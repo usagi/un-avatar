@@ -1,4 +1,4 @@
-# fmt --check → check --workspace → test --workspace（`xtask ci` と同等）
+# Rust workspace checks, CLI smoke, renderer startup smoke, and Supervisor frontend type checks.
 name: CI
 
 on:
@@ -12,6 +12,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Linux runtime/build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libvulkan1 \
+            mesa-vulkan-drivers
       - uses: dtolnay/rust-toolchain@stable
-      - name: cargo xtask ci (fmt/check/test + CLI smoke)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/un-avatar-supervisor/package-lock.json
+      - name: Install Supervisor frontend dependencies
+        working-directory: apps/un-avatar-supervisor
+        run: npm ci
+      - name: cargo xtask ci
         run: cargo run --locked -p xtask -- ci

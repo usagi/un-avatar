@@ -4,48 +4,59 @@
 
 # U.N. Avatar
 
-U.N. Avatar はアバターを軽快にレンダリングする「仮想アバターレンダラー」アプリです。姿勢や表情の入力を U.N. Motion からの UNMF/Z や VMC 対応で受け、ウィンドウ表示、スクリーンショット保存、Spout2 出力などを行えます。
+U.N. Avatar は VRM(0/1) と VRC / Unity アバターを、配信向けに軽快に表示する仮想アバターレンダラーです。U.N. Motion や VMC 対応アプリから姿勢・表情・手指を受け取り、透過ウィンドウ、Spout2、スクリーンショットなどで出力できます。
 
-## 想定ユーザー
+v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC / Unity アバター、lilToon / PhysBone、Modular Avatar ベースの Wardrobe を扱えます。VRC / Unity アバターは Unity Editor に追加する U.N. Avatar Exporter で `.unavatar` にエクスポートしてから使います。
 
-- U.N. Motion や VMC 送信対応アプリと組み合わせて、Web カメラや各種入力デバイスからのモーションでアバターを動かしたい VStreamer / VTuber / virtual avatar user
-- アバターを透過ウィンドウや Spout2 で配信ソフトへ載せたい民
-- 軽快な単体アバターレンダラーを求める民
-- UNMF/Z や VRM / MToon 表示の検証、ツール連携、研究用途で renderer を直接扱いたい研究者 / 開発者
+## はじめて使う場合
+
+1. `un-avatar-supervisor.exe` を起動します。
+2. 左側メニューの `プロファイル` を開き、`+` ボタンで新しいプロファイルを作ります。
+3. アバターファイルとして `.vrm` または `.unavatar` を選びます。
+4. 必要な設定を行い、`起動` ボタンで Renderer を起動します。
+5. U.N. Motion や VMC 対応アプリから UNMF/Z または VMC/UDP でモーションを送ります。
+
+VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.unavatar` を作ります。`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。Exporter の導入、`1. Base -> 2. Wardrobe Sets -> 3. Export` の操作、Wardrobe の作り方は [v2 Getting Started](docs/v2-getting-started.md) を参照してください。
+
+最初は Supervisor でプロファイルを作成・調整します。設定が固まったら、ショートカットやピン留めから特定プロファイルの Renderer を直接起動できます。Renderer 単独起動中の Wardrobe、出力、ウィンドウ、カメラなどの操作は、Windows タスクトレイの Renderer アイコンを右クリックして行います。
 
 ## できること
 
-- Supervisor Console で複数のプロファイルと Renderer を統合的に管理。
-- Renderer でプロファイルごとの設定に基づいたアバターを描画。
-- VRM / glTF ベースのアバターを wgpu renderer (backend: Vulkan / DX12) で描画、出力。
-- UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、SpringBone を反映。
-- プロファイルごとにアバターファイル、モーション入力、出力、描画品質、ルック、ウィンドウ、カメラ、ライティングを設定。
-- 透過ウィンドウ、クリック透過、最前面表示、背景色、XYZ 軸表示、簡易コライダー表示などの便利機能。
-- Spout2 Sender として OBS などへアバター映像を転送。
-- スクリーンショットをユーザーの Pictures 配下に保存。
+- VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (Vulkan / DX12) で描画。
+- Supervisor Console で複数のプロファイルと Renderer を管理。
+- VRC / Unity アバターを `.unavatar` に変換し、Unity なしの Renderer runtime で利用。
+- UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、UNPhysics / UNDynamics を反映。
+- VRM SpringBone と VRC PhysBone を U.N. Avatar の dynamics として扱う。
+- VRM MToon と VRC lilToon を UNToon material として扱う。
+- Modular Avatar 由来の衣装・小物・見た目プリセットの切り替えを Wardrobe として扱う。Modular Avatar 非対応の衣装も、GameObject active state を使って Wardrobe set にできます。
+- VRC Expression Menu / Animator 由来の操作を UNAnimator runtime action として扱う。
+- グローバルなキー / マウス / MIDI 割り当てで Wardrobe / UNAnimator action を実行。
+- 透過ウィンドウ、クリック透過、最前面表示、背景色、Spout2 Sender、スクリーンショット保存に対応。
 
-## ここが嬉しい
+## VRC / Unity アバターの流れ
 
-- 軽量で高速: Renderer は Supervisor と別プロセスで動作し、GPU skinning / GPU morph / texture cache / texture compression などで実行時の負荷を抑えます。
-- 配信に使いやすい: 透過ウィンドウと Spout2 出力を標準的な出力として対応、配信アプリとの組み合わせが容易で軽快です。
-- 複数運用しやすい: 複数のプロファイルを設定分けし、複数の Renderer を同時に稼働可能なので、複数アバターを同時に使ったり、同じモーションで別アバターを同時表示したりできます。
-- 見た目を整えやすい: AA、texture policy、背景色、肌色合わせ、Bloom、SSAO、Contact shadow、Outline、MatCap、Specular、Rim、Lighting などをプロファイルごとに設定できます。
-- 安定性と軽快さ: Rust と wgpu で堅牢さと一般性を両立したネイティブコードの Renderer プロセス本体は軽量で効率よく安定して動作し、Tauri/WebView で作られた Supervisor GUI プロセスは扱いやすく高度な表現でプロファイルや Renderer の管理を便利に行えます。
+U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。Unity project 上の VRC / Unity アバターを Exporter で `.unavatar` に変換し、Renderer がそれを読み込みます。
 
-## 一般的な使い方
+```text
+Unity project with VRC / Unity avatar
+  -> U.N. Avatar Exporter
+  -> .unavatar
+  -> U.N. Avatar Supervisor / Renderer
+  -> Window / Spout2
+  -> OBS or streaming software
+```
 
-1. Supervisor Console (un-avatar-supervisor.exe) を起動します。
-2. Profiles でプロファイルを作成します。
-3. アバターファイル、モーション入力、出力、ウィンドウ、カメラなどを設定します。
-4. Profiles または Renderers から Renderer を起動します。
-5. U.N. Motion などから UNMF/Z または VMC/UDP でモーションを送ります。
-6. 必要に応じて透過ウィンドウ、Spout2、背景色、ライティング、ルック、スクリーンショットを調整します。
+`.unavatar` には avatar mesh、texture、material metadata、lilToon parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。
 
-## U.N. Motion と組み合わせて OBS などで配信する場合の例
+## Wardrobe / Runtime Actions
+
+Wardrobe set が含まれる `.unavatar` は、Renderer 起動後に Renderer tray や Supervisor から衣装・小物・見た目プリセットを切り替えられます。VRC Expression Menu / Animator 由来の操作は、配信用に使う runtime action として UNAnimator にまとめて扱います。
+
+v2 は VRChat client や VRC SDK の完全な runtime 互換実装ではありません。VRC / Unity アバターを U.N. Avatar の独立 Renderer で配信利用しやすくするため、material、dynamics、Wardrobe、action を `.unavatar` と runtime status へ正規化して扱います。
+
+## U.N. Motion と組み合わせる例
 
 [U.N. Motion](https://github.com/usagi/un-motion) は Web カメラや VMC 入力からモーションを作るアプリで、U.N. Avatar はそのモーションを受けてアバターを表示できます。
-
-典型的には次の構成です。
 
 ```text
 Web camera / VMC app
@@ -56,12 +67,7 @@ Web camera / VMC app
   -> OBS or streaming software
 ```
 
-※U.N. Motion なしでも、VMC/UDP を送信できる既存アプリや、[UNMF/Z](https://github.com/usagi/un-motion-frame) を扱うアプリから U.N. Avatar を使えます。
-
-## Spout2 について
-
-Windows 版の標準リリースパッケージには Spout2 runtime が同梱され、Spout2 Sender 出力を利用できます。
-Spout2 は BSD 2-Clause License の第三者コンポーネントです。配布物にはライセンス表示が含まれています。
+U.N. Motion なしでも、VMC/UDP を送信できる既存アプリや [UNMF/Z](https://github.com/usagi/un-motion-frame) を扱うアプリから U.N. Avatar を使えます。
 
 ## 対応環境
 
@@ -69,52 +75,22 @@ Spout2 は BSD 2-Clause License の第三者コンポーネントです。配布
 - Vulkan または DX12 対応 GPU
 - Spout2 出力は Windows 版の標準リリースパッケージで利用可能
 
-## 開発者向け
-
-この repository には Supervisor GUI、Renderer runtime、VRM / glTF / UNA I/O、motion adapter、plugin host、release tooling が含まれています。
-
-よく使うコマンド:
-
-```sh
-cargo xtask ci
-cargo xtask build
-cargo xtask run
-cargo xtask run --release
-cargo xtask release-package --version 1.0.0
-```
-
-Renderer だけを smoke test する場合:
-
-```sh
-cargo xtask render-smoke
-```
-
-Supervisor の UI を編集する場合:
-
-```sh
-cd apps/un-avatar-supervisor
-npm install
-npm run dev
-```
-
-注意: workspace の default member は Supervisor 側です。開発中に Renderer 変更も含めて起動確認する場合は、`cargo run` / `cargo build` ではなく `cargo xtask build` または `cargo xtask run` を使ってください。
-
 ## ドキュメント
 
-- [Documentation Index](docs/README.md): 公開文書と開発メモの索引
-- [Roadmap](docs/roadmap.md): 実装状況、v1 境界、次の候補
-- [Runtime MVP](docs/runtime-mvp.md): VRM / VMC / MToon / wgpu / Spout2 runtime
-- [Profile Settings UI v1 Design](docs/profile-settings-ui-v1-design.md): Profiles / Renderers UI の情報設計メモ
-- [Render Quality Plan](docs/render-quality-plan.md): AA、mipmap、texture compression、描画品質
-- [Development Guidelines](docs/development-guidelines.md): 開発時の確認方針
+- [v2 Getting Started](docs/v2-getting-started.md): 初回起動、VRC Exporter、Wardrobe の操作手順
+- [Unity Exporter](docs/unity-exporter-v0.1.md): Unity project から `.unavatar` を出力する Exporter の境界
 - [Third-party Licenses](docs/third-party-licenses.md): Spout2 などの third-party licenses
+- [Documentation Index](docs/README.md): 詳しい仕様、設計メモ、開発者向け情報の索引
 
-## 関連プロジェクト
+## Acknowledgements
 
-- [U.N. Motion](https://github.com/usagi/un-motion): Web カメラや VMC 入力からモーションを作るモーションキャプチャアプリ
-- [U.N. Motion Frame](https://github.com/usagi/un-motion-frame): U.N. Motion Frame / Zenoh (UNMF/Z) プロトコルの定義
-- [U.N. Virtual Avatar Connect](https://github.com/usagi/un-virtual-avatar-connect): 仮想アバターと周辺アプリをつなぐデータフロー駆動のブリッジアプリ
-- [U.N. Virtual Eye Tracker](https://github.com/usagi/un-virtual-eye-tracker): 仮想アイトラッカー
+U.N. Avatar の toon rendering、material compatibility、Wardrobe / avatar assembly behavior は独立した Rust / wgpu / WGSL / Unity Exporter 実装ですが、互換性検証と behavior の理解にあたり、MIT License で公開されている次の先行プロジェクトを重要な参考実装として扱います。
+
+- [lilToon](https://github.com/lilxyzw/lilToon): UNToon v2 / lilToon-compatible rendering の主要な参考実装
+- [MToon](https://github.com/Santarh/MToon): VRM / MToon material compatibility の参考実装
+- [Modular Avatar](https://github.com/bdunderscore/modular-avatar): `.unavatar` Wardrobe / MergeArmature / BoneProxy / ObjectToggle behavior の主要な参考実装
+
+これらの project 名は互換性の説明と謝辞のために記載しています。U.N. Avatar は各 project の公式派生物または公式実装ではありません。
 
 ## License
 

@@ -1,51 +1,63 @@
+import {
+	DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
+	DYNAMICS_ENABLED_FIELD,
+	DYNAMICS_OVERRIDE_FIELD_PREFIX,
+} from "./dynamicsPresets";
+
 export function isLaunchTimeRendererField(field: string): boolean {
-  return (
-    field === "avatar_path" ||
-    field === "icon_path" ||
-    field === "profile.display_name" ||
-    field.startsWith("render_quality.") ||
-    field.startsWith("effects.") ||
-    field.startsWith("environment.") ||
-    field.startsWith("expression.") ||
-    field.startsWith("motion.") ||
-    field.startsWith("output.")
-  );
+	return (
+		field === "avatar_path" ||
+		field === "wardrobe_set" ||
+		field.startsWith("wardrobe.transition.") ||
+		field === "icon_path" ||
+		field === "profile.display_name" ||
+		field.startsWith("render_quality.") ||
+		field.startsWith("effects.") ||
+		field.startsWith("environment.") ||
+		field.startsWith("expression.") ||
+		field.startsWith("motion.") ||
+		field.startsWith("physics.contacts.")
+	);
 }
 
 export function isRuntimeWindowField(field: string): boolean {
-  return field.startsWith("window.");
+	return field.startsWith("window.");
 }
 
 export function canApplyWithoutRestart(field: string): boolean {
-  return (
-    field === "icon_path" ||
-    field.startsWith("motion.") ||
-    field === "spring_bones" ||
-    field.startsWith("physics.spring_bone.") ||
-    field.startsWith("physics.bone_colliders.") ||
-    field.startsWith("effects.avatar.outline.") ||
-    field.startsWith("effects.avatar.rim.") ||
-    field.startsWith("effects.avatar.matcap.") ||
-    field.startsWith("effects.avatar.specular.") ||
-    field.startsWith("effects.avatar.ambient_occlusion.") ||
-    field.startsWith("effects.avatar.contact_shadow.") ||
-    field.startsWith("effects.post.ssao.") ||
-    field.startsWith("effects.post.bloom.") ||
-    field.startsWith("environment.color.") ||
-    field.startsWith("environment.lighting.")
-  );
+	return (
+		field === "icon_path" ||
+		field.startsWith("wardrobe.transition.") ||
+		field === "wardrobe.bindings" ||
+		field.startsWith("animator.") ||
+		field.startsWith("output.spout2.") ||
+		field.startsWith("motion.") ||
+		field === DYNAMICS_ENABLED_FIELD ||
+		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
+		field.startsWith(DYNAMICS_BONE_COLLIDER_FIELD_PREFIX) ||
+		field.startsWith("effects.avatar.outline.") ||
+		field.startsWith("effects.avatar.contact_shadow.") ||
+		field.startsWith("effects.post.ssao.") ||
+		field.startsWith("effects.post.bloom.") ||
+		field.startsWith("environment.color.") ||
+		field.startsWith("environment.lighting.")
+	);
 }
 
-export function profileFieldLabel(field: string): string {
-  if (field === "avatar_path") return "Avatar File";
-  if (field === "icon_path") return "Icon";
-  if (field === "profile.display_name") return "Name";
-  if (field === "profile.group") return "Group";
-  if (field.startsWith("render_quality.")) return "Render quality";
-  if (field.startsWith("effects.")) return "Avatar effects";
-  if (field.startsWith("expression.")) return "Expression settings";
-  if (field.startsWith("window.")) return "Window settings";
-  if (field.startsWith("motion.")) return "Motion settings";
-  if (field.startsWith("output.")) return "Output settings";
-  return "This setting";
+export function profileFieldLabel(field: string, translate: (key: string) => string): string {
+	if (field === "avatar_path") return translate("profiles.fields.avatar_file");
+	if (field === "wardrobe_set") return translate("profiles.fields.wardrobe");
+	if (field.startsWith("wardrobe.transition.")) return translate("profiles.fields.wardrobe");
+	if (field === "icon_path") return translate("profiles.fields.icon");
+	if (field === "profile.display_name") return translate("profiles.fields.name");
+	if (field === "profile.group") return translate("profiles.fields.group");
+	if (field.startsWith("render_quality.")) return translate("profiles.fields.render_quality");
+	if (field.startsWith("effects.")) return translate("profiles.fields.avatar_effects");
+	if (field.startsWith("expression.")) return translate("profiles.fields.expression_settings");
+	if (field.startsWith("window.")) return translate("profiles.fields.window_settings");
+	if (field.startsWith("motion.")) return translate("profiles.fields.motion_settings");
+	if (field.startsWith("physics.contacts.")) return translate("profiles.fields.contact_settings");
+	if (field.startsWith("physics.dynamics.")) return translate("profiles.fields.dynamics_settings");
+	if (field.startsWith("output.")) return translate("profiles.fields.output_settings");
+	return translate("profiles.fields.this_setting");
 }

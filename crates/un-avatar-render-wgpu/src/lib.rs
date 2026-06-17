@@ -1,55 +1,65 @@
 //! winit + wgpu で独立アバター用ウィンドウを開く最小ブートストラップ（開発計画 Commit 1.1〜1.2）。
 
+mod audio_link;
 mod avatar_material;
 mod camera;
 mod debug_dump;
 mod debug_log;
 mod gpu;
+mod liltoon_features;
 mod manifest;
 mod mesh_pass;
 mod model_loader;
 mod options;
+mod pipeline_cache;
 mod post_process;
+#[cfg(windows)]
+mod renderer_tray;
 mod scene_transform;
+#[cfg(test)]
+mod shader_validation;
 mod skin_tone;
 #[cfg(windows)]
 mod spout;
 mod texture_pipeline;
+#[cfg(windows)]
+mod windows_identity;
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
 	cell::Cell,
-	collections::VecDeque,
+	collections::{BTreeMap, BTreeSet, VecDeque},
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
-	sync::{Arc, Mutex},
+	sync::{
+		atomic::{AtomicBool, AtomicU64, Ordering},
+		mpsc::{self, Receiver},
+		Arc, Mutex,
+	},
 	thread,
 	time::{Duration, Instant},
 };
 
 pub use debug_log::WindowDebugOptions;
 pub use gpu::FrameTimings;
-use gpu::{DocumentAttachOptions, GpuState, PreparedDocumentScene};
-pub use mesh_pass::{
-	AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, AvatarRimOptions,
-	AvatarRimPolicy, AvatarSpecularOptions, SceneMeshLoadOpts,
-};
+use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
+pub use mesh_pass::{AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshLoadOpts};
 pub use options::{
-	AaMode, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions,
-	DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, RenderBackend, SpoutWindowOptions,
-	SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
-	TextureResolutionLimit,
+	AaMode, AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions,
+	BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
+	LightingOptions, RenderBackend, SpoutWindowOptions, SsaoOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
+	TextureCompressionPreference, TextureMipmapFilter, TextureResolutionLimit, WardrobeBindingKind, WardrobeBindingOptions,
 };
-use un_avatar_skeleton::{BoneColliderConfig, SpringBonePhysicsConfig};
+use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::{
 	application::ApplicationHandler,
 	dpi::{PhysicalPosition, PhysicalSize},
 	event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
-	event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy},
+	event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
 	keyboard::{Key, ModifiersState},
 	window::{CursorIcon, Icon, ResizeDirection, Window, WindowLevel},
 };
@@ -70,8 +80,67 @@ impl std::fmt::Display for RunError {
 
 impl std::error::Error for RunError {}
 
-/// `RendererControlEvent::Screenshot` の同期結果をコントロールチャネルへ返すための共有スロット。
-type ScreenshotResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
+/// `RendererControlEvent` の同期 command 結果をコントロールチャネルへ返すための共有スロット。
+type CommandResultSlot = Arc<Mutex<Option<Result<(), String>>>>;
+type SceneStateResultSlot = Arc<Mutex<Option<String>>>;
+
+fn log_slow_renderer_step(label: impl std::fmt::Display, elapsed: Duration) {
+	let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+	if elapsed_ms >= 50.0 {
+		eprintln!("un-avatar-renderer: renderer {label}: {elapsed_ms:.1}ms");
+	}
+}
+
+const SCENE_STATE_STARTUP_PROGRESS: &str = "startup_progress";
+const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
+const SCENE_STATE_FAILED: &str = "failed";
+const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
+const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
+#[cfg(windows)]
+const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
+const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
+const WARDROBE_TRANSITION_EXIT_MS: u32 = 700;
+const WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS: u32 = 700;
+const WARDROBE_TRANSITION_ENTER_MS: u32 = 700;
+const STARTUP_PROGRESS_OVERLAY_RECT_CENTER: [f32; 2] = [0.0, 0.0];
+const STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
+const RESOLVER_CACHE_KEY_STATUS_ENV: &str = "UN_AVATAR_RESOLVER_CACHE_KEY_STATUS";
+const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
+	"shutdown",
+	"reset_camera",
+	"set_camera_orbit",
+	"set_clear_color",
+	"set_spout_output",
+	"set_window",
+	"screenshot",
+	"set_wardrobe",
+	"activate_action",
+	"set_parameter",
+	"set_dynamics_enabled",
+	"set_animator_profile",
+	"set_input_bindings",
+	"set_expression_override",
+	"clear_expression_overrides",
+	"set_look_at",
+	"activate",
+	"set_show_axes",
+	"set_show_bone_colliders",
+	"set_camera_lock",
+	"set_camera_fov",
+	"set_camera_state",
+	"set_apply_vmc_root_translation",
+	"set_primary_motion_source",
+	"set_motion_receivers",
+	"set_dynamics",
+	"set_avatar_outline",
+	"set_lighting",
+	"set_environment_color",
+	"set_bloom",
+	"set_ssao",
+	"set_contact_shadow",
+	"scene_state",
+];
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -114,6 +183,38 @@ fn default_camera_transition_duration_ms() -> u32 {
 	320
 }
 
+fn renderer_startup_frame_role(
+	renderer_startup_overlay: Option<gpu::StartupProgressOverlayFrame>,
+	startup_pending_document: bool,
+	startup_failed: bool,
+) -> Option<gpu::RenderedFrameRole> {
+	if renderer_startup_overlay.is_some() || startup_pending_document || startup_failed {
+		Some(gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
+			progress_overlay: renderer_startup_overlay,
+		}))
+	} else {
+		None
+	}
+}
+
+fn wardrobe_transition_frame_role(wardrobe_billboard: Option<gpu::WardrobeChangingBillboardFrame>) -> Option<gpu::RenderedFrameRole> {
+	wardrobe_billboard.map(|billboard| {
+		gpu::RenderedFrameRole::WardrobeTransition(gpu::WardrobeTransitionPresentation {
+			changing_billboard: billboard,
+		})
+	})
+}
+
+fn wardrobe_billboard_min_visible_elapsed(started_at: Option<Instant>, now: Instant) -> bool {
+	started_at.is_none_or(|started_at| {
+		now.saturating_duration_since(started_at) >= Duration::from_millis(u64::from(WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS))
+	})
+}
+
+fn should_evaluate_runtime_actions_for_frame(frame_role: &gpu::RenderedFrameRole) -> bool {
+	!matches!(frame_role, gpu::RenderedFrameRole::WardrobeTransition(_))
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CameraStatePatch {
 	target: Option<[f32; 3]>,
@@ -138,6 +239,102 @@ struct ActiveCameraTransition {
 	easing: CameraTransitionEasing,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AnimatorTransitionCurve {
+	Linear,
+	EaseIn,
+	EaseOut,
+	EaseInOut,
+}
+
+#[derive(Clone, Debug)]
+enum AnimatorTransitionTarget {
+	Expression { name: String },
+	Parameter { name: String },
+}
+
+#[derive(Clone, Debug)]
+struct ActiveAnimatorTransition {
+	target: AnimatorTransitionTarget,
+	start: f32,
+	end: f32,
+	started_at: Instant,
+	duration: Duration,
+	curve: AnimatorTransitionCurve,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WardrobeTransitionPhase {
+	Exit,
+	BillboardPrimed,
+	Applying,
+	BillboardHold,
+	Enter,
+}
+
+struct WardrobeTransitionState {
+	set_id: String,
+	result: CommandResultSlot,
+	saved_camera: gpu::CameraStateSnapshot,
+	billboard_center: [f32; 3],
+	phase: WardrobeTransitionPhase,
+	phase_started_at: Instant,
+	billboard_started_at: Option<Instant>,
+	started_at: Instant,
+}
+
+struct WardrobeApplyFrameResult {
+	outcome: Result<(), String>,
+	active_set_id: Option<String>,
+	active_asset_groups: Vec<String>,
+	asset_upload_plan: WardrobeAssetUploadPlan,
+}
+
+struct WardrobeAsyncApplyResult {
+	set_id: String,
+	scene: Result<(PreparedDocumentScene, DocumentAttachOptions), String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AnimatorProfileActionControl {
+	id: String,
+	mode: String,
+	#[serde(default)]
+	value: Option<f32>,
+	#[serde(default)]
+	transition_curve: Option<String>,
+	#[serde(default)]
+	transition_ms: Option<u32>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AnimatorProfileBindingControl {
+	action_id: String,
+	kind: String,
+	#[serde(default)]
+	binding: Option<String>,
+	#[serde(default)]
+	device: Option<String>,
+	#[serde(default)]
+	channel: Option<u8>,
+	#[serde(default)]
+	note: Option<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct WardrobeProfileBindingControl {
+	set_id: String,
+	kind: String,
+	#[serde(default)]
+	binding: Option<String>,
+	#[serde(default)]
+	device: Option<String>,
+	#[serde(default)]
+	channel: Option<u8>,
+	#[serde(default)]
+	note: Option<u8>,
+}
+
 #[allow(clippy::large_enum_variant)]
 enum RendererControlEvent {
 	Shutdown,
@@ -159,6 +356,10 @@ enum RendererControlEvent {
 		width: Option<u32>,
 		height: Option<u32>,
 	},
+	SetPreviewWindow {
+		enabled: bool,
+		activate: bool,
+	},
 	SetWindow {
 		decorations: Option<bool>,
 		transparent: Option<bool>,
@@ -170,7 +371,57 @@ enum RendererControlEvent {
 	},
 	Screenshot {
 		path: std::path::PathBuf,
-		result: ScreenshotResultSlot,
+		result: CommandResultSlot,
+	},
+	SetWardrobe {
+		set_id: String,
+		result: CommandResultSlot,
+	},
+	ActivateAction {
+		action_id: Option<String>,
+		supervisor_command: Option<String>,
+		expression_menu_path: Option<String>,
+		menu_path: Option<String>,
+		wardrobe_set_id: Option<String>,
+		parameter_name: Option<String>,
+		parameter_value: Option<f32>,
+		result: CommandResultSlot,
+	},
+	ActivateProfileAnimatorAction {
+		action_id: String,
+		result: CommandResultSlot,
+	},
+	SetParameter {
+		name: String,
+		value: f32,
+		result: CommandResultSlot,
+	},
+	SetDynamicsEnabled {
+		source_id: String,
+		enabled: bool,
+		result: CommandResultSlot,
+	},
+	SetCurrentWardrobeDynamicsEnabled {
+		enabled: bool,
+		result: CommandResultSlot,
+	},
+	SetAnimatorProfile {
+		actions: Vec<AnimatorProfileActionControl>,
+		bindings: Vec<AnimatorProfileBindingControl>,
+		result: CommandResultSlot,
+	},
+	SetInputBindings {
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
+		result: CommandResultSlot,
+	},
+	SetWardrobeTransition {
+		billboard_anchor: String,
+		billboard_y_offset_mm: f32,
+		result: CommandResultSlot,
+	},
+	SceneState {
+		result: SceneStateResultSlot,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -219,11 +470,11 @@ enum RendererControlEvent {
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
 	},
-	SetSpringBones {
+	SetDynamics {
 		enabled: bool,
 		bone_colliders: BoneColliderConfig,
-		/// None means no SpringBone physics override; SpringBone itself is controlled by `enabled`.
-		physics_config: Option<SpringBonePhysicsConfig>,
+		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
+		physics_config: Option<DynamicsPhysicsConfig>,
 	},
 	SetAvatarOutline {
 		policy: Option<String>,
@@ -233,25 +484,6 @@ enum RendererControlEvent {
 		color: Option<[f32; 3]>,
 		lighting_mix: Option<f32>,
 		roundness: Option<f32>,
-	},
-	SetAvatarRim {
-		policy: Option<String>,
-		color: Option<[f32; 3]>,
-		intensity: Option<f32>,
-		lighting_mix: Option<f32>,
-		fresnel_power: Option<f32>,
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		enabled: Option<bool>,
-		intensity: Option<f32>,
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		strength: Option<f32>,
 	},
 	SetLighting {
 		environment_enabled: Option<bool>,
@@ -295,6 +527,12 @@ enum RendererControlEvent {
 		softness: Option<f32>,
 		height: Option<f32>,
 	},
+	#[cfg(windows)]
+	TrayMenu {
+		id: String,
+	},
+	#[cfg(windows)]
+	TrayIconActivate,
 	StartupProgress {
 		phase: StartupPhase,
 		current: u32,
@@ -349,6 +587,54 @@ enum RendererControlCommand {
 	},
 	Screenshot {
 		path: String,
+	},
+	SetWardrobe {
+		set_id: String,
+	},
+	ActivateAction {
+		#[serde(default)]
+		action_id: Option<String>,
+		#[serde(default)]
+		supervisor_command: Option<String>,
+		#[serde(default, alias = "expressionMenuPath")]
+		expression_menu_path: Option<String>,
+		#[serde(default, alias = "menuPath")]
+		menu_path: Option<String>,
+		#[serde(default, alias = "wardrobeSetId")]
+		wardrobe_set_id: Option<String>,
+		#[serde(default, alias = "parameterName")]
+		parameter_name: Option<String>,
+		#[serde(default, alias = "parameterValue")]
+		parameter_value: Option<f32>,
+	},
+	SetParameter {
+		#[serde(alias = "parameterName")]
+		name: String,
+		#[serde(alias = "parameterValue")]
+		value: f32,
+	},
+	SetDynamicsEnabled {
+		#[serde(alias = "sourceId")]
+		source_id: String,
+		enabled: bool,
+	},
+	SetAnimatorProfile {
+		#[serde(default)]
+		actions: Vec<AnimatorProfileActionControl>,
+		#[serde(default)]
+		bindings: Vec<AnimatorProfileBindingControl>,
+	},
+	SetInputBindings {
+		#[serde(default)]
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		#[serde(default)]
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
+	},
+	SetWardrobeTransition {
+		#[serde(default, alias = "billboardAnchor")]
+		billboard_anchor: String,
+		#[serde(default, alias = "billboardYOffsetMm")]
+		billboard_y_offset_mm: f32,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -410,13 +696,13 @@ enum RendererControlCommand {
 		#[serde(default)]
 		unmotion_zenoh_key: String,
 	},
-	SetSpringBones {
+	SetDynamics {
 		enabled: bool,
 		bone_colliders: BoneColliderConfig,
-		/// None means no SpringBone physics override; SpringBone itself is controlled by `enabled`.
+		/// None means no dynamics physics override; dynamics itself is controlled by `enabled`.
 		#[serde(default)]
 		#[serde(alias = "physics")]
-		physics_config: Option<SpringBonePhysicsConfig>,
+		physics_config: Option<DynamicsPhysicsConfig>,
 	},
 	SetAvatarOutline {
 		#[serde(default)]
@@ -431,36 +717,6 @@ enum RendererControlCommand {
 		lighting_mix: Option<f32>,
 		#[serde(default)]
 		roundness: Option<f32>,
-	},
-	SetAvatarRim {
-		#[serde(default)]
-		policy: Option<String>,
-		#[serde(default)]
-		color: Option<[f32; 3]>,
-		#[serde(default)]
-		intensity: Option<f32>,
-		#[serde(default)]
-		lighting_mix: Option<f32>,
-		#[serde(default)]
-		fresnel_power: Option<f32>,
-		#[serde(default)]
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		#[serde(default)]
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		#[serde(default)]
-		enabled: Option<bool>,
-		#[serde(default)]
-		intensity: Option<f32>,
-		#[serde(default)]
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		#[serde(default)]
-		strength: Option<f32>,
 	},
 	SetLighting {
 		#[serde(default)]
@@ -593,6 +849,13 @@ impl RendererControlCommand {
 				height,
 			},
 			Self::Screenshot { .. } => unreachable!("Screenshot は runtime_control_response で個別に処理する"),
+			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
+			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
+			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
+			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
+			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
+			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
+			Self::SetWardrobeTransition { .. } => unreachable!("SetWardrobeTransition は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -628,11 +891,11 @@ impl RendererControlCommand {
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
 			},
-			Self::SetSpringBones {
+			Self::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
-			} => RendererControlEvent::SetSpringBones {
+			} => RendererControlEvent::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
@@ -652,24 +915,6 @@ impl RendererControlCommand {
 				lighting_mix,
 				roundness,
 			},
-			Self::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			} => RendererControlEvent::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			},
-			Self::SetAvatarMatcap { scale } => RendererControlEvent::SetAvatarMatcap { scale },
-			Self::SetAvatarSpecular { enabled, intensity, power } => RendererControlEvent::SetAvatarSpecular { enabled, intensity, power },
-			Self::SetAvatarAmbientOcclusion { strength } => RendererControlEvent::SetAvatarAmbientOcclusion { strength },
 			Self::SetLighting {
 				environment_enabled,
 				environment_color,
@@ -795,11 +1040,186 @@ fn patched_camera_state(mut state: gpu::CameraStateSnapshot, patch: CameraStateP
 	state
 }
 
+fn camera_state_patch_from_snapshot(state: gpu::CameraStateSnapshot) -> CameraStatePatch {
+	CameraStatePatch {
+		target: Some(state.target),
+		longitude_deg: Some(state.longitude_deg),
+		latitude_deg: Some(state.latitude_deg),
+		radius: Some(state.radius),
+		diagonal_fov_deg: Some(state.diagonal_fov_deg),
+	}
+}
+
+fn wardrobe_exit_camera_patch(state: gpu::CameraStateSnapshot) -> CameraStatePatch {
+	let yaw = state.longitude_deg.to_radians();
+	let right = [yaw.cos(), 0.0, -yaw.sin()];
+	let shift = (state.radius * 1.15).clamp(0.55, 3.0);
+	CameraStatePatch {
+		target: Some([
+			state.target[0] + right[0] * shift,
+			state.target[1] + 0.12,
+			state.target[2] + right[2] * shift,
+		]),
+		longitude_deg: Some(state.longitude_deg + 12.0),
+		latitude_deg: Some((state.latitude_deg + 3.0).clamp(-89.0, 89.0)),
+		radius: Some((state.radius * 0.86).max(0.05)),
+		diagonal_fov_deg: Some((state.diagonal_fov_deg * 0.92).clamp(1.0, 160.0)),
+	}
+}
+
+fn wardrobe_set_request_matches_active(active_set: Option<&str>, base_set: Option<&str>, requested_set: &str) -> bool {
+	let base_set = model_loader::normalize_wardrobe_set_id(base_set);
+	let requested_set = model_loader::normalize_wardrobe_set_id(Some(requested_set)).or(base_set);
+	let active_set = model_loader::normalize_wardrobe_set_id(active_set).or(base_set);
+	requested_set.is_some() && active_set == requested_set
+}
+
 fn ease_camera_transition(t: f32, easing: CameraTransitionEasing) -> f32 {
 	let t = t.clamp(0.0, 1.0);
 	match easing {
 		CameraTransitionEasing::Linear => t,
 		CameraTransitionEasing::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+	}
+}
+
+fn parse_animator_transition_curve(value: &str) -> Option<AnimatorTransitionCurve> {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => Some(AnimatorTransitionCurve::Linear),
+		"ease_in" | "easein" => Some(AnimatorTransitionCurve::EaseIn),
+		"ease_out" | "easeout" => Some(AnimatorTransitionCurve::EaseOut),
+		"ease_in_out" | "easeinout" => Some(AnimatorTransitionCurve::EaseInOut),
+		_ => None,
+	}
+}
+
+fn normalize_animator_action_mode_runtime(value: &str) -> String {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"one_shot" | "oneshot" | "momentary" | "button" => "one_shot".to_string(),
+		"toggle" | "on_off" | "switch" => "toggle".to_string(),
+		"off" | "none" | "disabled" => "off".to_string(),
+		_ => "toggle".to_string(),
+	}
+}
+
+fn normalize_animator_transition_curve_runtime(value: &str) -> Option<String> {
+	let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+	match normalized.as_str() {
+		"linear" | "ease_in" | "ease_out" | "ease_in_out" => Some(normalized),
+		_ => None,
+	}
+}
+
+fn normalize_input_binding_kind_runtime(value: &str) -> WardrobeBindingKind {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"midi_note" | "midi" | "note" => WardrobeBindingKind::MidiNote,
+		_ => WardrobeBindingKind::Keyboard,
+	}
+}
+
+fn wardrobe_bindings_from_runtime_controls(bindings: Vec<WardrobeProfileBindingControl>) -> Vec<WardrobeBindingOptions> {
+	let mut out = Vec::new();
+	for binding in bindings {
+		let set_id = binding.set_id.trim().to_string();
+		let kind = normalize_input_binding_kind_runtime(&binding.kind);
+		match kind {
+			WardrobeBindingKind::Keyboard => {
+				let binding_text = binding.binding.as_deref().map(str::trim).unwrap_or("");
+				if binding_text.is_empty() {
+					continue;
+				}
+				out.push(WardrobeBindingOptions {
+					set_id,
+					kind,
+					binding: binding_text.to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				});
+			}
+			WardrobeBindingKind::MidiNote => {
+				let (Some(channel), Some(note)) = (binding.channel, binding.note) else {
+					continue;
+				};
+				if !(1..=16).contains(&channel) || note > 127 {
+					continue;
+				}
+				out.push(WardrobeBindingOptions {
+					set_id,
+					kind,
+					binding: String::new(),
+					device: binding.device.and_then(|device| {
+						let device = device.trim().to_string();
+						(!device.is_empty()).then_some(device)
+					}),
+					channel: Some(channel),
+					note: Some(note),
+				});
+			}
+		}
+	}
+	out
+}
+
+fn animator_bindings_from_runtime_controls(bindings: Vec<AnimatorProfileBindingControl>) -> Vec<AnimatorActionBindingOptions> {
+	let mut out = Vec::new();
+	for binding in bindings {
+		let action_id = binding.action_id.trim();
+		if action_id.is_empty() {
+			continue;
+		}
+		let kind = normalize_input_binding_kind_runtime(&binding.kind);
+		match kind {
+			WardrobeBindingKind::Keyboard => {
+				let binding_text = binding.binding.as_deref().map(str::trim).unwrap_or("");
+				if binding_text.is_empty() {
+					continue;
+				}
+				out.push(AnimatorActionBindingOptions {
+					action_id: action_id.to_string(),
+					kind,
+					binding: binding_text.to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				});
+			}
+			WardrobeBindingKind::MidiNote => {
+				let (Some(channel), Some(note)) = (binding.channel, binding.note) else {
+					continue;
+				};
+				if !(1..=16).contains(&channel) || note > 127 {
+					continue;
+				}
+				out.push(AnimatorActionBindingOptions {
+					action_id: action_id.to_string(),
+					kind,
+					binding: String::new(),
+					device: binding.device.and_then(|device| {
+						let device = device.trim().to_string();
+						(!device.is_empty()).then_some(device)
+					}),
+					channel: Some(channel),
+					note: Some(note),
+				});
+			}
+		}
+	}
+	out
+}
+
+fn ease_animator_transition(t: f32, curve: AnimatorTransitionCurve) -> f32 {
+	let t = t.clamp(0.0, 1.0);
+	match curve {
+		AnimatorTransitionCurve::Linear => t,
+		AnimatorTransitionCurve::EaseIn => t * t,
+		AnimatorTransitionCurve::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+		AnimatorTransitionCurve::EaseInOut => {
+			if t < 0.5 {
+				2.0 * t * t
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(2) * 0.5
+			}
+		}
 	}
 }
 
@@ -840,19 +1260,10 @@ fn parse_avatar_outline_policy(value: Option<&str>) -> Option<AvatarOutlinePolic
 
 fn parse_avatar_outline_kind(value: Option<&str>) -> Option<AvatarOutlineKind> {
 	match value?.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
-		_ => None,
-	}
-}
-
-fn parse_avatar_rim_policy(value: Option<&str>) -> Option<AvatarRimPolicy> {
-	match value?.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some(AvatarRimPolicy::Authored),
-		"off" | "none" | "disabled" => Some(AvatarRimPolicy::Off),
-		"override" | "custom" => Some(AvatarRimPolicy::Override),
 		_ => None,
 	}
 }
@@ -875,52 +1286,6 @@ fn avatar_outline_from_control(
 			.or(current.color),
 		lighting_mix: lighting_mix.map(|v| v.clamp(0.0, 1.0)).or(current.lighting_mix),
 		roundness: roundness.map(|v| v.clamp(0.0, 1.0)).or(current.roundness),
-	}
-}
-
-fn avatar_rim_from_control(
-	current: AvatarRimOptions,
-	policy: Option<String>,
-	color: Option<[f32; 3]>,
-	intensity: Option<f32>,
-	lighting_mix: Option<f32>,
-	fresnel_power: Option<f32>,
-	lift: Option<f32>,
-) -> AvatarRimOptions {
-	AvatarRimOptions {
-		policy: parse_avatar_rim_policy(policy.as_deref()).unwrap_or(current.policy),
-		color: color
-			.map(|rgb| [rgb[0].clamp(0.0, 1.0), rgb[1].clamp(0.0, 1.0), rgb[2].clamp(0.0, 1.0)])
-			.or(current.color),
-		intensity: intensity.map(|v| v.clamp(0.0, 4.0)).or(current.intensity),
-		lighting_mix: lighting_mix.map(|v| v.clamp(0.0, 1.0)).or(current.lighting_mix),
-		fresnel_power: fresnel_power.map(|v| v.max(0.00001)).or(current.fresnel_power),
-		lift: lift.map(|v| v.clamp(-1.0, 1.0)).or(current.lift),
-	}
-}
-
-fn avatar_matcap_from_control(current: AvatarMatcapOptions, scale: Option<f32>) -> AvatarMatcapOptions {
-	AvatarMatcapOptions {
-		scale: scale.unwrap_or(current.scale).clamp(0.0, 2.0),
-	}
-}
-
-fn avatar_specular_from_control(
-	current: AvatarSpecularOptions,
-	enabled: Option<bool>,
-	intensity: Option<f32>,
-	power: Option<f32>,
-) -> AvatarSpecularOptions {
-	AvatarSpecularOptions {
-		enabled: enabled.unwrap_or(current.enabled),
-		intensity: intensity.unwrap_or(current.intensity).clamp(0.0, 2.0),
-		power: power.unwrap_or(current.power).clamp(1.0, 128.0),
-	}
-}
-
-fn avatar_ambient_occlusion_from_control(current: AvatarAmbientOcclusionOptions, strength: Option<f32>) -> AvatarAmbientOcclusionOptions {
-	AvatarAmbientOcclusionOptions {
-		strength: strength.unwrap_or(current.strength).clamp(0.0, 2.0),
 	}
 }
 
@@ -1079,7 +1444,7 @@ impl StartupPhase {
 		}
 	}
 
-	fn splash_code(&self) -> f32 {
+	fn overlay_phase_code(&self) -> f32 {
 		match self {
 			Self::Model => 1.0,
 			Self::TextureCache => 2.0,
@@ -1127,6 +1492,28 @@ fn startup_message(message: impl AsRef<str>, started_at: Instant) -> String {
 	format!("{}{}", message.as_ref(), startup_elapsed_suffix(started_at))
 }
 
+fn compact_window_title_status(status: impl AsRef<str>) -> String {
+	let status = status.as_ref();
+	let mut compact = String::with_capacity(status.len().min(WINDOW_TITLE_STATUS_MAX_CHARS));
+	for part in status.split_whitespace() {
+		if !compact.is_empty() {
+			compact.push(' ');
+		}
+		compact.push_str(part);
+	}
+	if compact.len() > WINDOW_TITLE_STATUS_MAX_CHARS {
+		let mut char_indices = compact.char_indices();
+		let truncate_at = char_indices
+			.nth(WINDOW_TITLE_STATUS_MAX_CHARS.saturating_sub(1))
+			.and_then(|(index, _)| char_indices.next().map(|_| index));
+		if let Some(index) = truncate_at {
+			compact.truncate(index);
+			compact.push('…');
+		}
+	}
+	compact
+}
+
 #[derive(Clone, Debug)]
 struct StartupProgressState {
 	phase: StartupPhase,
@@ -1151,6 +1538,7 @@ struct AvatarApp {
 	event_proxy: EventLoopProxy<RendererControlEvent>,
 	window: Option<Arc<Window>>,
 	gpu: Option<GpuState>,
+	preview_window_enabled: bool,
 	startup_progress: Option<StartupProgressState>,
 	startup_pending_document: bool,
 	startup_failed: Option<String>,
@@ -1159,9 +1547,13 @@ struct AvatarApp {
 	started_at: Instant,
 	fps_smooth: f32,
 	runtime_status_frame_seq: Cell<u32>,
+	resolver_cache_key_generation: Arc<AtomicU64>,
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
+	frame_bench: Option<FrameBenchState>,
+	pending_surface_size: Option<(u32, u32)>,
+	last_resize_at: Option<Instant>,
 	right_dragging: bool,
 	middle_dragging: bool,
 	last_cursor_pos: Option<PhysicalPosition<f64>>,
@@ -1175,6 +1567,265 @@ struct AvatarApp {
 	close_hotkey: Option<CloseHotkey>,
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
+	wardrobe_transition: Option<WardrobeTransitionState>,
+	wardrobe_apply_rx: Option<Receiver<WardrobeAsyncApplyResult>>,
+	#[cfg(windows)]
+	renderer_tray: Option<renderer_tray::RendererTray>,
+	#[cfg(windows)]
+	last_renderer_tray_refresh_at: Option<Instant>,
+	#[cfg(windows)]
+	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
+	wardrobe_midi: Option<WardrobeMidiRuntime>,
+	active_profile_animator_actions: BTreeSet<String>,
+	active_animator_transitions: Vec<ActiveAnimatorTransition>,
+}
+
+#[derive(Clone, Debug)]
+struct FrameBenchState {
+	target_frames: u32,
+	warmup_frames: u32,
+	skipped_frames: u32,
+	frames: u32,
+	wall_ms: FrameBenchMetric,
+	cpu_record_ms: FrameBenchMetric,
+	cpu_record_no_surface_ms: FrameBenchMetric,
+	cpu_total_ms: FrameBenchMetric,
+	motion_apply_ms: FrameBenchMetric,
+	dynamics_step_ms: FrameBenchMetric,
+	dynamics_fixed_steps: FrameBenchMetric,
+	dynamics_world_ms: FrameBenchMetric,
+	dynamics_collider_ms: FrameBenchMetric,
+	dynamics_solve_ms: FrameBenchMetric,
+	dynamics_solve_collision_ms: FrameBenchMetric,
+	dynamics_solve_propagate_ms: FrameBenchMetric,
+	frame_globals_ms: FrameBenchMetric,
+	surface_acquire_ms: FrameBenchMetric,
+	target_prepare_ms: FrameBenchMetric,
+	draw_state_refresh_ms: FrameBenchMetric,
+	draw_doc_lock_ms: FrameBenchMetric,
+	draw_expression_select_ms: FrameBenchMetric,
+	draw_update_total_ms: FrameBenchMetric,
+	scene_world_ms: FrameBenchMetric,
+	draw_skin_palette_ms: FrameBenchMetric,
+	draw_skin_palette_write_ms: FrameBenchMetric,
+	draw_fur_source_vertices_ms: FrameBenchMetric,
+	draw_expression_values_ms: FrameBenchMetric,
+	draw_morph_weights_ms: FrameBenchMetric,
+	draw_transform_loop_ms: FrameBenchMetric,
+	bone_collider_debug_ms: FrameBenchMetric,
+	command_encode_ms: FrameBenchMetric,
+	submit_present_ms: FrameBenchMetric,
+	spout_cpu_ms: FrameBenchMetric,
+	contact_eval_ms: FrameBenchMetric,
+	runtime_action_eval_ms: FrameBenchMetric,
+	gpu_ms: FrameBenchMetric,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameBenchMetric {
+	sum: f32,
+	max: f32,
+}
+
+impl FrameBenchMetric {
+	fn push(&mut self, value: f32) {
+		self.sum += value;
+		self.max = self.max.max(value);
+	}
+
+	fn avg(self, frames: u32) -> f32 {
+		if frames == 0 {
+			0.0
+		} else {
+			self.sum / frames as f32
+		}
+	}
+}
+
+impl FrameBenchState {
+	fn new(target_frames: u32) -> Self {
+		Self {
+			target_frames: target_frames.max(1),
+			warmup_frames: 5,
+			skipped_frames: 0,
+			frames: 0,
+			wall_ms: FrameBenchMetric::default(),
+			cpu_record_ms: FrameBenchMetric::default(),
+			cpu_record_no_surface_ms: FrameBenchMetric::default(),
+			cpu_total_ms: FrameBenchMetric::default(),
+			motion_apply_ms: FrameBenchMetric::default(),
+			dynamics_step_ms: FrameBenchMetric::default(),
+			dynamics_fixed_steps: FrameBenchMetric::default(),
+			dynamics_world_ms: FrameBenchMetric::default(),
+			dynamics_collider_ms: FrameBenchMetric::default(),
+			dynamics_solve_ms: FrameBenchMetric::default(),
+			dynamics_solve_collision_ms: FrameBenchMetric::default(),
+			dynamics_solve_propagate_ms: FrameBenchMetric::default(),
+			frame_globals_ms: FrameBenchMetric::default(),
+			surface_acquire_ms: FrameBenchMetric::default(),
+			target_prepare_ms: FrameBenchMetric::default(),
+			draw_state_refresh_ms: FrameBenchMetric::default(),
+			draw_doc_lock_ms: FrameBenchMetric::default(),
+			draw_expression_select_ms: FrameBenchMetric::default(),
+			draw_update_total_ms: FrameBenchMetric::default(),
+			scene_world_ms: FrameBenchMetric::default(),
+			draw_skin_palette_ms: FrameBenchMetric::default(),
+			draw_skin_palette_write_ms: FrameBenchMetric::default(),
+			draw_fur_source_vertices_ms: FrameBenchMetric::default(),
+			draw_expression_values_ms: FrameBenchMetric::default(),
+			draw_morph_weights_ms: FrameBenchMetric::default(),
+			draw_transform_loop_ms: FrameBenchMetric::default(),
+			bone_collider_debug_ms: FrameBenchMetric::default(),
+			command_encode_ms: FrameBenchMetric::default(),
+			submit_present_ms: FrameBenchMetric::default(),
+			spout_cpu_ms: FrameBenchMetric::default(),
+			contact_eval_ms: FrameBenchMetric::default(),
+			runtime_action_eval_ms: FrameBenchMetric::default(),
+			gpu_ms: FrameBenchMetric::default(),
+		}
+	}
+
+	fn push(&mut self, timings: &FrameTimings) -> bool {
+		if self.skipped_frames < self.warmup_frames {
+			self.skipped_frames = self.skipped_frames.saturating_add(1);
+			return false;
+		}
+		self.frames = self.frames.saturating_add(1);
+		self.wall_ms.push(timings.wall_since_last_ms);
+		self.cpu_record_ms.push(timings.cpu_record_ms);
+		self.cpu_record_no_surface_ms.push(frame_cpu_busy_ms(timings));
+		self.cpu_total_ms.push(timings.cpu_total_ms);
+		self.motion_apply_ms.push(timings.motion_apply_ms);
+		self.dynamics_step_ms.push(timings.dynamics_step_ms);
+		self.dynamics_fixed_steps.push(timings.dynamics_profile.fixed_steps as f32);
+		self.dynamics_world_ms.push(timings.dynamics_profile.world_ms);
+		self.dynamics_collider_ms.push(timings.dynamics_profile.collider_ms);
+		self.dynamics_solve_ms.push(timings.dynamics_profile.solve_ms);
+		self.dynamics_solve_collision_ms.push(timings.dynamics_profile.solve_collision_ms);
+		self.dynamics_solve_propagate_ms.push(timings.dynamics_profile.solve_propagate_ms);
+		self.frame_globals_ms.push(timings.frame_globals_ms);
+		self.surface_acquire_ms.push(timings.surface_acquire_ms);
+		self.target_prepare_ms.push(timings.target_prepare_ms);
+		self.draw_state_refresh_ms.push(timings.draw_state_refresh_ms);
+		self.draw_doc_lock_ms.push(timings.draw_doc_lock_ms);
+		self.draw_expression_select_ms.push(timings.draw_expression_select_ms);
+		self.draw_update_total_ms.push(timings.draw_update_total_ms);
+		self.scene_world_ms.push(timings.scene_world_ms);
+		self.draw_skin_palette_ms.push(timings.draw_skin_palette_ms);
+		self.draw_skin_palette_write_ms.push(timings.draw_skin_palette_write_ms);
+		self.draw_fur_source_vertices_ms.push(timings.draw_fur_source_vertices_ms);
+		self.draw_expression_values_ms.push(timings.draw_expression_values_ms);
+		self.draw_morph_weights_ms.push(timings.draw_morph_weights_ms);
+		self.draw_transform_loop_ms.push(timings.draw_transform_loop_ms);
+		self.bone_collider_debug_ms.push(timings.bone_collider_debug_ms);
+		self.command_encode_ms.push(timings.command_encode_ms);
+		self.submit_present_ms.push(timings.submit_present_ms);
+		self.spout_cpu_ms.push(timings.spout_cpu_ms);
+		self.contact_eval_ms.push(timings.contact_eval_ms);
+		self.runtime_action_eval_ms.push(timings.runtime_action_eval_ms);
+		self.gpu_ms.push(timings.gpu_ms);
+		self.frames >= self.target_frames
+	}
+
+	fn log_summary(&self) {
+		let frames = self.frames.max(1);
+		let fps = if self.wall_ms.avg(frames) > 0.01 {
+			1000.0 / self.wall_ms.avg(frames)
+		} else {
+			0.0
+		};
+		let dynamics_profile_enabled = self.dynamics_fixed_steps.max > 0.0
+			|| self.dynamics_world_ms.max > 0.0
+			|| self.dynamics_collider_ms.max > 0.0
+			|| self.dynamics_solve_ms.max > 0.0;
+		eprintln!(
+			"un-avatar-renderer: frame bench frames={} warmup={} fps_avg={:.1} wall_avg={:.2}ms wall_max={:.2}ms cpu_record_avg={:.2}ms cpu_record_max={:.2}ms cpu_no_surface_avg={:.2}ms cpu_no_surface_max={:.2}ms cpu_total_avg={:.2}ms cpu_total_max={:.2}ms gpu_avg={:.2}ms gpu_max={:.2}ms",
+			self.frames,
+			self.skipped_frames,
+			fps,
+			self.wall_ms.avg(frames),
+			self.wall_ms.max,
+			self.cpu_record_ms.avg(frames),
+			self.cpu_record_ms.max,
+			self.cpu_record_no_surface_ms.avg(frames),
+			self.cpu_record_no_surface_ms.max,
+			self.cpu_total_ms.avg(frames),
+			self.cpu_total_ms.max,
+			self.gpu_ms.avg(frames),
+			self.gpu_ms.max,
+		);
+		let dynamics_profile_detail = if dynamics_profile_enabled {
+			format!(
+				" dyn_steps={:.2}/{:.2} dyn_world={:.2}/{:.2}ms dyn_colliders={:.2}/{:.2}ms dyn_solve={:.2}/{:.2}ms dyn_solve_collision={:.2}/{:.2}ms dyn_solve_propagate={:.2}/{:.2}ms",
+				self.dynamics_fixed_steps.avg(frames),
+				self.dynamics_fixed_steps.max,
+				self.dynamics_world_ms.avg(frames),
+				self.dynamics_world_ms.max,
+				self.dynamics_collider_ms.avg(frames),
+				self.dynamics_collider_ms.max,
+				self.dynamics_solve_ms.avg(frames),
+				self.dynamics_solve_ms.max,
+				self.dynamics_solve_collision_ms.avg(frames),
+				self.dynamics_solve_collision_ms.max,
+				self.dynamics_solve_propagate_ms.avg(frames),
+				self.dynamics_solve_propagate_ms.max,
+			)
+		} else {
+			String::new()
+		};
+		eprintln!(
+			"un-avatar-renderer: frame bench detail motion={:.2}/{:.2}ms dynamics={:.2}/{:.2}ms{} globals={:.2}/{:.2}ms surface={:.2}/{:.2}ms target={:.2}/{:.2}ms draw_state={:.2}/{:.2}ms doc_lock={:.2}/{:.2}ms expr_select={:.2}/{:.2}ms draw_update={:.2}/{:.2}ms scene_world={:.2}/{:.2}ms skin_palette={:.2}/{:.2}ms skin_write={:.2}/{:.2}ms fur_source={:.2}/{:.2}ms expr_values={:.2}/{:.2}ms morph_weights={:.2}/{:.2}ms draw_transform={:.2}/{:.2}ms collider_debug={:.2}/{:.2}ms command={:.2}/{:.2}ms submit={:.2}/{:.2}ms spout={:.2}/{:.2}ms contact={:.2}/{:.2}ms actions={:.2}/{:.2}ms",
+			self.motion_apply_ms.avg(frames),
+			self.motion_apply_ms.max,
+			self.dynamics_step_ms.avg(frames),
+			self.dynamics_step_ms.max,
+			dynamics_profile_detail,
+			self.frame_globals_ms.avg(frames),
+			self.frame_globals_ms.max,
+			self.surface_acquire_ms.avg(frames),
+			self.surface_acquire_ms.max,
+			self.target_prepare_ms.avg(frames),
+			self.target_prepare_ms.max,
+			self.draw_state_refresh_ms.avg(frames),
+			self.draw_state_refresh_ms.max,
+			self.draw_doc_lock_ms.avg(frames),
+			self.draw_doc_lock_ms.max,
+			self.draw_expression_select_ms.avg(frames),
+			self.draw_expression_select_ms.max,
+			self.draw_update_total_ms.avg(frames),
+			self.draw_update_total_ms.max,
+			self.scene_world_ms.avg(frames),
+			self.scene_world_ms.max,
+			self.draw_skin_palette_ms.avg(frames),
+			self.draw_skin_palette_ms.max,
+			self.draw_skin_palette_write_ms.avg(frames),
+			self.draw_skin_palette_write_ms.max,
+			self.draw_fur_source_vertices_ms.avg(frames),
+			self.draw_fur_source_vertices_ms.max,
+			self.draw_expression_values_ms.avg(frames),
+			self.draw_expression_values_ms.max,
+			self.draw_morph_weights_ms.avg(frames),
+			self.draw_morph_weights_ms.max,
+			self.draw_transform_loop_ms.avg(frames),
+			self.draw_transform_loop_ms.max,
+			self.bone_collider_debug_ms.avg(frames),
+			self.bone_collider_debug_ms.max,
+			self.command_encode_ms.avg(frames),
+			self.command_encode_ms.max,
+			self.submit_present_ms.avg(frames),
+			self.submit_present_ms.max,
+			self.spout_cpu_ms.avg(frames),
+			self.spout_cpu_ms.max,
+			self.contact_eval_ms.avg(frames),
+			self.contact_eval_ms.max,
+			self.runtime_action_eval_ms.avg(frames),
+			self.runtime_action_eval_ms.max,
+		);
+	}
+}
+
+fn frame_cpu_busy_ms(timings: &FrameTimings) -> f32 {
+	(timings.cpu_record_ms - timings.surface_acquire_ms).max(0.0)
 }
 
 impl AvatarApp {
@@ -1190,7 +1841,8 @@ impl AvatarApp {
 		} else {
 			opts.runtime_status_address
 				.map(|address| start_runtime_status_server(address, &opts))
-		};
+		}
+		.or_else(|| Some(Arc::new(Mutex::new(initial_runtime_snapshot(&opts)))));
 		let close_hotkey = match CloseHotkey::parse(&opts.close_hotkey) {
 			Ok(close_hotkey) => close_hotkey,
 			Err(error) => {
@@ -1199,12 +1851,15 @@ impl AvatarApp {
 			}
 		};
 		let camera_locked = opts.camera_locked;
+		let frame_bench = opts.bench_frames.map(FrameBenchState::new);
+		let preview_window_enabled = !(opts.spout.enabled && opts.start_minimized);
 		Self {
 			opts,
 			title_base,
 			event_proxy,
 			window: None,
 			gpu: None,
+			preview_window_enabled,
 			startup_progress: None,
 			startup_pending_document: false,
 			startup_failed: None,
@@ -1213,9 +1868,13 @@ impl AvatarApp {
 			started_at: Instant::now(),
 			fps_smooth: 60.0,
 			runtime_status_frame_seq: Cell::new(0),
+			resolver_cache_key_generation: Arc::new(AtomicU64::new(0)),
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
+			frame_bench,
+			pending_surface_size: None,
+			last_resize_at: None,
 			right_dragging: false,
 			middle_dragging: false,
 			last_cursor_pos: None,
@@ -1226,6 +1885,17 @@ impl AvatarApp {
 			close_hotkey,
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
+			wardrobe_transition: None,
+			wardrobe_apply_rx: None,
+			#[cfg(windows)]
+			renderer_tray: None,
+			#[cfg(windows)]
+			last_renderer_tray_refresh_at: None,
+			#[cfg(windows)]
+			wardrobe_hotkeys: None,
+			wardrobe_midi: None,
+			active_profile_animator_actions: BTreeSet::new(),
+			active_animator_transitions: Vec::new(),
 		}
 	}
 
@@ -1236,11 +1906,35 @@ impl AvatarApp {
 	}
 
 	fn reconfigure(&mut self, width: u32, height: u32) {
-		let Some(gpu) = self.gpu.as_mut() else {
-			return;
-		};
-		gpu.resize(width, height);
+		self.pending_surface_size = Some((width, height));
+		self.last_resize_at = Some(Instant::now());
 		self.update_runtime_surface(width, height);
+	}
+
+	fn apply_pending_reconfigure(&mut self, now: Instant, window: &Window) -> bool {
+		let Some((pending_width, pending_height)) = self.pending_surface_size else {
+			return false;
+		};
+		if self
+			.last_resize_at
+			.is_some_and(|resized_at| now.saturating_duration_since(resized_at) < SURFACE_RESIZE_SETTLE_DELAY)
+		{
+			return true;
+		}
+
+		let size = window.inner_size();
+		let width = if size.width == 0 { pending_width } else { size.width };
+		let height = if size.height == 0 { pending_height } else { size.height };
+		if width == 0 || height == 0 {
+			return true;
+		}
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.resize(width, height);
+		}
+		self.pending_surface_size = None;
+		self.last_resize_at = None;
+		self.update_runtime_surface(width, height);
+		false
 	}
 
 	fn update_runtime_surface(&self, width: u32, height: u32) {
@@ -1268,6 +1962,855 @@ impl AvatarApp {
 		}
 		let size = window.inner_size();
 		status.window_inner_size = Some([size.width, size.height]);
+		status.minimized = !self.preview_window_enabled || window.is_minimized().unwrap_or(false);
+	}
+
+	fn preview_window_output_enabled(&self) -> bool {
+		self.preview_window_enabled && self.window.as_ref().is_some_and(|window| !window.is_minimized().unwrap_or(false))
+	}
+
+	fn hide_minimized_spout_preview(&mut self) -> bool {
+		if !self.opts.spout.enabled || !self.preview_window_enabled {
+			return false;
+		}
+		let Some(window) = self.window.as_ref() else {
+			return false;
+		};
+		if !window.is_minimized().unwrap_or(false) {
+			return false;
+		}
+		self.set_preview_window_enabled(false, false);
+		true
+	}
+
+	fn set_preview_window_enabled(&mut self, enabled: bool, activate: bool) {
+		self.preview_window_enabled = enabled;
+		if let Some(window) = &self.window {
+			if enabled {
+				window.set_visible(true);
+				window.set_minimized(false);
+				if activate {
+					window.focus_window();
+				}
+			} else {
+				window.set_visible(false);
+			}
+		}
+		self.update_runtime_window_geometry();
+	}
+
+	fn toggle_preview_window_from_tray(&mut self) {
+		let next_enabled = !self.preview_window_output_enabled();
+		self.set_preview_window_enabled(next_enabled, next_enabled);
+		self.request_redraw();
+	}
+
+	fn apply_configured_window_icon(&self) {
+		let Some(window) = self.window.as_ref() else {
+			return;
+		};
+		if let Some(icon) = self
+			.opts
+			.icon_path
+			.as_deref()
+			.and_then(load_window_icon)
+			.or_else(load_default_window_icon)
+		{
+			window.set_window_icon(Some(icon));
+		}
+	}
+
+	#[cfg(windows)]
+	fn ensure_renderer_tray(&mut self) {
+		if self.renderer_tray.is_some() {
+			return;
+		}
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+			return;
+		};
+		match renderer_tray::RendererTray::new(&self.opts, &snapshot, self.event_proxy.clone()) {
+			Ok(tray) => {
+				self.renderer_tray = Some(tray);
+			}
+			Err(error) => eprintln!("un-avatar-renderer: renderer tray disabled: {error}"),
+		}
+	}
+
+	#[cfg(windows)]
+	fn refresh_renderer_tray(&mut self) {
+		let now = Instant::now();
+		if self
+			.last_renderer_tray_refresh_at
+			.is_some_and(|last| now.saturating_duration_since(last) < RENDERER_TRAY_REFRESH_INTERVAL)
+		{
+			return;
+		}
+		self.last_renderer_tray_refresh_at = Some(now);
+		let Some(tray) = self.renderer_tray.as_mut() else {
+			return;
+		};
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+			return;
+		};
+		tray.refresh(&self.opts, &snapshot);
+	}
+
+	#[cfg(windows)]
+	fn handle_renderer_tray_menu(&mut self, event_loop: &ActiveEventLoop, id: String) {
+		let Some(action) = self.renderer_tray.as_ref().and_then(|tray| tray.action(&id)) else {
+			return;
+		};
+		self.handle_renderer_tray_action(event_loop, action);
+	}
+
+	#[cfg(windows)]
+	fn handle_renderer_tray_action(&mut self, event_loop: &ActiveEventLoop, action: renderer_tray::RendererTrayAction) {
+		use renderer_tray::RendererTrayAction;
+		if let Some(events) = renderer_tray_output_events(&action) {
+			for event in events {
+				let _ = self.event_proxy.send_event(event);
+			}
+			return;
+		}
+		match action {
+			RendererTrayAction::ActivatePreview => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::Activate);
+			}
+			RendererTrayAction::SetWindowPreview
+			| RendererTrayAction::SetSpoutPreview
+			| RendererTrayAction::SetSpoutOnly
+			| RendererTrayAction::SetSpoutResolution { .. } => {}
+			RendererTrayAction::SaveSpoutToProfile => {
+				if let Err(error) = self.save_tray_spout_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveWindowToProfile => {
+				if let Err(error) = self.save_tray_window_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::RestoreWindowFromProfile => {
+				if let Err(error) = self.restore_tray_window_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveCameraToProfile => {
+				if let Err(error) = self.save_tray_camera_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::RestoreCameraFromProfile => {
+				if let Err(error) = self.restore_tray_camera_from_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SaveWardrobeToProfile => {
+				if let Err(error) = self.save_tray_wardrobe_to_profile() {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::SetAlwaysOnTop(always_on_top) => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: None,
+					always_on_top: Some(always_on_top),
+					minimized: None,
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetInputPassthrough(input_passthrough) => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+					decorations: None,
+					transparent: None,
+					input_passthrough: Some(input_passthrough),
+					always_on_top: None,
+					minimized: None,
+					width: None,
+					height: None,
+				});
+			}
+			RendererTrayAction::SetCurrentWardrobeDynamics(enabled) => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self
+					.event_proxy
+					.send_event(RendererControlEvent::SetCurrentWardrobeDynamicsEnabled { enabled, result });
+			}
+			RendererTrayAction::SetWardrobe(set_id) => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self.event_proxy.send_event(RendererControlEvent::SetWardrobe { set_id, result });
+			}
+			RendererTrayAction::SetParameter { name, value } => {
+				let result = Arc::new(Mutex::new(None));
+				let _ = self
+					.event_proxy
+					.send_event(RendererControlEvent::SetParameter { name, value, result });
+			}
+			RendererTrayAction::ActivateAction(action_id) => {
+				let result = Arc::new(Mutex::new(None));
+				if self.opts.animator_action_modes.contains_key(&action_id) {
+					let _ = self
+						.event_proxy
+						.send_event(RendererControlEvent::ActivateProfileAnimatorAction { action_id, result });
+				} else {
+					let _ = self.event_proxy.send_event(RendererControlEvent::ActivateAction {
+						action_id: Some(action_id),
+						supervisor_command: None,
+						expression_menu_path: None,
+						menu_path: None,
+						wardrobe_set_id: None,
+						parameter_name: None,
+						parameter_value: None,
+						result,
+					});
+				}
+			}
+			RendererTrayAction::OpenSupervisor => {
+				if let Err(error) = renderer_tray::open_supervisor(self.opts.manifest_path.as_deref()) {
+					eprintln!("un-avatar-renderer: {error}");
+				}
+			}
+			RendererTrayAction::ResetCamera => {
+				let _ = self.event_proxy.send_event(RendererControlEvent::ResetCamera);
+			}
+			RendererTrayAction::Quit => {
+				self.hide_window_for_shutdown();
+				event_loop.exit();
+			}
+		}
+	}
+
+	fn activate_profile_animator_action(&mut self, action_id: &str) -> Result<(), String> {
+		let mode = self
+			.opts
+			.animator_action_modes
+			.get(action_id)
+			.cloned()
+			.unwrap_or_else(|| "toggle".to_string());
+		let active = self.active_profile_animator_actions.contains(action_id)
+			|| self
+				.runtime_status
+				.as_ref()
+				.and_then(|status| status.lock().ok())
+				.is_some_and(|status| {
+					status
+						.runtime_actions
+						.iter()
+						.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
+				});
+		if mode == "toggle" && active {
+			let parameter = self.runtime_status.as_ref().and_then(|status| {
+				status.lock().ok().and_then(|status| {
+					status
+						.runtime_actions
+						.iter()
+						.find(|action| action.action_id == action_id)
+						.and_then(|action| action.parameter_name.as_ref().zip(action.parameter_value))
+						.map(|(name, value)| (name.clone(), value))
+				})
+			});
+			let activation = if let Some((name, value)) = parameter {
+				let inactive_value = if value.abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON {
+					1.0
+				} else {
+					0.0
+				};
+				if self.schedule_animator_parameter_transition(action_id, &name, inactive_value) {
+					None
+				} else {
+					let activation = match self.gpu.as_mut() {
+						Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
+						None => return Err("renderer is not initialized".to_string()),
+					};
+					self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
+					activation
+				}
+			} else {
+				if self.schedule_animator_expression_transitions(action_id, false) {
+					None
+				} else {
+					match self.gpu.as_mut() {
+						Some(gpu) => Some(gpu.deactivate_runtime_action(action_id)?),
+						None => return Err("renderer is not initialized".to_string()),
+					}
+				}
+			};
+			self.active_profile_animator_actions.remove(action_id);
+			if let Some(activation) = activation.as_ref() {
+				self.apply_runtime_activation_status(activation);
+			}
+			self.request_redraw();
+			return Ok(());
+		}
+		let outcome = match self.gpu.as_mut() {
+			Some(gpu) => gpu.activate_runtime_action(Some(action_id), None, None, None, None),
+			None => Err("renderer is not initialized".to_string()),
+		}?;
+		self.schedule_animator_activation_transitions(action_id, &outcome);
+		if mode == "toggle" {
+			self.active_profile_animator_actions.insert(action_id.to_string());
+		}
+		self.apply_runtime_activation_status(&outcome);
+		self.request_redraw();
+		Ok(())
+	}
+
+	fn start_wardrobe_transition(&mut self, set_id: String, result: CommandResultSlot) {
+		if self.wardrobe_transition.is_some() {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Err("wardrobe transition already running".to_string()));
+			}
+			return;
+		}
+		let Some(gpu) = self.gpu.as_ref() else {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Err("renderer is not initialized".to_string()));
+			}
+			return;
+		};
+		if wardrobe_set_request_matches_active(gpu.active_wardrobe_set().as_deref(), gpu.base_wardrobe_set().as_deref(), &set_id) {
+			if let Ok(mut guard) = result.lock() {
+				*guard = Some(Ok(()));
+			}
+			return;
+		}
+		let saved_camera = gpu.camera_state_snapshot();
+		let billboard_center = gpu.wardrobe_billboard_anchor_world(
+			saved_camera,
+			&self.opts.wardrobe_billboard_anchor,
+			self.opts.wardrobe_billboard_y_offset_m,
+		);
+		let now = Instant::now();
+		self.wardrobe_transition = Some(WardrobeTransitionState {
+			set_id,
+			result,
+			saved_camera,
+			billboard_center,
+			phase: WardrobeTransitionPhase::Exit,
+			phase_started_at: now,
+			billboard_started_at: None,
+			started_at: now,
+		});
+		self.enqueue_camera_transition(
+			wardrobe_exit_camera_patch(saved_camera),
+			CameraTransitionOptions {
+				duration_ms: WARDROBE_TRANSITION_EXIT_MS,
+				easing: CameraTransitionEasing::EaseOutCubic,
+				mode: CameraTransitionMode::Replace,
+			},
+		);
+		self.request_redraw();
+	}
+
+	fn update_wardrobe_transition_before_frame(&mut self, now: Instant) {
+		self.poll_wardrobe_apply_worker();
+		let Some(transition) = self.wardrobe_transition.as_mut() else {
+			return;
+		};
+		match transition.phase {
+			WardrobeTransitionPhase::Exit
+				if now.saturating_duration_since(transition.phase_started_at)
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_EXIT_MS)) =>
+			{
+				transition.phase = WardrobeTransitionPhase::BillboardPrimed;
+				transition.phase_started_at = now;
+				transition.billboard_started_at = Some(now);
+				self.request_redraw();
+			}
+			WardrobeTransitionPhase::Enter
+				if now.saturating_duration_since(transition.phase_started_at)
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_ENTER_MS)) =>
+			{
+				self.wardrobe_transition = None;
+				self.request_redraw();
+			}
+			WardrobeTransitionPhase::BillboardHold if wardrobe_billboard_min_visible_elapsed(transition.billboard_started_at, now) => {
+				transition.phase = WardrobeTransitionPhase::Enter;
+				transition.phase_started_at = now;
+				let saved_camera = transition.saved_camera;
+				self.enqueue_camera_transition(
+					camera_state_patch_from_snapshot(saved_camera),
+					CameraTransitionOptions {
+						duration_ms: WARDROBE_TRANSITION_ENTER_MS,
+						easing: CameraTransitionEasing::EaseOutCubic,
+						mode: CameraTransitionMode::Replace,
+					},
+				);
+			}
+			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying => {
+				self.request_redraw();
+			}
+			_ => {}
+		}
+	}
+
+	fn wardrobe_changing_billboard_frame(&self, now: Instant) -> Option<gpu::WardrobeChangingBillboardFrame> {
+		let transition = self.wardrobe_transition.as_ref()?;
+		let billboard = transition
+			.saved_camera
+			.wardrobe_billboard_camera(self.wardrobe_transition_aspect_wh(), transition.billboard_center);
+		matches!(
+			transition.phase,
+			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::BillboardHold
+		)
+		.then_some(gpu::WardrobeChangingBillboardFrame {
+			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
+			billboard_center: billboard.center,
+			billboard_size: billboard.size,
+			billboard_view_proj: billboard.view_proj,
+			billboard_camera_pos: billboard.camera_pos,
+		})
+	}
+
+	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
+		let transition = self.wardrobe_transition.as_ref()?;
+		matches!(transition.phase, WardrobeTransitionPhase::BillboardPrimed).then(|| transition.set_id.clone())
+	}
+
+	fn start_wardrobe_apply_worker_after_render(&mut self, set_id: String) {
+		if self.wardrobe_apply_rx.is_some() {
+			return;
+		}
+		let Some(gpu) = self.gpu.as_ref() else {
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err("renderer is not initialized".to_string()),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+			return;
+		};
+		let Some(doc_arc) = gpu.document_arc() else {
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err("document is not attached".to_string()),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+			return;
+		};
+		let context = gpu.scene_build_context();
+		let rest_nodes = gpu.rest_nodes_for_scene_prepare();
+		let options = self.document_attach_options();
+		if let Some(transition) = self.wardrobe_transition.as_mut() {
+			transition.phase = WardrobeTransitionPhase::Applying;
+			transition.phase_started_at = Instant::now();
+		}
+		let (tx, rx) = mpsc::channel();
+		self.wardrobe_apply_rx = Some(rx);
+		let thread_set_id = set_id.clone();
+		let spawn_result = thread::Builder::new().name("un-avatar-wardrobe-apply".to_string()).spawn(move || {
+			let scene = (|| {
+				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+				let mut cloned = (*doc).clone();
+				drop(doc);
+				if let Some(rest_nodes) = rest_nodes.as_ref() {
+					gpu::restore_runtime_scene_transforms_to_rest(&mut cloned, rest_nodes.as_slice())?;
+				}
+				crate::model_loader::apply_required_wardrobe_set(&mut cloned, &thread_set_id)?;
+				let prepared = context.prepare_document_scene(Arc::new(cloned), &options, |_| {})?;
+				Ok((prepared, options))
+			})();
+			let _ = tx.send(WardrobeAsyncApplyResult {
+				set_id: thread_set_id,
+				scene,
+			});
+		});
+		if let Err(err) = spawn_result {
+			self.wardrobe_apply_rx = None;
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err(format!("spawn wardrobe apply worker failed: {err}")),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+		}
+	}
+
+	fn poll_wardrobe_apply_worker(&mut self) {
+		let Some(rx) = self.wardrobe_apply_rx.as_ref() else {
+			return;
+		};
+		let Ok(result) = rx.try_recv() else {
+			return;
+		};
+		self.wardrobe_apply_rx = None;
+		let outcome = match result.scene {
+			Ok((prepared, options)) => match self.gpu.as_mut() {
+				Some(gpu) => gpu.attach_prepared_document(prepared, options),
+				None => Err("renderer is not initialized".to_string()),
+			},
+			Err(err) => Err(err),
+		};
+		let (active_set_id, active_asset_groups, asset_upload_plan) = if outcome.is_ok() {
+			if let Some(gpu) = self.gpu.as_ref() {
+				(
+					gpu.active_wardrobe_set(),
+					gpu.active_asset_groups(),
+					gpu.wardrobe_asset_upload_plan(),
+				)
+			} else {
+				(None, Vec::new(), WardrobeAssetUploadPlan::default())
+			}
+		} else {
+			(None, Vec::new(), WardrobeAssetUploadPlan::default())
+		};
+		let _ = result.set_id;
+		self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+			outcome,
+			active_set_id,
+			active_asset_groups,
+			asset_upload_plan,
+		});
+	}
+
+	fn finish_wardrobe_apply_after_render(&mut self, result: WardrobeApplyFrameResult) {
+		let saved_camera = self.wardrobe_transition.as_ref().map(|transition| transition.saved_camera);
+		let success = result.outcome.is_ok();
+		if let Some(transition) = self.wardrobe_transition.as_ref() {
+			if let Ok(mut guard) = transition.result.lock() {
+				*guard = Some(result.outcome.clone());
+			}
+		}
+		if success {
+			self.update_runtime_wardrobe_set(result.active_set_id);
+			self.update_runtime_asset_groups(result.active_asset_groups);
+			self.update_runtime_wardrobe_asset_upload(result.asset_upload_plan);
+			self.update_runtime_resolver_cache_key_deferred();
+		}
+		if saved_camera.is_some() {
+			if let Some(transition) = self.wardrobe_transition.as_mut() {
+				transition.phase = WardrobeTransitionPhase::BillboardHold;
+				transition.phase_started_at = Instant::now();
+			}
+		} else {
+			self.wardrobe_transition = None;
+		}
+		self.request_redraw();
+	}
+
+	fn apply_animator_profile_runtime(
+		&mut self,
+		actions: Vec<AnimatorProfileActionControl>,
+		bindings: Vec<AnimatorProfileBindingControl>,
+	) -> Result<(), String> {
+		let mut action_ids = Vec::new();
+		let mut action_modes = BTreeMap::new();
+		let mut action_values = BTreeMap::new();
+		let mut action_transitions = BTreeMap::new();
+		for action in actions {
+			let id = action.id.trim();
+			if id.is_empty() {
+				continue;
+			}
+			let mode = normalize_animator_action_mode_runtime(&action.mode);
+			if mode == "off" {
+				continue;
+			}
+			if action_modes.contains_key(id) {
+				continue;
+			}
+			action_ids.push(id.to_string());
+			action_modes.insert(id.to_string(), mode);
+			if let Some(value) = action.value.filter(|value| value.is_finite()) {
+				action_values.insert(id.to_string(), value.clamp(0.0, 1.0));
+			}
+			if let Some(curve) = action
+				.transition_curve
+				.as_deref()
+				.and_then(normalize_animator_transition_curve_runtime)
+			{
+				let duration_ms = action.transition_ms.unwrap_or(0).min(3000);
+				if duration_ms > 0 {
+					action_transitions.insert(id.to_string(), AnimatorActionTransitionOptions { curve, duration_ms });
+				}
+			}
+		}
+
+		let next_bindings = animator_bindings_from_runtime_controls(bindings);
+
+		let enabled: BTreeSet<_> = action_ids.iter().cloned().collect();
+		self.active_profile_animator_actions.retain(|id| enabled.contains(id));
+		self.opts.animator_action_ids = action_ids;
+		self.opts.animator_action_modes = action_modes;
+		self.opts.animator_action_values = action_values;
+		self.opts.animator_action_transitions = action_transitions;
+		self.opts.animator_bindings = next_bindings;
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.refresh_profile_expression_runtime_actions(&self.opts.animator_action_ids, &self.opts.animator_action_values)?;
+		}
+		self.restart_input_binding_runtimes();
+		self.update_runtime_profile_animator_actions();
+		#[cfg(windows)]
+		{
+			self.last_renderer_tray_refresh_at = None;
+			self.refresh_renderer_tray();
+		}
+		Ok(())
+	}
+
+	fn apply_input_bindings_runtime(
+		&mut self,
+		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+		animator_bindings: Vec<AnimatorProfileBindingControl>,
+	) -> Result<(), String> {
+		self.opts.wardrobe_bindings = wardrobe_bindings_from_runtime_controls(wardrobe_bindings);
+		self.opts.animator_bindings = animator_bindings_from_runtime_controls(animator_bindings);
+		self.restart_input_binding_runtimes();
+		#[cfg(windows)]
+		{
+			self.last_renderer_tray_refresh_at = None;
+			self.refresh_renderer_tray();
+		}
+		Ok(())
+	}
+
+	fn apply_wardrobe_transition_runtime(&mut self, billboard_anchor: String, billboard_y_offset_mm: f32) -> Result<(), String> {
+		let anchor = match billboard_anchor.trim().to_ascii_lowercase().as_str() {
+			"head" => "head",
+			"neck" => "neck",
+			"spine" => "spine",
+			_ => "neck",
+		};
+		self.opts.wardrobe_billboard_anchor = anchor.to_string();
+		self.opts.wardrobe_billboard_y_offset_m = (billboard_y_offset_mm / 1000.0).clamp(-1.0, 1.0);
+		Ok(())
+	}
+
+	fn restart_input_binding_runtimes(&mut self) {
+		#[cfg(windows)]
+		{
+			self.wardrobe_hotkeys = None;
+			self.wardrobe_hotkeys =
+				WardrobeHotkeyRuntime::start(&self.opts.wardrobe_bindings, &self.opts.animator_bindings, self.event_proxy.clone());
+		}
+		self.wardrobe_midi = None;
+		self.wardrobe_midi =
+			WardrobeMidiRuntime::start(&self.opts.wardrobe_bindings, &self.opts.animator_bindings, self.event_proxy.clone());
+	}
+
+	fn animator_transition_options(&self, action_id: &str) -> Option<(AnimatorTransitionCurve, Duration)> {
+		let AnimatorActionTransitionOptions { curve, duration_ms } = self.opts.animator_action_transitions.get(action_id)?;
+		let curve = parse_animator_transition_curve(curve)?;
+		if *duration_ms == 0 {
+			return None;
+		}
+		Some((curve, Duration::from_millis(u64::from((*duration_ms).min(3000)))))
+	}
+
+	fn schedule_animator_activation_transitions(&mut self, action_id: &str, activation: &gpu::RuntimeActionActivation) {
+		for (name, end) in &activation.parameter_values {
+			let _ = self.schedule_animator_parameter_transition(action_id, name, *end);
+		}
+		let _ = self.schedule_animator_expression_transitions(action_id, true);
+	}
+
+	fn schedule_animator_parameter_transition(&mut self, action_id: &str, name: &str, end: f32) -> bool {
+		let Some((curve, duration)) = self.animator_transition_options(action_id) else {
+			return false;
+		};
+		let start = self
+			.runtime_status
+			.as_ref()
+			.and_then(|status| status.lock().ok())
+			.and_then(|status| status.runtime_parameter_values.get(name).copied())
+			.unwrap_or_else(|| {
+				if end.abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON {
+					1.0
+				} else {
+					0.0
+				}
+			});
+		if let Some(gpu) = self.gpu.as_mut() {
+			let _ = gpu.set_runtime_parameter(name, start);
+		}
+		self.update_runtime_parameters(BTreeMap::from([(name.to_string(), start)]));
+		self.replace_animator_transition(ActiveAnimatorTransition {
+			target: AnimatorTransitionTarget::Parameter { name: name.to_string() },
+			start,
+			end: end.clamp(0.0, 1.0),
+			started_at: Instant::now(),
+			duration,
+			curve,
+		});
+		true
+	}
+
+	fn schedule_animator_expression_transitions(&mut self, action_id: &str, on: bool) -> bool {
+		let Some((curve, duration)) = self.animator_transition_options(action_id) else {
+			return false;
+		};
+		let targets = self
+			.gpu
+			.as_ref()
+			.map(|gpu| gpu.runtime_action_expression_weights(action_id))
+			.unwrap_or_default();
+		if targets.is_empty() {
+			return false;
+		}
+		let now = Instant::now();
+		for (name, weight) in targets {
+			let (start, end) = if on { (0.0, weight) } else { (weight, 0.0) };
+			if let Some(gpu) = self.gpu.as_mut() {
+				gpu.set_expression_override(&name, start);
+			}
+			self.replace_animator_transition(ActiveAnimatorTransition {
+				target: AnimatorTransitionTarget::Expression { name },
+				start: start.clamp(0.0, 1.0),
+				end: end.clamp(0.0, 1.0),
+				started_at: now,
+				duration,
+				curve,
+			});
+		}
+		true
+	}
+
+	fn replace_animator_transition(&mut self, transition: ActiveAnimatorTransition) {
+		self.active_animator_transitions
+			.retain(|existing| match (&existing.target, &transition.target) {
+				(AnimatorTransitionTarget::Expression { name: a }, AnimatorTransitionTarget::Expression { name: b }) => a != b,
+				(AnimatorTransitionTarget::Parameter { name: a }, AnimatorTransitionTarget::Parameter { name: b }) => a != b,
+				_ => true,
+			});
+		self.active_animator_transitions.push(transition);
+	}
+
+	fn advance_animator_transitions(&mut self, now: Instant) {
+		if self.active_animator_transitions.is_empty() {
+			return;
+		}
+		let mut next = Vec::new();
+		let mut parameter_updates = BTreeMap::new();
+		for transition in self.active_animator_transitions.drain(..) {
+			let raw_t = if transition.duration.is_zero() {
+				1.0
+			} else {
+				now.saturating_duration_since(transition.started_at).as_secs_f32() / transition.duration.as_secs_f32()
+			};
+			let done = raw_t >= 1.0;
+			let value = lerp(transition.start, transition.end, ease_animator_transition(raw_t, transition.curve)).clamp(0.0, 1.0);
+			match &transition.target {
+				AnimatorTransitionTarget::Expression { name } => {
+					if let Some(gpu) = self.gpu.as_mut() {
+						gpu.set_expression_override(name, value);
+					}
+				}
+				AnimatorTransitionTarget::Parameter { name } => {
+					if let Some(gpu) = self.gpu.as_mut() {
+						let _ = gpu.set_runtime_parameter(name, value);
+					}
+					parameter_updates.insert(name.clone(), value);
+				}
+			}
+			if !done {
+				next.push(transition);
+			}
+		}
+		if !parameter_updates.is_empty() {
+			self.update_runtime_parameters(parameter_updates);
+		}
+		self.active_animator_transitions = next;
+		self.request_redraw();
+	}
+
+	#[cfg(windows)]
+	fn tray_manifest_path(&self) -> Result<&std::path::Path, String> {
+		self.opts
+			.manifest_path
+			.as_deref()
+			.ok_or_else(|| "renderer has no profile manifest path".to_string())
+	}
+
+	#[cfg(windows)]
+	fn tray_runtime_snapshot(&self) -> Result<RendererRuntimeSnapshot, String> {
+		let status = self
+			.runtime_status
+			.as_ref()
+			.ok_or_else(|| "renderer has no runtime status snapshot".to_string())?;
+		status
+			.lock()
+			.map(|status| status.clone())
+			.map_err(|_| "runtime status snapshot poisoned".to_string())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_spout_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let state = renderer_tray::spout_profile_state_from_snapshot(&snapshot);
+		renderer_tray::save_spout_state_to_profile(manifest_path, &state)
+	}
+
+	#[cfg(windows)]
+	fn save_tray_window_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let state = renderer_tray::window_profile_state_from_snapshot(&snapshot)?;
+		renderer_tray::save_window_state_to_profile(manifest_path, &state)
+	}
+
+	#[cfg(windows)]
+	fn restore_tray_window_from_profile(&self) -> Result<(), String> {
+		let window = renderer_tray::read_window_state_from_profile(self.tray_manifest_path()?)?;
+		if let Some([x, y]) = window.position {
+			let _ = self
+				.event_proxy
+				.send_event(RendererControlEvent::SetWindowPosition { x: Some(x), y: Some(y) });
+		}
+		if let Some([width, height]) = window.inner_size {
+			let _ = self.event_proxy.send_event(RendererControlEvent::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: None,
+				width: Some(width),
+				height: Some(height),
+			});
+		}
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_camera_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		let camera = snapshot.camera.ok_or_else(|| "renderer has not reported camera yet".to_string())?;
+		renderer_tray::save_camera_state_to_profile(manifest_path, &camera)
+	}
+
+	#[cfg(windows)]
+	fn restore_tray_camera_from_profile(&self) -> Result<(), String> {
+		let camera = renderer_tray::read_camera_state_from_profile(self.tray_manifest_path()?)?;
+		let _ = self.event_proxy.send_event(RendererControlEvent::SetCameraState {
+			target: camera.target,
+			longitude_deg: camera.longitude_deg,
+			latitude_deg: camera.latitude_deg,
+			radius: camera.radius,
+			diagonal_fov_deg: camera.diagonal_fov_deg,
+			transition: None,
+		});
+		Ok(())
+	}
+
+	#[cfg(windows)]
+	fn save_tray_wardrobe_to_profile(&self) -> Result<(), String> {
+		let manifest_path = self.tray_manifest_path()?;
+		let snapshot = self.tray_runtime_snapshot()?;
+		renderer_tray::save_wardrobe_state_to_profile(
+			manifest_path,
+			snapshot.active_wardrobe_set.as_deref(),
+			snapshot.base_wardrobe_set.as_deref(),
+		)
 	}
 
 	fn update_runtime_focus_status(&self) {
@@ -1277,6 +2820,20 @@ impl AvatarApp {
 		if let Ok(mut status) = status.lock() {
 			status.window_focused = self.window_focused;
 			status.window_activation_seq = self.window_activation_seq;
+		}
+	}
+
+	fn update_runtime_profile_animator_actions(&self) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+			if let Some(gpu) = self.gpu.as_ref() {
+				status.runtime_actions = gpu.runtime_actions();
+				status.menu_action_candidates = gpu.menu_action_candidates();
+				status.menu_wardrobe_candidates = gpu.menu_wardrobe_candidates();
+			}
 		}
 	}
 
@@ -1341,18 +2898,22 @@ impl AvatarApp {
 			self.opts.window_height = height;
 			if let Some(window) = &self.window {
 				if let Some(size) = window.request_inner_size(PhysicalSize::new(width, height)) {
-					self.update_runtime_surface(size.width, size.height);
+					self.reconfigure(size.width, size.height);
 				}
 			}
 		}
 		if let Some(minimized) = minimized {
-			if let Some(window) = &self.window {
+			if self.opts.spout.enabled {
+				self.set_preview_window_enabled(!minimized, !minimized);
+			} else if let Some(window) = &self.window {
+				self.preview_window_enabled = !minimized;
 				window.set_minimized(minimized);
 				if !minimized {
 					window.set_visible(true);
 				}
 			}
 		}
+		self.update_runtime_window_geometry();
 		self.request_redraw();
 	}
 
@@ -1367,51 +2928,147 @@ impl AvatarApp {
 			return;
 		};
 		if let Ok(mut status) = status.lock() {
+			let gpu = self.gpu.as_ref();
 			let runtime_status_frame_seq = self.runtime_status_frame_seq.get().wrapping_add(1);
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
-			status.cpu_ms = Some(timings.cpu_record_ms);
+			status.cpu_ms = Some(frame_cpu_busy_ms(timings));
+			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
+			status.frame_motion_apply_ms = Some(timings.motion_apply_ms);
+			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
+			status.frame_globals_ms = Some(timings.frame_globals_ms);
+			status.frame_surface_acquire_ms = Some(timings.surface_acquire_ms);
+			status.frame_target_prepare_ms = Some(timings.target_prepare_ms);
+			status.frame_draw_state_refresh_ms = Some(timings.draw_state_refresh_ms);
+			status.frame_draw_doc_lock_ms = Some(timings.draw_doc_lock_ms);
+			status.frame_draw_expression_select_ms = Some(timings.draw_expression_select_ms);
+			status.frame_draw_update_total_ms = Some(timings.draw_update_total_ms);
+			status.frame_scene_world_ms = Some(timings.scene_world_ms);
+			status.frame_draw_skin_palette_ms = Some(timings.draw_skin_palette_ms);
+			status.frame_draw_skin_palette_write_ms = Some(timings.draw_skin_palette_write_ms);
+			status.frame_draw_fur_source_vertices_ms = Some(timings.draw_fur_source_vertices_ms);
+			status.frame_draw_expression_values_ms = Some(timings.draw_expression_values_ms);
+			status.frame_draw_morph_weights_ms = Some(timings.draw_morph_weights_ms);
+			status.frame_draw_transform_loop_ms = Some(timings.draw_transform_loop_ms);
+			status.frame_bone_collider_debug_ms = Some(timings.bone_collider_debug_ms);
+			status.frame_command_encode_ms = Some(timings.command_encode_ms);
+			status.frame_submit_present_ms = Some(timings.submit_present_ms);
+			status.frame_spout_cpu_ms = Some(timings.spout_cpu_ms);
+			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
+			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
-			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(30) {
+			let refresh_runtime_metadata =
+				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
+			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
 				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
 			}
-			let presets = self.gpu.as_ref().map(|g| g.expression_presets()).unwrap_or(&[]);
-			if status.expression_presets.len() != presets.len() || status.expression_presets.iter().zip(presets.iter()).any(|(a, b)| a != b)
-			{
+			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
+			if status.expression_presets.as_slice() != presets {
 				status.expression_presets = presets.to_vec();
 			}
-			let clamp = self.gpu.as_ref().and_then(|g| g.eye_look_at_clamp_deg());
+			let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
 			status.look_at_enabled = clamp.is_some();
 			status.look_at_clamp_deg = clamp;
-			status.apply_vmc_root_translation = self.gpu.as_ref().is_some_and(|g| g.apply_vmc_root_translation());
-			status.unmotion_zenoh_enabled = self.gpu.as_ref().is_some_and(|g| g.unmotion_zenoh_live());
+			status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
+			status.unmotion_zenoh_enabled = gpu.is_some_and(|g| g.unmotion_zenoh_live());
 			if status.unmotion_zenoh_key != self.opts.unmotion_zenoh.base_key_expr {
 				status.unmotion_zenoh_key.clone_from(&self.opts.unmotion_zenoh.base_key_expr);
 			}
-			status.unmotion_zenoh_received_frames = self.gpu.as_ref().map_or(0, |g| g.unmotion_zenoh_received_frames());
-			status.motion_applied_frames = self.gpu.as_ref().map_or(0, |g| g.motion_applied_frames());
-			status.primary_motion_source = self
-				.gpu
-				.as_ref()
-				.map(|g| g.primary_motion_source())
-				.unwrap_or(self.opts.primary_motion_source);
-			status.show_axes = self.gpu.as_ref().is_some_and(|g| g.show_axes());
-			status.show_bone_colliders = self.gpu.as_ref().is_some_and(|g| g.show_bone_colliders());
-			status.bone_collider_count = self.gpu.as_ref().map_or(0, |g| g.bone_collider_count());
-			let bone_collider_source = self.gpu.as_ref().map_or("off", |g| g.bone_collider_source());
+			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
+			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
+			status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
+			let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
+			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
+			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
+			status.runtime_requires_fur = runtime_requirements.fur;
+			if refresh_runtime_metadata {
+				status.base_wardrobe_set = gpu.and_then(|g| g.base_wardrobe_set());
+				status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
+				status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
+				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
+				status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
+				status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
+				status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+				status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
+				status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
+				status.runtime_action_restore_baseline_candidates =
+					gpu.map(|g| g.runtime_action_restore_baseline_candidates()).unwrap_or_default();
+				status.runtime_action_restore_baseline_capture_plan =
+					gpu.map(|g| g.runtime_action_restore_baseline_capture_plan()).unwrap_or_default();
+				status.runtime_action_restore_apply_plan = gpu.map(|g| g.runtime_action_restore_apply_plan()).unwrap_or_default();
+				status.menu_action_candidates = gpu.map(|g| g.menu_action_candidates()).unwrap_or_default();
+				status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
+				status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
+				status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
+			}
+			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
+			status.show_axes = gpu.is_some_and(|g| g.show_axes());
+			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
+			status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
+			let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
 			if status.bone_collider_source != bone_collider_source {
 				status.bone_collider_source = bone_collider_source.to_string();
+			}
+			if refresh_runtime_metadata {
+				let dynamics = gpu.map_or(Default::default(), |g| g.dynamics_counts());
+				status.dynamics_group_count = dynamics.groups;
+				status.dynamics_enabled_group_count = dynamics.enabled_groups;
+				status.dynamics_source_enabled_group_count = dynamics.source_enabled_groups;
+				status.dynamics_enabled_override_count = dynamics.runtime_enabled_overrides;
+				status.dynamics_vrm_spring_bone_group_count = dynamics.vrm_spring_bone_groups;
+				status.dynamics_vrc_physbone_group_count = dynamics.vrc_physbone_groups;
+				status.dynamics_unknown_group_count = dynamics.unknown_groups;
+				status.dynamics_limit_group_count = dynamics.limit_groups;
+				status.dynamics_angle_limit_group_count = dynamics.angle_limit_groups;
+				status.dynamics_stretch_limit_group_count = dynamics.stretch_limit_groups;
+				status.dynamics_grabbing_enabled_group_count = dynamics.grabbing_enabled_groups;
+				status.dynamics_posing_enabled_group_count = dynamics.posing_enabled_groups;
+				status.dynamics_collider_count = dynamics.colliders;
+				status.dynamics_vrm_spring_bone_collider_count = dynamics.vrm_spring_bone_colliders;
+				status.dynamics_vrc_physbone_collider_count = dynamics.vrc_physbone_colliders;
+				status.dynamics_unknown_collider_count = dynamics.unknown_colliders;
+				status.dynamics_contact_count = dynamics.contacts;
+				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
+				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
+				status.dynamics_contact_parameter_declaration_count = dynamics.contact_parameter_declarations;
+				let contact_probe_status = gpu.map(|g| g.contact_probe_status()).unwrap_or_default();
+				status.contact_probes = contact_probe_status.probes;
+				status.dynamics_contact_probe_count = contact_probe_status.count;
+				status.dynamics_contact_probe_would_emit_count = contact_probe_status.would_emit_count;
+				let contact_emission_status = gpu.map(|g| g.contact_parameter_emission_status()).unwrap_or_default();
+				status.contact_parameter_emissions = contact_emission_status.emissions;
+				status.dynamics_contact_parameter_emission_count = contact_emission_status.count;
+				status.dynamics_contact_parameter_emitted_count = contact_emission_status.emitted_count;
+				status.dynamics_contact_parameter_reset_to_zero_count = contact_emission_status.reset_to_zero_count;
+				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
+				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
+				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_rotation_translation_writeback_group_count =
+					runtime_dynamics_rotation_translation_writeback_group_count(&status) as u32;
+				status.dynamics_translation_writeback_candidate_count =
+					runtime_dynamics_rotation_translation_writeback_candidate_count(&status) as u32;
+				status.dynamics_translation_writeback_target_count =
+					runtime_dynamics_rotation_translation_writeback_target_count(&status) as u32;
+				status.dynamics_stretch_translation_writeback_group_count =
+					runtime_dynamics_stretch_translation_writeback_group_count(&status) as u32;
+				status.dynamics_stretch_translation_writeback_target_group_count =
+					runtime_dynamics_stretch_translation_writeback_target_group_count(&status) as u32;
+				status.dynamics_interaction_hooks = gpu.map(|g| g.dynamics_interaction_hooks()).unwrap_or_default();
+				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
+				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
+				status.dynamics_warnings = runtime_dynamics_warnings(&status);
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
 			status.window_activation_seq = self.window_activation_seq;
-			status.minimized = self.window.as_ref().is_some_and(|w| w.is_minimized().unwrap_or(false));
-			status.camera = self.gpu.as_ref().map(|g| g.camera_state_snapshot());
+			status.minimized = !self.preview_window_enabled || self.window.as_ref().is_some_and(|w| w.is_minimized().unwrap_or(false));
+			status.camera = gpu.map(|g| g.camera_state_snapshot());
 			let c = self.opts.clear_color;
 			status.clear_color = [c.r, c.g, c.b, c.a];
 			status.transparent_window = self.opts.transparent;
 			status.input_passthrough = self.opts.input_passthrough;
+			status.always_on_top = self.opts.always_on_top;
 		}
 	}
 
@@ -1475,6 +3132,32 @@ impl AvatarApp {
 		}
 	}
 
+	fn resolve_action_id_by_menu_path(
+		&self,
+		action_id: Option<&str>,
+		menu_path: Option<&str>,
+		wardrobe_set_id: Option<&str>,
+	) -> Result<Option<String>, String> {
+		if let Some(action_id) = action_id {
+			return Ok(Some(action_id.to_string()));
+		}
+		let Some(menu_path) = menu_path else {
+			return Ok(None);
+		};
+		let candidates = self
+			.gpu
+			.as_ref()
+			.ok_or_else(|| "renderer is not initialized".to_string())?
+			.menu_wardrobe_candidates();
+		let resolved_action_id = resolve_activate_action_from_menu_path(menu_path, wardrobe_set_id, &candidates).map_err(|error| {
+			format!(
+				"{error}{}",
+				wardrobe_set_id.map_or(String::new(), |set_id| format!(" wardrobe_set_id={set_id}"))
+			)
+		})?;
+		Ok(Some(resolved_action_id))
+	}
+
 	fn update_runtime_texture_summary(&self, texture_summary: Option<mesh_pass::TextureUploadSummary>) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -1484,20 +3167,112 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_wardrobe_set(&self, set_id: Option<String>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.active_wardrobe_set = set_id;
+		}
+	}
+
+	fn update_runtime_asset_groups(&self, asset_groups: Vec<String>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.active_asset_groups = asset_groups;
+		}
+	}
+
+	fn update_runtime_wardrobe_asset_upload(&self, plan: WardrobeAssetUploadPlan) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.wardrobe_asset_upload = plan;
+		}
+	}
+
+	fn update_runtime_resolver_cache_key_deferred(&self) {
+		let Some(status) = self.runtime_status.clone() else {
+			return;
+		};
+		if std::env::var_os(RESOLVER_CACHE_KEY_STATUS_ENV).is_none() {
+			if let Ok(mut status) = status.lock() {
+				status.resolver_cache_key = None;
+			}
+			return;
+		}
+		let Some(document) = self.gpu.as_ref().and_then(GpuState::document_arc) else {
+			return;
+		};
+		let generation = self.resolver_cache_key_generation.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+		let latest_generation = Arc::clone(&self.resolver_cache_key_generation);
+		if let Ok(mut status) = status.lock() {
+			status.resolver_cache_key = None;
+		}
+		let _ = thread::Builder::new()
+			.name("un-avatar-resolver-cache-key".to_string())
+			.spawn(move || {
+				let start = Instant::now();
+				let key = document.read().ok().map(|doc| doc.runtime_model().resolver_cache_key());
+				if latest_generation.load(Ordering::Acquire) != generation {
+					return;
+				}
+				if let Ok(mut status) = status.lock() {
+					status.resolver_cache_key = key;
+				}
+				log_slow_renderer_step("deferred resolver cache key", start.elapsed());
+			});
+	}
+
+	fn update_runtime_last_action(&self, action_id: Option<String>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.last_action_id = action_id;
+		}
+	}
+
+	fn update_runtime_parameters(&self, parameter_values: BTreeMap<String, f32>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.runtime_parameter_values.extend(parameter_values);
+		}
+	}
+
+	fn apply_runtime_activation_status(&self, activation: &gpu::RuntimeActionActivation) {
+		if let Some(active_set_id) = &activation.active_wardrobe_set {
+			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
+			self.update_runtime_asset_groups(self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default());
+			self.update_runtime_wardrobe_asset_upload(self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default());
+			self.update_runtime_resolver_cache_key_deferred();
+		}
+		self.update_runtime_last_action(Some(activation.action_id.clone()));
+		self.update_runtime_parameters(activation.parameter_values.clone());
+	}
+
 	fn update_runtime_startup(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
 		if let Ok(mut status) = status.lock() {
 			if let Some(progress) = &self.startup_progress {
+				status.scene_state = SCENE_STATE_STARTUP_PROGRESS.to_string();
 				status.startup_phase = Some(progress.phase.as_str().to_string());
 				status.startup_progress = Some([progress.current, progress.total]);
 				status.startup_message = Some(progress.message.clone());
 			} else if let Some(error) = &self.startup_failed {
+				status.scene_state = SCENE_STATE_FAILED.to_string();
 				status.startup_phase = Some("failed".to_string());
 				status.startup_progress = None;
 				status.startup_message = Some(error.clone());
 			} else {
+				status.scene_state = SCENE_STATE_AVATAR_SCENE.to_string();
 				status.startup_phase = None;
 				status.startup_progress = None;
 				status.startup_message = None;
@@ -1524,6 +3299,15 @@ impl AvatarApp {
 		self.update_runtime_startup();
 	}
 
+	fn set_startup_failed(&mut self, message: impl Into<String>) {
+		self.startup_pending_document = false;
+		self.startup_progress = None;
+		self.startup_failed = Some(message.into());
+		self.update_runtime_startup();
+		self.update_failed_title();
+		self.request_redraw();
+	}
+
 	fn update_loading_title(&self) {
 		let Some(window) = self.window.as_ref() else {
 			return;
@@ -1531,14 +3315,73 @@ impl AvatarApp {
 		let Some(progress) = self.startup_progress.as_ref() else {
 			return;
 		};
+		let diagnostic_suffix = self.title_diagnostic_suffix();
 		if progress.total > 0 {
 			window.set_title(&format!(
-				"{} — {} {}/{}",
-				self.title_base, progress.message, progress.current, progress.total
+				"{}{} — {} {}/{}",
+				self.title_base,
+				diagnostic_suffix,
+				compact_window_title_status(&progress.message),
+				progress.current,
+				progress.total
 			));
 		} else {
-			window.set_title(&format!("{} — {}", self.title_base, progress.message));
+			window.set_title(&format!(
+				"{}{} — {}",
+				self.title_base,
+				diagnostic_suffix,
+				compact_window_title_status(&progress.message)
+			));
 		}
+	}
+
+	fn update_failed_title(&self) {
+		let Some(window) = self.window.as_ref() else {
+			return;
+		};
+		if let Some(error) = self.startup_failed.as_ref() {
+			window.set_title(&format!(
+				"{}{} — startup failed: {}",
+				self.title_base,
+				self.title_diagnostic_suffix(),
+				compact_window_title_status(error)
+			));
+		}
+	}
+
+	fn title_diagnostic_suffix(&self) -> String {
+		let opts = self.scene_mesh_load_opts();
+		let mut suffix = String::new();
+		let mut push_diagnostic = |label: &str| {
+			if suffix.is_empty() {
+				suffix.push_str(" [diagnostics: ");
+			} else {
+				suffix.push_str(", ");
+			}
+			suffix.push_str(label);
+		};
+		if opts.disable_fur {
+			push_diagnostic("fur OFF");
+		}
+		if opts.debug_disable_reflection {
+			push_diagnostic("reflection OFF");
+		}
+		if opts.debug_base_texture_only {
+			push_diagnostic("base only");
+		}
+		if opts.debug_zero_morphs {
+			push_diagnostic("zero morphs");
+		}
+		if opts.debug_bind_pose {
+			push_diagnostic("bind pose");
+		}
+		if opts.debug_skin_legacy_no_inv_mesh {
+			push_diagnostic("legacy skin");
+		}
+		if !suffix.is_empty() {
+			suffix.push(']');
+		}
+		suffix
 	}
 
 	fn start_async_model_load(&mut self, proxy: EventLoopProxy<RendererControlEvent>) {
@@ -1548,22 +3391,73 @@ impl AvatarApp {
 		let Some(path) = self.opts.gltf_path.clone() else {
 			return;
 		};
+		let wardrobe_set = self.opts.wardrobe_set.clone();
+		let enabled_animator_action_ids = self.opts.animator_action_ids.clone();
+		let animator_action_values = self.opts.animator_action_values.clone();
+		let contact_parameter_emission = self.opts.contact_parameter_emission;
+		let defer_initial_image_decode = self.opts.processed_texture_cache;
+		let profile_import = self.opts.bench_frames.is_some() || std::env::var_os("UN_AVATAR_IMPORT_PROFILE").is_some();
 		self.startup_pending_document = true;
 		self.set_startup_progress("model", 0, 0, "Loading model");
 		let spawn_result = thread::Builder::new().name("un-avatar-startup-load".to_string()).spawn(move || {
 			let startup_started = Instant::now();
+			let heartbeat_done = Arc::new(AtomicBool::new(false));
+			let heartbeat_done_for_thread = Arc::clone(&heartbeat_done);
+			let heartbeat_proxy = proxy.clone();
+			let heartbeat_result = thread::Builder::new()
+				.name("un-avatar-startup-load-heartbeat".to_string())
+				.spawn(move || {
+					while !heartbeat_done_for_thread.load(Ordering::Acquire) {
+						thread::sleep(Duration::from_millis(250));
+						if heartbeat_done_for_thread.load(Ordering::Acquire) {
+							break;
+						}
+						let _ = heartbeat_proxy.send_event(RendererControlEvent::StartupProgress {
+							phase: StartupPhase::Model,
+							current: 0,
+							total: 0,
+							message: startup_message("Loading model", startup_started),
+						});
+					}
+				});
+			if let Err(e) = heartbeat_result {
+				eprintln!("un-avatar-renderer: spawn startup loader heartbeat failed: {e}");
+			}
 			let _ = proxy.send_event(RendererControlEvent::StartupProgress {
 				phase: StartupPhase::Model,
 				current: 0,
 				total: 0,
 				message: startup_message("Loading model", startup_started),
 			});
-			let Some(document) = model_loader::load_document(&path) else {
-				let _ = proxy.send_event(RendererControlEvent::StartupFailed {
-					message: format!("Failed to load model {}", path.display()),
-				});
-				return;
+			let document = match if profile_import {
+				model_loader::load_document_profiled(
+					&path,
+					wardrobe_set.as_deref(),
+					&enabled_animator_action_ids,
+					&animator_action_values,
+					contact_parameter_emission,
+					defer_initial_image_decode,
+				)
+			} else {
+				model_loader::load_document(
+					&path,
+					wardrobe_set.as_deref(),
+					&enabled_animator_action_ids,
+					&animator_action_values,
+					contact_parameter_emission,
+					defer_initial_image_decode,
+				)
+			} {
+				Ok(document) => document,
+				Err(e) => {
+					heartbeat_done.store(true, Ordering::Release);
+					let _ = proxy.send_event(RendererControlEvent::StartupFailed {
+						message: format!("Failed to load model {}: {e}", path.display()),
+					});
+					return;
+				}
 			};
+			heartbeat_done.store(true, Ordering::Release);
 			let _ = proxy.send_event(RendererControlEvent::StartupProgress {
 				phase: StartupPhase::Model,
 				current: 1,
@@ -1580,28 +3474,15 @@ impl AvatarApp {
 			let _ = proxy.send_event(RendererControlEvent::StartupReady { document, texture_summary });
 		});
 		if let Err(e) = spawn_result {
-			self.startup_pending_document = false;
-			self.startup_failed = Some(format!("spawn startup loader failed: {e}"));
-			self.update_runtime_startup();
+			self.set_startup_failed(format!("spawn startup loader failed: {e}"));
 		}
 	}
 
 	fn scene_mesh_load_opts(&self) -> SceneMeshLoadOpts {
-		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
-		mesh_diagnostics.force_simple_basecolor |= self.opts.simple_basecolor_only;
-		mesh_diagnostics.disable_mtoon_outlines |= self.opts.disable_mtoon_outlines;
-		mesh_diagnostics.debug_disable_rim_lighting |= self.opts.debug_disable_rim_lighting;
-		mesh_diagnostics.debug_force_shading_shift_zero |= self.opts.debug_force_shading_shift_zero;
-		mesh_diagnostics.debug_disable_matcap |= self.opts.debug_disable_matcap;
-		mesh_diagnostics.debug_disable_emissive |= self.opts.debug_disable_emissive;
-		mesh_diagnostics.debug_disable_shade_color |= self.opts.debug_disable_shade_color;
-		mesh_diagnostics.debug_disable_normal_map |= self.opts.debug_disable_normal_map;
-		mesh_diagnostics.debug_base_texture_only |= self.opts.debug_base_texture_only;
-		mesh_diagnostics.skin_tone_matching |= self.opts.skin_tone_matching;
-		mesh_diagnostics
+		gpu::scene_mesh_load_opts_for_window_options(&self.opts)
 	}
 
-	fn startup_texture_target_size(&self) -> (u32, u32) {
+	fn document_texture_target_size(&self) -> (u32, u32) {
 		if self.opts.spout.enabled {
 			(
 				self.opts.spout.width.unwrap_or(self.opts.window_width).max(1),
@@ -1615,10 +3496,19 @@ impl AvatarApp {
 		}
 	}
 
+	fn wardrobe_transition_aspect_wh(&self) -> f32 {
+		let (width, height) = self.document_texture_target_size();
+		width.max(1) as f32 / height.max(1) as f32
+	}
+
 	fn document_attach_options(&self) -> DocumentAttachOptions {
-		let (target_width, target_height) = self.startup_texture_target_size();
+		let (target_width, target_height) = self.document_texture_target_size();
 		let texture_max_dimension = self.opts.texture_resolution_limit.max_dimension(target_width, target_height);
-		let bc_supported = cfg!(windows) && self.opts.texture_compression != TextureCompressionMode::Source;
+		let bc_supported = cfg!(windows)
+			&& !matches!(
+				self.opts.texture_compression,
+				TextureCompressionMode::Source | TextureCompressionMode::Compat
+			);
 		let mesh_diagnostics = self.scene_mesh_load_opts();
 		DocumentAttachOptions {
 			mesh_diagnostics,
@@ -1632,12 +3522,13 @@ impl AvatarApp {
 			texture_compression_astc_supported: false,
 			texture_compression_etc2_supported: false,
 			processed_texture_cache: self.opts.processed_texture_cache,
-			enable_spring_bones: self.opts.enable_spring_bones,
+			dynamics_enabled: self.opts.dynamics_enabled,
 			bone_colliders: self.opts.bone_colliders,
 			spring_bone_physics: self.opts.spring_bone_physics.clone(),
 			debug_material_dump: self.opts.debug_material_dump,
 			vmc_address: self.opts.vmc_address,
 			unmotion_zenoh: self.opts.unmotion_zenoh.clone(),
+			audio_link: self.opts.audio_link.clone(),
 			debug_vmc: self.opts.debug.vmc,
 		}
 	}
@@ -1658,24 +3549,36 @@ impl AvatarApp {
 			.name("un-avatar-gpu-scene-build".to_string())
 			.spawn(move || {
 				let gpu_started = Instant::now();
-				let result = context.prepare_document_scene(document, &options, |progress| {
-					let _ = proxy.send_event(RendererControlEvent::StartupProgress {
-						phase: StartupPhase::from(progress.phase),
-						current: progress.current,
-						total: progress.total,
-						message: startup_message(progress.message, gpu_started),
-					});
-				});
+				let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+					context.prepare_document_scene(document, &options, |progress| {
+						let _ = proxy.send_event(RendererControlEvent::StartupProgress {
+							phase: StartupPhase::from(progress.phase),
+							current: progress.current,
+							total: progress.total,
+							message: startup_message(progress.message, gpu_started),
+						});
+					})
+				}));
 				match result {
-					Ok(prepared) => {
+					Ok(Ok(prepared)) => {
 						let _ = proxy.send_event(RendererControlEvent::StartupSceneReady {
 							prepared,
 							options,
 							fallback_texture_summary,
 						});
 					}
-					Err(error) => {
+					Ok(Err(error)) => {
 						let _ = proxy.send_event(RendererControlEvent::StartupFailed { message: error });
+					}
+					Err(panic) => {
+						let message = if let Some(message) = panic.downcast_ref::<&str>() {
+							(*message).to_string()
+						} else if let Some(message) = panic.downcast_ref::<String>() {
+							message.clone()
+						} else {
+							"GPU scene build panicked".to_string()
+						};
+						let _ = proxy.send_event(RendererControlEvent::StartupFailed { message });
 					}
 				}
 			})
@@ -1756,37 +3659,110 @@ impl AvatarApp {
 		}
 	}
 
-	fn render_frame(&mut self) {
+	fn render_frame(&mut self) -> bool {
 		let now = Instant::now();
 		let wall = now.saturating_duration_since(self.last_wall);
 		self.last_wall = now;
 
 		let Some(win) = self.window.as_ref().cloned() else {
-			return;
+			return false;
 		};
+		if self.apply_pending_reconfigure(now, win.as_ref()) {
+			win.request_redraw();
+			return false;
+		}
 		self.advance_camera_transition(now);
-		let Some(gpu) = self.gpu.as_mut() else {
-			return;
-		};
+		self.advance_animator_transitions(now);
+		self.update_wardrobe_transition_before_frame(now);
+		let preview_window_output_enabled = self.preview_window_output_enabled();
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
-		let startup_splash = if let Some(progress) = self.startup_progress.as_ref() {
-			Some(gpu::StartupSplashFrame {
+		let renderer_startup_overlay = if let Some(progress) = self.startup_progress.as_ref() {
+			Some(gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
-				phase: progress.phase.splash_code(),
+				phase: progress.phase.overlay_phase_code(),
+				rect_center: STARTUP_PROGRESS_OVERLAY_RECT_CENTER,
+				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		} else {
-			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
+			self.startup_failed.as_ref().map(|_| gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: -1.0,
 				phase: 9.0,
+				rect_center: STARTUP_PROGRESS_OVERLAY_RECT_CENTER,
+				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		};
-		let Some(timings) = gpu.render_frame(win.as_ref(), self.opts.clear_color, wall_clamped, startup_splash) else {
-			win.request_redraw();
-			return;
+		let frame_role = renderer_startup_frame_role(
+			renderer_startup_overlay,
+			self.startup_pending_document,
+			self.startup_failed.is_some(),
+		)
+		.or_else(|| wardrobe_transition_frame_role(self.wardrobe_changing_billboard_frame(now)))
+		.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		let evaluate_runtime_actions = should_evaluate_runtime_actions_for_frame(&frame_role);
+		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
+		let render_work = {
+			let Some(gpu) = self.gpu.as_mut() else {
+				return false;
+			};
+			let Some(mut timings) = gpu.render_frame(
+				win.as_ref(),
+				self.opts.clear_color,
+				wall_clamped,
+				frame_role,
+				preview_window_output_enabled,
+			) else {
+				win.request_redraw();
+				return false;
+			};
+			let (parameter_updates, runtime_parameter_activations) = {
+				if evaluate_runtime_actions {
+					let t_contact0 = Instant::now();
+					let parameter_updates = match gpu.apply_contact_parameter_emissions() {
+						Ok(parameter_updates) => parameter_updates,
+						Err(err) => {
+							eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
+							BTreeMap::new()
+						}
+					};
+					timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
+					let t_action0 = Instant::now();
+					let activations = match gpu.evaluate_runtime_parameter_actions() {
+						Ok(activations) => activations,
+						Err(err) => {
+							eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
+							Vec::new()
+						}
+					};
+					timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
+					(parameter_updates, activations)
+				} else {
+					(BTreeMap::new(), Vec::new())
+				}
+			};
+			(
+				timings,
+				parameter_updates,
+				runtime_parameter_activations,
+				wardrobe_apply_after_render_set_id,
+			)
 		};
+		let (mut timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_after_render_set_id) = render_work;
+		timings.cpu_total_ms = now.elapsed().as_secs_f32() * 1000.0;
+		if let Some(set_id) = wardrobe_apply_after_render_set_id {
+			self.start_wardrobe_apply_worker_after_render(set_id);
+		}
+		if !parameter_updates.is_empty() {
+			self.update_runtime_parameters(parameter_updates);
+		}
+		for activation in &runtime_parameter_activations {
+			self.apply_runtime_activation_status(activation);
+		}
+		if !runtime_parameter_activations.is_empty() {
+			self.request_redraw();
+		}
 		let inst_fps = if timings.wall_since_last_ms > 0.05 {
 			1000.0 / timings.wall_since_last_ms
 		} else {
@@ -1795,6 +3771,8 @@ impl AvatarApp {
 		self.fps_smooth = self.fps_smooth * 0.9 + inst_fps * 0.1;
 		self.update_runtime_frame(&timings);
 		self.update_runtime_spout_stats();
+		#[cfg(windows)]
+		self.refresh_renderer_tray();
 
 		if self.startup_progress.is_some() {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
@@ -1804,25 +3782,99 @@ impl AvatarApp {
 		} else if self.startup_failed.is_some() {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
-				win.set_title(&format!("{} — startup failed", self.title_base));
+				self.update_failed_title();
 			}
 		} else if self.opts.show_fps_in_title {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
 				win.set_title(&format!(
-					"{} — {:.0} FPS  cpu {:.2} ms  gpu~ {:.2} ms",
-					self.title_base, self.fps_smooth, timings.cpu_record_ms, timings.gpu_ms
+					"{}{} — {:.0} FPS  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
+					self.title_base,
+					self.title_diagnostic_suffix(),
+					self.fps_smooth,
+					frame_cpu_busy_ms(&timings),
+					timings.surface_acquire_ms,
+					timings.gpu_ms
 				));
 			}
 		}
 
-		win.request_redraw();
+		if self.startup_progress.is_none() && self.startup_failed.is_none() {
+			if let Some(bench) = self.frame_bench.as_mut() {
+				if bench.push(&timings) {
+					bench.log_summary();
+					return true;
+				}
+			}
+		}
+
+		if self.preview_window_enabled {
+			win.request_redraw();
+		}
+		if self
+			.wardrobe_transition
+			.as_ref()
+			.is_some_and(|transition| matches!(transition.phase, WardrobeTransitionPhase::Applying))
+		{
+			win.request_redraw();
+		}
+		false
 	}
 
 	fn close_hotkey_matches(&self, key: &Key) -> bool {
 		self.close_hotkey
 			.as_ref()
 			.is_some_and(|hotkey| hotkey.matches(key, self.current_modifiers))
+	}
+}
+
+#[cfg(windows)]
+fn renderer_tray_output_events(action: &renderer_tray::RendererTrayAction) -> Option<Vec<RendererControlEvent>> {
+	use renderer_tray::RendererTrayAction;
+	match action {
+		RendererTrayAction::SetWindowPreview => Some(vec![
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true,
+			},
+			RendererControlEvent::SetSpoutOutput {
+				enabled: false,
+				name: None,
+				width: None,
+				height: None,
+			},
+		]),
+		RendererTrayAction::SetSpoutPreview => Some(vec![
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None,
+			},
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true,
+			},
+		]),
+		RendererTrayAction::SetSpoutOnly => Some(vec![
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None,
+			},
+			RendererControlEvent::SetPreviewWindow {
+				enabled: false,
+				activate: false,
+			},
+		]),
+		RendererTrayAction::SetSpoutResolution { width, height } => Some(vec![RendererControlEvent::SetSpoutOutput {
+			enabled: true,
+			name: None,
+			width: Some(*width),
+			height: Some(*height),
+		}]),
+		_ => None,
 	}
 }
 
@@ -1833,7 +3885,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		}
 
 		let mut attrs = Window::default_attributes()
-			.with_title(self.opts.title.clone())
+			.with_title(format!("{} — initializing", self.opts.title))
 			.with_decorations(self.opts.decorations)
 			.with_transparent(true)
 			.with_visible(false)
@@ -1853,10 +3905,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		{
 			attrs = attrs.with_no_redirection_bitmap(true);
 		}
-		if let Some(path) = self.opts.icon_path.as_deref() {
-			if let Some(icon) = load_window_icon(path) {
-				attrs = attrs.with_window_icon(Some(icon));
-			}
+		if let Some(icon) = self
+			.opts
+			.icon_path
+			.as_deref()
+			.and_then(load_window_icon)
+			.or_else(load_default_window_icon)
+		{
+			attrs = attrs.with_window_icon(Some(icon));
 		}
 
 		let win = match event_loop.create_window(attrs) {
@@ -1867,25 +3923,23 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				return;
 			}
 		};
+		self.window = Some(win.clone());
+		self.apply_configured_window_icon();
 		apply_window_hittest(&win, self.opts.transparent, self.opts.input_passthrough);
 		if let Some([x, y]) = self.opts.window_position {
 			win.set_outer_position(winit::dpi::PhysicalPosition::new(x, y));
 		}
-		if self.opts.start_minimized {
-			win.set_minimized(true);
+		if self.preview_window_enabled {
+			if self.opts.start_minimized {
+				win.set_minimized(true);
+			}
+			win.set_visible(true);
+			self.apply_configured_window_icon();
+		} else {
+			win.set_visible(false);
 		}
-		win.set_visible(true);
 
-		let mut mesh_diagnostics = self.opts.mesh_diagnostics.clone();
-		mesh_diagnostics.force_simple_basecolor |= self.opts.simple_basecolor_only;
-		mesh_diagnostics.disable_mtoon_outlines |= self.opts.disable_mtoon_outlines;
-		mesh_diagnostics.debug_disable_rim_lighting |= self.opts.debug_disable_rim_lighting;
-		mesh_diagnostics.debug_force_shading_shift_zero |= self.opts.debug_force_shading_shift_zero;
-		mesh_diagnostics.debug_disable_matcap |= self.opts.debug_disable_matcap;
-		mesh_diagnostics.debug_disable_emissive |= self.opts.debug_disable_emissive;
-		mesh_diagnostics.debug_disable_shade_color |= self.opts.debug_disable_shade_color;
-		mesh_diagnostics.debug_disable_normal_map |= self.opts.debug_disable_normal_map;
-		mesh_diagnostics.debug_base_texture_only |= self.opts.debug_base_texture_only;
+		let mesh_diagnostics = self.scene_mesh_load_opts();
 		match GpuState::new_shell(
 			win.clone(),
 			self.opts.transparent,
@@ -1927,17 +3981,28 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 		}
 
-		win.focus_window();
+		if self.preview_window_enabled && !self.opts.start_minimized {
+			win.focus_window();
+		}
 		self.last_wall = Instant::now();
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
-		win.request_redraw();
-		self.window = Some(win);
+		self.update_runtime_window_geometry();
+		#[cfg(windows)]
+		self.ensure_renderer_tray();
 		self.start_async_model_load(self.event_proxy.clone());
+		win.request_redraw();
 	}
 
-	fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-		if let Some(window) = &self.window {
+	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+		self.hide_minimized_spout_preview();
+		if self.opts.spout.enabled && !self.preview_window_output_enabled() {
+			event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(16)));
+			if self.render_frame() {
+				event_loop.exit();
+			}
+		} else if let Some(window) = &self.window {
+			event_loop.set_control_flow(ControlFlow::Wait);
 			window.request_redraw();
 		}
 	}
@@ -1948,6 +4013,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				event_loop.exit();
 			}
 			WindowEvent::Resized(size) => {
+				if self.hide_minimized_spout_preview() {
+					return;
+				}
 				self.reconfigure(size.width, size.height);
 				self.update_runtime_window_geometry();
 				if let Some(w) = &self.window {
@@ -1967,7 +4035,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.update_runtime_focus_status();
 			}
 			WindowEvent::RedrawRequested => {
-				self.render_frame();
+				if self.render_frame() {
+					event_loop.exit();
+				}
 			}
 			WindowEvent::MouseInput { state, button, .. } => {
 				if button == MouseButton::Left && state == ElementState::Pressed && !self.opts.decorations {
@@ -2140,14 +4210,18 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					self.opts.spout.height = height;
 				}
 				self.opts.spout.enabled = enabled;
-				let active = if let Some(gpu) = self.gpu.as_mut() {
+				let _active = if let Some(gpu) = self.gpu.as_mut() {
 					let active = gpu.set_spout_output(enabled, self.opts.spout.clone());
 					self.request_redraw();
 					active
 				} else {
 					false
 				};
-				self.update_runtime_spout(active);
+				self.update_runtime_spout(self.opts.spout.enabled);
+			}
+			RendererControlEvent::SetPreviewWindow { enabled, activate } => {
+				self.set_preview_window_enabled(enabled, activate);
+				self.request_redraw();
 			}
 			RendererControlEvent::SetWindow {
 				decorations,
@@ -2165,6 +4239,146 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				};
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetWardrobe { set_id, result } => {
+				self.start_wardrobe_transition(set_id, result);
+			}
+			RendererControlEvent::ActivateAction {
+				action_id,
+				supervisor_command,
+				expression_menu_path,
+				menu_path,
+				wardrobe_set_id,
+				parameter_name,
+				parameter_value,
+				result,
+			} => {
+				let resolved_action_id =
+					match self.resolve_action_id_by_menu_path(action_id.as_deref(), menu_path.as_deref(), wardrobe_set_id.as_deref()) {
+						Ok(action_id) => action_id,
+						Err(e) => {
+							if let Ok(mut guard) = result.lock() {
+								*guard = Some(Err(e));
+							}
+							return;
+						}
+					};
+				if let Some(set_id) = resolved_action_id
+					.as_deref()
+					.and_then(|action_id| self.gpu.as_ref().and_then(|gpu| gpu.runtime_action_wardrobe_set_id(action_id)))
+				{
+					self.start_wardrobe_transition(set_id, result);
+					return;
+				}
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.activate_runtime_action(
+						resolved_action_id.as_deref(),
+						supervisor_command.as_deref(),
+						menu_path.or(expression_menu_path).as_deref(),
+						parameter_name.as_deref(),
+						parameter_value,
+					),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(activation) = &outcome {
+					self.apply_runtime_activation_status(activation);
+				}
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome.map(|_| ()));
+				}
+			}
+			RendererControlEvent::ActivateProfileAnimatorAction { action_id, result } => {
+				let outcome = self.activate_profile_animator_action(&action_id);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetParameter { name, value, result } => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_runtime_parameter(&name, value),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(activation) = &outcome {
+					self.update_runtime_parameters(BTreeMap::from([(name.clone(), value)]));
+					if let Some(activation) = activation {
+						self.apply_runtime_activation_status(activation);
+					}
+				}
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome.map(|_| ()));
+				}
+			}
+			RendererControlEvent::SetDynamicsEnabled {
+				source_id,
+				enabled,
+				result,
+			} => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_runtime_dynamics_enabled(&source_id, enabled),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetCurrentWardrobeDynamicsEnabled { enabled, result } => {
+				let outcome = match self.gpu.as_mut() {
+					Some(gpu) => gpu.set_current_wardrobe_runtime_dynamics_enabled(enabled),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if outcome.is_ok() {
+					self.request_redraw();
+				}
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetAnimatorProfile { actions, bindings, result } => {
+				let outcome = self.apply_animator_profile_runtime(actions, bindings);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetInputBindings {
+				wardrobe_bindings,
+				animator_bindings,
+				result,
+			} => {
+				let outcome = self.apply_input_bindings_runtime(wardrobe_bindings, animator_bindings);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetWardrobeTransition {
+				billboard_anchor,
+				billboard_y_offset_mm,
+				result,
+			} => {
+				let outcome = self.apply_wardrobe_transition_runtime(billboard_anchor, billboard_y_offset_mm);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SceneState { result } => {
+				let state = if self.startup_failed.is_some() {
+					SCENE_STATE_FAILED
+				} else if self.startup_progress.is_some() || self.startup_pending_document {
+					SCENE_STATE_STARTUP_PROGRESS
+				} else {
+					SCENE_STATE_AVATAR_SCENE
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(state.to_string());
 				}
 			}
 			RendererControlEvent::SetExpressionOverride { name, weight } => {
@@ -2247,7 +4461,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					None
 				};
 				self.opts.eye_look_at_clamp_deg = next;
-				if let Some(gpu) = self.gpu.as_ref() {
+				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_eye_look_at_clamp_deg(next);
 				}
 				self.request_redraw();
@@ -2266,7 +4480,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			}
 			RendererControlEvent::SetApplyVmcRootTranslation { enabled } => {
 				self.opts.apply_vmc_root_translation = enabled;
-				if let Some(gpu) = self.gpu.as_ref() {
+				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_apply_vmc_root_translation(enabled);
 				}
 				self.request_redraw();
@@ -2299,16 +4513,16 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 				self.request_redraw();
 			}
-			RendererControlEvent::SetSpringBones {
+			RendererControlEvent::SetDynamics {
 				enabled,
 				bone_colliders,
 				physics_config,
 			} => {
-				self.opts.enable_spring_bones = enabled;
+				self.opts.dynamics_enabled = enabled;
 				self.opts.bone_colliders = bone_colliders;
 				self.opts.spring_bone_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
 				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.reconfigure_spring_bones(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
+					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
 				}
 				self.request_redraw();
 			}
@@ -2332,53 +4546,6 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.opts.mesh_diagnostics.avatar_outline = next;
 				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_avatar_outline(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarRim {
-				policy,
-				color,
-				intensity,
-				lighting_mix,
-				fresnel_power,
-				lift,
-			} => {
-				let next = avatar_rim_from_control(
-					self.opts.mesh_diagnostics.avatar_rim,
-					policy,
-					color,
-					intensity,
-					lighting_mix,
-					fresnel_power,
-					lift,
-				);
-				self.opts.mesh_diagnostics.avatar_rim = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_rim(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarMatcap { scale } => {
-				let next = avatar_matcap_from_control(self.opts.mesh_diagnostics.avatar_matcap, scale);
-				self.opts.mesh_diagnostics.avatar_matcap = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_matcap(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarSpecular { enabled, intensity, power } => {
-				let next = avatar_specular_from_control(self.opts.mesh_diagnostics.avatar_specular, enabled, intensity, power);
-				self.opts.mesh_diagnostics.avatar_specular = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_specular(next);
-				}
-				self.request_redraw();
-			}
-			RendererControlEvent::SetAvatarAmbientOcclusion { strength } => {
-				let next = avatar_ambient_occlusion_from_control(self.opts.mesh_diagnostics.avatar_ambient_occlusion, strength);
-				self.opts.mesh_diagnostics.avatar_ambient_occlusion = next;
-				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.set_avatar_ambient_occlusion(next);
 				}
 				self.request_redraw();
 			}
@@ -2480,23 +4647,26 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 				self.request_redraw();
 			}
+			#[cfg(windows)]
+			RendererControlEvent::TrayMenu { id } => {
+				self.handle_renderer_tray_menu(event_loop, id);
+			}
+			RendererControlEvent::TrayIconActivate => {
+				self.toggle_preview_window_from_tray();
+			}
 			RendererControlEvent::StartupProgress {
 				phase,
 				current,
 				total,
 				message,
 			} => {
-				self.set_startup_progress(phase, current, total, message);
+				if self.startup_pending_document {
+					self.set_startup_progress(phase, current, total, message);
+				}
 			}
 			RendererControlEvent::StartupReady { document, texture_summary } => {
 				if let Err(e) = self.start_async_scene_build(document, texture_summary) {
-					self.startup_pending_document = false;
-					self.startup_failed = Some(e.clone());
-					self.startup_progress = None;
-					self.update_runtime_startup();
-					if let Some(win) = self.window.as_ref() {
-						win.set_title(&format!("{} — startup failed", self.title_base));
-					}
+					self.set_startup_failed(e.clone());
 					eprintln!("un-avatar-renderer: {e}");
 				}
 			}
@@ -2505,16 +4675,33 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				options,
 				fallback_texture_summary,
 			} => {
+				let startup_scene_ready_start = Instant::now();
 				let Some(win) = self.window.as_ref().cloned() else {
 					return;
 				};
+				let attach_start = Instant::now();
 				let attach_result = self
 					.gpu
 					.as_mut()
 					.ok_or_else(|| "GPU state is not initialized".to_string())
 					.and_then(|gpu| gpu.attach_prepared_document(prepared, options));
+				log_slow_renderer_step("startup scene attach", attach_start.elapsed());
 				match attach_result {
 					Ok(()) => {
+						let runtime_actions_start = Instant::now();
+						let startup_activations = match self.gpu.as_mut() {
+							Some(gpu) => match gpu.evaluate_runtime_parameter_actions() {
+								Ok(activations) => activations,
+								Err(e) => {
+									self.set_startup_failed(e.clone());
+									eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {e}");
+									return;
+								}
+							},
+							None => Vec::new(),
+						};
+						log_slow_renderer_step("startup runtime action evaluation", runtime_actions_start.elapsed());
+						let status_update_start = Instant::now();
 						let actual_texture_summary = self
 							.gpu
 							.as_ref()
@@ -2522,29 +4709,66 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							.or(Some(fallback_texture_summary));
 						self.startup_pending_document = false;
 						self.clear_startup_progress();
+						let step_start = Instant::now();
 						self.update_runtime_texture_summary(actual_texture_summary);
-						self.update_runtime_spout(self.gpu.as_ref().is_some_and(|gpu| gpu.spout_active()));
-						win.set_title(&self.title_base);
+						log_slow_renderer_step("startup status texture summary", step_start.elapsed());
+						let step_start = Instant::now();
+						let active_wardrobe_set = self.gpu.as_ref().and_then(|gpu| gpu.active_wardrobe_set());
+						log_slow_renderer_step("startup collect active wardrobe set", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_wardrobe_set(active_wardrobe_set);
+						log_slow_renderer_step("startup status wardrobe set", step_start.elapsed());
+						let step_start = Instant::now();
+						let active_asset_groups = self.gpu.as_ref().map(|gpu| gpu.active_asset_groups()).unwrap_or_default();
+						log_slow_renderer_step("startup collect active asset groups", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_asset_groups(active_asset_groups);
+						log_slow_renderer_step("startup status asset groups", step_start.elapsed());
+						let step_start = Instant::now();
+						let wardrobe_asset_upload = self.gpu.as_ref().map(|gpu| gpu.wardrobe_asset_upload_plan()).unwrap_or_default();
+						log_slow_renderer_step("startup collect wardrobe asset upload", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_wardrobe_asset_upload(wardrobe_asset_upload);
+						log_slow_renderer_step("startup status wardrobe asset upload", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_resolver_cache_key_deferred();
+						log_slow_renderer_step("startup defer resolver cache key", step_start.elapsed());
+						let step_start = Instant::now();
+						let last_action_id = self.gpu.as_ref().and_then(|gpu| gpu.last_action_id());
+						log_slow_renderer_step("startup collect last action", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_last_action(last_action_id);
+						log_slow_renderer_step("startup status last action", step_start.elapsed());
+						let step_start = Instant::now();
+						let runtime_parameter_values = self.gpu.as_ref().map(|gpu| gpu.runtime_parameter_values()).unwrap_or_default();
+						log_slow_renderer_step("startup collect runtime parameters", step_start.elapsed());
+						let step_start = Instant::now();
+						self.update_runtime_parameters(runtime_parameter_values);
+						log_slow_renderer_step("startup status runtime parameters", step_start.elapsed());
+						for activation in &startup_activations {
+							let step_start = Instant::now();
+							self.apply_runtime_activation_status(activation);
+							log_slow_renderer_step("startup status runtime activation", step_start.elapsed());
+						}
+						let step_start = Instant::now();
+						self.update_runtime_spout(self.opts.spout.enabled);
+						log_slow_renderer_step("startup status spout", step_start.elapsed());
+						log_slow_renderer_step("startup runtime status update", status_update_start.elapsed());
+						let title_start = Instant::now();
+						self.apply_configured_window_icon();
+						win.set_title(&format!("{}{}", self.title_base, self.title_diagnostic_suffix()));
 						self.request_redraw();
+						log_slow_renderer_step("startup title/redraw request", title_start.elapsed());
+						log_slow_renderer_step("startup scene ready handling total", startup_scene_ready_start.elapsed());
 					}
 					Err(e) => {
-						self.startup_pending_document = false;
-						self.startup_failed = Some(e.clone());
-						self.startup_progress = None;
-						self.update_runtime_startup();
-						win.set_title(&format!("{} — startup failed", self.title_base));
+						self.set_startup_failed(e.clone());
 						eprintln!("un-avatar-renderer: {e}");
 					}
 				}
 			}
 			RendererControlEvent::StartupFailed { message } => {
-				self.startup_pending_document = false;
-				self.startup_progress = None;
-				self.startup_failed = Some(message.clone());
-				self.update_runtime_startup();
-				if let Some(win) = self.window.as_ref() {
-					win.set_title(&format!("{} — startup failed", self.title_base));
-				}
+				self.set_startup_failed(message.clone());
 				eprintln!("un-avatar-renderer: {message}");
 			}
 		}
@@ -2654,14 +4878,805 @@ fn normalize_key_name(name: &str) -> String {
 	}
 }
 
+struct WardrobeMidiRuntime {
+	_connections: Vec<midir::MidiInputConnection<()>>,
+}
+
+impl WardrobeMidiRuntime {
+	fn start(
+		wardrobe_bindings: &[WardrobeBindingOptions],
+		animator_bindings: &[AnimatorActionBindingOptions],
+		proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Option<Self> {
+		let bindings = midi_note_bindings(wardrobe_bindings, animator_bindings);
+		if bindings.is_empty() {
+			return None;
+		}
+		let discovery = match midir::MidiInput::new("un-avatar-renderer-midi-discovery") {
+			Ok(input) => input,
+			Err(error) => {
+				eprintln!("un-avatar-renderer: MIDI input unavailable: {error}");
+				return None;
+			}
+		};
+		let ports = discovery.ports();
+		if ports.is_empty() {
+			eprintln!("un-avatar-renderer: no MIDI input ports available");
+			return None;
+		}
+		let port_names = ports
+			.iter()
+			.enumerate()
+			.map(|(index, port)| {
+				(
+					index,
+					discovery.port_name(port).unwrap_or_else(|_| format!("unknown MIDI input {index}")),
+				)
+			})
+			.collect::<Vec<_>>();
+		let mut connections = Vec::new();
+		for (port_index, port_name) in port_names {
+			let port_bindings = bindings
+				.iter()
+				.filter(|binding| midi_device_matches(binding.device.as_deref(), &port_name))
+				.cloned()
+				.collect::<Vec<_>>();
+			if port_bindings.is_empty() {
+				continue;
+			}
+			let proxy = proxy.clone();
+			let port_name_for_callback = port_name.clone();
+			let mut input = match midir::MidiInput::new(&format!("un-avatar-renderer-midi-{port_index}")) {
+				Ok(input) => input,
+				Err(error) => {
+					eprintln!("un-avatar-renderer: create MIDI input for `{port_name}` failed: {error}");
+					continue;
+				}
+			};
+			input.ignore(midir::Ignore::None);
+			let ports = input.ports();
+			let Some(port) = ports.get(port_index).cloned() else {
+				eprintln!("un-avatar-renderer: MIDI input `{port_name}` disappeared before connect");
+				continue;
+			};
+			match input.connect(
+				&port,
+				&format!("un-avatar-renderer-{port_name}"),
+				move |_timestamp, message, _| {
+					if let Some(note_event) = parse_midi_note_event(message) {
+						if !note_event.down {
+							return;
+						}
+						for binding in &port_bindings {
+							if binding.channel == note_event.channel && binding.note == note_event.note {
+								let result = Arc::new(Mutex::new(None));
+								match &binding.action {
+									InputBindingAction::WardrobeSet(set_id) => {
+										let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+											set_id: set_id.clone(),
+											result,
+										});
+									}
+									InputBindingAction::AnimatorAction(action_id) => {
+										let _ = proxy.send_event(RendererControlEvent::ActivateProfileAnimatorAction {
+											action_id: action_id.clone(),
+											result,
+										});
+									}
+								}
+							}
+						}
+					}
+				},
+				(),
+			) {
+				Ok(connection) => {
+					eprintln!("un-avatar-renderer: listening for MIDI bindings on `{port_name_for_callback}`");
+					connections.push(connection);
+				}
+				Err(error) => eprintln!("un-avatar-renderer: connect MIDI input `{port_name}` failed: {error}"),
+			}
+		}
+		if connections.is_empty() {
+			return None;
+		}
+		Some(Self { _connections: connections })
+	}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WardrobeMidiNoteBinding {
+	action: InputBindingAction,
+	device: Option<String>,
+	channel: u8,
+	note: u8,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InputBindingAction {
+	WardrobeSet(String),
+	AnimatorAction(String),
+}
+
+fn midi_note_bindings(
+	wardrobe_bindings: &[WardrobeBindingOptions],
+	animator_bindings: &[AnimatorActionBindingOptions],
+) -> Vec<WardrobeMidiNoteBinding> {
+	let wardrobe = wardrobe_bindings
+		.iter()
+		.filter(|binding| binding.kind == WardrobeBindingKind::MidiNote)
+		.filter_map(|binding| {
+			let channel = binding.channel?;
+			let note = binding.note?;
+			if !(1..=16).contains(&channel) || note > 127 {
+				return None;
+			}
+			Some(WardrobeMidiNoteBinding {
+				action: InputBindingAction::WardrobeSet(binding.set_id.trim().to_string()),
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			})
+		});
+	let animator = animator_bindings
+		.iter()
+		.filter(|binding| binding.kind == WardrobeBindingKind::MidiNote)
+		.filter_map(|binding| {
+			let action_id = binding.action_id.trim();
+			let channel = binding.channel?;
+			let note = binding.note?;
+			if action_id.is_empty() || !(1..=16).contains(&channel) || note > 127 {
+				return None;
+			}
+			Some(WardrobeMidiNoteBinding {
+				action: InputBindingAction::AnimatorAction(action_id.to_string()),
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			})
+		});
+	wardrobe.chain(animator).collect()
+}
+
+fn midi_device_matches(expected: Option<&str>, port_name: &str) -> bool {
+	let Some(expected) = expected.map(str::trim).filter(|expected| !expected.is_empty()) else {
+		return true;
+	};
+	port_name.to_ascii_lowercase().contains(&expected.to_ascii_lowercase())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MidiNoteEvent {
+	channel: u8,
+	note: u8,
+	down: bool,
+}
+
+fn parse_midi_note_event(message: &[u8]) -> Option<MidiNoteEvent> {
+	if message.len() < 3 {
+		return None;
+	}
+	let status = message[0];
+	let command = status & 0xF0;
+	let channel = (status & 0x0F) + 1;
+	let note = message[1];
+	if note > 127 {
+		return None;
+	}
+	match command {
+		0x90 => Some(MidiNoteEvent {
+			channel,
+			note,
+			down: message[2] > 0,
+		}),
+		0x80 => Some(MidiNoteEvent {
+			channel,
+			note,
+			down: false,
+		}),
+		_ => None,
+	}
+}
+
+#[cfg(windows)]
+struct WardrobeHotkeyRuntime {
+	thread_id: u32,
+	handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl WardrobeHotkeyRuntime {
+	fn start(
+		wardrobe_bindings: &[WardrobeBindingOptions],
+		animator_bindings: &[AnimatorActionBindingOptions],
+		proxy: EventLoopProxy<RendererControlEvent>,
+	) -> Option<Self> {
+		let registrations = global_hotkey_registrations(wardrobe_bindings, animator_bindings);
+		if registrations.is_empty() {
+			return None;
+		}
+		let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+		let handle = thread::spawn(move || wardrobe_hotkey_thread(registrations, proxy, ready_tx));
+		match ready_rx.recv_timeout(Duration::from_secs(2)) {
+			Ok(thread_id) if thread_id != 0 => Some(Self {
+				thread_id,
+				handle: Some(handle),
+			}),
+			_ => {
+				eprintln!("un-avatar-renderer: global hotkey thread did not start");
+				None
+			}
+		}
+	}
+}
+
+#[cfg(windows)]
+impl Drop for WardrobeHotkeyRuntime {
+	fn drop(&mut self) {
+		if self.thread_id != 0 {
+			unsafe {
+				let _ = windows::Win32::UI::WindowsAndMessaging::PostThreadMessageW(
+					self.thread_id,
+					windows::Win32::UI::WindowsAndMessaging::WM_QUIT,
+					windows::Win32::Foundation::WPARAM(0),
+					windows::Win32::Foundation::LPARAM(0),
+				);
+			}
+		}
+		if let Some(handle) = self.handle.take() {
+			let _ = handle.join();
+		}
+	}
+}
+
+#[cfg(windows)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WardrobeHotkeyRegistration {
+	id: i32,
+	action: InputBindingAction,
+	shortcut: String,
+	modifiers: windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS,
+	virtual_key: u32,
+}
+
+#[cfg(windows)]
+fn global_hotkey_registrations(
+	wardrobe_bindings: &[WardrobeBindingOptions],
+	animator_bindings: &[AnimatorActionBindingOptions],
+) -> Vec<WardrobeHotkeyRegistration> {
+	let mut out = Vec::new();
+	for binding in wardrobe_bindings {
+		push_global_hotkey_registration(
+			&mut out,
+			InputBindingAction::WardrobeSet(binding.set_id.trim().to_string()),
+			binding.kind.clone(),
+			binding.binding.trim(),
+		);
+	}
+	for binding in animator_bindings {
+		push_global_hotkey_registration(
+			&mut out,
+			InputBindingAction::AnimatorAction(binding.action_id.trim().to_string()),
+			binding.kind.clone(),
+			binding.binding.trim(),
+		);
+	}
+	out
+}
+
+#[cfg(windows)]
+fn push_global_hotkey_registration(
+	out: &mut Vec<WardrobeHotkeyRegistration>,
+	action: InputBindingAction,
+	kind: WardrobeBindingKind,
+	binding_text: &str,
+) {
+	if kind != WardrobeBindingKind::Keyboard || binding_text.is_empty() {
+		return;
+	}
+	if matches!(&action, InputBindingAction::AnimatorAction(id) if id.trim().is_empty()) {
+		return;
+	}
+	match parse_windows_hotkey(binding_text) {
+		Ok((modifiers, virtual_key)) => {
+			if out
+				.iter()
+				.any(|existing: &WardrobeHotkeyRegistration| existing.modifiers.0 == modifiers.0 && existing.virtual_key == virtual_key)
+			{
+				eprintln!("un-avatar-renderer: duplicate global hotkey ignored: {binding_text}");
+				return;
+			}
+			out.push(WardrobeHotkeyRegistration {
+				id: 0x554E_5700_i32.saturating_add(out.len() as i32),
+				action,
+				shortcut: binding_text.to_string(),
+				modifiers,
+				virtual_key,
+			});
+		}
+		Err(error) => eprintln!("un-avatar-renderer: invalid global hotkey `{binding_text}`: {error}"),
+	}
+}
+
+#[cfg(windows)]
+fn parse_windows_hotkey(text: &str) -> Result<(windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS, u32), String> {
+	use windows::Win32::UI::Input::KeyboardAndMouse::*;
+	let mut modifiers = MOD_NOREPEAT.0;
+	let mut key = None;
+	for part in text.split('+').map(str::trim).filter(|part| !part.is_empty()) {
+		match normalize_key_name(part).as_str() {
+			"ctrl" | "control" => modifiers |= MOD_CONTROL.0,
+			"shift" => modifiers |= MOD_SHIFT.0,
+			"alt" | "option" => modifiers |= MOD_ALT.0,
+			"super" | "meta" | "cmd" | "command" | "win" | "windows" => modifiers |= MOD_WIN.0,
+			candidate => {
+				let vk = match candidate {
+					"a" => VK_A.0,
+					"b" => VK_B.0,
+					"c" => VK_C.0,
+					"d" => VK_D.0,
+					"e" => VK_E.0,
+					"f" => VK_F.0,
+					"g" => VK_G.0,
+					"h" => VK_H.0,
+					"i" => VK_I.0,
+					"j" => VK_J.0,
+					"k" => VK_K.0,
+					"l" => VK_L.0,
+					"m" => VK_M.0,
+					"n" => VK_N.0,
+					"o" => VK_O.0,
+					"p" => VK_P.0,
+					"q" => VK_Q.0,
+					"r" => VK_R.0,
+					"s" => VK_S.0,
+					"t" => VK_T.0,
+					"u" => VK_U.0,
+					"v" => VK_V.0,
+					"w" => VK_W.0,
+					"x" => VK_X.0,
+					"y" => VK_Y.0,
+					"z" => VK_Z.0,
+					"0" => VK_0.0,
+					"1" => VK_1.0,
+					"2" => VK_2.0,
+					"3" => VK_3.0,
+					"4" => VK_4.0,
+					"5" => VK_5.0,
+					"6" => VK_6.0,
+					"7" => VK_7.0,
+					"8" => VK_8.0,
+					"9" => VK_9.0,
+					"f1" => VK_F1.0,
+					"f2" => VK_F2.0,
+					"f3" => VK_F3.0,
+					"f4" => VK_F4.0,
+					"f5" => VK_F5.0,
+					"f6" => VK_F6.0,
+					"f7" => VK_F7.0,
+					"f8" => VK_F8.0,
+					"f9" => VK_F9.0,
+					"f10" => VK_F10.0,
+					"f11" => VK_F11.0,
+					"f12" => VK_F12.0,
+					"f13" => VK_F13.0,
+					"f14" => VK_F14.0,
+					"f15" => VK_F15.0,
+					"f16" => VK_F16.0,
+					"f17" => VK_F17.0,
+					"f18" => VK_F18.0,
+					"f19" => VK_F19.0,
+					"f20" => VK_F20.0,
+					"f21" => VK_F21.0,
+					"f22" => VK_F22.0,
+					"f23" => VK_F23.0,
+					"f24" => VK_F24.0,
+					"escape" => VK_ESCAPE.0,
+					"enter" => VK_RETURN.0,
+					"space" => VK_SPACE.0,
+					"tab" => VK_TAB.0,
+					"delete" => VK_DELETE.0,
+					"insert" => VK_INSERT.0,
+					"home" => VK_HOME.0,
+					"end" => VK_END.0,
+					"pageup" => VK_PRIOR.0,
+					"pagedown" => VK_NEXT.0,
+					"arrowleft" => VK_LEFT.0,
+					"arrowright" => VK_RIGHT.0,
+					"arrowup" => VK_UP.0,
+					"arrowdown" => VK_DOWN.0,
+					_ => return Err("unsupported key".to_string()),
+				};
+				if key.replace(vk).is_some() {
+					return Err("hotkey must contain a single non-modifier key".to_string());
+				}
+			}
+		}
+	}
+	let key = key.ok_or_else(|| "hotkey must contain a non-modifier key".to_string())?;
+	Ok((HOT_KEY_MODIFIERS(modifiers), u32::from(key)))
+}
+
+#[cfg(windows)]
+fn wardrobe_hotkey_thread(
+	registrations: Vec<WardrobeHotkeyRegistration>,
+	proxy: EventLoopProxy<RendererControlEvent>,
+	ready_tx: std::sync::mpsc::Sender<u32>,
+) {
+	use windows::Win32::{
+		System::Threading::GetCurrentThreadId,
+		UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey},
+		UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_NOREMOVE, WM_HOTKEY},
+	};
+	unsafe {
+		let thread_id = GetCurrentThreadId();
+		let mut message = MSG::default();
+		let _ = PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE);
+		let _ = ready_tx.send(thread_id);
+		let mut active = Vec::new();
+		for registration in registrations {
+			match RegisterHotKey(None, registration.id, registration.modifiers, registration.virtual_key) {
+				Ok(()) => {
+					eprintln!("un-avatar-renderer: registered global hotkey `{}`", registration.shortcut);
+					active.push(registration);
+				}
+				Err(error) => eprintln!(
+					"un-avatar-renderer: register global hotkey `{}` failed: {error}",
+					registration.shortcut
+				),
+			}
+		}
+		if active.is_empty() {
+			return;
+		}
+		while GetMessageW(&mut message, None, 0, 0).into() {
+			if message.message == WM_HOTKEY {
+				let id = message.wParam.0 as i32;
+				if let Some(registration) = active.iter().find(|registration| registration.id == id) {
+					let result = Arc::new(Mutex::new(None));
+					match &registration.action {
+						InputBindingAction::WardrobeSet(set_id) => {
+							let _ = proxy.send_event(RendererControlEvent::SetWardrobe {
+								set_id: set_id.clone(),
+								result,
+							});
+						}
+						InputBindingAction::AnimatorAction(action_id) => {
+							let _ = proxy.send_event(RendererControlEvent::ActivateProfileAnimatorAction {
+								action_id: action_id.clone(),
+								result,
+							});
+						}
+					}
+				}
+			} else {
+				let _ = TranslateMessage(&message);
+				DispatchMessageW(&message);
+			}
+		}
+		for registration in active {
+			let _ = UnregisterHotKey(None, registration.id);
+		}
+	}
+}
+
+fn is_false(value: &bool) -> bool {
+	!*value
+}
+
+fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	let mut warnings = Vec::new();
+	if status.dynamics_group_count > 0 && status.dynamics_enabled_group_count == 0 {
+		let samples = runtime_dynamics_group_samples(status);
+		warnings.push(format!(
+			"dynamics groups are present but none are currently enabled; groups={} source_enabled_groups={} runtime_enabled_overrides={}{}",
+			status.dynamics_group_count,
+			status.dynamics_source_enabled_group_count,
+			status.dynamics_enabled_override_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	if status.dynamics_stretch_limit_group_count > 0 {
+		let samples = runtime_dynamics_stretch_limit_samples(status);
+		warnings.push(format!(
+			"dynamics stretch limits are partially supported by rotation_translation target writeback; targetless stretch groups remain metadata-only; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
+			status.dynamics_stretch_limit_group_count,
+			status.dynamics_stretch_translation_writeback_target_group_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	let unsupported_writeback_groups = runtime_dynamics_unsupported_writeback_group_count(status);
+	if unsupported_writeback_groups > 0 {
+		let samples = runtime_dynamics_unsupported_writeback_samples(status);
+		let unsupported_candidate_count = runtime_dynamics_unsupported_writeback_candidate_count(status);
+		let unsupported_target_count = runtime_dynamics_unsupported_writeback_target_count(status);
+		warnings.push(format!(
+			"dynamics rotation_translation writeback has no safe translation target in the current solver; groups={} candidate_joints={} target_joints={}{}",
+			unsupported_writeback_groups,
+			unsupported_candidate_count,
+			unsupported_target_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
+		let samples = runtime_dynamics_interaction_hook_samples(status);
+		warnings.push(format!(
+			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}{}",
+			status.dynamics_grabbing_enabled_group_count,
+			status.dynamics_posing_enabled_group_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	if status.dynamics_vrc_constraint_ref_count > 0 {
+		let samples = runtime_dynamics_constraint_ref_samples(status);
+		warnings.push(format!(
+			"dynamics VRC constraint refs are metadata/reset refs only in the current solver; vrc_constraint_refs={}{}",
+			status.dynamics_vrc_constraint_ref_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	if status.dynamics_contact_probe_would_emit_count > 0 && !status.contact_parameter_emission_enabled {
+		let samples = runtime_dynamics_contact_probe_samples(status);
+		warnings.push(format!(
+			"dynamics contact probes would emit {} parameter value(s), but contact parameter emission is disabled{}",
+			status.dynamics_contact_probe_would_emit_count,
+			format_runtime_warning_samples(&samples)
+		));
+	}
+	warnings
+}
+
+fn runtime_dynamics_group_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.take(4)
+		.map(runtime_dynamics_group_sample_label)
+		.collect()
+}
+
+fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+		})
+		.take(4)
+		.map(runtime_dynamics_group_sample_label)
+		.collect()
+}
+
+fn runtime_dynamics_rotation_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.count()
+}
+
+fn runtime_dynamics_unsupported_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
+		.count()
+}
+
+fn runtime_dynamics_unsupported_writeback_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
+		.take(4)
+		.map(runtime_dynamics_group_sample_label)
+		.collect()
+}
+
+fn runtime_dynamics_rotation_translation_writeback_candidate_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.map(|group| group.translation_writeback_candidate_count)
+		.sum()
+}
+
+fn runtime_dynamics_rotation_translation_writeback_target_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation)
+		.map(|group| group.translation_writeback_target_count)
+		.sum()
+}
+
+fn runtime_dynamics_unsupported_writeback_candidate_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
+		.map(|group| group.translation_writeback_candidate_count)
+		.sum()
+}
+
+fn runtime_dynamics_unsupported_writeback_target_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_target_count == 0
+		})
+		.map(|group| group.translation_writeback_target_count)
+		.sum()
+}
+
+fn runtime_dynamics_stretch_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
+				&& group.translation_writeback_candidate_count > 0
+		})
+		.count()
+}
+
+fn runtime_dynamics_stretch_translation_writeback_target_group_count(status: &RendererRuntimeSnapshot) -> usize {
+	status
+		.dynamics_groups
+		.iter()
+		.filter(|group| {
+			group
+				.max_stretch
+				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+				&& group.translation_writeback_target_count > 0
+		})
+		.count()
+}
+
+fn runtime_dynamics_group_sample_label(group: &crate::gpu::RuntimeDynamicsGroupStatus) -> String {
+	let id = if group.source_id.is_empty() {
+		format!("group[{}]", group.index)
+	} else {
+		group.source_id.clone()
+	};
+	match &group.root_path {
+		Some(root_path) => format!("{id}@{root_path}"),
+		None => id,
+	}
+}
+
+fn runtime_dynamics_interaction_hook_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_interaction_hooks
+		.iter()
+		.take(4)
+		.map(|hook| {
+			let id = if hook.source_id.is_empty() {
+				format!("group[{}]", hook.group_index)
+			} else {
+				hook.source_id.clone()
+			};
+			match &hook.root_path {
+				Some(root_path) => format!("{id}@{root_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn runtime_dynamics_constraint_ref_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.dynamics_constraint_refs
+		.iter()
+		.take(4)
+		.map(|constraint_ref| {
+			let id = if constraint_ref.source_id.is_empty() {
+				format!("constraint_ref[{}]", constraint_ref.index)
+			} else {
+				constraint_ref.source_id.clone()
+			};
+			match &constraint_ref.target_path {
+				Some(target_path) => format!("{id}@{target_path}"),
+				None => id,
+			}
+		})
+		.collect()
+}
+
+fn runtime_dynamics_contact_probe_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	status
+		.contact_probes
+		.iter()
+		.filter(|probe| probe.would_emit)
+		.take(4)
+		.map(|probe| {
+			let receiver = if probe.receiver_source_id.is_empty() {
+				format!("receiver[{}]", probe.receiver_index)
+			} else {
+				probe.receiver_source_id.clone()
+			};
+			let sender = if probe.sender_source_id.is_empty() {
+				format!("sender[{}]", probe.sender_index)
+			} else {
+				probe.sender_source_id.clone()
+			};
+			let target = match &probe.receiver_node_path {
+				Some(receiver_path) => format!("{receiver}@{receiver_path}"),
+				None => receiver,
+			};
+			format!("{target}<={sender}:{}", probe.parameter)
+		})
+		.collect()
+}
+
+fn format_runtime_warning_samples(samples: &[String]) -> String {
+	if samples.is_empty() {
+		String::new()
+	} else {
+		format!(" samples=[{}]", samples.join(", "))
+	}
+}
+
 #[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
+	#[serde(default)]
+	pid: u32,
 	protocol: String,
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_cpu_total_ms: Option<f32>,
+	frame_motion_apply_ms: Option<f32>,
+	frame_dynamics_step_ms: Option<f32>,
+	frame_globals_ms: Option<f32>,
+	frame_surface_acquire_ms: Option<f32>,
+	frame_target_prepare_ms: Option<f32>,
+	frame_draw_state_refresh_ms: Option<f32>,
+	frame_draw_doc_lock_ms: Option<f32>,
+	frame_draw_expression_select_ms: Option<f32>,
+	frame_draw_update_total_ms: Option<f32>,
+	frame_scene_world_ms: Option<f32>,
+	frame_draw_skin_palette_ms: Option<f32>,
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	frame_draw_expression_values_ms: Option<f32>,
+	frame_draw_morph_weights_ms: Option<f32>,
+	frame_draw_transform_loop_ms: Option<f32>,
+	frame_bone_collider_debug_ms: Option<f32>,
+	frame_command_encode_ms: Option<f32>,
+	frame_submit_present_ms: Option<f32>,
+	frame_spout_cpu_ms: Option<f32>,
+	frame_contact_eval_ms: Option<f32>,
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -2679,6 +5694,62 @@ struct RendererRuntimeSnapshot {
 	texture_compression_advanced: TextureCompressionAdvancedOptions,
 	processed_texture_cache: bool,
 	texture_summary: Option<mesh_pass::TextureUploadSummary>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
+	#[serde(default)]
+	base_wardrobe_set: Option<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	active_asset_groups: Vec<String>,
+	#[serde(default, skip_serializing_if = "wardrobe_asset_upload_plan_is_default")]
+	wardrobe_asset_upload: WardrobeAssetUploadPlan,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	resolver_cache_key: Option<un_avatar_core::UnaRuntimeResolverCacheKey>,
+	#[serde(default)]
+	last_action_id: Option<String>,
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	runtime_parameter_values: BTreeMap<String, f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_definitions: Vec<un_avatar_core::UnaRuntimeParameterDefinition>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_conflicts: Vec<un_avatar_core::UnaRuntimeParameterConflict>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	wardrobe_actions: Vec<gpu::RuntimeWardrobeActionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_actions: Vec<gpu::RuntimeActionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	active_profile_animator_actions: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_target_write_collisions: Vec<un_avatar_core::UnaEvaluationTargetWriteCollision>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_readiness: Vec<un_avatar_core::UnaEvaluationRestoreReadiness>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_baseline_candidates: Vec<un_avatar_core::UnaEvaluationRestoreBaselineCandidate>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_baseline_capture_plan: Vec<un_avatar_core::UnaEvaluationRestoreBaselineEntry>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_apply_plan: Vec<un_avatar_core::UnaEvaluationRestoreApplyEntry>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_action_candidates: Vec<gpu::RuntimeMenuActionCandidateStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_wardrobe_candidates: Vec<gpu::RuntimeMenuWardrobeCandidateStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_declarations: Vec<gpu::RuntimeContactParameterDeclarationStatus>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	contact_parameter_emission_enabled: bool,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_emissions: Vec<gpu::RuntimeContactParameterEmissionStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_interaction_hooks: Vec<gpu::RuntimeDynamicsInteractionHookStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_colliders: Vec<gpu::RuntimeDynamicsColliderStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_constraint_refs: Vec<gpu::RuntimeDynamicsConstraintRefStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_warnings: Vec<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -2716,6 +5787,15 @@ struct RendererRuntimeSnapshot {
 	unmotion_zenoh_received_frames: u64,
 	#[serde(default)]
 	motion_applied_frames: u64,
+	/// 現在の profile と可視 material set が external AudioLink texture を必要としているか。
+	#[serde(default)]
+	audio_link_texture_needed: bool,
+	#[serde(default)]
+	runtime_requires_audio_link_texture: bool,
+	#[serde(default)]
+	runtime_requires_screen_refraction: bool,
+	#[serde(default)]
+	runtime_requires_fur: bool,
 	/// 旧 status 互換の primary motion source。
 	#[serde(default)]
 	primary_motion_source: crate::options::PrimaryMotionSource,
@@ -2727,6 +5807,70 @@ struct RendererRuntimeSnapshot {
 	bone_collider_count: u32,
 	#[serde(default)]
 	bone_collider_source: String,
+	#[serde(default)]
+	dynamics_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_source_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_override_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_group_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_group_count: u32,
+	#[serde(default)]
+	dynamics_unknown_group_count: u32,
+	#[serde(default)]
+	dynamics_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_angle_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_rotation_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_candidate_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_target_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_target_group_count: u32,
+	#[serde(default)]
+	dynamics_grabbing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_posing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_collider_count: u32,
+	#[serde(default)]
+	dynamics_unknown_collider_count: u32,
+	#[serde(default)]
+	dynamics_contact_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_sender_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_receiver_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_declaration_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_would_emit_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emission_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emitted_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_reset_to_zero_count: u32,
+	#[serde(default)]
+	dynamics_constraint_ref_count: u32,
+	#[serde(default)]
+	dynamics_vrc_constraint_ref_count: u32,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -2748,6 +5892,9 @@ struct RendererRuntimeSnapshot {
 	/// 現在 click-through (input passthrough) が有効か。
 	#[serde(default)]
 	input_passthrough: bool,
+	/// 現在 always-on-top が有効か。
+	#[serde(default)]
+	always_on_top: bool,
 	#[serde(default)]
 	startup_phase: Option<String>,
 	#[serde(default)]
@@ -2760,42 +5907,39 @@ struct RendererRuntimeSnapshot {
 fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapshot {
 	RendererRuntimeSnapshot {
 		connected: true,
+		pid: std::process::id(),
 		protocol: "local-tcp-json-v2".to_string(),
-		control_capabilities: vec![
-			"shutdown".to_string(),
-			"reset_camera".to_string(),
-			"set_camera_orbit".to_string(),
-			"set_clear_color".to_string(),
-			"set_spout_output".to_string(),
-			"set_window".to_string(),
-			"screenshot".to_string(),
-			"set_expression_override".to_string(),
-			"clear_expression_overrides".to_string(),
-			"set_look_at".to_string(),
-			"activate".to_string(),
-			"set_show_axes".to_string(),
-			"set_show_bone_colliders".to_string(),
-			"set_camera_lock".to_string(),
-			"set_camera_fov".to_string(),
-			"set_camera_state".to_string(),
-			"set_apply_vmc_root_translation".to_string(),
-			"set_primary_motion_source".to_string(),
-			"set_motion_receivers".to_string(),
-			"set_spring_bones".to_string(),
-			"set_avatar_outline".to_string(),
-			"set_avatar_rim".to_string(),
-			"set_avatar_matcap".to_string(),
-			"set_avatar_specular".to_string(),
-			"set_avatar_ambient_occlusion".to_string(),
-			"set_lighting".to_string(),
-			"set_environment_color".to_string(),
-			"set_bloom".to_string(),
-			"set_ssao".to_string(),
-			"set_contact_shadow".to_string(),
-		],
+		control_capabilities: RENDERER_CONTROL_CAPABILITIES
+			.iter()
+			.map(|capability| (*capability).to_string())
+			.collect(),
+		scene_state: SCENE_STATE_STARTUP_PROGRESS.to_string(),
 		uptime_secs: 0,
 		fps: None,
 		cpu_ms: None,
+		frame_cpu_total_ms: None,
+		frame_motion_apply_ms: None,
+		frame_dynamics_step_ms: None,
+		frame_globals_ms: None,
+		frame_surface_acquire_ms: None,
+		frame_target_prepare_ms: None,
+		frame_draw_state_refresh_ms: None,
+		frame_draw_doc_lock_ms: None,
+		frame_draw_expression_select_ms: None,
+		frame_draw_update_total_ms: None,
+		frame_scene_world_ms: None,
+		frame_draw_skin_palette_ms: None,
+		frame_draw_skin_palette_write_ms: None,
+		frame_draw_fur_source_vertices_ms: None,
+		frame_draw_expression_values_ms: None,
+		frame_draw_morph_weights_ms: None,
+		frame_draw_transform_loop_ms: None,
+		frame_bone_collider_debug_ms: None,
+		frame_command_encode_ms: None,
+		frame_submit_present_ms: None,
+		frame_spout_cpu_ms: None,
+		frame_contact_eval_ms: None,
+		frame_runtime_action_eval_ms: None,
 		gpu_ms: None,
 		ram_mb: None,
 		surface_width: opts.spout.width,
@@ -2810,6 +5954,34 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		texture_compression_advanced: opts.texture_compression_advanced.clone(),
 		processed_texture_cache: opts.processed_texture_cache,
 		texture_summary: None,
+		active_wardrobe_set: model_loader::normalize_wardrobe_set_id(opts.wardrobe_set.as_deref()).map(str::to_owned),
+		base_wardrobe_set: None,
+		active_asset_groups: Vec::new(),
+		wardrobe_asset_upload: WardrobeAssetUploadPlan::default(),
+		resolver_cache_key: None,
+		last_action_id: None,
+		runtime_parameter_values: BTreeMap::new(),
+		runtime_parameter_definitions: Vec::new(),
+		runtime_parameter_conflicts: Vec::new(),
+		wardrobe_actions: Vec::new(),
+		runtime_actions: Vec::new(),
+		active_profile_animator_actions: Vec::new(),
+		runtime_action_target_write_collisions: Vec::new(),
+		runtime_action_restore_readiness: Vec::new(),
+		runtime_action_restore_baseline_candidates: Vec::new(),
+		runtime_action_restore_baseline_capture_plan: Vec::new(),
+		runtime_action_restore_apply_plan: Vec::new(),
+		menu_action_candidates: Vec::new(),
+		menu_wardrobe_candidates: Vec::new(),
+		contact_parameter_declarations: Vec::new(),
+		contact_parameter_emission_enabled: false,
+		contact_parameter_emissions: Vec::new(),
+		contact_probes: Vec::new(),
+		dynamics_groups: Vec::new(),
+		dynamics_interaction_hooks: Vec::new(),
+		dynamics_colliders: Vec::new(),
+		dynamics_constraint_refs: Vec::new(),
+		dynamics_warnings: Vec::new(),
 		spout_available: crate::spout::backend_available(),
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
@@ -2834,11 +6006,47 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		unmotion_zenoh_key: opts.unmotion_zenoh.base_key_expr.clone(),
 		unmotion_zenoh_received_frames: 0,
 		motion_applied_frames: 0,
+		audio_link_texture_needed: false,
+		runtime_requires_audio_link_texture: false,
+		runtime_requires_screen_refraction: false,
+		runtime_requires_fur: false,
 		primary_motion_source: opts.primary_motion_source,
 		show_axes: opts.show_axes,
 		show_bone_colliders: opts.show_bone_colliders,
 		bone_collider_count: 0,
 		bone_collider_source: "off".to_string(),
+		dynamics_group_count: 0,
+		dynamics_enabled_group_count: 0,
+		dynamics_source_enabled_group_count: 0,
+		dynamics_enabled_override_count: 0,
+		dynamics_vrm_spring_bone_group_count: 0,
+		dynamics_vrc_physbone_group_count: 0,
+		dynamics_unknown_group_count: 0,
+		dynamics_limit_group_count: 0,
+		dynamics_angle_limit_group_count: 0,
+		dynamics_stretch_limit_group_count: 0,
+		dynamics_rotation_translation_writeback_group_count: 0,
+		dynamics_translation_writeback_candidate_count: 0,
+		dynamics_translation_writeback_target_count: 0,
+		dynamics_stretch_translation_writeback_group_count: 0,
+		dynamics_stretch_translation_writeback_target_group_count: 0,
+		dynamics_grabbing_enabled_group_count: 0,
+		dynamics_posing_enabled_group_count: 0,
+		dynamics_collider_count: 0,
+		dynamics_vrm_spring_bone_collider_count: 0,
+		dynamics_vrc_physbone_collider_count: 0,
+		dynamics_unknown_collider_count: 0,
+		dynamics_contact_count: 0,
+		dynamics_vrc_contact_sender_count: 0,
+		dynamics_vrc_contact_receiver_count: 0,
+		dynamics_contact_parameter_declaration_count: 0,
+		dynamics_contact_probe_count: 0,
+		dynamics_contact_probe_would_emit_count: 0,
+		dynamics_contact_parameter_emission_count: 0,
+		dynamics_contact_parameter_emitted_count: 0,
+		dynamics_contact_parameter_reset_to_zero_count: 0,
+		dynamics_constraint_ref_count: 0,
+		dynamics_vrc_constraint_ref_count: 0,
 		camera_locked: opts.camera_locked,
 		window_focused: false,
 		window_activation_seq: 0,
@@ -2847,6 +6055,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		clear_color: [opts.clear_color.r, opts.clear_color.g, opts.clear_color.b, opts.clear_color.a],
 		transparent_window: opts.transparent,
 		input_passthrough: opts.input_passthrough,
+		always_on_top: opts.always_on_top,
 		startup_phase: None,
 		startup_progress: None,
 		startup_message: None,
@@ -3085,8 +6294,45 @@ fn handle_runtime_control_client(mut stream: std::net::TcpStream, proxy: EventLo
 }
 
 fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererControlEvent>) -> String {
+	if command == "scene_state" {
+		return dispatch_scene_state_command(proxy);
+	}
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
+		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
+		Ok(RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		}) => dispatch_activate_action_command(
+			proxy,
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		),
+		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
+		Ok(RendererControlCommand::SetDynamicsEnabled { source_id, enabled }) => {
+			dispatch_set_dynamics_enabled_command(proxy, source_id, enabled)
+		}
+		Ok(RendererControlCommand::SetAnimatorProfile { actions, bindings }) => {
+			dispatch_set_animator_profile_command(proxy, actions, bindings)
+		}
+		Ok(RendererControlCommand::SetInputBindings {
+			wardrobe_bindings,
+			animator_bindings,
+		}) => dispatch_set_input_bindings_command(proxy, wardrobe_bindings, animator_bindings),
+		Ok(RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor,
+			billboard_y_offset_mm,
+		}) => dispatch_set_wardrobe_transition_command(proxy, billboard_anchor, billboard_y_offset_mm),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -3095,11 +6341,190 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	}
 }
 
+fn dispatch_set_parameter_command(proxy: &EventLoopProxy<RendererControlEvent>, name: String, value: f32) -> String {
+	let name = name.trim().to_string();
+	if name.is_empty() {
+		return "err parameter name required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetParameter {
+		name,
+		value,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_parameter")
+}
+
+fn dispatch_set_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlEvent>, source_id: String, enabled: bool) -> String {
+	let source_id = source_id.trim().to_string();
+	if source_id.is_empty() {
+		return "err dynamics source_id required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetDynamicsEnabled {
+		source_id,
+		enabled,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_dynamics_enabled")
+}
+
+fn dispatch_set_animator_profile_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	actions: Vec<AnimatorProfileActionControl>,
+	bindings: Vec<AnimatorProfileBindingControl>,
+) -> String {
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetAnimatorProfile {
+		actions,
+		bindings,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_animator_profile")
+}
+
+fn dispatch_set_input_bindings_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
+	animator_bindings: Vec<AnimatorProfileBindingControl>,
+) -> String {
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetInputBindings {
+		wardrobe_bindings,
+		animator_bindings,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_input_bindings")
+}
+
+fn dispatch_set_wardrobe_transition_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	billboard_anchor: String,
+	billboard_y_offset_mm: f32,
+) -> String {
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetWardrobeTransition {
+		billboard_anchor,
+		billboard_y_offset_mm,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_wardrobe_transition")
+}
+
+fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
+	let set_id = set_id.trim().to_string();
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetWardrobe {
+		set_id,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(10), "set_wardrobe")
+}
+
+fn dispatch_activate_action_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	action_id: Option<String>,
+	supervisor_command: Option<String>,
+	expression_menu_path: Option<String>,
+	menu_path: Option<String>,
+	wardrobe_set_id: Option<String>,
+	parameter_name: Option<String>,
+	parameter_value: Option<f32>,
+) -> String {
+	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let supervisor_command = supervisor_command
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	let expression_menu_path = expression_menu_path
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	let menu_path = menu_path.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let wardrobe_set_id = wardrobe_set_id
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	let parameter_name = parameter_name
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if parameter_value.is_some() && parameter_name.is_none() {
+		return "err parameter_name required when parameter_value is provided".to_string();
+	}
+	if parameter_name.is_some() && parameter_value.is_none() {
+		return "err parameter_value required when parameter_name is provided".to_string();
+	}
+	if action_id.is_none()
+		&& supervisor_command.is_none()
+		&& expression_menu_path.is_none()
+		&& menu_path.is_none()
+		&& parameter_name.is_none()
+	{
+		return "err action_id, menu_path, supervisor_command, expression_menu_path, wardrobe_set_id, or parameter_name required"
+			.to_string();
+	}
+	if menu_path.is_none() && wardrobe_set_id.is_some() {
+		return "err menu_path is required when wardrobe_set_id is provided".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::ActivateAction {
+		action_id,
+		supervisor_command,
+		expression_menu_path,
+		menu_path,
+		wardrobe_set_id,
+		parameter_name,
+		parameter_value,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "activate_action")
+}
+
+fn dispatch_scene_state_command(proxy: &EventLoopProxy<RendererControlEvent>) -> String {
+	let result: SceneStateResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SceneState {
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	let deadline = Instant::now() + Duration::from_secs(2);
+	loop {
+		if let Ok(guard) = result.lock() {
+			if let Some(state) = guard.as_ref() {
+				return state.clone();
+			}
+		}
+		if Instant::now() >= deadline {
+			return "err scene_state timeout".to_string();
+		}
+		thread::sleep(Duration::from_millis(20));
+	}
+}
+
 fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String) -> String {
 	if path.trim().is_empty() {
 		return "err screenshot path required".to_string();
 	}
-	let result: ScreenshotResultSlot = Arc::new(Mutex::new(None));
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::Screenshot {
 		path: std::path::PathBuf::from(path),
 		result: Arc::clone(&result),
@@ -3107,7 +6532,11 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 	if proxy.send_event(event).is_err() {
 		return "err event-loop-closed".to_string();
 	}
-	let deadline = Instant::now() + Duration::from_secs(10);
+	wait_command_result(result, Duration::from_secs(10), "screenshot")
+}
+
+fn wait_command_result(result: CommandResultSlot, timeout: Duration, command_name: &str) -> String {
+	let deadline = Instant::now() + timeout;
 	loop {
 		if let Ok(guard) = result.lock() {
 			if let Some(outcome) = guard.as_ref() {
@@ -3118,7 +6547,7 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 			}
 		}
 		if Instant::now() >= deadline {
-			return "err screenshot timeout".to_string();
+			return format!("err {command_name} timeout");
 		}
 		thread::sleep(Duration::from_millis(20));
 	}
@@ -3133,12 +6562,79 @@ fn parse_renderer_control_command(command: &str) -> Result<RendererControlComman
 	}
 }
 
+fn normalize_menu_path(path: &str) -> Vec<String> {
+	path.trim()
+		.trim_matches('/')
+		.split('/')
+		.map(str::trim)
+		.filter(|part| !part.is_empty())
+		.map(str::to_string)
+		.collect::<Vec<_>>()
+}
+
+fn resolve_activate_action_from_menu_path(
+	menu_path: &str,
+	wardrobe_set_id: Option<&str>,
+	candidates: &[gpu::RuntimeMenuWardrobeCandidateStatus],
+) -> Result<String, String> {
+	let normalized_menu_path = normalize_menu_path(menu_path);
+	if normalized_menu_path.is_empty() {
+		return Err("menu_path is required".to_string());
+	}
+	let mut matching_action_ids = Vec::<String>::new();
+	for candidate in candidates {
+		let candidate_menu_path = candidate
+			.menu_path
+			.iter()
+			.map(|part| part.trim())
+			.filter(|part| !part.is_empty())
+			.map(str::to_string)
+			.collect::<Vec<_>>();
+		let menu_path_matches = if normalized_menu_path.len() == candidate_menu_path.len() {
+			normalized_menu_path == candidate_menu_path
+		} else if normalized_menu_path.len() == candidate_menu_path.len() + 1 {
+			normalized_menu_path.starts_with(&candidate_menu_path)
+		} else {
+			false
+		};
+		if menu_path_matches && wardrobe_set_id.is_none_or(|set_id| set_id == candidate.wardrobe_set_id.as_str()) {
+			if !matching_action_ids.iter().any(|action_id| action_id == &candidate.action_id) {
+				matching_action_ids.push(candidate.action_id.clone());
+			}
+		}
+	}
+	let resolved_action_id = matching_action_ids
+		.first()
+		.cloned()
+		.ok_or_else(|| format!("no menu wardrobe candidate found for menu_path={menu_path}"))?;
+	if matching_action_ids.len() > 1 {
+		return Err(format!(
+			"menu path {} is ambiguous across {} action(s): {}",
+			menu_path,
+			matching_action_ids.len(),
+			matching_action_ids.join(", ")
+		));
+	}
+	Ok(resolved_action_id)
+}
+
 /// イベントループをブロックしてウィンドウを表示する。
 pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
+	#[cfg(windows)]
+	if let Err(error) =
+		windows_identity::set_renderer_app_user_model_id(opts.app_user_model_id.as_deref().unwrap_or("UsagiNetwork.UNAvatar.Renderer"))
+	{
+		eprintln!("un-avatar-renderer: set AppUserModelID failed: {error}");
+	}
 	let event_loop = EventLoop::<RendererControlEvent>::with_user_event()
 		.build()
 		.map_err(|e| RunError::EventLoop(e.to_string()))?;
 	let event_proxy = event_loop.create_proxy();
+	#[cfg(windows)]
+	renderer_tray::install_event_handlers(event_proxy.clone());
+	#[cfg(windows)]
+	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
+	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
 	if opts.runtime_bus_key.is_none() {
 		if let Some(address) = opts.runtime_control_address {
 			start_runtime_control_server(address, event_proxy.clone());
@@ -3146,6 +6642,11 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	}
 
 	let mut app = AvatarApp::new(opts, event_proxy);
+	#[cfg(windows)]
+	{
+		app.wardrobe_hotkeys = wardrobe_hotkeys;
+	}
+	app.wardrobe_midi = wardrobe_midi;
 	event_loop.run_app(&mut app).map_err(|e| RunError::EventLoop(e.to_string()))
 }
 
@@ -3162,6 +6663,15 @@ pub fn run_cli() -> Result<(), RunError> {
 		manifest: Option<PathBuf>,
 		#[arg(long, hide = true)]
 		validate_startup: bool,
+		#[arg(long, hide = true)]
+		bench_gpu_scene: bool,
+		#[arg(
+			long,
+			help = "モデルのGPU sceneをウィンドウなしで構築し、texture / compressed texture / pipeline cacheを生成して終了する"
+		)]
+		prewarm_scene_cache: bool,
+		#[arg(long, hide = true)]
+		prewarm_shaders: bool,
 		#[arg(long, hide = true)]
 		dump_skin_tone_matching: bool,
 		#[arg(long, default_value = "UN Avatar")]
@@ -3195,14 +6705,24 @@ pub fn run_cli() -> Result<(), RunError> {
 		ca: f64,
 		#[arg(long, help = "タイトルバーへの FPS・計測表示を出さない（ウィンドウタイトルは --title 固定）")]
 		no_fps_title: bool,
+		#[arg(long, value_name = "N", help = "ロード完了後 N フレームの timing を stderr へ出力して終了する")]
+		bench_frames: Option<u32>,
 		#[arg(
 			long,
 			value_name = "PATH",
-			help = "表示するモデル: glTF（.gltf / .glb）または VRM（.vrm / VRM 拡張付き .glb）。メッシュ表示モード（空シーンのスカイに代わる）"
+			help = "表示するモデル: glTF（.gltf / .glb）または VRM（.vrm / VRM 拡張付き .glb）または .unavatar。メッシュ表示モード（空シーンのスカイに代わる）"
 		)]
 		gltf: Option<PathBuf>,
+		#[arg(
+			long,
+			value_name = "ID",
+			help = ".unavatar wardrobe set id。Base 適用後に指定セットを重ねてからロード"
+		)]
+		wardrobe_set: Option<String>,
 		#[arg(long, value_name = "PATH", help = "ウィンドウ・タスクバー用アイコン画像（PNG/JPEG等）")]
 		icon: Option<PathBuf>,
+		#[arg(long, hide = true)]
+		app_user_model_id: Option<String>,
 		#[arg(long, value_name = "IP:PORT", help = "VMC Marionette: UDP 待受アドレス（例: 0.0.0.0:39539）")]
 		vmc_address: Option<SocketAddr>,
 		#[arg(long, value_name = "PORT", hide = true)]
@@ -3230,8 +6750,8 @@ pub fn run_cli() -> Result<(), RunError> {
 		#[arg(
 			long,
 			value_enum,
-			default_value_t = TextureCompressionMode::Source,
-			help = "テクスチャ圧縮方針: source / auto / advanced。sourceが既定"
+			default_value_t = TextureCompressionMode::Balanced,
+			help = "テクスチャ圧縮方針: source / balanced / memory / compat。既定はbalanced。旧auto/advancedはbalancedとして読む"
 		)]
 		texture_compression: TextureCompressionMode,
 		#[arg(
@@ -3275,10 +6795,11 @@ pub fn run_cli() -> Result<(), RunError> {
 		)]
 		runtime_bus_key: Option<String>,
 		#[arg(
-			long,
-			help = "VRM SpringBone シミュレーションを無効化（既定 ON。静止画用途で揺れを完全に止めたいときに指定）"
+			long = "no-dynamics",
+			alias = "no-spring-bones",
+			help = "UNPhysics / UNDynamics シミュレーションを無効化（既定 ON。静止画用途で揺れを完全に止めたいときに指定）"
 		)]
-		no_spring_bones: bool,
+		no_dynamics: bool,
 		#[arg(
 			long,
 			value_name = "PATH",
@@ -3331,12 +6852,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		start_minimized: bool,
 		#[arg(
 			long,
-			help = "診断用: MToon outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
+			help = "診断用: UNToon geometry outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
 		)]
 		disable_mtoon_outlines: bool,
 		#[arg(
 			long,
-			help = "診断用: 全メッシュを不透明 LitLambert + baseColorTexture のみで描画（MToon/アルファ表現をシェーダ側で無視）"
+			help = "診断用: 全メッシュを不透明 LitLambert + baseColorTexture のみで描画（UNToon/アルファ表現をシェーダ側で無視）"
 		)]
 		simple_basecolor_only: bool,
 		#[arg(long, help = "ロード時にマテリアル名・alphaMode・スキン joint 本数などを stderr に出す")]
@@ -3357,26 +6878,30 @@ pub fn run_cli() -> Result<(), RunError> {
 			help = "ジョイント行列を inv(meshWorld)*joint*IBM ではなく joint*IBM のみに（旧実装・エクスポータ差の確認）"
 		)]
 		debug_skin_legacy_no_inv_mesh: bool,
-		#[arg(long, help = "診断用: MToon parametric Rim Lighting 寄与を 0 に固定")]
+		#[arg(long, help = "診断用: UNToon rim lighting 寄与を 0 に固定")]
 		debug_disable_rim_lighting: bool,
 		#[arg(long, help = "診断用: shading_shift_factor と shadingShiftTexture の寄与を 0 に固定")]
 		debug_force_shading_shift_zero: bool,
-		#[arg(long, help = "診断用: MToon matcap (sphere add) 寄与を 0 に固定")]
+		#[arg(long, help = "診断用: UNToon matcap / sphere add 寄与を 0 に固定")]
 		debug_disable_matcap: bool,
 		#[arg(long, help = "診断用: emissive (emissive_factor × emissive_tex) 寄与を 0 に固定")]
 		debug_disable_emissive: bool,
 		#[arg(
 			long,
-			help = "診断用: MToon shade_term を base 色で置換（shade_color × shade_tex を base に差し替え）"
+			help = "診断用: UNToon shade term を base 色で置換（shade_color × shade_tex を base に差し替え）"
 		)]
 		debug_disable_shade_color: bool,
 		#[arg(long, help = "診断用: normalTexture を使わず頂点法線のみで shading / rim を計算")]
 		debug_disable_normal_map: bool,
+		#[arg(long, help = "診断用: lilToon reflection / specular / gem reflection 寄与を 0 に固定")]
+		debug_disable_reflection: bool,
 		#[arg(
 			long,
-			help = "診断用: fs_mtoon を base (alb × base_color) のみで早期 return（shading/GI/rim/matcap/emissive 全 skip）"
+			help = "診断用: toon path を base (alb × base_color) のみで早期 return（shading/GI/rim/matcap/emissive 全 skip）"
 		)]
 		debug_base_texture_only: bool,
+		#[arg(long, help = "診断用: lilToon Fur shell pass を完全に無効化")]
+		debug_disable_fur: bool,
 	}
 
 	let cli = Cli::parse();
@@ -3390,6 +6915,7 @@ pub fn run_cli() -> Result<(), RunError> {
 				return Err(RunError::EventLoop(e));
 			}
 		}
+		opts.manifest_path = Some(path.to_path_buf());
 		opts
 	} else {
 		AvatarWindowOptions::default()
@@ -3406,13 +6932,26 @@ pub fn run_cli() -> Result<(), RunError> {
 		// CLI からは位置指定なし。manifest 経由で指定された場合のみ apply される。
 		window_position: None,
 		show_fps_in_title: !cli.no_fps_title,
+		bench_frames: cli.bench_frames,
 		gltf_path: cli.gltf,
+		manifest_path: None,
+		wardrobe_set: cli.wardrobe_set,
+		wardrobe_billboard_anchor: AvatarWindowOptions::default().wardrobe_billboard_anchor,
+		wardrobe_billboard_y_offset_m: AvatarWindowOptions::default().wardrobe_billboard_y_offset_m,
+		wardrobe_bindings: Vec::new(),
+		animator_action_ids: Vec::new(),
+		animator_action_modes: Default::default(),
+		animator_action_values: Default::default(),
+		animator_action_transitions: Default::default(),
+		animator_bindings: Vec::new(),
 		icon_path: cli.icon,
+		app_user_model_id: None,
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
 		},
+		audio_link: Default::default(),
 		primary_motion_source: cli.primary_motion_source.unwrap_or_default(),
 		spout: SpoutWindowOptions {
 			enabled: cli.spout,
@@ -3424,6 +6963,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		lighting: LightingOptions::default(),
 		bloom: BloomOptions::default(),
 		aa: cli.aa,
+		contact_parameter_emission: false,
 		texture_resolution_limit: cli.texture_resolution_limit,
 		texture_compression: cli.texture_compression,
 		mipmap_filter: cli.mipmap_filter,
@@ -3442,9 +6982,9 @@ pub fn run_cli() -> Result<(), RunError> {
 			b: cli.cb,
 			a: cli.ca,
 		},
-		enable_spring_bones: !cli.no_spring_bones,
+		dynamics_enabled: !cli.no_dynamics,
 		bone_colliders: Default::default(),
-		spring_bone_physics: SpringBonePhysicsConfig::default(),
+		spring_bone_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {
 			log_path: cli.debug_log.clone(),
 			mirror_stderr: cli.debug_stderr,
@@ -3485,18 +7025,22 @@ pub fn run_cli() -> Result<(), RunError> {
 			debug_disable_emissive: cli.debug_disable_emissive,
 			debug_disable_shade_color: cli.debug_disable_shade_color,
 			debug_disable_normal_map: cli.debug_disable_normal_map,
+			debug_disable_reflection: cli.debug_disable_reflection,
 			debug_base_texture_only: cli.debug_base_texture_only,
+			disable_fur: cli.debug_disable_fur,
 			avatar_outline: Default::default(),
-			avatar_rim: Default::default(),
-			avatar_matcap: Default::default(),
-			avatar_specular: Default::default(),
-			avatar_ambient_occlusion: Default::default(),
 			skin_tone_matching: cli.skin_tone_matching,
 		},
 		contact_shadow: Default::default(),
 		ssao: Default::default(),
 	};
 	merge_cli_options(&mut opts, cli_opts);
+	if opts.mesh_diagnostics.disable_fur {
+		eprintln!("un-avatar-renderer: diagnostics active: lilToon Fur shell pass disabled");
+	}
+	if opts.mesh_diagnostics.debug_disable_reflection {
+		eprintln!("un-avatar-renderer: diagnostics active: lilToon reflection disabled");
+	}
 	if cli.no_processed_texture_cache {
 		opts.processed_texture_cache = false;
 	}
@@ -3542,6 +7086,18 @@ pub fn run_cli() -> Result<(), RunError> {
 		validate_startup_options(&opts).map_err(RunError::EventLoop)?;
 		return Ok(());
 	}
+	if cli.bench_gpu_scene {
+		gpu::warmup_gpu_scene_startup(&opts, gpu::GpuSceneWarmupPurpose::Benchmark).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
+	if cli.prewarm_scene_cache {
+		gpu::warmup_gpu_scene_startup(&opts, gpu::GpuSceneWarmupPurpose::PrewarmSceneCache).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
+	if cli.prewarm_shaders {
+		gpu::prewarm_shader_pipelines(&opts).map_err(RunError::EventLoop)?;
+		return Ok(());
+	}
 	if cli.dump_skin_tone_matching {
 		dump_skin_tone_matching(&opts).map_err(RunError::EventLoop)?;
 		return Ok(());
@@ -3554,22 +7110,51 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		if !path.is_file() {
 			return Err(format!("startup validation: model not found: {}", path.display()));
 		}
-		model_loader::load_document(path)
-			.map(|_| ())
-			.ok_or_else(|| format!("startup validation: model import failed: {}", path.display()))
+		model_loader::load_document(
+			path,
+			opts.wardrobe_set.as_deref(),
+			&opts.animator_action_ids,
+			&opts.animator_action_values,
+			opts.contact_parameter_emission,
+			opts.processed_texture_cache,
+		)
+		.map(|_| ())
+		.map_err(|e| format!("startup validation: model import failed: {}: {e}", path.display()))
 	} else {
 		Ok(())
 	}
+}
+
+fn standalone_runtime_bus_key_for_manifest(path: &Path) -> String {
+	format!("un-avatar/runtime/standalone/{:016x}", stable_manifest_path_hash(path))
+}
+
+fn stable_manifest_path_hash(path: &Path) -> u64 {
+	let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let key = canonical.display().to_string().replace('\\', "/").to_ascii_lowercase();
+	let mut hash = 0xcbf2_9ce4_8422_2325u64;
+	for byte in key.as_bytes() {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x1000_0000_01b3);
+	}
+	hash
 }
 
 fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err("skin tone matching dump: --gltf or manifest avatar_path is required".to_string());
 	};
-	let Some(document) = model_loader::load_document(path) else {
-		return Err(format!("skin tone matching dump: model import failed: {}", path.display()));
-	};
-	let Some(scene) = document.scene.as_ref() else {
+	let document = model_loader::load_document(
+		path,
+		opts.wardrobe_set.as_deref(),
+		&opts.animator_action_ids,
+		&opts.animator_action_values,
+		opts.contact_parameter_emission,
+		opts.processed_texture_cache,
+	)
+	.map_err(|e| format!("skin tone matching dump: model import failed: {}: {e}", path.display()))?;
+	let runtime_model = document.runtime_model();
+	let Some(scene) = runtime_model.scene() else {
 		return Err(format!("skin tone matching dump: model has no scene: {}", path.display()));
 	};
 	let debug = mesh_pass::skin_tone_matching_debug_for_scene(scene);
@@ -3607,14 +7192,26 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.gltf_path.is_some() {
 		opts.gltf_path = cli.gltf_path;
 	}
+	if cli.manifest_path.is_some() {
+		opts.manifest_path = cli.manifest_path;
+	}
+	if cli.wardrobe_set.is_some() {
+		opts.wardrobe_set = cli.wardrobe_set;
+	}
 	if cli.icon_path.is_some() {
 		opts.icon_path = cli.icon_path;
+	}
+	if cli.app_user_model_id.is_some() {
+		opts.app_user_model_id = cli.app_user_model_id;
 	}
 	if cli.clear_color != default.clear_color {
 		opts.clear_color = cli.clear_color;
 	}
 	if !cli.show_fps_in_title {
 		opts.show_fps_in_title = false;
+	}
+	if cli.bench_frames.is_some() {
+		opts.bench_frames = cli.bench_frames;
 	}
 	if cli.vmc_address.is_some() {
 		opts.vmc_address = cli.vmc_address;
@@ -3664,10 +7261,18 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.runtime_bus_key.is_some() {
 		opts.runtime_bus_key = cli.runtime_bus_key;
 	}
-	// CLI で `--no-spring-bones` が指定されたときだけ強制 OFF。指定なしは
+	if opts.runtime_bus_key.is_none() {
+		if let Some(manifest_path) = opts.manifest_path.as_deref() {
+			opts.runtime_bus_key = Some(standalone_runtime_bus_key_for_manifest(manifest_path));
+		}
+	}
+	if cli.audio_link != default.audio_link {
+		opts.audio_link = cli.audio_link;
+	}
+	// CLI で `--no-dynamics` が指定されたときだけ強制 OFF。指定なしは
 	// manifest 値（または既定値 true）をそのまま使う。
-	if !cli.enable_spring_bones {
-		opts.enable_spring_bones = false;
+	if !cli.dynamics_enabled {
+		opts.dynamics_enabled = false;
 	}
 	if cli.debug.log_path.is_some() {
 		opts.debug.log_path = cli.debug.log_path;
@@ -3726,6 +7331,12 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.mesh_diagnostics.debug_skin_legacy_no_inv_mesh {
 		opts.mesh_diagnostics.debug_skin_legacy_no_inv_mesh = true;
 	}
+	if cli.mesh_diagnostics.debug_disable_reflection {
+		opts.mesh_diagnostics.debug_disable_reflection = true;
+	}
+	if cli.mesh_diagnostics.disable_fur {
+		opts.mesh_diagnostics.disable_fur = true;
+	}
 	if cli.debug_disable_rim_lighting {
 		opts.debug_disable_rim_lighting = true;
 	}
@@ -3767,18 +7378,43 @@ fn load_window_icon(path: &Path) -> Option<Icon> {
 		.ok()
 }
 
+fn load_default_window_icon() -> Option<Icon> {
+	let bytes = include_bytes!("../../../assets/brand/un-avatar-artwork-renderer.png");
+	let image = match image::load_from_memory(bytes) {
+		Ok(image) => image.into_rgba8(),
+		Err(e) => {
+			eprintln!("un-avatar-renderer: bundled icon: {e}");
+			return None;
+		}
+	};
+	let (width, height) = image.dimensions();
+	Icon::from_rgba(image.into_raw(), width, height)
+		.map_err(|e| eprintln!("un-avatar-renderer: bundled icon: {e}"))
+		.ok()
+}
+
 #[cfg(test)]
 mod tests {
 	use std::{
 		io::{BufRead, BufReader, Read, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+		path::Path,
 		thread,
 		time::{Duration, Instant},
 	};
 
+	#[cfg(windows)]
+	use super::global_hotkey_registrations;
+	#[cfg(windows)]
+	use super::parse_windows_hotkey;
 	use super::{
-		parse_renderer_control_command, start_runtime_status_server, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode,
-		CloseHotkey, RendererControlCommand,
+		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
+		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, renderer_startup_frame_role,
+		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, standalone_runtime_bus_key_for_manifest,
+		start_runtime_status_server, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active, wardrobe_transition_frame_role,
+		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
+		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
+		SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -3800,10 +7436,610 @@ mod tests {
 		}
 	}
 
+	fn test_startup_overlay() -> gpu::StartupProgressOverlayFrame {
+		gpu::StartupProgressOverlayFrame {
+			time_secs: 0.0,
+			progress: 0.25,
+			phase: 1.0,
+			rect_center: [0.0, 0.0],
+			rect_half_size: [1.0, 1.0],
+		}
+	}
+
+	fn test_wardrobe_billboard() -> gpu::WardrobeChangingBillboardFrame {
+		gpu::WardrobeChangingBillboardFrame {
+			time_secs: 0.0,
+			billboard_center: [0.0, 1.0, 0.0],
+			billboard_size: 0.5,
+			billboard_view_proj: [[0.0; 4]; 4],
+			billboard_camera_pos: [0.0, 0.0, 2.0],
+		}
+	}
+
+	#[test]
+	fn rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive() {
+		let pending = renderer_startup_frame_role(None, true, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		assert!(
+			matches!(
+				pending,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: None })
+			),
+			"startup-pending frames must remain renderer-local even if a wardrobe billboard is queued"
+		);
+
+		let loading = renderer_startup_frame_role(Some(test_startup_overlay()), false, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		assert!(
+			matches!(
+				loading,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: Some(_) })
+			),
+			"startup overlay must not be co-rendered with wardrobe billboard output"
+		);
+
+		let failed = renderer_startup_frame_role(None, false, true)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		assert!(
+			matches!(
+				failed,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: None })
+			),
+			"startup failure presentation is renderer-local and must not fall through to wardrobe output"
+		);
+
+		let wardrobe = renderer_startup_frame_role(None, false, false)
+			.or_else(|| wardrobe_transition_frame_role(Some(test_wardrobe_billboard())))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		assert!(matches!(wardrobe, gpu::RenderedFrameRole::WardrobeTransition(_)));
+
+		let runtime = renderer_startup_frame_role(None, false, false)
+			.or_else(|| wardrobe_transition_frame_role(None))
+			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		assert!(matches!(runtime, gpu::RenderedFrameRole::RuntimeAvatar));
+	}
+
+	#[test]
+	fn wardrobe_transition_frame_skips_runtime_action_evaluation() {
+		let startup = gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
+			progress_overlay: Some(test_startup_overlay()),
+		});
+		let wardrobe = gpu::RenderedFrameRole::WardrobeTransition(gpu::WardrobeTransitionPresentation {
+			changing_billboard: test_wardrobe_billboard(),
+		});
+		assert!(super::should_evaluate_runtime_actions_for_frame(
+			&gpu::RenderedFrameRole::RuntimeAvatar
+		));
+		assert!(super::should_evaluate_runtime_actions_for_frame(&startup));
+		assert!(
+			!super::should_evaluate_runtime_actions_for_frame(&wardrobe),
+			"wardrobe transition billboard frames should not contend with document/action evaluation while the apply worker is active"
+		);
+	}
+
+	#[test]
+	fn wardrobe_billboard_min_visibility_adds_no_wait_after_long_apply() {
+		let started_at = Instant::now();
+		let before_minimum = started_at + Duration::from_millis(u64::from(super::WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS - 1));
+		let after_minimum = started_at + Duration::from_millis(u64::from(super::WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS));
+
+		assert!(!super::wardrobe_billboard_min_visible_elapsed(Some(started_at), before_minimum));
+		assert!(super::wardrobe_billboard_min_visible_elapsed(Some(started_at), after_minimum));
+		assert!(super::wardrobe_billboard_min_visible_elapsed(None, started_at));
+	}
+
+	#[test]
+	fn resumed_marks_startup_before_first_redraw() {
+		let source = include_str!("lib.rs");
+		let anchor = "fn resumed(&mut self, event_loop: &ActiveEventLoop)";
+		let resumed = source.split(anchor).nth(1).expect("resumed method exists");
+		let startup = resumed
+			.find("self.start_async_model_load(self.event_proxy.clone());")
+			.expect("resumed starts async model load");
+		let redraw = resumed.find("win.request_redraw();").expect("resumed requests first redraw");
+		assert!(
+			startup < redraw,
+			"startup state must be established before the first redraw so Spout2 never receives a pre-startup runtime frame"
+		);
+	}
+
+	#[test]
+	fn runtime_dynamics_warnings_explain_metadata_only_and_disabled_emission() {
+		let mut status = initial_runtime_snapshot(&AvatarWindowOptions::default());
+		status.dynamics_group_count = 3;
+		status.dynamics_enabled_group_count = 0;
+		status.dynamics_source_enabled_group_count = 0;
+		status.dynamics_enabled_override_count = 0;
+		status.dynamics_stretch_limit_group_count = 2;
+		status.dynamics_rotation_translation_writeback_group_count = 1;
+		status.dynamics_translation_writeback_candidate_count = 1;
+		status.dynamics_translation_writeback_target_count = 1;
+		status.dynamics_stretch_translation_writeback_group_count = 1;
+		status.dynamics_stretch_translation_writeback_target_group_count = 1;
+		status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
+			index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			authored_enabled: true,
+			effective_enabled: true,
+			runtime_enabled_override: None,
+			source_id: "physbone:hair".to_string(),
+			comment: String::new(),
+			category: String::new(),
+			bone_count: 2,
+			root_node: Some(1),
+			root_path: Some("root/hair".to_string()),
+			tip_node: Some(2),
+			tip_path: Some("root/hair/tip".to_string()),
+			stiffness: 0.0,
+			drag_force: 0.0,
+			gravity_power: 0.0,
+			gravity_dir: [0.0, -1.0, 0.0],
+			hit_radius: 0.0,
+			hit_radius_sample_count: 0,
+			hit_radius_sample_min: None,
+			hit_radius_sample_max: None,
+			center_node: None,
+			center_path: None,
+			limit_type: Some("Angle".to_string()),
+			max_angle_x: Some(45.0),
+			max_angle_z: Some(45.0),
+			max_stretch: Some(0.25),
+			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
+			translation_writeback_candidate_count: 1,
+			translation_writeback_target_count: 1,
+			allow_grabbing: None,
+			allow_posing: None,
+			interaction_parameter: String::new(),
+		}];
+		status.dynamics_grabbing_enabled_group_count = 1;
+		status.dynamics_posing_enabled_group_count = 2;
+		status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
+			group_index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			authored_enabled: true,
+			effective_enabled: true,
+			source_id: "physbone:hair".to_string(),
+			root_path: Some("root/hair".to_string()),
+			allow_grabbing: true,
+			allow_posing: true,
+			parameter: String::new(),
+			suffix_parameters: Vec::new(),
+			metadata_only: true,
+		}];
+		status.dynamics_vrc_constraint_ref_count = 4;
+		status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
+			index: 0,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			source_id: "constraint:parent".to_string(),
+			target_node: 1,
+			target_path: Some("root/target".to_string()),
+			source_nodes: vec![0],
+			source_paths: vec!["root/source".to_string()],
+			constraint_type: "parent".to_string(),
+			weight: 1.0,
+		}];
+		status.dynamics_contact_probe_would_emit_count = 3;
+		status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
+			index: 0,
+			receiver_index: 0,
+			sender_index: 1,
+			receiver_source_id: "contact:hand".to_string(),
+			sender_source_id: "contact:sender".to_string(),
+			receiver_node: 1,
+			receiver_node_path: Some("root/hand".to_string()),
+			sender_node: 2,
+			sender_node_path: Some("root/sender".to_string()),
+			parameter: "ContactHand".to_string(),
+			matched_tags: vec!["Hand".to_string()],
+			tag_match: true,
+			overlap: true,
+			would_emit: true,
+			distance: 0.0,
+			threshold: 0.1,
+			receiver_radius: 0.05,
+			sender_radius: 0.05,
+			receiver_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+			sender_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+			approximation: "sphere".to_string(),
+		}];
+		status.contact_parameter_emission_enabled = false;
+
+		let warnings = runtime_dynamics_warnings(&status);
+		assert_eq!(warnings.len(), 5);
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics groups are present but none are currently enabled")
+				&& warning.contains("samples=[physbone:hair@root/hair]")
+		));
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics stretch limits are partially supported")
+				&& warning.contains("writeback_target_groups=1")
+				&& warning.contains("physbone:hair@root/hair")));
+		assert!(!warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target")));
+		assert!(warnings.iter().any(|warning| warning
+			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			&& warning.contains("samples=[physbone:hair@root/hair]")));
+		assert!(warnings.iter().any(|warning| warning
+			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
+			&& warning.contains("samples=[constraint:parent@root/target]")));
+		assert!(warnings
+			.iter()
+			.any(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")
+				&& warning.contains("samples=[contact:hand@root/hand<=contact:sender:ContactHand]")
+		));
+	}
+
+	#[test]
+	fn compact_window_title_status_collapses_whitespace_and_truncates() {
+		assert_eq!(
+			compact_window_title_status("  Loading\tmodel\n textures  "),
+			"Loading model textures"
+		);
+
+		let long = "x".repeat(WINDOW_TITLE_STATUS_MAX_CHARS + 8);
+		let compact = compact_window_title_status(long);
+		assert_eq!(compact.chars().count(), WINDOW_TITLE_STATUS_MAX_CHARS);
+		assert!(compact.ends_with('…'));
+	}
+
 	#[test]
 	fn runtime_status_server_keeps_one_shot_compatibility() {
 		let address = reserve_runtime_status_address();
-		let _status = start_runtime_status_server(address, &AvatarWindowOptions::default());
+		let opts = AvatarWindowOptions {
+			wardrobe_set: Some(" field_drape ".to_string()),
+			..Default::default()
+		};
+		let status = start_runtime_status_server(address, &opts);
+		{
+			let mut status = status.lock().unwrap();
+			status.wardrobe_asset_upload = WardrobeAssetUploadPlan {
+				mode: "draw-scoped-resource-scoped".to_string(),
+				total_draw_mesh_primitive_count: 3,
+				resident_draw_mesh_primitive_count: 2,
+				inactive_draw_mesh_primitive_count: 1,
+				total_draw_mesh_buffer_bytes: 3000,
+				resident_draw_mesh_buffer_bytes: 2000,
+				inactive_draw_mesh_buffer_bytes: 1000,
+				total_image_texture_count: 4,
+				resident_image_texture_count: 3,
+				inactive_image_texture_count: 1,
+				draws_using_inactive_image_texture_count: 2,
+				active_draws_using_inactive_image_texture_count: 1,
+				inactive_image_textures_used_by_active_draw_count: 1,
+				inactive_image_textures_used_by_active_draw: vec![3],
+				active_draws_using_inactive_cube_texture_count: 1,
+				inactive_cube_textures_used_by_active_draw_count: 1,
+				inactive_cube_textures_used_by_active_draw: vec![6],
+				total_material_slot_count: 5,
+				resident_material_slot_count: 4,
+				inactive_material_slot_count: 1,
+				active_draws_using_inactive_material_slot_count: 1,
+				inactive_material_slots_used_by_active_draw_count: 1,
+				inactive_material_slots_used_by_active_draw: vec![4],
+				pending_image_texture_upload_count: 1,
+				pending_cube_texture_upload_count: 1,
+				pending_material_slot_upload_count: 1,
+				last_mesh_buffer_scoped_load_count: 1,
+				last_mesh_buffer_scoped_unload_count: 2,
+				scoped_draw_supported: true,
+				scoped_upload_supported: true,
+				all_resident: false,
+				active_residency_gaps_detected: true,
+				residency_gap_index_status_limit: 64,
+				..Default::default()
+			};
+			status.runtime_parameter_definitions = vec![un_avatar_core::UnaRuntimeParameterDefinition {
+				name: "Outfit".to_string(),
+				owner_keys: vec!["action:wardrobe:field_drape".to_string()],
+				source_kinds: vec!["action_condition".to_string(), "action_trigger".to_string()],
+				value_samples: vec![1.0],
+				current_value: Some(1.0),
+				transient: false,
+				..Default::default()
+			}];
+			status.runtime_parameter_conflicts = vec![un_avatar_core::UnaRuntimeParameterConflict {
+				name: "ContactHand".to_string(),
+				reason: "contact_transient_overlaps_action_parameter".to_string(),
+				owner_keys: vec!["action:contact-react".to_string(), "contact:hand".to_string()],
+				source_kinds: vec!["action_condition".to_string(), "contact_receiver".to_string()],
+				value_samples: vec![0.0, 1.0],
+			}];
+			status.wardrobe_actions = vec![crate::gpu::RuntimeWardrobeActionStatus {
+				action_id: "wardrobe:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				set_id: "field_drape".to_string(),
+				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+				supervisor_command: Some("field_drape".to_string()),
+				parameter_name: Some("Outfit".to_string()),
+				parameter_value: Some(1.0),
+			}];
+			status.runtime_actions = vec![crate::gpu::RuntimeActionStatus {
+				action_id: "wardrobe:field_drape".to_string(),
+				label: "Field Drape".to_string(),
+				effect_count: 5,
+				expression_menu_path: Some("Wardrobe/Field Drape".to_string()),
+				supervisor_command: Some("field_drape".to_string()),
+				parameter_name: Some("Outfit".to_string()),
+				parameter_value: Some(1.0),
+				condition_parameter_names: vec!["Outfit".to_string()],
+				current_condition_state: Some("active".to_string()),
+				available: true,
+				wardrobe_set_id: Some("field_drape".to_string()),
+				target_writes: vec![un_avatar_core::UnaEvaluationRuntimeActionTargetWrite {
+					owner_key: "action:wardrobe:field_drape".to_string(),
+					action_id: "wardrobe:field_drape".to_string(),
+					effect_kind: "node_visibility".to_string(),
+					target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+					target_key: "Avatar/Coat".to_string(),
+				}],
+				node_visibility_effects: vec![crate::gpu::RuntimeActionNodeVisibilityEffectStatus {
+					node_index: Some(3),
+					path: Some("Avatar/Coat".to_string()),
+					visible: true,
+					..Default::default()
+				}],
+				material_property_effects: vec![crate::gpu::RuntimeActionMaterialPropertyEffectStatus {
+					property_kind: "color".to_string(),
+					material_index: Some(2),
+					material_name: Some("Coat".to_string()),
+					parameter: "_Color".to_string(),
+					color_value: Some([1.0, 0.5, 0.25, 1.0]),
+					..Default::default()
+				}],
+				material_slot_effects: vec![crate::gpu::RuntimeActionMaterialSlotEffectStatus {
+					node_index: Some(3),
+					path: Some("Avatar/Coat".to_string()),
+					primitive_index: Some(0),
+					material_index: Some(2),
+					material_name: Some("Coat".to_string()),
+					..Default::default()
+				}],
+				expression_weight_effects: vec![crate::gpu::RuntimeActionExpressionWeightEffectStatus {
+					name: "Smile".to_string(),
+					weight: 0.75,
+				}],
+				dynamics_enabled_effects: vec![crate::gpu::RuntimeActionDynamicsEnabledEffectStatus {
+					source_id: "physbone:hair".to_string(),
+					enabled: true,
+				}],
+				effect_kinds: [
+					("node_visibility".to_string(), 1),
+					("expression_weight".to_string(), 1),
+					("material_color".to_string(), 1),
+					("material_slot".to_string(), 1),
+					("dynamics_enabled".to_string(), 1),
+				]
+				.into_iter()
+				.collect(),
+			}];
+			status.runtime_action_target_write_collisions = vec![un_avatar_core::UnaEvaluationTargetWriteCollision {
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				owner_keys: vec!["action:wardrobe:field_drape".to_string(), "action:wardrobe:coat_off".to_string()],
+				action_ids: vec!["wardrobe:field_drape".to_string(), "wardrobe:coat_off".to_string()],
+				writes: Vec::new(),
+			}];
+			status.runtime_action_restore_readiness = vec![un_avatar_core::UnaEvaluationRestoreReadiness {
+				owner_key: "action:wardrobe:field_drape".to_string(),
+				action_id: "wardrobe:field_drape".to_string(),
+				effect_kind: "node_visibility".to_string(),
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				restore_target: true,
+				current_value_available: true,
+				current_value: Some(serde_json::Value::from(true)),
+				baseline_required: true,
+				ready: false,
+				reason: "baseline_not_captured".to_string(),
+			}];
+			status.runtime_action_restore_baseline_candidates = vec![un_avatar_core::UnaEvaluationRestoreBaselineCandidate {
+				owner_key: "action:wardrobe:field_drape".to_string(),
+				action_id: "wardrobe:field_drape".to_string(),
+				effect_kind: "node_visibility".to_string(),
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				baseline_value: serde_json::Value::from(true),
+			}];
+			status.runtime_action_restore_baseline_capture_plan = vec![un_avatar_core::UnaEvaluationRestoreBaselineEntry {
+				owner_key: "action:wardrobe:field_drape".to_string(),
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				baseline_value: serde_json::Value::from(true),
+				source_action_ids: vec!["wardrobe:field_drape".to_string()],
+				source_effect_kinds: vec!["node_visibility".to_string()],
+			}];
+			status.runtime_action_restore_apply_plan = vec![un_avatar_core::UnaEvaluationRestoreApplyEntry {
+				owner_key: "action:wardrobe:field_drape".to_string(),
+				action_id: "wardrobe:field_drape".to_string(),
+				condition_state: Some("inactive".to_string()),
+				target_kind: un_avatar_core::UnaEvaluationTargetKind::NodeVisibility,
+				target_key: "Avatar/Coat".to_string(),
+				baseline_value: Some(serde_json::Value::from(true)),
+				current_value_available: true,
+				current_value: Some(serde_json::Value::from(false)),
+				ready: true,
+				reason: "ready".to_string(),
+			}];
+			status.menu_action_candidates = vec![crate::gpu::RuntimeMenuActionCandidateStatus {
+				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
+				menu_label: Some("Wardrobe".to_string()),
+				control_type: None,
+				parameter_name: "Outfit".to_string(),
+				parameter_value: 1.0,
+				action_id: "wardrobe:field_drape".to_string(),
+				action_label: "Field Drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+				available: true,
+				effect_count: 4,
+				effect_kinds: [
+					("node_visibility".to_string(), 1),
+					("expression_weight".to_string(), 2),
+					("material_color".to_string(), 1),
+					("material_scalar".to_string(), 1),
+				]
+				.into_iter()
+				.collect(),
+				wardrobe_set_ids: vec!["field_drape".to_string()],
+			}];
+			status.menu_wardrobe_candidates = vec![crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
+				menu_label: Some("Wardrobe".to_string()),
+				action_id: "wardrobe:field_drape".to_string(),
+				wardrobe_set_id: "field_drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			}];
+			status.contact_parameter_declarations = vec![crate::gpu::RuntimeContactParameterDeclarationStatus {
+				owner_key: "contact:hand".to_string(),
+				source_id: "contact:hand".to_string(),
+				node: 1,
+				node_path: Some("root/receiver".to_string()),
+				parameter: "ContactHand".to_string(),
+				collision_tags: vec!["Hand".to_string(), "Interact".to_string()],
+			}];
+			status.contact_parameter_emission_enabled = true;
+			status.contact_parameter_emissions = vec![crate::gpu::RuntimeContactParameterEmissionStatus {
+				owner_key: "contact:hand".to_string(),
+				source_id: "contact:hand".to_string(),
+				receiver_index: 0,
+				receiver_node: 1,
+				receiver_node_path: Some("root/receiver".to_string()),
+				parameter: "ContactHand".to_string(),
+				value: 1.0,
+				emitted: true,
+				sender_source_ids: vec!["contact:sender".to_string()],
+			}];
+			status.contact_probes = vec![crate::gpu::RuntimeContactProbeStatus {
+				index: 0,
+				receiver_index: 0,
+				sender_index: 1,
+				receiver_source_id: "contact:hand".to_string(),
+				sender_source_id: "contact:sender".to_string(),
+				receiver_node: 1,
+				receiver_node_path: Some("root/receiver".to_string()),
+				sender_node: 2,
+				sender_node_path: Some("root/sender".to_string()),
+				parameter: "ContactHand".to_string(),
+				matched_tags: vec!["Hand".to_string()],
+				tag_match: true,
+				overlap: true,
+				would_emit: true,
+				distance: 0.07,
+				threshold: 0.09,
+				receiver_radius: 0.05,
+				sender_radius: 0.04,
+				receiver_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+				sender_shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+				approximation: "sphere".to_string(),
+			}];
+			status.dynamics_contact_count = 2;
+			status.dynamics_vrc_contact_sender_count = 1;
+			status.dynamics_vrc_contact_receiver_count = 1;
+			status.dynamics_collider_count = 1;
+			status.dynamics_vrc_physbone_collider_count = 1;
+			status.dynamics_contact_parameter_declaration_count = 1;
+			status.dynamics_contact_probe_count = 1;
+			status.dynamics_contact_probe_would_emit_count = 1;
+			status.dynamics_contact_parameter_emission_count = 1;
+			status.dynamics_contact_parameter_emitted_count = 1;
+			status.dynamics_contact_parameter_reset_to_zero_count = 0;
+			status.dynamics_groups = vec![crate::gpu::RuntimeDynamicsGroupStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				authored_enabled: false,
+				effective_enabled: true,
+				runtime_enabled_override: Some(true),
+				source_id: "physbone:hair".to_string(),
+				comment: "Hair".to_string(),
+				category: "secondary".to_string(),
+				bone_count: 3,
+				root_node: Some(1),
+				root_path: Some("root/hair".to_string()),
+				tip_node: Some(3),
+				tip_path: Some("root/hair/tip".to_string()),
+				stiffness: 0.35,
+				drag_force: 0.2,
+				gravity_power: 0.1,
+				gravity_dir: [0.0, -1.0, 0.0],
+				hit_radius: 0.04,
+				hit_radius_sample_count: 2,
+				hit_radius_sample_min: Some(0.02),
+				hit_radius_sample_max: Some(0.04),
+				center_node: Some(0),
+				center_path: Some("root".to_string()),
+				limit_type: Some("Angle".to_string()),
+				max_angle_x: Some(45.0),
+				max_angle_z: Some(30.0),
+				max_stretch: Some(0.0),
+				writeback_mode: Default::default(),
+				translation_writeback_candidate_count: 0,
+				translation_writeback_target_count: 0,
+				allow_grabbing: Some(true),
+				allow_posing: Some(false),
+				interaction_parameter: "HairPB".to_string(),
+			}];
+			status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
+				group_index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				authored_enabled: false,
+				effective_enabled: true,
+				source_id: "physbone:hair".to_string(),
+				root_path: Some("root/hair".to_string()),
+				allow_grabbing: true,
+				allow_posing: false,
+				parameter: "HairPB".to_string(),
+				suffix_parameters: un_avatar_core::UNA_PHYSBONE_PARAMETER_SUFFIXES
+					.iter()
+					.map(|suffix| format!("HairPB{suffix}"))
+					.collect(),
+				metadata_only: true,
+			}];
+			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				node: 5,
+				node_path: Some("root/collider".to_string()),
+				shape: un_avatar_core::UnaDynamicsColliderShape::Capsule,
+				radius: 0.08,
+				height: 0.24,
+				position: [0.0, 0.1, 0.0],
+				rotation: [0.0, 0.0, 0.0, 1.0],
+				inside_bounds: true,
+			}];
+			status.dynamics_constraint_refs = vec![crate::gpu::RuntimeDynamicsConstraintRefStatus {
+				index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "constraint:parent".to_string(),
+				target_node: 4,
+				target_path: Some("root/target".to_string()),
+				source_nodes: vec![1, 2],
+				source_paths: vec!["root/source-a".to_string(), "root/source-b".to_string()],
+				constraint_type: "parent".to_string(),
+				weight: 0.75,
+			}];
+			status.dynamics_constraint_ref_count = 3;
+			status.dynamics_vrc_constraint_ref_count = 2;
+			status.dynamics_limit_group_count = 4;
+			status.dynamics_angle_limit_group_count = 3;
+			status.dynamics_stretch_limit_group_count = 1;
+			status.dynamics_grabbing_enabled_group_count = 2;
+			status.dynamics_posing_enabled_group_count = 1;
+			status.dynamics_warnings = runtime_dynamics_warnings(&status);
+		}
 		let mut stream = connect_runtime_status(address);
 		let mut text = String::new();
 		stream.read_to_string(&mut text).unwrap();
@@ -3811,6 +8047,651 @@ mod tests {
 		let snapshot: serde_json::Value = serde_json::from_str(&text).unwrap();
 		assert_eq!(snapshot.get("connected").and_then(|value| value.as_bool()), Some(true));
 		assert_eq!(snapshot.get("protocol").and_then(|value| value.as_str()), Some("local-tcp-json-v2"));
+		assert_eq!(
+			snapshot.get("scene_state").and_then(|value| value.as_str()),
+			Some(SCENE_STATE_STARTUP_PROGRESS)
+		);
+		assert_eq!(
+			snapshot.get("active_wardrobe_set").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert_eq!(snapshot.get("dynamics_contact_count").and_then(|value| value.as_u64()), Some(2));
+		assert_eq!(
+			snapshot.get("dynamics_vrc_contact_sender_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_vrc_contact_receiver_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_declaration_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let declarations = snapshot
+			.get("contact_parameter_declarations")
+			.and_then(|value| value.as_array())
+			.expect("contact parameter declarations");
+		assert_eq!(declarations.len(), 1);
+		assert_eq!(
+			declarations[0].get("owner_key").and_then(|value| value.as_str()),
+			Some("contact:hand")
+		);
+		assert_eq!(
+			declarations[0].get("parameter").and_then(|value| value.as_str()),
+			Some("ContactHand")
+		);
+		assert_eq!(
+			declarations[0].get("node_path").and_then(|value| value.as_str()),
+			Some("root/receiver")
+		);
+		assert_eq!(
+			snapshot.get("contact_parameter_emission_enabled").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_emission_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_parameter_emitted_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let emissions = snapshot
+			.get("contact_parameter_emissions")
+			.and_then(|value| value.as_array())
+			.expect("contact parameter emissions");
+		assert_eq!(emissions.len(), 1);
+		assert_eq!(emissions[0].get("parameter").and_then(|value| value.as_str()), Some("ContactHand"));
+		assert_eq!(emissions[0].get("value").and_then(|value| value.as_f64()), Some(1.0));
+		assert_eq!(emissions[0].get("emitted").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(
+			snapshot.get("dynamics_contact_probe_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_contact_probe_would_emit_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let dynamics_groups = snapshot
+			.get("dynamics_groups")
+			.and_then(|value| value.as_array())
+			.expect("dynamics groups");
+		assert_eq!(dynamics_groups.len(), 1);
+		assert_eq!(
+			dynamics_groups[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("root_path").and_then(|value| value.as_str()),
+			Some("root/hair")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("tip_path").and_then(|value| value.as_str()),
+			Some("root/hair/tip")
+		);
+		assert_eq!(
+			dynamics_groups[0].get("effective_enabled").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("runtime_enabled_override").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("writeback_mode").and_then(|value| value.as_str()),
+			Some("rotation_only")
+		);
+		assert_eq!(
+			dynamics_groups[0]
+				.get("translation_writeback_candidate_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			dynamics_groups[0]
+				.get("translation_writeback_target_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("allow_grabbing").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_min").and_then(|value| value.as_f64()),
+			Some(0.02)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("hit_radius_sample_max").and_then(|value| value.as_f64()),
+			Some(0.04)
+		);
+		let interaction_hooks = snapshot
+			.get("dynamics_interaction_hooks")
+			.and_then(|value| value.as_array())
+			.expect("dynamics interaction hooks");
+		assert_eq!(interaction_hooks.len(), 1);
+		assert_eq!(
+			interaction_hooks[0].get("parameter").and_then(|value| value.as_str()),
+			Some("HairPB")
+		);
+		assert_eq!(
+			interaction_hooks[0].get("metadata_only").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		let suffix_parameters = interaction_hooks[0]
+			.get("suffix_parameters")
+			.and_then(|value| value.as_array())
+			.expect("suffix parameters");
+		assert!(suffix_parameters.iter().any(|value| value.as_str() == Some("HairPB_IsGrabbed")));
+		let dynamics_colliders = snapshot
+			.get("dynamics_colliders")
+			.and_then(|value| value.as_array())
+			.expect("dynamics colliders");
+		assert_eq!(dynamics_colliders.len(), 1);
+		assert_eq!(
+			dynamics_colliders[0].get("node_path").and_then(|value| value.as_str()),
+			Some("root/collider")
+		);
+		assert_eq!(dynamics_colliders[0].get("shape").and_then(|value| value.as_str()), Some("capsule"));
+		assert_eq!(
+			dynamics_colliders[0].get("inside_bounds").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		let probes = snapshot
+			.get("contact_probes")
+			.and_then(|value| value.as_array())
+			.expect("contact probes");
+		assert_eq!(probes.len(), 1);
+		assert_eq!(probes[0].get("parameter").and_then(|value| value.as_str()), Some("ContactHand"));
+		assert_eq!(
+			probes[0].get("receiver_node_path").and_then(|value| value.as_str()),
+			Some("root/receiver")
+		);
+		assert_eq!(
+			probes[0].get("sender_node_path").and_then(|value| value.as_str()),
+			Some("root/sender")
+		);
+		assert_eq!(probes[0].get("would_emit").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(
+			snapshot.get("dynamics_constraint_ref_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		let constraint_refs = snapshot
+			.get("dynamics_constraint_refs")
+			.and_then(|value| value.as_array())
+			.expect("dynamics constraint refs");
+		assert_eq!(constraint_refs.len(), 1);
+		assert_eq!(
+			constraint_refs[0].get("source_id").and_then(|value| value.as_str()),
+			Some("constraint:parent")
+		);
+		assert_eq!(
+			constraint_refs[0].get("constraint_type").and_then(|value| value.as_str()),
+			Some("parent")
+		);
+		assert_eq!(
+			constraint_refs[0].get("target_path").and_then(|value| value.as_str()),
+			Some("root/target")
+		);
+		assert_eq!(
+			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(snapshot.get("dynamics_limit_group_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(
+			snapshot.get("dynamics_angle_limit_group_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_stretch_limit_group_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_rotation_translation_writeback_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_translation_writeback_candidate_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_translation_writeback_target_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_stretch_translation_writeback_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		assert_eq!(
+			snapshot
+				.get("dynamics_stretch_translation_writeback_target_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(0)
+		);
+		let dynamics_warnings = snapshot
+			.get("dynamics_warnings")
+			.and_then(|value| value.as_array())
+			.expect("dynamics warnings");
+		assert_eq!(dynamics_warnings.len(), 3);
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are partially supported"))));
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver"))));
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))));
+		assert_eq!(
+			snapshot
+				.get("dynamics_grabbing_enabled_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			snapshot.get("dynamics_posing_enabled_group_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert!(snapshot.get("active_asset_groups").is_none());
+		let upload = snapshot.get("wardrobe_asset_upload").expect("wardrobe asset upload status");
+		assert_eq!(
+			upload.get("mode").and_then(|value| value.as_str()),
+			Some("draw-scoped-resource-scoped")
+		);
+		assert_eq!(
+			upload.get("total_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			upload.get("resident_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			upload.get("inactive_draw_mesh_primitive_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("total_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(3000)
+		);
+		assert_eq!(
+			upload.get("resident_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(2000)
+		);
+		assert_eq!(
+			upload.get("inactive_draw_mesh_buffer_bytes").and_then(|value| value.as_u64()),
+			Some(1000)
+		);
+		assert_eq!(upload.get("total_image_texture_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(upload.get("resident_image_texture_count").and_then(|value| value.as_u64()), Some(3));
+		assert_eq!(upload.get("inactive_image_texture_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(
+			upload
+				.get("draws_using_inactive_image_texture_count")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_image_texture_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_image_textures_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_image_textures_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![3])
+		);
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_cube_texture_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_cube_textures_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_cube_textures_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![6])
+		);
+		assert_eq!(upload.get("total_material_slot_count").and_then(|value| value.as_u64()), Some(5));
+		assert_eq!(upload.get("resident_material_slot_count").and_then(|value| value.as_u64()), Some(4));
+		assert_eq!(upload.get("inactive_material_slot_count").and_then(|value| value.as_u64()), Some(1));
+		assert_eq!(
+			upload
+				.get("active_draws_using_inactive_material_slot_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_material_slots_used_by_active_draw_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload
+				.get("inactive_material_slots_used_by_active_draw")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_u64()).collect::<Vec<_>>()),
+			Some(vec![4])
+		);
+		assert_eq!(
+			upload.get("pending_image_texture_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("pending_cube_texture_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("pending_material_slot_upload_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("last_mesh_buffer_scoped_load_count").and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			upload.get("last_mesh_buffer_scoped_unload_count").and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(upload.get("scoped_draw_supported").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(upload.get("scoped_upload_supported").and_then(|value| value.as_bool()), Some(true));
+		assert_eq!(upload.get("all_resident").and_then(|value| value.as_bool()), Some(false));
+		assert_eq!(
+			upload.get("active_residency_gaps_detected").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			upload.get("residency_gap_index_status_limit").and_then(|value| value.as_u64()),
+			Some(64)
+		);
+		let parameter_definitions = snapshot
+			.get("runtime_parameter_definitions")
+			.and_then(|value| value.as_array())
+			.expect("runtime parameter definitions");
+		assert_eq!(parameter_definitions.len(), 1);
+		assert_eq!(
+			parameter_definitions[0].get("name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		let parameter_conflicts = snapshot
+			.get("runtime_parameter_conflicts")
+			.and_then(|value| value.as_array())
+			.expect("runtime parameter conflicts");
+		assert_eq!(parameter_conflicts.len(), 1);
+		assert_eq!(
+			parameter_conflicts[0].get("reason").and_then(|value| value.as_str()),
+			Some("contact_transient_overlaps_action_parameter")
+		);
+		let wardrobe_actions = snapshot
+			.get("wardrobe_actions")
+			.and_then(|value| value.as_array())
+			.expect("wardrobe actions");
+		assert_eq!(wardrobe_actions.len(), 1);
+		assert_eq!(
+			wardrobe_actions[0].get("action_id").and_then(|value| value.as_str()),
+			Some("wardrobe:field_drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("label").and_then(|value| value.as_str()),
+			Some("Field Drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("expression_menu_path").and_then(|value| value.as_str()),
+			Some("Wardrobe/Field Drape")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("parameter_name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			wardrobe_actions[0].get("parameter_value").and_then(|value| value.as_f64()),
+			Some(1.0)
+		);
+		let runtime_actions = snapshot
+			.get("runtime_actions")
+			.and_then(|value| value.as_array())
+			.expect("runtime actions");
+		assert_eq!(runtime_actions.len(), 1);
+		assert_eq!(
+			runtime_actions[0].get("action_id").and_then(|value| value.as_str()),
+			Some("wardrobe:field_drape")
+		);
+		assert_eq!(
+			runtime_actions[0].get("label").and_then(|value| value.as_str()),
+			Some("Field Drape")
+		);
+		assert_eq!(
+			runtime_actions[0].get("wardrobe_set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert_eq!(runtime_actions[0].get("effect_count").and_then(|value| value.as_u64()), Some(5));
+		assert_eq!(
+			runtime_actions[0]
+				.get("condition_parameter_names")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			runtime_actions[0].get("current_condition_state").and_then(|value| value.as_str()),
+			Some("active")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("target_writes")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("owner_key"))
+				.and_then(|value| value.as_str()),
+			Some("action:wardrobe:field_drape")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("node_visibility_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("path"))
+				.and_then(|value| value.as_str()),
+			Some("Avatar/Coat")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("material_property_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("parameter"))
+				.and_then(|value| value.as_str()),
+			Some("_Color")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("material_slot_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("material_name"))
+				.and_then(|value| value.as_str()),
+			Some("Coat")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("expression_weight_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("name"))
+				.and_then(|value| value.as_str()),
+			Some("Smile")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("dynamics_enabled_effects")
+				.and_then(|value| value.as_array())
+				.and_then(|values| values.first())
+				.and_then(|value| value.get("source_id"))
+				.and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
+		assert_eq!(
+			runtime_actions[0]
+				.get("effect_kinds")
+				.and_then(|value| value.get("node_visibility"))
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		let action_collisions = snapshot
+			.get("runtime_action_target_write_collisions")
+			.and_then(|value| value.as_array())
+			.expect("runtime action target write collisions");
+		assert_eq!(action_collisions.len(), 1);
+		assert_eq!(
+			action_collisions[0].get("target_key").and_then(|value| value.as_str()),
+			Some("Avatar/Coat")
+		);
+		let restore_readiness = snapshot
+			.get("runtime_action_restore_readiness")
+			.and_then(|value| value.as_array())
+			.expect("runtime action restore readiness");
+		assert_eq!(restore_readiness.len(), 1);
+		assert_eq!(
+			restore_readiness[0].get("reason").and_then(|value| value.as_str()),
+			Some("baseline_not_captured")
+		);
+		let baseline_candidates = snapshot
+			.get("runtime_action_restore_baseline_candidates")
+			.and_then(|value| value.as_array())
+			.expect("runtime action restore baseline candidates");
+		assert_eq!(baseline_candidates.len(), 1);
+		assert_eq!(
+			baseline_candidates[0].get("baseline_value").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		let capture_plan = snapshot
+			.get("runtime_action_restore_baseline_capture_plan")
+			.and_then(|value| value.as_array())
+			.expect("runtime action restore baseline capture plan");
+		assert_eq!(capture_plan.len(), 1);
+		assert_eq!(
+			capture_plan[0].get("target_key").and_then(|value| value.as_str()),
+			Some("Avatar/Coat")
+		);
+		let apply_plan = snapshot
+			.get("runtime_action_restore_apply_plan")
+			.and_then(|value| value.as_array())
+			.expect("runtime action restore apply plan");
+		assert_eq!(apply_plan.len(), 1);
+		assert_eq!(apply_plan[0].get("ready").and_then(|value| value.as_bool()), Some(true));
+		let menu_action_candidates = snapshot
+			.get("menu_action_candidates")
+			.and_then(|value| value.as_array())
+			.expect("menu action candidates");
+		assert_eq!(menu_action_candidates.len(), 1);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("menu_component_index")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
+		assert_eq!(
+			menu_action_candidates[0].get("parameter_name").and_then(|value| value.as_str()),
+			Some("Outfit")
+		);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("menu_path")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>()),
+			Some(vec!["Wardrobe"])
+		);
+		assert_eq!(
+			menu_action_candidates[0]
+				.get("wardrobe_set_ids")
+				.and_then(|value| value.as_array())
+				.map(|values| values.iter().filter_map(|value| value.as_str()).collect::<Vec<_>>()),
+			Some(vec!["field_drape"])
+		);
+		let menu_wardrobe_candidates = snapshot
+			.get("menu_wardrobe_candidates")
+			.and_then(|value| value.as_array())
+			.expect("menu wardrobe candidates");
+		assert_eq!(menu_wardrobe_candidates.len(), 1);
+		assert_eq!(
+			menu_wardrobe_candidates[0].get("wardrobe_set_id").and_then(|value| value.as_str()),
+			Some("field_drape")
+		);
+		assert!(snapshot.get("resolver_cache_key").is_none());
+		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("scene_state"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_wardrobe"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_parameter"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_dynamics_enabled"))));
+		assert!(snapshot
+			.get("control_capabilities")
+			.and_then(|value| value.as_array())
+			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_animator_profile"))));
+	}
+
+	#[test]
+	fn standalone_runtime_bus_key_is_stable_for_manifest_path() {
+		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\Mizuki.toml"));
+		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/mizuki.toml"));
+
+		assert!(first.starts_with("un-avatar/runtime/standalone/"));
+		assert_eq!(first, second);
 	}
 
 	#[test]
@@ -3851,6 +8732,299 @@ mod tests {
 			parse_renderer_control_command(r#"{"command":"reset_camera"}"#).unwrap(),
 			RendererControlCommand::ResetCamera
 		));
+	}
+
+	#[test]
+	fn parses_json_set_wardrobe_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"set_wardrobe","set_id":"field_drape"}"#).unwrap();
+		let RendererControlCommand::SetWardrobe { set_id } = command else {
+			panic!("expected set_wardrobe command");
+		};
+		assert_eq!(set_id, "field_drape");
+	}
+
+	#[test]
+	fn wardrobe_exit_camera_patch_moves_target_sideways_and_restore_patch_roundtrips() {
+		let state = gpu::CameraStateSnapshot {
+			target: [0.0, 1.2, 0.0],
+			longitude_deg: 0.0,
+			latitude_deg: 5.0,
+			radius: 1.5,
+			diagonal_fov_deg: 35.0,
+		};
+		let exit = wardrobe_exit_camera_patch(state);
+		assert!(exit.target.unwrap()[0] > 1.0);
+		assert!(exit.target.unwrap()[1] > state.target[1]);
+		assert!(exit.radius.unwrap() < state.radius);
+
+		let restore = camera_state_patch_from_snapshot(state);
+		let restored = patched_camera_state(state, restore);
+		assert_eq!(restored.target, state.target);
+		assert_eq!(restored.longitude_deg, state.longitude_deg);
+		assert_eq!(restored.latitude_deg, state.latitude_deg);
+		assert_eq!(restored.radius, state.radius);
+		assert_eq!(restored.diagonal_fov_deg, state.diagonal_fov_deg);
+	}
+
+	#[test]
+	fn wardrobe_set_request_match_treats_empty_as_base() {
+		assert!(wardrobe_set_request_matches_active(Some("base"), Some("base"), ""));
+		assert!(wardrobe_set_request_matches_active(Some("base"), Some("base"), " \t "));
+		assert!(wardrobe_set_request_matches_active(
+			Some("field_drape"),
+			Some("base"),
+			" field_drape "
+		));
+		assert!(!wardrobe_set_request_matches_active(Some("field_drape"), Some("base"), ""));
+		assert!(!wardrobe_set_request_matches_active(None, None, ""));
+	}
+
+	#[test]
+	fn configured_window_icon_reapply_does_not_clear_to_default_icon() {
+		let source = include_str!("lib.rs");
+		let forbidden = ["set_window_icon", "(None)"].concat();
+		assert!(
+			!source.contains(&forbidden),
+			"runtime icon refresh must not briefly clear to the Windows default taskbar icon"
+		);
+	}
+
+	#[test]
+	fn parses_json_set_animator_profile_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_animator_profile","actions":[{"id":"expression:angry","mode":"toggle","value":0.45,"transition_curve":"ease_out","transition_ms":250}],"bindings":[{"action_id":"expression:angry","kind":"keyboard","binding":"F12"},{"action_id":"expression:angry","kind":"midi_note","device":"Pad","channel":1,"note":36}]}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetAnimatorProfile { actions, bindings } = command else {
+			panic!("expected set_animator_profile command");
+		};
+		assert_eq!(actions.len(), 1);
+		assert_eq!(actions[0].id, "expression:angry");
+		assert_eq!(actions[0].mode, "toggle");
+		assert_eq!(actions[0].value, Some(0.45));
+		assert_eq!(actions[0].transition_curve.as_deref(), Some("ease_out"));
+		assert_eq!(actions[0].transition_ms, Some(250));
+		assert_eq!(bindings.len(), 2);
+		assert_eq!(bindings[0].binding.as_deref(), Some("F12"));
+		assert_eq!(bindings[1].device.as_deref(), Some("Pad"));
+		assert_eq!(bindings[1].channel, Some(1));
+		assert_eq!(bindings[1].note, Some(36));
+	}
+
+	#[test]
+	fn parses_json_set_input_bindings_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_input_bindings","wardrobe_bindings":[{"set_id":"","kind":"keyboard","binding":"F21"},{"set_id":"field_drape","kind":"keyboard","binding":"F22"}],"animator_bindings":[{"action_id":"expression:angry","kind":"keyboard","binding":"F23"}]}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetInputBindings {
+			wardrobe_bindings,
+			animator_bindings,
+		} = command
+		else {
+			panic!("expected set_input_bindings command");
+		};
+		assert_eq!(wardrobe_bindings.len(), 2);
+		assert_eq!(wardrobe_bindings[0].set_id, "");
+		assert_eq!(wardrobe_bindings[0].binding.as_deref(), Some("F21"));
+		assert_eq!(wardrobe_bindings[1].set_id, "field_drape");
+		assert_eq!(animator_bindings.len(), 1);
+		assert_eq!(animator_bindings[0].binding.as_deref(), Some("F23"));
+	}
+
+	#[test]
+	fn parses_json_set_wardrobe_transition_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_wardrobe_transition","billboard_anchor":"spine","billboard_y_offset_mm":42.0}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor,
+			billboard_y_offset_mm,
+		} = command
+		else {
+			panic!("expected set_wardrobe_transition command");
+		};
+		assert_eq!(billboard_anchor, "spine");
+		assert_eq!(billboard_y_offset_mm, 42.0);
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id.as_deref(), Some("wardrobe:field_drape"));
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_expression_menu_path() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","expressionMenuPath":"Wardrobe/Field Drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path.as_deref(), Some("Wardrobe/Field Drape"));
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_parameter_value() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","parameterName":"JacketColor","parameterValue":1.0}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path, None);
+		assert_eq!(wardrobe_set_id, None);
+		assert_eq!(parameter_name.as_deref(), Some("JacketColor"));
+		assert_eq!(parameter_value, Some(1.0));
+	}
+
+	#[test]
+	fn parses_json_activate_action_control_command_by_menu_path() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"activate_action","menuPath":"Wardrobe","wardrobeSetId":"field_drape"}"#).unwrap();
+		let RendererControlCommand::ActivateAction {
+			action_id,
+			supervisor_command,
+			expression_menu_path,
+			menu_path,
+			wardrobe_set_id,
+			parameter_name,
+			parameter_value,
+		} = command
+		else {
+			panic!("expected activate_action command");
+		};
+		assert_eq!(action_id, None);
+		assert_eq!(supervisor_command, None);
+		assert_eq!(expression_menu_path, None);
+		assert_eq!(menu_path.as_deref(), Some("Wardrobe"));
+		assert_eq!(wardrobe_set_id.as_deref(), Some("field_drape"));
+		assert_eq!(parameter_name, None);
+		assert_eq!(parameter_value, None);
+	}
+
+	#[test]
+	fn resolves_activate_action_from_menu_path() {
+		let candidates = vec![
+			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 1,
+				menu_key: "component:1".to_string(),
+				menu_path: vec!["Wardrobe".to_string()],
+				menu_path_truncated: false,
+				menu_label: Some("Wardrobe".to_string()),
+				action_id: "wardrobe:field_drape".to_string(),
+				wardrobe_set_id: "field_drape".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			},
+			crate::gpu::RuntimeMenuWardrobeCandidateStatus {
+				menu_component_index: 2,
+				menu_key: "component:2".to_string(),
+				menu_path: vec!["Helmet".to_string()],
+				menu_path_truncated: false,
+				menu_label: Some("Helmet".to_string()),
+				action_id: "wardrobe:helmet".to_string(),
+				wardrobe_set_id: "helmet".to_string(),
+				match_kind: "trigger".to_string(),
+				inverted: false,
+			},
+		];
+		assert_eq!(
+			resolve_activate_action_from_menu_path("Wardrobe/Field Drape", Some("field_drape"), &candidates).as_deref(),
+			Ok("wardrobe:field_drape")
+		);
+		assert_eq!(
+			resolve_activate_action_from_menu_path("Wardrobe", None, &candidates).as_deref(),
+			Ok("wardrobe:field_drape")
+		);
+		assert!(resolve_activate_action_from_menu_path("Wardrobe", Some("field_drape"), &candidates).is_ok());
+		assert!(resolve_activate_action_from_menu_path("Wardrobe", Some("missing"), &candidates).is_err());
+	}
+
+	#[test]
+	fn parses_json_set_parameter_control_command() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"set_parameter","parameterName":"JacketColor","parameterValue":1.0}"#).unwrap();
+		let RendererControlCommand::SetParameter { name, value } = command else {
+			panic!("expected set_parameter command");
+		};
+		assert_eq!(name, "JacketColor");
+		assert_eq!(value, 1.0);
+	}
+
+	#[test]
+	fn parses_json_set_dynamics_enabled_control_command() {
+		let command =
+			parse_renderer_control_command(r#"{"command":"set_dynamics_enabled","sourceId":"physbone:hair","enabled":true}"#).unwrap();
+		let RendererControlCommand::SetDynamicsEnabled { source_id, enabled } = command else {
+			panic!("expected set_dynamics_enabled command");
+		};
+		assert_eq!(source_id, "physbone:hair");
+		assert!(enabled);
+	}
+
+	#[test]
+	fn parses_json_set_dynamics_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0}}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetDynamics {
+			enabled,
+			bone_colliders,
+			physics_config,
+		} = command
+		else {
+			panic!("expected set_dynamics command");
+		};
+		assert!(!enabled);
+		assert!(!bone_colliders.enabled);
+		assert_eq!(physics_config.unwrap().simulation_hz, 120.0);
 	}
 
 	#[test]
@@ -3945,10 +9119,56 @@ mod tests {
 		assert_eq!(height, Some(720));
 	}
 
+	#[cfg(windows)]
+	#[test]
+	fn renderer_tray_window_preview_shows_preview_before_disabling_spout() {
+		let events = super::renderer_tray_output_events(&super::renderer_tray::RendererTrayAction::SetWindowPreview).unwrap();
+		assert_eq!(events.len(), 2);
+		assert!(matches!(
+			&events[0],
+			RendererControlEvent::SetPreviewWindow {
+				enabled: true,
+				activate: true
+			}
+		));
+		assert!(matches!(
+			&events[1],
+			RendererControlEvent::SetSpoutOutput {
+				enabled: false,
+				name: None,
+				width: None,
+				height: None
+			}
+		));
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn renderer_tray_spout_only_enables_spout_before_hiding_preview() {
+		let events = super::renderer_tray_output_events(&super::renderer_tray::RendererTrayAction::SetSpoutOnly).unwrap();
+		assert_eq!(events.len(), 2);
+		assert!(matches!(
+			&events[0],
+			RendererControlEvent::SetSpoutOutput {
+				enabled: true,
+				name: None,
+				width: None,
+				height: None
+			}
+		));
+		assert!(matches!(
+			&events[1],
+			RendererControlEvent::SetPreviewWindow {
+				enabled: false,
+				activate: false
+			}
+		));
+	}
+
 	#[test]
 	fn parses_json_set_avatar_outline_control_command() {
 		let command = parse_renderer_control_command(
-			r#"{"command":"set_avatar_outline","policy":"override","type":"mtoon","width":0.004,"color":[1.0,0.5,0.25],"lighting_mix":0.1,"roundness":0.75}"#,
+			r#"{"command":"set_avatar_outline","policy":"override","type":"silhouette","width":0.004,"color":[1.0,0.5,0.25],"lighting_mix":0.1,"roundness":0.75}"#,
 		)
 		.unwrap();
 		let RendererControlCommand::SetAvatarOutline {
@@ -3963,11 +9183,28 @@ mod tests {
 			panic!("expected set_avatar_outline command");
 		};
 		assert_eq!(policy.as_deref(), Some("override"));
-		assert_eq!(r#type.as_deref(), Some("mtoon"));
+		assert_eq!(r#type.as_deref(), Some("silhouette"));
 		assert_eq!(width, Some(0.004));
 		assert_eq!(color, Some([1.0, 0.5, 0.25]));
 		assert_eq!(lighting_mix, Some(0.1));
 		assert_eq!(roundness, Some(0.75));
+	}
+
+	#[test]
+	fn avatar_outline_control_accepts_legacy_mtoon_alias() {
+		let current = Default::default();
+		let next = avatar_outline_from_control(
+			current,
+			Some("override".to_string()),
+			Some("mtoon".to_string()),
+			Some(0.004),
+			None,
+			None,
+			None,
+		);
+		assert_eq!(next.policy, AvatarOutlinePolicy::Override);
+		assert_eq!(next.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(next.width, Some(0.004));
 	}
 
 	#[test]
@@ -3996,36 +9233,6 @@ mod tests {
 		assert_eq!(intensity, Some(0.45));
 		assert_eq!(temperature, Some(0.2));
 		assert_eq!(tint, Some(-0.15));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_matcap_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_avatar_matcap","scale":1.35}"#).unwrap();
-		let RendererControlCommand::SetAvatarMatcap { scale } = command else {
-			panic!("expected set_avatar_matcap command");
-		};
-		assert_eq!(scale, Some(1.35));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_specular_control_command() {
-		let command =
-			parse_renderer_control_command(r#"{"command":"set_avatar_specular","enabled":true,"intensity":0.5,"power":32.0}"#).unwrap();
-		let RendererControlCommand::SetAvatarSpecular { enabled, intensity, power } = command else {
-			panic!("expected set_avatar_specular command");
-		};
-		assert_eq!(enabled, Some(true));
-		assert_eq!(intensity, Some(0.5));
-		assert_eq!(power, Some(32.0));
-	}
-
-	#[test]
-	fn parses_json_set_avatar_ambient_occlusion_control_command() {
-		let command = parse_renderer_control_command(r#"{"command":"set_avatar_ambient_occlusion","strength":1.4}"#).unwrap();
-		let RendererControlCommand::SetAvatarAmbientOcclusion { strength } = command else {
-			panic!("expected set_avatar_ambient_occlusion command");
-		};
-		assert_eq!(strength, Some(1.4));
 	}
 
 	#[test]
@@ -4155,5 +9362,100 @@ mod tests {
 	#[test]
 	fn close_hotkey_can_be_disabled() {
 		assert!(CloseHotkey::parse("None").unwrap().is_none());
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn parses_wardrobe_windows_hotkey() {
+		use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F21, VK_F22, VK_F23, VK_F24};
+		let (mods, key) = parse_windows_hotkey("Ctrl+Alt+1").unwrap();
+		assert_ne!(mods.0, 0);
+		assert_eq!(key, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_1.0));
+		for (binding, expected) in [("F21", VK_F21.0), ("F22", VK_F22.0), ("F23", VK_F23.0), ("F24", VK_F24.0)] {
+			let (_, key) = parse_windows_hotkey(binding).unwrap();
+			assert_eq!(
+				key,
+				u32::from(expected),
+				"{binding} should map to its extended function virtual key"
+			);
+		}
+		assert!(parse_windows_hotkey("Ctrl+Alt").is_err());
+		assert!(parse_windows_hotkey("Ctrl+Alt+1+2").is_err());
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn wardrobe_hotkey_registration_keeps_base_set_binding() {
+		let registrations = global_hotkey_registrations(
+			&[WardrobeBindingOptions {
+				set_id: String::new(),
+				kind: WardrobeBindingKind::Keyboard,
+				binding: "F21".to_string(),
+				device: None,
+				channel: None,
+				note: None,
+			}],
+			&[],
+		);
+		assert_eq!(registrations.len(), 1);
+		assert_eq!(
+			registrations[0].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F21.0)
+		);
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn animator_hotkey_registration_accepts_extended_function_keys() {
+		let registrations = global_hotkey_registrations(
+			&[],
+			&[
+				crate::options::AnimatorActionBindingOptions {
+					action_id: "expression:angry".to_string(),
+					kind: WardrobeBindingKind::Keyboard,
+					binding: "F23".to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				},
+				crate::options::AnimatorActionBindingOptions {
+					action_id: "expression:joy".to_string(),
+					kind: WardrobeBindingKind::Keyboard,
+					binding: "F24".to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				},
+			],
+		);
+		assert_eq!(registrations.len(), 2);
+		assert_eq!(
+			registrations[0].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F23.0)
+		);
+		assert_eq!(
+			registrations[1].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F24.0)
+		);
+	}
+
+	#[test]
+	fn parses_midi_note_down_and_up_events() {
+		let down = parse_midi_note_event(&[0x90, 60, 100]).unwrap();
+		assert_eq!(down.channel, 1);
+		assert_eq!(down.note, 60);
+		assert!(down.down);
+
+		let up_from_note_on_zero = parse_midi_note_event(&[0x90, 60, 0]).unwrap();
+		assert_eq!(up_from_note_on_zero.channel, 1);
+		assert_eq!(up_from_note_on_zero.note, 60);
+		assert!(!up_from_note_on_zero.down);
+
+		let up = parse_midi_note_event(&[0x81, 61, 64]).unwrap();
+		assert_eq!(up.channel, 2);
+		assert_eq!(up.note, 61);
+		assert!(!up.down);
+
+		assert!(parse_midi_note_event(&[0xB0, 1, 127]).is_none());
 	}
 }

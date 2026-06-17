@@ -469,15 +469,18 @@ pub(crate) fn build_skin_tone_matched_images(
 		body_seam_uv_count,
 		..Default::default()
 	};
-	let mut face_samples = Vec::new();
-	let mut body_samples = Vec::new();
+	let face_sample_capacity = kinds.iter().filter(|kind| matches!(kind, Some(SkinToneTextureKind::Face))).count();
+	let body_sample_capacity = kinds.iter().filter(|kind| matches!(kind, Some(SkinToneTextureKind::Body))).count();
+	let mut face_samples = Vec::with_capacity(face_sample_capacity);
+	let mut body_samples = Vec::with_capacity(body_sample_capacity);
 	for (index, im) in scene.images.iter().enumerate() {
+		let rgba = im.rgba8_compat_pixels();
 		match kinds.get(index).copied().flatten() {
 			Some(SkinToneTextureKind::Face) => {
 				let sample = face_seam_uvs
 					.get(&index)
-					.and_then(|uvs| sample_skin_lab_near_uv(&im.rgba, im.width, im.height, uvs))
-					.or_else(|| estimate_skin_lab(&im.rgba, im.width, im.height));
+					.and_then(|uvs| sample_skin_lab_near_uv(rgba.as_ref(), im.width, im.height, uvs))
+					.or_else(|| estimate_skin_lab(rgba.as_ref(), im.width, im.height));
 				if let Some(sample) = sample {
 					face_samples.push((index, sample));
 				}
@@ -485,8 +488,8 @@ pub(crate) fn build_skin_tone_matched_images(
 			Some(SkinToneTextureKind::Body) => {
 				let sample = body_seam_uvs
 					.get(&index)
-					.and_then(|uvs| sample_skin_lab_near_uv(&im.rgba, im.width, im.height, uvs))
-					.or_else(|| estimate_skin_lab(&im.rgba, im.width, im.height));
+					.and_then(|uvs| sample_skin_lab_near_uv(rgba.as_ref(), im.width, im.height, uvs))
+					.or_else(|| estimate_skin_lab(rgba.as_ref(), im.width, im.height));
 				if let Some(sample) = sample {
 					body_samples.push((index, sample));
 				}
@@ -514,8 +517,15 @@ pub(crate) fn build_skin_tone_matched_images(
 	let mut adjusted = vec![None; scene.images.len()];
 	for (index, source) in face_samples {
 		let im = &scene.images[index];
-		let (rgba, adjusted_pixels) =
-			apply_skin_tone_shift(&im.rgba, im.width, im.height, source, target, Lab { l: 0.18, a: 0.35, b: 0.35 });
+		let source_rgba = im.rgba8_compat_pixels();
+		let (rgba, adjusted_pixels) = apply_skin_tone_shift(
+			source_rgba.as_ref(),
+			im.width,
+			im.height,
+			source,
+			target,
+			Lab { l: 0.18, a: 0.35, b: 0.35 },
+		);
 		let adjusted_lab = face_seam_uvs
 			.get(&index)
 			.and_then(|uvs| sample_skin_lab_near_uv(&rgba, im.width, im.height, uvs))
@@ -534,7 +544,15 @@ pub(crate) fn build_skin_tone_matched_images(
 	}
 	for (index, source) in body_samples {
 		let im = &scene.images[index];
-		let (rgba, adjusted_pixels) = apply_skin_tone_shift(&im.rgba, im.width, im.height, source, target, Lab { l: 0.8, a: 1.0, b: 1.0 });
+		let source_rgba = im.rgba8_compat_pixels();
+		let (rgba, adjusted_pixels) = apply_skin_tone_shift(
+			source_rgba.as_ref(),
+			im.width,
+			im.height,
+			source,
+			target,
+			Lab { l: 0.8, a: 1.0, b: 1.0 },
+		);
 		let adjusted_lab = body_seam_uvs
 			.get(&index)
 			.and_then(|uvs| sample_skin_lab_near_uv(&rgba, im.width, im.height, uvs))

@@ -4,22 +4,36 @@
 
 #![forbid(unsafe_code)]
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+	collections::BTreeMap,
+	fs::File,
+	io::{Read, Seek, SeekFrom},
+	path::Path,
+	time::Instant,
+};
 
 use glam::Mat4;
 use serde_json::Value;
 use un_avatar_core::{
-	ReportStatus, UnaAlphaMode, UnaDocument, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba,
-	UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
-	UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry,
-	UnaVrmExtension,
+	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset,
+	UnaExpressionWeights, UnaImageRgba, UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
+	UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
 	ImportOptions, ImportProbe, ImportProbeResult, ImportReport, ImportResult, IoRegistry, PluginStability,
 };
-use un_avatar_io_gltf::scene_snapshot_from_gltf;
+use un_avatar_io_gltf::{scene_snapshot_from_gltf, scene_snapshot_from_gltf_profiled};
 use un_avatar_types::HumanoidProfile;
+
+const GLB_MAGIC: u32 = 0x46546C67;
+const GLB_VERSION_2: u32 = 2;
+const JSON_CHUNK_TYPE: u32 = 0x4E4F534A;
+
+fn read_le_u32(bytes: &[u8; 4]) -> u32 {
+	u32::from_le_bytes(*bytes)
+}
 
 pub fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
 	if bytes.starts_with(b"glTF") {
@@ -28,6 +42,42 @@ pub fn gltf_root_json_from_bytes(bytes: &[u8]) -> Result<Value, ImportError> {
 	} else {
 		serde_json::from_slice(bytes).map_err(|e| ImportError::Message(format!("glTF JSON: {e}")))
 	}
+}
+
+pub fn gltf_root_json_from_path(path: &Path) -> Result<Value, ImportError> {
+	let mut file = File::open(path).map_err(|e| ImportError::Message(format!("read {}: {e}", path.display())))?;
+	let mut header = [0u8; 12];
+	let header_len = file
+		.read(&mut header)
+		.map_err(|e| ImportError::Message(format!("read {} header: {e}", path.display())))?;
+	if header_len == header.len()
+		&& read_le_u32(header[0..4].try_into().expect("slice length")) == GLB_MAGIC
+		&& read_le_u32(header[4..8].try_into().expect("slice length")) == GLB_VERSION_2
+	{
+		loop {
+			let mut chunk_header = [0u8; 8];
+			file.read_exact(&mut chunk_header)
+				.map_err(|e| ImportError::Message(format!("GLB JSON chunk is missing in {}: {e}", path.display())))?;
+			let length = read_le_u32(chunk_header[0..4].try_into().expect("slice length")) as usize;
+			let chunk_type = read_le_u32(chunk_header[4..8].try_into().expect("slice length"));
+			if chunk_type == JSON_CHUNK_TYPE {
+				let mut json = vec![0u8; length];
+				file.read_exact(&mut json)
+					.map_err(|e| ImportError::Message(format!("read {} GLB JSON chunk: {e}", path.display())))?;
+				let end = json.iter().position(|byte| *byte == 0).unwrap_or(json.len());
+				return serde_json::from_slice(&json[..end]).map_err(|e| ImportError::Message(format!("GLB JSON: {e}")));
+			}
+			file.seek(SeekFrom::Current(length as i64))
+				.map_err(|e| ImportError::Message(format!("skip {} GLB chunk: {e}", path.display())))?;
+		}
+	}
+
+	let mut bytes = Vec::new();
+	file.seek(SeekFrom::Start(0))
+		.map_err(|e| ImportError::Message(format!("seek {}: {e}", path.display())))?;
+	file.read_to_end(&mut bytes)
+		.map_err(|e| ImportError::Message(format!("read {}: {e}", path.display())))?;
+	gltf_root_json_from_bytes(&bytes)
 }
 
 fn take_vrm_extension(root: &Value) -> Result<(VrmFlavor, Value), ImportError> {
@@ -134,7 +184,7 @@ fn mtoon_materials_v0(vrm: &Value) -> Vec<UnaVrm0MtoonMaterialEntry> {
 	let Some(arr) = vrm.get("materialProperties").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	let mut out = Vec::new();
+	let mut out = Vec::with_capacity(arr.len());
 	for (i, item) in arr.iter().enumerate() {
 		// 旧 UniVRM: `material` 整数。省かれている書き出しは **materialProperties の並び = materials[] と同順** とみなす。
 		let mi = item.get("material").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(i);
@@ -152,10 +202,13 @@ fn mtoon_material_indices_v1(root: &Value) -> Vec<usize> {
 	let Some(mats) = root.get("materials").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	mats.iter()
-		.enumerate()
-		.filter_map(|(i, m)| m.get("extensions").and_then(|e| e.get("VRMC_materials_mtoon")).map(|_| i))
-		.collect()
+	let mut indices = Vec::with_capacity(mats.len());
+	indices.extend(
+		mats.iter()
+			.enumerate()
+			.filter_map(|(i, m)| m.get("extensions").and_then(|e| e.get("VRMC_materials_mtoon")).map(|_| i)),
+	);
+	indices
 }
 
 fn normalize_scene_basis_for_vrm(scene: &mut UnaSceneSnapshot, flavor: VrmFlavor) {
@@ -208,7 +261,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 	let Some(nodes) = root.get("nodes").and_then(|x| x.as_array()) else {
 		return Vec::new();
 	};
-	let mut out = Vec::new();
+	let mut out = Vec::with_capacity(nodes.len());
 	for (target_node, node) in nodes.iter().enumerate() {
 		let Some(c) = node
 			.get("extensions")
@@ -542,6 +595,7 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		matcap_texture_index: value_mtoon_texture_index(ext, "matcapTexture", root),
 		parametric_rim_color_factor: obj_vec3(obj, "parametricRimColorFactor", [0.0, 0.0, 0.0]),
 		rim_multiply_texture_index: value_mtoon_texture_index(ext, "rimMultiplyTexture", root),
+		reflection_cube_texture_index: None,
 		rim_lighting_mix_factor: obj_f32(obj, &["rimLightingMixFactor"], 1.0).clamp(0.0, 1.0),
 		parametric_rim_fresnel_power_factor: obj_f32(obj, &["parametricRimFresnelPowerFactor"], 5.0).max(0.00001),
 		parametric_rim_lift_factor: obj_f32(obj, &["parametricRimLiftFactor"], 0.0),
@@ -555,6 +609,7 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 		outline_color_factor: obj_vec3(obj, "outlineColorFactor", [0.0, 0.0, 0.0]),
 		outline_lighting_mix_factor: obj_f32(obj, &["outlineLightingMixFactor"], 1.0).clamp(0.0, 1.0),
 		uv_animation_mask_texture_index: value_mtoon_texture_index(ext, "uvAnimationMaskTexture", root),
+		uv_offset_scale: [0.0, 0.0, 1.0, 1.0],
 		uv_animation_scroll_x_speed_factor: obj_f32(obj, &["uvAnimationScrollXSpeedFactor"], 0.0),
 		uv_animation_scroll_y_speed_factor: obj_f32(obj, &["uvAnimationScrollYSpeedFactor"], 0.0),
 		uv_animation_rotation_speed_factor: obj_f32(obj, &["uvAnimationRotationSpeedFactor"], 0.0),
@@ -600,15 +655,21 @@ fn vrm0_mtoon_raw_implies_transparent_blend(raw: &Value, shader_name: &str) -> b
 }
 
 fn vrm0_mtoon_double_sided(raw: &Value) -> Option<bool> {
+	vrm0_mtoon_cull_mode(raw).map(|mode| mode == UnaCullMode::Off)
+}
+
+fn vrm0_mtoon_cull_mode(raw: &Value) -> Option<UnaCullMode> {
 	let mode = raw
 		.get("floatProperties")
 		.and_then(|x| x.as_object())
 		.and_then(|floats| floats.get("_CullMode"))
 		.and_then(|x| x.as_f64())?;
 	if (mode - 0.0).abs() < 0.5 {
-		Some(true)
+		Some(UnaCullMode::Off)
+	} else if (mode - 1.0).abs() < 0.5 {
+		Some(UnaCullMode::Front)
 	} else if (mode - 2.0).abs() < 0.5 {
-		Some(false)
+		Some(UnaCullMode::Back)
 	} else {
 		None
 	}
@@ -620,6 +681,9 @@ fn tag_mtoon_materials(scene: &mut UnaSceneSnapshot, vrm: &UnaVrmExtension) {
 			m.shading = UnaShadingModel::MToonLike;
 			if let Some(double_sided) = vrm0_mtoon_double_sided(&e.raw) {
 				m.double_sided = double_sided;
+			}
+			if let Some(cull_mode) = vrm0_mtoon_cull_mode(&e.raw) {
+				m.cull_mode = cull_mode;
 			}
 			if vrm0_mtoon_raw_implies_transparent_blend(&e.raw, &e.shader_name) {
 				m.alpha_mode = UnaAlphaMode::Blend;
@@ -740,12 +804,11 @@ fn relax_mtoon_mask_for_likely_eye_materials(scene: &mut UnaSceneSnapshot) {
 }
 
 fn image_is_flat_neutral_normal(image: &UnaImageRgba) -> bool {
-	if image.width == 0 || image.height == 0 || image.rgba.is_empty() {
+	if image.width == 0 || image.height == 0 || image.pixels.is_empty() {
 		return false;
 	}
-	image
-		.rgba
-		.chunks_exact(4)
+	let rgba = image.rgba8_compat_pixels();
+	rgba.chunks_exact(4)
 		.all(|px| (127..=128).contains(&px[0]) && (127..=128).contains(&px[1]) && px[2] >= 254)
 }
 
@@ -788,7 +851,7 @@ fn expression_catalog_v0(vrm: &Value) -> UnaExpressionCatalog {
 	let Some(groups) = groups else {
 		return UnaExpressionCatalog::default();
 	};
-	let mut presets = Vec::new();
+	let mut presets = Vec::with_capacity(groups.len());
 	for g in groups {
 		// VRM0 BlendShapeGroup の名前選択:
 		// - PerfectSync 対応モデルでは ARKit 52 個分の BlendShape が `presetName = "unknown"`、
@@ -808,7 +871,7 @@ fn expression_catalog_v0(vrm: &Value) -> UnaExpressionCatalog {
 		let Some(vals) = vrm0_blend_shape_binds(g) else {
 			continue;
 		};
-		let mut binds = Vec::new();
+		let mut binds = Vec::with_capacity(vals.len());
 		for v in vals {
 			let mesh = v.get("mesh").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
 			let idx = v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
@@ -831,7 +894,12 @@ fn expression_catalog_v1(vrm: &Value, node_mesh: &[Option<usize>]) -> UnaExpress
 	let Some(expr_root) = vrm.get("expressions") else {
 		return UnaExpressionCatalog::default();
 	};
-	let mut presets = Vec::new();
+	let preset_count = ["preset", "custom"]
+		.iter()
+		.filter_map(|cat_key| expr_root.get(cat_key).and_then(|x| x.as_object()))
+		.map(|cat| cat.len())
+		.sum();
+	let mut presets = Vec::with_capacity(preset_count);
 	for cat_key in ["preset", "custom"] {
 		let Some(cat) = expr_root.get(cat_key).and_then(|x| x.as_object()) else {
 			continue;
@@ -840,7 +908,7 @@ fn expression_catalog_v1(vrm: &Value, node_mesh: &[Option<usize>]) -> UnaExpress
 			let Some(binds_arr) = expr_val.get("morphTargetBinds").and_then(|x| x.as_array()) else {
 				continue;
 			};
-			let mut binds = Vec::new();
+			let mut binds = Vec::with_capacity(binds_arr.len());
 			for b in binds_arr {
 				let node_idx = b
 					.get("node")
@@ -884,7 +952,7 @@ fn build_expression_catalog(source: &Value, flavor: VrmFlavor, node_mesh: &[Opti
 fn expand_expression_binds_per_primitive(scene: &UnaSceneSnapshot, cat: &mut UnaExpressionCatalog) {
 	for preset in &mut cat.presets {
 		let old = std::mem::take(&mut preset.binds);
-		let mut new_binds = Vec::new();
+		let mut new_binds = Vec::with_capacity(old.len());
 		for b in old {
 			let Some(mesh_prims) = scene.meshes.get(b.mesh_index) else {
 				continue;
@@ -950,12 +1018,16 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 	let groups = sa.get("boneGroups")?.as_array()?;
 	let empty: Vec<Value> = Vec::new();
 	let nodes = root.get("nodes").and_then(|x| x.as_array()).unwrap_or(&empty);
-	let mut out_groups = Vec::new();
+	let mut out_groups = Vec::with_capacity(groups.len());
 	for bg in groups {
 		let bone_roots: Vec<usize> = bg
 			.get("bones")
 			.and_then(|b| b.as_array())
-			.map(|a| a.iter().filter_map(|v| v.as_u64().map(|u| u as usize)).collect())
+			.map(|a| {
+				let mut roots = Vec::with_capacity(a.len());
+				roots.extend(a.iter().filter_map(|v| v.as_u64().map(|u| u as usize)));
+				roots
+			})
 			.unwrap_or_default();
 		if bone_roots.is_empty() {
 			continue;
@@ -987,6 +1059,9 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				continue;
 			}
 			out_groups.push(UnaSpringBoneGroup {
+				source_kind: UnaDynamicsSourceKind::VrmSpringBone,
+				enabled: true,
+				source_id: String::new(),
 				comment: comment.clone(),
 				category: String::new(),
 				stiffness,
@@ -995,6 +1070,10 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				drag_force: drag,
 				center_node,
 				hit_radius,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: chain,
 			});
 		}
@@ -1002,7 +1081,11 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 	if out_groups.is_empty() {
 		None
 	} else {
-		Some(UnaSpringBoneSettings { groups: out_groups })
+		Some(UnaSpringBoneSettings {
+			groups: out_groups,
+			colliders: Vec::new(),
+			..Default::default()
+		})
 	}
 }
 
@@ -1010,7 +1093,7 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 	let ext = root.get("extensions")?.as_object()?;
 	let sb = ext.get("VRMC_springBone")?;
 	let springs = sb.get("springs")?.as_array()?;
-	let mut out_groups = Vec::new();
+	let mut out_groups = Vec::with_capacity(springs.len());
 	for sp in springs {
 		let joints = sp.get("joints")?.as_array()?;
 		if joints.len() < 2 {
@@ -1040,6 +1123,9 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 		}
 		let comment = sp.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string();
 		out_groups.push(UnaSpringBoneGroup {
+			source_kind: UnaDynamicsSourceKind::VrmSpringBone,
+			enabled: true,
+			source_id: String::new(),
 			comment,
 			category: String::new(),
 			stiffness,
@@ -1048,13 +1134,21 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 			drag_force: drag,
 			center_node: None,
 			hit_radius,
+			hit_radius_samples: Vec::new(),
+			writeback_mode: Default::default(),
+			limit: None,
+			interaction: None,
 			bone_node_indices: bones,
 		});
 	}
 	if out_groups.is_empty() {
 		None
 	} else {
-		Some(UnaSpringBoneSettings { groups: out_groups })
+		Some(UnaSpringBoneSettings {
+			groups: out_groups,
+			colliders: Vec::new(),
+			..Default::default()
+		})
 	}
 }
 
@@ -1069,22 +1163,57 @@ fn extract_spring_bones(root: &Value, vrm: &Value, flavor: VrmFlavor) -> Option<
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VrmImporter;
 
-fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
+fn log_vrm_import_profile_step(path_hint: Option<&Path>, step: &str, started: Instant) {
+	let path = path_hint
+		.map(|path| path.display().to_string())
+		.unwrap_or_else(|| "<memory>".to_string());
+	eprintln!(
+		"un-avatar-renderer: vrm import profile path={path} step={step} elapsed={:.1}ms",
+		started.elapsed().as_secs_f64() * 1000.0
+	);
+}
+
+fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>, profile: bool) -> Result<ImportResult, ImportError> {
+	let step_started = Instant::now();
 	let root = match root {
 		Some(root) => root,
 		None => gltf_root_json_from_bytes(bytes)?,
 	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "root_json", step_started);
+	}
+	let step_started = Instant::now();
 	let (flavor, vrm_raw) = take_vrm_extension(&root)?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "take_vrm_extension", step_started);
+	}
+	let step_started = Instant::now();
 	let vrm_ext = build_vrm_extension(&root, flavor, vrm_raw)?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "build_vrm_extension", step_started);
+	}
 
+	let step_started = Instant::now();
 	let (document, buffers, image_data) = gltf::import_slice(bytes).map_err(|e| ImportError::Message(e.to_string()))?;
+	if profile {
+		log_vrm_import_profile_step(path_hint, "gltf_import_slice", step_started);
+	}
 
 	let mut report = ImportReport {
 		source_format: Some(VrmImporter.descriptor().id.clone()),
 		..Default::default()
 	};
 
-	let mut scene = scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?;
+	let step_started = Instant::now();
+	let mut scene = if profile {
+		scene_snapshot_from_gltf_profiled(&document, &buffers, image_data, &mut report)?
+	} else {
+		scene_snapshot_from_gltf(&document, &buffers, image_data, &mut report)?
+	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "scene_snapshot_from_gltf", step_started);
+	}
+	let step_started = Instant::now();
 	normalize_scene_basis_for_vrm(&mut scene, flavor);
 	scene.node_constraints = node_constraints_from_root(&root);
 	tag_mtoon_materials(&mut scene, &vrm_ext);
@@ -1093,6 +1222,10 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	// Unlit のままだと relax 対象外だった MASK 瞳を、MToon 化後にもう一度緩和する。
 	relax_mtoon_mask_for_likely_eye_materials(&mut scene);
 	drop_flat_neutral_normal_textures(&mut scene);
+	if profile {
+		log_vrm_import_profile_step(path_hint, "apply_vrm_scene_metadata", step_started);
+	}
+	let step_started = Instant::now();
 	let node_mesh: Vec<Option<usize>> = scene.nodes.iter().map(|n| n.mesh).collect();
 	let mut expr_cat = build_expression_catalog(&vrm_ext.source, flavor, &node_mesh);
 	if !expr_cat.presets.is_empty() {
@@ -1103,7 +1236,11 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	} else {
 		(Some(expr_cat), Some(UnaExpressionWeights::default()))
 	};
+	if profile {
+		log_vrm_import_profile_step(path_hint, "build_expression_catalog", step_started);
+	}
 
+	let step_started = Instant::now();
 	let humanoid_profile = if vrm_ext.humanoid_bones.is_empty() {
 		None
 	} else {
@@ -1113,6 +1250,9 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	};
 
 	let spring_bones = extract_spring_bones(&root, &vrm_ext.source, flavor);
+	if profile {
+		log_vrm_import_profile_step(path_hint, "humanoid_and_spring_bones", step_started);
+	}
 
 	report.status = if report.lost_features.is_empty() && report.approximations.is_empty() {
 		ReportStatus::Success
@@ -1139,10 +1279,13 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	Ok(ImportResult {
 		document: UnaDocument {
 			scene: Some(scene),
+			unavatar: None,
 			vrm: Some(vrm_ext),
 			humanoid_profile,
 			expression_catalog,
 			expression_weights,
+			runtime_actions: None,
+			runtime_state: Default::default(),
 			spring_bones,
 		},
 		report,
@@ -1150,7 +1293,11 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 }
 
 pub fn import_vrm_bytes(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
-	import_vrm_from_parts(path_hint, bytes, root)
+	import_vrm_from_parts(path_hint, bytes, root, false)
+}
+
+pub fn import_vrm_bytes_profiled(path_hint: Option<&Path>, bytes: &[u8], root: Option<Value>) -> Result<ImportResult, ImportError> {
+	import_vrm_from_parts(path_hint, bytes, root, true)
 }
 
 impl AvatarImporter for VrmImporter {
@@ -1213,9 +1360,9 @@ impl AvatarImporter for VrmImporter {
 		match input {
 			ImportInput::Path(path) => {
 				let bytes = std::fs::read(&path).map_err(|e| ImportError::Message(format!("読み込み: {e}")))?;
-				import_vrm_from_parts(Some(&path), &bytes, None)
+				import_vrm_from_parts(Some(&path), &bytes, None, false)
 			}
-			ImportInput::Bytes { bytes, path_hint } => import_vrm_from_parts(path_hint.as_deref(), bytes.as_ref(), None),
+			ImportInput::Bytes { bytes, path_hint } => import_vrm_from_parts(path_hint.as_deref(), bytes.as_ref(), None, false),
 		}
 	}
 }
@@ -1304,11 +1451,16 @@ mod tests {
 	fn vrm0_basis_normalization_rotates_roots_to_una_positive_z_front() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![un_avatar_core::UnaSceneNode {
+				source_node_id: None,
+				resolved_node_id: None,
 				name: None,
+				visible: true,
 				transform: Mat4::IDENTITY.to_cols_array(),
 				children: vec![],
 				mesh: None,
 				skin: None,
+				probe_anchor_node: None,
+				local_bounds: None,
 			}],
 			roots: vec![0],
 			..Default::default()
@@ -1554,6 +1706,7 @@ mod tests {
 		};
 		tag_mtoon_materials(&mut scene, &vrm);
 		assert!(!scene.materials[0].double_sided);
+		assert_eq!(scene.materials[0].cull_mode, UnaCullMode::Back);
 	}
 
 	#[test]
@@ -2091,12 +2244,15 @@ mod tests {
 			images: vec![UnaImageRgba {
 				width: 2,
 				height: 1,
-				rgba: vec![127, 127, 255, 255, 128, 128, 255, 255],
+				pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+				pixels: vec![127, 127, 255, 255, 128, 128, 255, 255],
 			}],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		drop_flat_neutral_normal_textures(&mut scene);
 		assert_eq!(scene.materials[0].normal_texture_index, None);
@@ -2108,9 +2264,15 @@ mod tests {
 		use un_avatar_core::{UnaMeshBuffers, UnaMorphTargetDeltas};
 		let prim_with_4 = || UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![],
 			normals: None,
+			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
 			joints: None,
 			weights: None,
 			indices: None,
@@ -2122,16 +2284,19 @@ mod tests {
 				};
 				4
 			],
+			morph_target_names: vec![],
 			default_morph_weights: vec![],
 		};
 		let scene = UnaSceneSnapshot {
 			meshes: vec![vec![prim_with_4(), prim_with_4()]],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {
@@ -2161,9 +2326,15 @@ mod tests {
 		use un_avatar_core::{UnaMeshBuffers, UnaMorphTargetDeltas};
 		let prim_n = |n: usize| UnaMeshBuffers {
 			name: None,
+			vertex_payload_id: None,
 			positions: vec![],
 			normals: None,
+			tangents: None,
 			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
 			joints: None,
 			weights: None,
 			indices: None,
@@ -2175,16 +2346,19 @@ mod tests {
 				};
 				n
 			],
+			morph_target_names: vec![],
 			default_morph_weights: vec![],
 		};
 		let scene = UnaSceneSnapshot {
 			meshes: vec![vec![prim_n(4), prim_n(2)]],
 			materials: vec![],
 			images: vec![],
+			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
 			roots: vec![],
 			node_constraints: vec![],
+			asset_group_ownership: vec![],
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {

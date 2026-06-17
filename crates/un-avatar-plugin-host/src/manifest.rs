@@ -119,14 +119,23 @@ pub fn load_manifest(path: &Path) -> Result<PluginManifest, ManifestError> {
 }
 
 /// 子ディレクトリ直下の **`manifest.toml` を優先**。無ければ `manifest.json`（非再帰・1 プラグイン 1 ファイル）。
-pub fn discover_manifests_in_dir(dir: &Path) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn discover_manifest_in_dir(dir: &Path) -> io::Result<Option<PathBuf>> {
 	let tom = dir.join("manifest.toml");
-	let js = dir.join("manifest.json");
-	let mut out = Vec::new();
 	if tom.is_file() {
-		out.push(tom);
-	} else if js.is_file() {
-		out.push(js);
+		return Ok(Some(tom));
+	}
+	let js = dir.join("manifest.json");
+	if js.is_file() {
+		return Ok(Some(js));
+	}
+	Ok(None)
+}
+
+/// 子ディレクトリ直下の **`manifest.toml` を優先**。無ければ `manifest.json`（非再帰・1 プラグイン 1 ファイル）。
+pub fn discover_manifests_in_dir(dir: &Path) -> io::Result<Vec<PathBuf>> {
+	let mut out = Vec::with_capacity(1);
+	if let Some(path) = discover_manifest_in_dir(dir)? {
+		out.push(path);
 	}
 	Ok(out)
 }

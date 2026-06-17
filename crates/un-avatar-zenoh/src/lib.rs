@@ -136,10 +136,10 @@ impl UnAvatarZenohReceiver {
 	/// 適用すると profile 間の合成が崩れる。呼び出し側で順に適用できるよう、bounded batch として
 	/// 返す。
 	pub fn drain_available(&self, max_frames: usize) -> Vec<UNMotionFrame> {
-		let mut frames = Vec::new();
 		if max_frames == 0 {
-			return frames;
+			return Vec::new();
 		}
+		let mut frames = Vec::with_capacity(max_frames);
 		while frames.len() < max_frames {
 			match self.rx.try_recv() {
 				Ok(frame) => frames.push(frame),

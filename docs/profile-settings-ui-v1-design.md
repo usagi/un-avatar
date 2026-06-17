@@ -9,7 +9,7 @@ UN Avatar v1 の Supervisor Console `Profiles` 画面を、製品向けの profi
 - VStreamer が初見でも「なんとなく良い感じ」に設定できる。
 - 上級ユーザーは個別パラメーターを直接調整できる。
 - 開発・診断用の項目は必要なときだけ表示し、通常の profile 編集を邪魔しない。
-- レンダラー splash / VRM metadata 画面と同じく、USAGI.NETWORK らしい cool / cute / technical な印象を持たせる。
+- レンダラー startup progress / VRM metadata 画面と同じく、USAGI.NETWORK らしい cool / cute / technical な印象を持たせる。
 - v1.1 以後に PBR / Realistic / Offline RT の rendering style を足しても UI の大改修を避ける。
 - 新バージョンで既存 profile のレンダリング結果を勝手に変えない。
 
@@ -188,6 +188,8 @@ Advanced Controls:
 
 Notes:
 
+- This document records the v1 UI shape. In v2, material authored Outline / Rim / MatCap / Specular / AO are preserved as per-material UNToon parameters, not exposed as profile-wide overrides. The old global controls that push one value set into every material are deprecated.
+- The v1 screen-space avatar outline override is renamed `Silhouette Outline` in v2. It is a UN Avatar viewer/post effect, not lilToon/MToon authored material outline.
 - `MToon controls` という subsection は Advanced 側に置く。Simple preset 名は MToon 固有語にしない。
 - 将来 PBR では同じ Quick Set を PBR 側パラメーターへ map する。
 - `Offline RT` は runtime renderer とは性質が違うため、将来は style option ではなく export/render job として扱う可能性もある。UI 上は同じ `Rendering style` の文脈に置けるよう余地を残す。
@@ -209,6 +211,7 @@ Advanced Controls:
 - Primary motion source
 - VMC address / port
 - UNMotion / Zenoh key
+- AudioLink source (`none` / `input_device`) and input device id/name hint. Detailed runtime policy is fixed in `docs/unavatar-v2-audiolink.md`.
 - Root translation
 - Spring bones は Avatar 側に置くか Motion 側に置くかを実装時に決める。一般ユーザー視点では Avatar 側の方が見つけやすい。
 
@@ -247,8 +250,8 @@ Quick Set:
 
 | Button | 意図 | 代表値 |
 | --- | --- | --- |
-| `Light` | 低負荷 | FXAA、texture limit 2K/auto、compression auto |
-| `Balanced` | v1 既定 | SMAA、texture limit off or auto、compression auto/source policy |
+| `Light` | 低負荷 | FXAA、texture limit 2K/auto、compression compat or memory |
+| `Balanced` | v1/v2 既定 | SMAA、texture limit off or auto、compression balanced |
 | `Quality` | 高品質 | SMAA/MSAA、texture limit off、Mitchell/Lanczos、cache on |
 
 Advanced Controls:

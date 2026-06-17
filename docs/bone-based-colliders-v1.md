@@ -124,9 +124,40 @@ Telemetry。
 show_bone_colliders: bool
 bone_collider_count: u32
 bone_collider_source: "off" | "auto" | "auto+vrm" | "vrm"
+dynamics_group_count: u32
+dynamics_enabled_group_count: u32
+dynamics_source_enabled_group_count: u32
+dynamics_enabled_override_count: u32
+dynamics_vrm_spring_bone_group_count: u32
+dynamics_vrc_physbone_group_count: u32
+dynamics_unknown_group_count: u32
+dynamics_limit_group_count: u32
+dynamics_angle_limit_group_count: u32
+dynamics_stretch_limit_group_count: u32
+dynamics_grabbing_enabled_group_count: u32
+dynamics_posing_enabled_group_count: u32
+dynamics_collider_count: u32
+dynamics_vrm_spring_bone_collider_count: u32
+dynamics_vrc_physbone_collider_count: u32
+dynamics_unknown_collider_count: u32
+dynamics_contact_count: u32
+dynamics_vrc_contact_sender_count: u32
+dynamics_vrc_contact_receiver_count: u32
+dynamics_contact_parameter_declaration_count: u32
+dynamics_contact_probe_count: u32
+dynamics_contact_probe_would_emit_count: u32
+dynamics_constraint_ref_count: u32
+dynamics_vrc_constraint_ref_count: u32
+contact_parameter_declarations: RuntimeContactParameterDeclarationStatus[]
+contact_probes: RuntimeContactProbeStatus[]
+dynamics_groups: RuntimeDynamicsGroupStatus[]
+dynamics_colliders: RuntimeDynamicsColliderStatus[]
+dynamics_constraint_refs: RuntimeDynamicsConstraintRefStatus[]
 ```
 
 `bone_collider_source` は v1 では `"off"` / `"auto"` のみでよい。将来 VRM collider 読み込みを足す時に値を拡張する。
+`dynamics_*` は renderer が正規化後に保持している runtime dynamics group / collider / contact / constraint ref の件数であり、raw `.unavatar` `dynamics` entry 数ではない。bounded list は Supervisor diagnostics pass-through でも同じ JSON field として扱う。`dynamics_enabled_group_count` は wardrobe / action 適用後に solver 対象として残っている group 数、`dynamics_source_enabled_group_count` は authored default、`dynamics_enabled_override_count` は runtime state override 数。limit / grabbing / posing は metadata count であり、stretch / interaction 挙動の solver 反映を意味しない。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
+`.unavatar` / VRC PhysBone source collider は import 時に local sphere / capsule collider として正規化し、SpringBone solver と debug draw の collider list に結合する。`insideBounds` collider は外側へ押し出す collider ではなく、tail を collider 内側へ留める制約として近似する。
 
 Diagnostics には profile 値、生成 collider 数、part ごとの有効/無効と scale を出す。
 

@@ -1,8 +1,7 @@
 //! §9.4 manifest ＋ stdio JSON-RPC 子プロセスで [`AvatarExporter`] を満たすアダプタ（`IoRegistry` 接続用）。
 
 use std::{
-	collections::VecDeque,
-	fmt, fs, io,
+	fmt, io,
 	path::{Path, PathBuf},
 	process::Command,
 };
@@ -14,8 +13,8 @@ use un_avatar_io::{
 
 use crate::manifest::{load_manifest, PluginManifest};
 use crate::stdio_importer::{
-	bundle_dir_from_manifest, check_protocol, plugin_child_uses_bundle_cwd_from_env, plugin_discovery_max_depth_from_env,
-	registration_origin_label, resolve_plugin_executable, should_skip_plugin_search_dir,
+	bundle_dir_from_manifest, check_protocol, plugin_child_uses_bundle_cwd_from_env, register_stdio_plugins_from_root,
+	registration_origin_label, resolve_plugin_executable,
 };
 use crate::stdio_rpc::{rpc_handshake_timeout_from_env, rpc_import_timeout_from_env, HandshakeError, PluginChild};
 
@@ -87,6 +86,10 @@ pub struct StdioJsonRpcExporter {
 }
 
 impl StdioJsonRpcExporter {
+	pub fn format_descriptor(&self) -> &FormatDescriptor {
+		&self.descriptor
+	}
+
 	/// manifest ファイルのパスから構築する。
 	pub fn from_manifest_file(manifest_path: &Path) -> Result<Self, StdioExporterError> {
 		let m = load_manifest(manifest_path)?;
@@ -169,9 +172,9 @@ fn export_err_handshake(e: HandshakeError) -> ExportError {
 /// 既に同じ `FormatId` の exporter がある状態でさらに登録するとき、**stderr に警告**を出す（レジストリの `exporter_by_id` は先に登録された方だけを返す）。
 pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegistry, dir: &Path) -> io::Result<usize> {
 	let mut n = 0;
-	for p in crate::manifest::discover_manifests_in_dir(dir)? {
+	if let Some(p) = crate::manifest::discover_manifest_in_dir(dir)? {
 		if let Ok(exp) = StdioJsonRpcExporter::from_manifest_file(&p) {
-			let new_desc = exp.descriptor();
+			let new_desc = exp.format_descriptor();
 			if let Some(existing) = reg.exporter_by_id(&new_desc.id) {
 				eprintln!(
 					"un-avatar-plugin-host: warning: duplicate exporter FormatId `{}` \
@@ -179,7 +182,7 @@ pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 					 `exporter_by_id` / first-match tie-breaks use the earlier registration only.",
 					new_desc.id.0,
 					registration_origin_label(&existing.descriptor()),
-					registration_origin_label(&new_desc),
+					registration_origin_label(new_desc),
 					p.display()
 				);
 			}
@@ -192,46 +195,7 @@ pub fn register_stdio_exporters_from_manifest_dir(reg: &mut un_avatar_io::IoRegi
 
 /// [`crate::stdio_importer::register_stdio_importers_from_plugin_root`] と同じ探索規則で stdio exporter を登録する。
 pub fn register_stdio_exporters_from_plugin_root(reg: &mut un_avatar_io::IoRegistry, root: &Path) -> io::Result<usize> {
-	let mut n = register_stdio_exporters_from_manifest_dir(reg, root)?;
-	if n > 0 {
-		return Ok(n);
-	}
-	if !root.is_dir() {
-		return Ok(0);
-	}
-	let max_depth = plugin_discovery_max_depth_from_env();
-	let mut q = VecDeque::new();
-	for entry in fs::read_dir(root)? {
-		let path = entry?.path();
-		if path.is_dir() {
-			let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-			if should_skip_plugin_search_dir(name) {
-				continue;
-			}
-			q.push_back((path, 1usize));
-		}
-	}
-	while let Some((dir, depth)) = q.pop_front() {
-		if depth > max_depth {
-			continue;
-		}
-		let added = register_stdio_exporters_from_manifest_dir(reg, &dir)?;
-		n += added;
-		if added > 0 {
-			continue;
-		}
-		for entry in fs::read_dir(&dir)? {
-			let path = entry?.path();
-			if path.is_dir() {
-				let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-				if should_skip_plugin_search_dir(name) {
-					continue;
-				}
-				q.push_back((path, depth + 1));
-			}
-		}
-	}
-	Ok(n)
+	register_stdio_plugins_from_root(root, |dir| register_stdio_exporters_from_manifest_dir(reg, dir))
 }
 
 #[cfg(test)]

@@ -207,18 +207,27 @@ fn message_to_event(msg: OscMessage) -> Option<VmcEvent> {
 	}
 }
 
-fn flatten_to_messages(packet: OscPacket) -> Vec<OscMessage> {
+fn push_events_from_packet(packet: OscPacket, events: &mut Vec<VmcEvent>) {
 	match packet {
-		OscPacket::Message(m) => vec![m],
-		OscPacket::Bundle(b) => b.content.into_iter().flat_map(flatten_to_messages).collect(),
+		OscPacket::Message(message) => {
+			if let Some(event) = message_to_event(message) {
+				events.push(event);
+			}
+		}
+		OscPacket::Bundle(bundle) => {
+			for packet in bundle.content {
+				push_events_from_packet(packet, events);
+			}
+		}
 	}
 }
 
 /// 1 つの UDP ダタグラム（OSC メッセージまたは bundle）を Marionette 向けイベントに展開する。
 pub fn decode_vmcp_osc_bytes(buf: &[u8]) -> Result<Vec<VmcEvent>, VmcDecodeError> {
 	let (_rem, packet) = rosc::decoder::decode_udp(buf).map_err(|e| VmcDecodeError::Osc(e.to_string()))?;
-	let messages = flatten_to_messages(packet);
-	Ok(messages.into_iter().filter_map(message_to_event).collect())
+	let mut events = Vec::new();
+	push_events_from_packet(packet, &mut events);
+	Ok(events)
 }
 
 /// 送信側が `Chest_LeftArm` やパス付き文字列を使う場合に最後のセグメントだけを見る。
@@ -348,9 +357,9 @@ fn vmc_finger_bone_route(name: &str) -> Option<(VmcHandSide, Finger, usize)> {
 }
 
 fn hand_motion_from_vmc_finger_bones(bones: &BTreeMap<String, BonePoseLocal>, side: VmcHandSide) -> Option<HandMotion> {
-	let mut finger_poses = Vec::new();
+	let mut finger_poses = Vec::with_capacity(5);
 	for finger in [Finger::Thumb, Finger::Index, Finger::Middle, Finger::Ring, Finger::Little] {
-		let mut joints: Vec<Option<TransformSample>> = vec![None, None, None];
+		let mut joints = [None, None, None];
 		for (name, pose) in bones {
 			let Some((bone_side, bone_finger, joint_index)) = vmc_finger_bone_route(name) else {
 				continue;

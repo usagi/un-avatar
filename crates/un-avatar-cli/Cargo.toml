@@ -19,7 +19,6 @@ serde_json = { workspace = true }
 un-avatar-core = { path = "../un-avatar-core" }
 un-avatar-io = { path = "../un-avatar-io" }
 un-avatar-io-gltf = { path = "../un-avatar-io-gltf" }
-un-avatar-io-una = { path = "../un-avatar-io-una" }
 un-avatar-io-vrm = { path = "../un-avatar-io-vrm" }
 un-avatar-plugin-host = { path = "../un-avatar-plugin-host" }
 un-avatar-skeleton = { path = "../un-avatar-skeleton" }

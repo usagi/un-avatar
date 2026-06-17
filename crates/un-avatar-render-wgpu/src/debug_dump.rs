@@ -9,7 +9,8 @@ fn json_number_f(v: &Value) -> Option<f32> {
 
 /// `--debug-material-dump` 用: スキン本数と、目周り候補マテリアルの UNA / VRM 生情報。
 pub fn log_material_skin_report(doc: &UnaDocument) {
-	let Some(sc) = &doc.scene else {
+	let runtime_model = doc.runtime_model();
+	let Some(sc) = runtime_model.scene() else {
 		eprintln!("[debug-material] scene なし");
 		return;
 	};
@@ -21,7 +22,18 @@ pub fn log_material_skin_report(doc: &UnaDocument) {
 		} else {
 			""
 		};
-		eprintln!("[debug-material] skin[{i}]: joints.len() = {n}{warn}");
+		eprintln!(
+			"[debug-material] skin[{i}]: joints.len() = {n} skeleton_node={:?}{warn}",
+			sk.skeleton_node
+		);
+	}
+	for (i, node) in sc.nodes.iter().enumerate() {
+		if node.probe_anchor_node.is_some() || node.local_bounds.is_some() {
+			eprintln!(
+				"[debug-material] node[{i}] name={:?} probe_anchor_node={:?} local_bounds={:?}",
+				node.name, node.probe_anchor_node, node.local_bounds
+			);
+		}
 	}
 
 	let mtoon_by_mat: Vec<Option<&serde_json::Map<String, Value>>> = doc
@@ -42,14 +54,38 @@ pub fn log_material_skin_report(doc: &UnaDocument) {
 
 	for (mi, mat) in sc.materials.iter().enumerate() {
 		eprintln!(
-			"[debug-material] materials[{mi}] name={:?} shading={:?} alpha_mode={:?} alpha_cutoff={} double_sided={} base_color_factor.a={}",
+			"[debug-material] materials[{mi}] name={:?} shading={:?} alpha_mode={:?} alpha_cutoff={} cull={:?} double_sided={} base_color_factor.a={}",
 			mat.name,
 			mat.shading,
 			mat.alpha_mode,
 			mat.alpha_cutoff,
+			mat.cull_mode,
 			mat.double_sided,
 			mat.base_color_factor[3],
 		);
+		if let Some(unavatar) = mat.unavatar_material.as_ref().and_then(|v| v.as_object()) {
+			let source_shader = unavatar.get("sourceShader").and_then(Value::as_str);
+			let family = unavatar.get("family").and_then(Value::as_str);
+			let render_queue = unavatar.get("renderQueue").and_then(json_number_f);
+			eprintln!(
+				"  UN_avatar_material: sourceShader={:?} family={:?} renderQueue={:?}",
+				source_shader, family, render_queue
+			);
+			if let Some(fp) = unavatar.get("floatParams").and_then(Value::as_object) {
+				let cutoff = fp.get("_Cutoff").or_else(|| fp.get("_AlphaCutoff")).and_then(json_number_f);
+				let cull = fp.get("_Cull").or_else(|| fp.get("_CullMode")).and_then(json_number_f);
+				let zwrite = fp.get("_ZWrite").or_else(|| fp.get("_ZWriteMode")).and_then(json_number_f);
+				let use_shadow = fp.get("_UseShadow").and_then(json_number_f);
+				let use_matcap = fp.get("_UseMatCap").and_then(json_number_f);
+				let use_rim = fp.get("_UseRim").and_then(json_number_f);
+				let use_emission = fp.get("_UseEmission").and_then(json_number_f);
+				let outline_width = fp.get("_OutlineWidth").and_then(json_number_f);
+				eprintln!(
+					"  UN_avatar floatParams: _Cutoff={:?} _Cull/_CullMode={:?} _ZWrite/_ZWriteMode={:?} _UseShadow={:?} _UseMatCap={:?} _UseRim={:?} _UseEmission={:?} _OutlineWidth={:?}",
+					cutoff, cull, zwrite, use_shadow, use_matcap, use_rim, use_emission, outline_width
+				);
+			}
+		}
 		if let Some(raw) = mtoon_by_mat.get(mi).copied().flatten() {
 			if let Some(fp) = raw.get("floatProperties").and_then(|x| x.as_object()) {
 				let bm = fp.get("_BlendMode").and_then(json_number_f);

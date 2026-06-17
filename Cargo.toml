@@ -12,7 +12,7 @@ members = [
  "crates/un-avatar-io",
  "crates/un-avatar-io-gltf",
  "crates/un-avatar-io-vrm",
- "crates/un-avatar-io-una",
+ "crates/un-avatar-optimizer",
  "crates/un-avatar-plugin-host",
  "plugins/sample-io-plugin",
  "crates/un-avatar-cli",
@@ -22,14 +22,14 @@ default-members = ["apps/un-avatar-supervisor/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 authors = ["usagi / USAGI.NETWORK"]
 license = "MIT"
 repository = "https://github.com/usagi/un-avatar"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.dependencies]
 # https://crates.io/crates/un-motion-frame / un-motion-frame-zenoh (registry で統一)

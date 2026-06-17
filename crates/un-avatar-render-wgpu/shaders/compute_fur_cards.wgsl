@@ -1,0 +1,350 @@
+// Compute Fur Cards generator.
+//
+// This is the first GPU-side skeleton: one deterministic card per source
+// triangle. Density allocation, texture-driven length/mask/vector sampling,
+// and animated physics will be layered onto this interface.
+
+struct ComputeFurCardsParams {
+	source_triangle_count: u32,
+	card_count: u32,
+	max_generated_vertices: u32,
+	max_generated_indices: u32,
+	cards_per_triangle: u32,
+	_seed: u32,
+	randomize: f32,
+	feature_flags: u32,
+	fur_length: f32,
+	card_width: f32,
+	root_offset: f32,
+	gravity: f32,
+	cutout_length: f32,
+	_pad2: u32,
+	_pad3: u32,
+	_pad4: u32,
+	direction: vec4<f32>,
+	main_uv: vec4<f32>,
+	model: mat4x4<f32>,
+	inv_model: mat4x4<f32>,
+}
+
+const COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX: u32 = 1u;
+const COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR: u32 = 2u;
+
+struct ComputeFurCardsSourceVertex {
+	position: vec4<f32>,
+	normal: vec4<f32>,
+	tangent: vec4<f32>,
+	uv: vec4<f32>,
+	color: vec4<f32>,
+	joints: vec4<u32>,
+	weights: vec4<f32>,
+}
+
+struct ComputeFurCardsCardSource {
+	indices: vec4<u32>,
+	sample_index: u32,
+	_pad0: u32,
+	_pad1: u32,
+	_pad2: u32,
+}
+
+struct ComputeFurCardsGeneratedVertex {
+	position_layer: vec4<f32>,
+	normal_side: vec4<f32>,
+	uv: vec2<f32>,
+	alpha: f32,
+	seed: u32,
+	root_position: vec4<f32>,
+	pre_position: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> params: ComputeFurCardsParams;
+@group(0) @binding(1) var<storage, read> source_vertices: array<ComputeFurCardsSourceVertex>;
+@group(0) @binding(2) var<storage, read> card_sources: array<ComputeFurCardsCardSource>;
+@group(0) @binding(3) var<storage, read_write> generated_vertices: array<ComputeFurCardsGeneratedVertex>;
+@group(0) @binding(4) var<storage, read_write> generated_indices: array<u32>;
+@group(0) @binding(5) var fur_vector_tex: texture_2d<f32>;
+@group(0) @binding(6) var fur_length_mask_tex: texture_2d<f32>;
+@group(0) @binding(7) var fur_noise_mask_tex: texture_2d<f32>;
+@group(0) @binding(8) var fur_mask_tex: texture_2d<f32>;
+@group(0) @binding(9) var fur_samp: sampler;
+
+fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+	let len2 = dot(v, v);
+	if len2 <= 0.0000001 {
+		return fallback;
+	}
+	return v * inverseSqrt(len2);
+}
+
+fn make_card_side(normal: vec3<f32>, tangent: vec3<f32>) -> vec3<f32> {
+	let tangent_side = tangent - normal * dot(tangent, normal);
+	if dot(tangent_side, tangent_side) > 0.0000001 {
+		return safe_normalize(tangent_side, vec3<f32>(1.0, 0.0, 0.0));
+	}
+	let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(normal.y) < 0.999);
+	return safe_normalize(cross(axis, normal), vec3<f32>(1.0, 0.0, 0.0));
+}
+
+fn unpack_fur_vector_map(texel: vec4<f32>, scale: f32) -> vec3<f32> {
+	var n = vec3<f32>(texel.a * texel.r, texel.g, 1.0) * 2.0 - vec3<f32>(1.0);
+	n.x = n.x * scale;
+	n.y = n.y * scale;
+	if dot(n, n) < 0.000001 {
+		return vec3<f32>(0.0, 0.0, 1.0);
+	}
+	n.z = sqrt(max(1.0 - min(dot(n.xy, n.xy), 1.0), 0.0));
+	return n;
+}
+
+fn lil_blend_normal(dst_normal: vec3<f32>, src_normal: vec3<f32>) -> vec3<f32> {
+	return vec3<f32>(dst_normal.xy + src_normal.xy, dst_normal.z * src_normal.z);
+}
+
+fn main_uv(uv0: vec2<f32>) -> vec2<f32> {
+	return uv0 * params.main_uv.xy + params.main_uv.zw;
+}
+
+fn transform_dir_os_to_ws(v: vec3<f32>) -> vec3<f32> {
+	return (params.model * vec4<f32>(v, 0.0)).xyz;
+}
+
+fn transform_position_ws_to_os(v: vec3<f32>) -> vec3<f32> {
+	return (params.inv_model * vec4<f32>(v, 1.0)).xyz;
+}
+
+fn interpolate3(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> vec3<f32> {
+	return (a + b + c) * (1.0 / 3.0);
+}
+
+fn interpolate2(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>) -> vec2<f32> {
+	return (a + b + c) * (1.0 / 3.0);
+}
+
+fn hash_u32(x_in: u32) -> u32 {
+	var x = x_in;
+	x = x ^ (x >> 16u);
+	x = x * 2146121005u;
+	x = x ^ (x >> 15u);
+	x = x * 2246822507u;
+	x = x ^ (x >> 16u);
+	return x;
+}
+
+fn unit_from_hash(seed: u32) -> f32 {
+	let value = hash_u32(seed) >> 8u;
+	return (f32(value) + 0.5) * (1.0 / 16777216.0);
+}
+
+fn radical_inverse_vdc(bits_in: u32) -> f32 {
+	var bits = ((bits_in & 0x55555555u) << 1u) | ((bits_in & 0xAAAAAAAAu) >> 1u);
+	bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+	bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+	bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+	bits = (bits << 16u) | (bits >> 16u);
+	return f32(bits) * 2.3283064365386963e-10;
+}
+
+fn barycentric_sample(triangle_seed: u32, sample_index: u32) -> vec3<f32> {
+	let seed = hash_u32(triangle_seed ^ sample_index * 2654435769u);
+	let jitter = unit_from_hash(seed);
+	let u = fract((f32(sample_index) + jitter) * 0.61803398875);
+	let v = radical_inverse_vdc(sample_index ^ seed);
+	let su = sqrt(u);
+	return vec3<f32>(1.0 - su, su * (1.0 - v), su * v);
+}
+
+fn liltoon_fur_barycentric_point(point_index: u32, segment_count: u32) -> vec3<f32> {
+	if point_index == 0u {
+		return vec3<f32>(1.0, 0.0, 0.0);
+	}
+	if segment_count <= 3u {
+		if point_index == 1u {
+			return vec3<f32>(0.0, 1.0, 0.0);
+		}
+		if point_index == 2u {
+			return vec3<f32>(0.0, 0.0, 1.0);
+		}
+		return vec3<f32>(1.0, 0.0, 0.0);
+	}
+	if point_index == 1u {
+		return vec3<f32>(0.0, 0.5, 0.5);
+	}
+	if point_index == 2u {
+		return vec3<f32>(0.0, 1.0, 0.0);
+	}
+	if point_index == 3u {
+		return vec3<f32>(0.5, 0.0, 0.5);
+	}
+	if point_index == 4u {
+		return vec3<f32>(0.0, 0.0, 1.0);
+	}
+	if point_index == 5u {
+		return vec3<f32>(0.5, 0.5, 0.0);
+	}
+	if segment_count <= 6u {
+		return vec3<f32>(1.0, 0.0, 0.0);
+	}
+	if point_index == 6u {
+		return vec3<f32>(1.0 / 6.0, 4.0 / 6.0, 1.0 / 6.0);
+	}
+	if point_index == 7u {
+		return vec3<f32>(0.0, 0.5, 0.5);
+	}
+	if point_index == 8u {
+		return vec3<f32>(1.0 / 6.0, 1.0 / 6.0, 4.0 / 6.0);
+	}
+	if point_index == 9u {
+		return vec3<f32>(0.5, 0.0, 0.5);
+	}
+	if point_index == 10u {
+		return vec3<f32>(4.0 / 6.0, 1.0 / 6.0, 1.0 / 6.0);
+	}
+	if point_index == 11u {
+		return vec3<f32>(0.5, 0.5, 0.0);
+	}
+	return vec3<f32>(1.0, 0.0, 0.0);
+}
+
+fn interpolate3b(a: vec3<f32>, b: vec3<f32>, c: vec3<f32>, bary: vec3<f32>) -> vec3<f32> {
+	return a * bary.x + b * bary.y + c * bary.z;
+}
+
+fn interpolate2b(a: vec2<f32>, b: vec2<f32>, c: vec2<f32>, bary: vec3<f32>) -> vec2<f32> {
+	return a * bary.x + b * bary.y + c * bary.z;
+}
+
+fn liltoon_vertex_noise(vertex_ids: vec3<u32>, weight: vec3<u32>) -> vec3<f32> {
+	let seed = vertex_ids.x * weight.x + vertex_ids.y * weight.y + vertex_ids.z * weight.z;
+	let n = vec3<u32>(seed) * vec3<u32>(1597334677u, 3812015801u, 2912667907u);
+	return safe_normalize(vec3<f32>(n) * (2.0 / 4294967295.0) - vec3<f32>(1.0), vec3<f32>(0.0, 1.0, 0.0));
+}
+
+fn fur_vector_for_vertex(v: ComputeFurCardsSourceVertex, random_dir: vec3<f32>, cutout_scale: f32) -> vec3<f32> {
+	let normal = safe_normalize(v.normal.xyz, vec3<f32>(0.0, 1.0, 0.0));
+	let tangent = v.tangent.xyz;
+	let side_dir = make_card_side(normal, tangent);
+	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0);
+	let bitangent = safe_normalize(cross(normal, side_dir), vec3<f32>(0.0, 0.0, 1.0)) * tangent_sign;
+	var authored_vector = params.direction.xyz + vec3<f32>(0.0, 0.0, 0.001);
+	if (params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_VERTEX_COLOR_FUR_VECTOR) != 0u {
+		authored_vector = lil_blend_normal(authored_vector, v.color.xyz);
+	}
+	if (params.feature_flags & COMPUTE_FUR_CARDS_FEATURE_FUR_VECTOR_TEX) != 0u {
+		let vector_tex = unpack_fur_vector_map(textureSampleLevel(fur_vector_tex, fur_samp, main_uv(v.uv.xy), 0.0), params.direction.w);
+		authored_vector = lil_blend_normal(authored_vector, vector_tex);
+	}
+	var fur_vector = side_dir * authored_vector.x + bitangent * authored_vector.y + normal * authored_vector.z;
+	fur_vector = safe_normalize(fur_vector, normal) * max(params.fur_length, 0.0);
+	fur_vector = fur_vector * cutout_scale;
+	fur_vector = transform_dir_os_to_ws(fur_vector);
+	let fur_length = length(fur_vector);
+	fur_vector.y = fur_vector.y - params.gravity * fur_length;
+	fur_vector = fur_vector + random_dir * max(params.fur_length, 0.0) * clamp(params.randomize, 0.0, 1.0);
+	let length_mask = clamp(textureSampleLevel(fur_length_mask_tex, fur_samp, main_uv(v.uv.xy), 0.0).r, 0.0, 1.0);
+	fur_vector = fur_vector * length_mask;
+	return fur_vector;
+}
+
+fn fur_tip_for_sample(
+	v0: ComputeFurCardsSourceVertex,
+	v1: ComputeFurCardsSourceVertex,
+	v2: ComputeFurCardsSourceVertex,
+	bary: vec3<f32>,
+	seed: u32,
+	vertex_ids: vec3<u32>,
+) -> ComputeFurCardsGeneratedVertex {
+	let normal = safe_normalize(interpolate3b(v0.normal.xyz, v1.normal.xyz, v2.normal.xyz, bary), vec3<f32>(0.0, 1.0, 0.0));
+	let root = interpolate3b(v0.position.xyz, v1.position.xyz, v2.position.xyz, bary);
+	let root_ws = (params.model * vec4<f32>(root, 1.0)).xyz;
+	let uv = interpolate2b(v0.uv.xy, v1.uv.xy, v2.uv.xy, bary);
+	let random0 = liltoon_vertex_noise(vertex_ids, vec3<u32>(3u, 1u, 1u));
+	let random1 = liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 3u, 1u));
+	let random2 = liltoon_vertex_noise(vertex_ids, vec3<u32>(1u, 1u, 3u));
+	let fv0 = fur_vector_for_vertex(v0, random0, 1.0);
+	let fv1 = fur_vector_for_vertex(v1, random1, 1.0);
+	let fv2 = fur_vector_for_vertex(v2, random2, 1.0);
+	let fur_vector = interpolate3b(fv0, fv1, fv2, bary);
+	let cutout_scale = max(params.cutout_length, 0.0);
+	let pre_fv0 = fur_vector_for_vertex(v0, random0, cutout_scale);
+	let pre_fv1 = fur_vector_for_vertex(v1, random1, cutout_scale);
+	let pre_fv2 = fur_vector_for_vertex(v2, random2, cutout_scale);
+	let pre_fur_vector = interpolate3b(pre_fv0, pre_fv1, pre_fv2, bary);
+	return ComputeFurCardsGeneratedVertex(
+		vec4<f32>(transform_position_ws_to_os(root_ws + fur_vector), 1.0),
+		vec4<f32>(normal, 0.0),
+		uv,
+		1.0,
+		seed,
+		vec4<f32>(root, 1.0),
+		vec4<f32>(transform_position_ws_to_os(root_ws + pre_fur_vector), 1.0),
+	);
+}
+
+fn fur_root_for_tip(tip: ComputeFurCardsGeneratedVertex, v0: ComputeFurCardsSourceVertex, v1: ComputeFurCardsSourceVertex, v2: ComputeFurCardsSourceVertex, bary: vec3<f32>, seed: u32) -> ComputeFurCardsGeneratedVertex {
+	let normal = safe_normalize(interpolate3b(v0.normal.xyz, v1.normal.xyz, v2.normal.xyz, bary), vec3<f32>(0.0, 1.0, 0.0));
+	let root = interpolate3b(v0.position.xyz, v1.position.xyz, v2.position.xyz, bary);
+	return ComputeFurCardsGeneratedVertex(
+		vec4<f32>(root, 0.0),
+		vec4<f32>(normal, 0.0),
+		tip.uv,
+		tip.alpha,
+		seed,
+		vec4<f32>(root, 1.0),
+		vec4<f32>(root, 1.0),
+	);
+}
+
+fn write_vertex(vertex_index: u32, center_position: vec3<f32>, layer: f32, normal: vec3<f32>, signed_half_width: f32, uv: vec2<f32>, alpha: f32, seed: u32) {
+	generated_vertices[vertex_index] = ComputeFurCardsGeneratedVertex(
+		vec4<f32>(center_position, layer),
+		vec4<f32>(normal, signed_half_width),
+		uv,
+		alpha,
+		seed,
+		vec4<f32>(center_position, 1.0),
+		vec4<f32>(center_position, 1.0),
+	);
+}
+
+@compute @workgroup_size(64)
+fn compute_fur_cards_generate(@builtin(global_invocation_id) gid: vec3<u32>) {
+	let card_index = gid.x;
+	if card_index >= params.card_count {
+		return;
+	}
+	let card_source = card_sources[card_index];
+	let sample_index = card_source.sample_index;
+
+	let vertex_base = card_index * 4u;
+	let index_base = card_index * 6u;
+	if vertex_base + 3u >= params.max_generated_vertices || index_base + 5u >= params.max_generated_indices {
+		return;
+	}
+
+	let tri = card_source.indices;
+	let v0 = source_vertices[tri.x];
+	let v1 = source_vertices[tri.y];
+	let v2 = source_vertices[tri.z];
+
+	let segment_count = max(params.cards_per_triangle, 1u);
+	let local_segment = sample_index % segment_count;
+	let seed = (tri.x * 3u + tri.y * 5u + tri.z * 7u + local_segment * 11u) * 747796405u + 277803737u;
+	let bary = liltoon_fur_barycentric_point(local_segment, segment_count);
+	let next_seed = seed ^ 0x9E3779B9u;
+	let next_bary = liltoon_fur_barycentric_point(local_segment + 1u, segment_count);
+	let vertex_ids = tri.xyz;
+	let tip0 = fur_tip_for_sample(v0, v1, v2, bary, seed, vertex_ids);
+	let tip1 = fur_tip_for_sample(v0, v1, v2, next_bary, next_seed, vertex_ids);
+	generated_vertices[vertex_base + 0u] = fur_root_for_tip(tip0, v0, v1, v2, bary, seed);
+	generated_vertices[vertex_base + 1u] = tip0;
+	generated_vertices[vertex_base + 2u] = fur_root_for_tip(tip1, v0, v1, v2, next_bary, next_seed);
+	generated_vertices[vertex_base + 3u] = tip1;
+
+	generated_indices[index_base + 0u] = vertex_base + 0u;
+	generated_indices[index_base + 1u] = vertex_base + 1u;
+	generated_indices[index_base + 2u] = vertex_base + 2u;
+	generated_indices[index_base + 3u] = vertex_base + 2u;
+	generated_indices[index_base + 4u] = vertex_base + 1u;
+	generated_indices[index_base + 5u] = vertex_base + 3u;
+}

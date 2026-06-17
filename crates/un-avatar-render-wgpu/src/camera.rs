@@ -40,7 +40,7 @@ impl Default for OrbitCamera {
 impl OrbitCamera {
 	const MIN_LATITUDE: f32 = -1.52;
 	const MAX_LATITUDE: f32 = 1.52;
-	const MIN_RADIUS: f32 = 0.35;
+	const MIN_RADIUS: f32 = 0.03;
 	const MAX_RADIUS: f32 = 30.0;
 
 	pub(crate) fn position(self) -> Vec3 {
@@ -128,5 +128,16 @@ mod tests {
 		let pos = camera.position();
 		assert!(pos.z > camera.target.z);
 		assert!(pos.abs_diff_eq(INITIAL_CAMERA_POS_POSITIVE_Z, 1e-5));
+	}
+
+	#[test]
+	fn orbit_camera_allows_close_small_prop_inspection() {
+		let mut camera = OrbitCamera::default();
+		camera.set_orbit(None, None, Some(0.01));
+		assert_eq!(camera.radius, OrbitCamera::MIN_RADIUS);
+
+		camera.radius = 0.05;
+		camera.zoom(10.0);
+		assert_eq!(camera.radius, OrbitCamera::MIN_RADIUS);
 	}
 }

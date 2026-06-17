@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+half = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 un-avatar-types = { path = "../un-avatar-types" }

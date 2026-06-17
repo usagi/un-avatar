@@ -1,0 +1,58 @@
+{
+  "author": "contact@usagi.network",
+  "id": "network.usagi.un-avatar",
+  "name": "UN Avatar Packages",
+  "packages": {
+    "network.usagi.un-avatar.unity-exporter": {
+      "versions": {
+        "2.0.0": {
+          "author": {
+            "email": "contact@usagi.network",
+            "name": "USAGI.NETWORK",
+            "url": "https://github.com/usagi/un-avatar"
+          },
+          "description": "Unity Editor exporter for U.N. Avatar .unavatar GLB-compatible packages.",
+          "displayName": "U.N. Avatar Unity Exporter",
+          "keywords": [
+            "avatar",
+            "gltf",
+            "glb",
+            "vrchat",
+            "modular-avatar",
+            "unavatar"
+          ],
+          "license": "MIT",
+          "name": "network.usagi.un-avatar.unity-exporter",
+          "unity": "2022.3",
+          "url": "https://github.com/usagi/un-avatar/releases/download/2.0.0/network.usagi.un-avatar.unity-exporter-2.0.0.zip",
+          "version": "2.0.0",
+          "zipSHA256": "f6c6e7e93814c4cc947cac66a3784d7feff6d888db9e55bf39978249624c71af"
+        },
+        "2.0.0-beta-2": {
+          "author": {
+            "email": "contact@usagi.network",
+            "name": "USAGI.NETWORK",
+            "url": "https://github.com/usagi/un-avatar"
+          },
+          "description": "Unity Editor exporter for U.N. Avatar .unavatar GLB-compatible packages.",
+          "displayName": "U.N. Avatar Unity Exporter",
+          "keywords": [
+            "avatar",
+            "gltf",
+            "glb",
+            "vrchat",
+            "modular-avatar",
+            "unavatar"
+          ],
+          "license": "MIT",
+          "name": "network.usagi.un-avatar.unity-exporter",
+          "unity": "2022.3",
+          "url": "https://github.com/usagi/un-avatar/releases/download/2.0.0-beta-2/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip",
+          "version": "2.0.0-beta-2",
+          "zipSHA256": "7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1"
+        }
+      }
+    }
+  },
+  "url": "https://usagi.github.io/un-avatar/vcc/index.json"
+}

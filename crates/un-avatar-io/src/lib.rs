@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+	collections::BTreeMap,
 	path::{Path, PathBuf},
 	sync::Arc,
 };
@@ -125,9 +126,21 @@ pub enum ExportOutput {
 	Path(PathBuf),
 }
 
+pub fn path_has_format_extension(path: &str, extension: &str) -> bool {
+	if extension.is_empty() {
+		return path.ends_with('.');
+	}
+	path.len() > extension.len() && path.as_bytes().get(path.len() - extension.len() - 1) == Some(&b'.') && path.ends_with(extension)
+}
+
 pub struct ImportContext {
 	pub asset_root: PathBuf,
 	pub temp_dir: PathBuf,
+	pub initial_wardrobe_set: Option<String>,
+	pub enabled_animator_action_ids: Vec<String>,
+	pub animator_action_values: BTreeMap<String, f32>,
+	pub defer_initial_image_decode: bool,
+	pub profile: bool,
 }
 
 impl ImportContext {
@@ -135,6 +148,11 @@ impl ImportContext {
 		Self {
 			asset_root: PathBuf::from("."),
 			temp_dir: PathBuf::from("."),
+			initial_wardrobe_set: None,
+			enabled_animator_action_ids: Vec::new(),
+			animator_action_values: BTreeMap::new(),
+			defer_initial_image_decode: false,
+			profile: false,
 		}
 	}
 }
@@ -243,20 +261,23 @@ impl IoRegistry {
 	}
 
 	pub fn importer_descriptors(&self) -> Vec<FormatDescriptor> {
-		self.importers.iter().map(|i| i.descriptor()).collect()
+		let mut descriptors = Vec::with_capacity(self.importers.len());
+		descriptors.extend(self.importers.iter().map(|i| i.descriptor()));
+		descriptors
 	}
 
 	pub fn exporter_descriptors(&self) -> Vec<FormatDescriptor> {
-		self.exporters.iter().map(|e| e.descriptor()).collect()
+		let mut descriptors = Vec::with_capacity(self.exporters.len());
+		descriptors.extend(self.exporters.iter().map(|e| e.descriptor()));
+		descriptors
 	}
 	pub fn probe_importers(&self, probe: &ImportProbe) -> Vec<(FormatId, ImportProbeResult)> {
-		self.importers
-			.iter()
-			.map(|i| {
-				let desc = i.descriptor();
-				(desc.id, i.probe(probe))
-			})
-			.collect()
+		let mut results = Vec::with_capacity(self.importers.len());
+		results.extend(self.importers.iter().map(|i| {
+			let desc = i.descriptor();
+			(desc.id, i.probe(probe))
+		}));
+		results
 	}
 
 	/// `confidence` が最大の importer。0 のみなら `None`。同点では**先に登録**されたものを残す。
@@ -306,8 +327,7 @@ impl IoRegistry {
 			}
 			let desc = e.descriptor();
 			for ext in &desc.extensions {
-				let suffix = format!(".{ext}");
-				if path_str.ends_with(&suffix) {
+				if path_has_format_extension(&path_str, ext) {
 					return Some(e.as_ref());
 				}
 			}
@@ -395,6 +415,14 @@ mod tests {
 		assert!(reg.importer_by_id(&id).is_some());
 		assert!(reg.exporter_by_id(&id).is_some());
 		assert!(reg.importer_by_id(&FormatId::new("io.none")).is_none());
+	}
+
+	#[test]
+	fn path_extension_match_requires_dot_boundary() {
+		assert!(path_has_format_extension("out.dummy", "dummy"));
+		assert!(path_has_format_extension("out.una.d", "una.d"));
+		assert!(!path_has_format_extension("out.notdummy", "dummy"));
+		assert!(!path_has_format_extension("dummy", "dummy"));
 	}
 
 	#[test]

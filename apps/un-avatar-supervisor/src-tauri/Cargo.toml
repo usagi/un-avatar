@@ -42,13 +42,26 @@ tauri = { version = "2.11.1", features = [
  "image-png",
 ] }
 tauri-plugin-notification = "2.3.3"
+tauri-plugin-single-instance = "2.4.2"
 toml = { workspace = true }
 un-avatar-core = { path = "../../../crates/un-avatar-core" }
 un-avatar-io-vrm = { path = "../../../crates/un-avatar-io-vrm" }
+midir = "0.10"
 # i18n: shared crate `un-i18n` (<https://github.com/usagi/un-common>). Pin `rev` on release branches.
 un-i18n = { git = "https://github.com/usagi/un-common.git", branch = "main", package = "un-i18n" }
 rust-i18n = "4"
 tracing = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = [
+ "Win32_Foundation",
+ "Win32_Storage_EnhancedStorage",
+ "Win32_System_Com",
+ "Win32_System_Com_StructuredStorage",
+ "Win32_UI_Shell",
+ "Win32_UI_Shell_Common",
+ "Win32_UI_Shell_PropertiesSystem",
+] }
 
 [lints]
 workspace = true

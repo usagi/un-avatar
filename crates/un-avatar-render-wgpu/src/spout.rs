@@ -83,7 +83,7 @@ impl SpoutCapture {
 		unreachable!("Spout スタブ")
 	}
 
-	pub fn send_mapped_rgba(&mut self, _device: &wgpu::Device) {
+	pub fn send_mapped_rgba(&mut self, _device: &wgpu::Device) -> bool {
 		unreachable!("Spout スタブ")
 	}
 
@@ -91,7 +91,14 @@ impl SpoutCapture {
 		unreachable!("Spout スタブ")
 	}
 
-	pub fn encode_blit(&self, _encoder: &mut wgpu::CommandEncoder, _swap_view: &wgpu::TextureView, _clear: wgpu::Color) {
+	pub fn encode_blit(
+		&self,
+		_encoder: &mut wgpu::CommandEncoder,
+		_swap_view: &wgpu::TextureView,
+		_target_width: u32,
+		_target_height: u32,
+		_clear: wgpu::Color,
+	) {
 		unreachable!("Spout スタブ")
 	}
 }

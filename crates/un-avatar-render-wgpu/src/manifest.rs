@@ -3,12 +3,11 @@ use std::{fs, net::SocketAddr, path::Path};
 use serde::Deserialize;
 
 use crate::{
-	mesh_pass::{
-		AvatarAmbientOcclusionOptions, AvatarMatcapOptions, AvatarOutlineKind, AvatarOutlinePolicy, AvatarRimPolicy, AvatarSpecularOptions,
-	},
+	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
-		AvatarWindowOptions, BloomOptions, BloomQuality, ColorGradingLook, ContactShadowOptions, DirectionalLightOptions,
-		EnvironmentColorOptions, EnvironmentLightOptions, PrimaryMotionSource, SsaoOptions,
+		AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality,
+		ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
+		PrimaryMotionSource, SsaoOptions, WardrobeBindingKind, WardrobeBindingOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -24,6 +23,8 @@ pub(crate) struct RendererManifest {
 	pub input_passthrough: Option<bool>,
 	#[serde(alias = "gltf_path", alias = "model_path")]
 	pub avatar_path: Option<std::path::PathBuf>,
+	/// `.unavatar` wardrobe set id. Base は常に import 時に適用し、ここでは追加セットだけを指定する。
+	pub wardrobe_set: Option<String>,
 	#[serde(alias = "window_icon", alias = "icon")]
 	pub icon_path: Option<std::path::PathBuf>,
 	pub background_color: Option<[f64; 3]>,
@@ -32,20 +33,167 @@ pub(crate) struct RendererManifest {
 	pub vmc_address: Option<SocketAddr>,
 	pub vmc_port: Option<u16>,
 	pub motion: Option<MotionManifest>,
+	pub audio_link: Option<AudioLinkManifest>,
 	pub physics: Option<PhysicsManifest>,
-	pub spring_bones: Option<bool>,
 	pub aa: Option<AaMode>,
 	pub render_quality: Option<RenderQualityManifest>,
 	pub environment: Option<EnvironmentManifest>,
 	/// 旧 manifest 互換。新規 profile は `[output.spout2]` を使う。
 	pub spout: Option<SpoutManifest>,
+	/// 旧 v1 profile 互換。新規 profile は `[physics.dynamics] enabled = ...` を使う。
+	pub spring_bones: Option<bool>,
 	pub output: Option<OutputManifest>,
 	pub ipc: Option<IpcManifest>,
 	pub debug: Option<DebugManifest>,
 	pub diagnostics: Option<MeshDiagnosticsManifest>,
 	pub effects: Option<EffectsManifest>,
+	pub animator: Option<AnimatorManifest>,
+	pub wardrobe: Option<WardrobeManifest>,
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
+	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeManifest {
+	pub shortcuts: Option<Vec<WardrobeShortcutManifest>>,
+	pub bindings: Option<Vec<WardrobeBindingManifest>>,
+	pub transition: Option<WardrobeTransitionManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeTransitionManifest {
+	pub billboard_anchor: Option<String>,
+	pub billboard_y_offset_mm: Option<f32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeShortcutManifest {
+	pub set_id: Option<String>,
+	pub shortcut: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct WardrobeBindingManifest {
+	pub set_id: Option<String>,
+	pub kind: Option<String>,
+	pub binding: Option<String>,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
+fn wardrobe_bindings_from_manifest(wardrobe: WardrobeManifest) -> Vec<WardrobeBindingOptions> {
+	let mut out = Vec::new();
+	for shortcut in wardrobe.shortcuts.unwrap_or_default() {
+		let binding = shortcut.shortcut.unwrap_or_default().trim().to_string();
+		if binding.is_empty() {
+			continue;
+		}
+		out.push(WardrobeBindingOptions {
+			set_id: shortcut.set_id.unwrap_or_default().trim().to_string(),
+			kind: WardrobeBindingKind::Keyboard,
+			binding,
+			device: None,
+			channel: None,
+			note: None,
+		});
+	}
+	for binding in wardrobe.bindings.unwrap_or_default() {
+		let kind = match binding
+			.kind
+			.unwrap_or_else(|| "keyboard".to_string())
+			.trim()
+			.to_ascii_lowercase()
+			.as_str()
+		{
+			"keyboard" => WardrobeBindingKind::Keyboard,
+			"midi_note" | "midinote" | "midi note" => WardrobeBindingKind::MidiNote,
+			_ => continue,
+		};
+		let binding_text = binding.binding.unwrap_or_default().trim().to_string();
+		let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+		let note = binding.note.filter(|note| *note <= 127);
+		if kind == WardrobeBindingKind::Keyboard && binding_text.is_empty() {
+			continue;
+		}
+		if kind == WardrobeBindingKind::MidiNote && (channel.is_none() || note.is_none()) {
+			continue;
+		}
+		out.push(WardrobeBindingOptions {
+			set_id: binding.set_id.unwrap_or_default().trim().to_string(),
+			kind,
+			binding: binding_text,
+			device: binding
+				.device
+				.map(|device| device.trim().to_string())
+				.filter(|device| !device.is_empty()),
+			channel,
+			note,
+		});
+	}
+	out
+}
+
+fn normalize_wardrobe_billboard_anchor(value: &str) -> Option<String> {
+	let normalized = value.trim().to_ascii_lowercase();
+	match normalized.as_str() {
+		"head" | "neck" | "spine" => Some(normalized),
+		_ => None,
+	}
+}
+
+impl WardrobeTransitionManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(anchor) = self.billboard_anchor.as_deref().and_then(normalize_wardrobe_billboard_anchor) {
+			opts.wardrobe_billboard_anchor = anchor;
+		}
+		if let Some(offset_mm) = self.billboard_y_offset_mm.filter(|value| value.is_finite()) {
+			opts.wardrobe_billboard_y_offset_m = (offset_mm / 1000.0).clamp(-1.0, 1.0);
+		}
+	}
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorManifest {
+	pub action_ids: Option<Vec<String>>,
+	pub actions: Option<Vec<AnimatorActionManifest>>,
+	pub bindings: Option<Vec<AnimatorBindingManifest>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorActionManifest {
+	pub id: Option<String>,
+	/// off | toggle | one_shot. Unknown values are treated as off.
+	pub mode: Option<String>,
+	/// Optional parameter value to send when activating this action.
+	pub value: Option<f32>,
+	pub transition_curve: Option<String>,
+	pub transition_ms: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct AnimatorBindingManifest {
+	pub action_id: Option<String>,
+	pub kind: Option<String>,
+	pub binding: Option<String>,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct ProfileManifest {
+	pub id: Option<String>,
+	pub display_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -205,10 +353,6 @@ pub(crate) struct AvatarEffectsManifest {
 	pub outline_lighting_mix: Option<f32>,
 	pub outline_roundness: Option<f32>,
 	pub outline: Option<AvatarOutlineManifest>,
-	pub rim: Option<AvatarRimManifest>,
-	pub matcap: Option<AvatarMatcapManifest>,
-	pub specular: Option<AvatarSpecularManifest>,
-	pub ambient_occlusion: Option<AvatarAmbientOcclusionManifest>,
 	pub contact_shadow: Option<ContactShadowManifest>,
 }
 
@@ -236,37 +380,6 @@ pub(crate) struct AvatarOutlineManifest {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarRimManifest {
-	pub policy: Option<String>,
-	pub color: Option<[f32; 3]>,
-	pub intensity: Option<f32>,
-	pub lighting_mix: Option<f32>,
-	pub fresnel_power: Option<f32>,
-	pub lift: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarMatcapManifest {
-	pub scale: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarSpecularManifest {
-	pub enabled: Option<bool>,
-	pub intensity: Option<f32>,
-	pub power: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
-pub(crate) struct AvatarAmbientOcclusionManifest {
-	pub strength: Option<f32>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "snake_case")]
 pub(crate) struct MotionManifest {
 	pub vmc_udp: Option<VmcUdpManifest>,
 	pub unmotion_zenoh: Option<UnmotionZenohManifest>,
@@ -280,9 +393,35 @@ pub(crate) struct MotionManifest {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
+pub(crate) struct AudioLinkManifest {
+	pub source: Option<AudioLinkSource>,
+	pub input_device_id: Option<String>,
+	pub input_device_name_hint: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
 pub(crate) struct PhysicsManifest {
 	pub bone_colliders: Option<BoneCollidersManifest>,
+	pub contacts: Option<ContactsPhysicsManifest>,
+	pub dynamics: Option<DynamicsPhysicsManifest>,
+	/// v1/v2 development-era compatibility. v2 canonical profile schema uses
+	/// `[physics.dynamics.solver]`.
 	pub spring_bone: Option<SpringBonePhysicsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct DynamicsPhysicsManifest {
+	pub enabled: Option<bool>,
+	pub solver: Option<SpringBonePhysicsConfig>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct ContactsPhysicsManifest {
+	pub parameter_emission: Option<bool>,
+	pub parameter_emission_enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -373,10 +512,10 @@ pub(crate) struct DebugManifest {
 	pub show_axes: Option<bool>,
 	/// ボーンベースコライダー debug 表示の初期値（既定 false）。
 	pub show_bone_colliders: Option<bool>,
-	/// MToon outline 描画を完全に無効化する診断 toggle（既定 false）。
+	/// UNToon geometry outline 描画を完全に無効化する診断 toggle（既定 false）。
 	/// 一部の VRM モデルで目周辺に肌色寄りの outline が太く出る現象の切り分け用。
 	pub disable_mtoon_outlines: Option<bool>,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle（既定 false）。
+	/// UNToon rim lighting 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_rim_lighting: Option<bool>,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle（既定 false）。
 	pub force_shading_shift_zero: Option<bool>,
@@ -384,11 +523,11 @@ pub(crate) struct DebugManifest {
 	pub disable_matcap: Option<bool>,
 	/// emissive (`emissive_factor × emissive_tex`) 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_emissive: Option<bool>,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断 toggle（既定 false）。
+	/// UNToon `shade_color × shade_tex` の代わりに base を使う診断 toggle（既定 false）。
 	pub disable_shade_color: Option<bool>,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断 toggle（既定 false）。
 	pub disable_normal_map: Option<bool>,
-	/// fs_mtoon を `base` のみで早期 return する診断 toggle（既定 false）。
+	/// toon path を `base` のみで早期 return する診断 toggle（既定 false）。
 	pub base_texture_only: Option<bool>,
 }
 
@@ -400,6 +539,8 @@ pub(crate) struct MeshDiagnosticsManifest {
 	pub zero_morphs: Option<bool>,
 	pub relax_iris_alpha: Option<bool>,
 	pub skin_legacy_no_inv_mesh: Option<bool>,
+	pub disable_reflection: Option<bool>,
+	pub disable_fur: Option<bool>,
 }
 
 impl RendererManifest {
@@ -418,6 +559,9 @@ impl RendererManifest {
 	}
 
 	pub(crate) fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(profile) = self.profile {
+			profile.apply_to(opts);
+		}
 		if let Some(title) = self.title {
 			opts.title = title;
 		}
@@ -432,6 +576,15 @@ impl RendererManifest {
 		}
 		if let Some(path) = self.avatar_path {
 			opts.gltf_path = Some(path);
+		}
+		if let Some(set_id) = self.wardrobe_set {
+			opts.wardrobe_set = Some(set_id);
+		}
+		if let Some(mut wardrobe) = self.wardrobe {
+			if let Some(transition) = wardrobe.transition.take() {
+				transition.apply_to(opts);
+			}
+			opts.wardrobe_bindings = wardrobe_bindings_from_manifest(wardrobe);
 		}
 		if let Some(path) = self.icon_path {
 			opts.icon_path = Some(path);
@@ -458,11 +611,17 @@ impl RendererManifest {
 		if let Some(motion) = self.motion {
 			motion.apply_to(opts);
 		}
+		if let Some(audio_link) = self.audio_link {
+			audio_link.apply_to(opts);
+		}
+		if let Some(spring_bones) = self.spring_bones {
+			opts.dynamics_enabled = spring_bones;
+		}
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
 		}
-		if let Some(spring_bones) = self.spring_bones {
-			opts.enable_spring_bones = spring_bones;
+		if let Some(animator) = self.animator {
+			animator.apply_to(opts);
 		}
 		if let Some(aa) = self.aa {
 			opts.aa = aa;
@@ -530,6 +689,151 @@ impl RendererManifest {
 			window.apply_to(opts);
 		}
 	}
+}
+
+impl AnimatorManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		let mut ids = self
+			.action_ids
+			.unwrap_or_default()
+			.into_iter()
+			.map(|id| id.trim().to_string())
+			.filter(|id| !id.is_empty())
+			.collect::<Vec<_>>();
+		for action in self.actions.unwrap_or_default() {
+			let mode = action.mode.unwrap_or_else(|| "off".to_string()).to_ascii_lowercase();
+			if mode != "toggle" && mode != "one_shot" {
+				continue;
+			}
+			let Some(id) = action.id.map(|id| id.trim().to_string()).filter(|id| !id.is_empty()) else {
+				continue;
+			};
+			if !ids.iter().any(|existing| existing == &id) {
+				ids.push(id.clone());
+			}
+			opts.animator_action_modes.insert(id.clone(), mode);
+			if let Some(value) = action.value.filter(|value| value.is_finite()) {
+				opts.animator_action_values.insert(id.clone(), value);
+			}
+			let transition = animator_transition_from_fields(action.transition_curve.as_deref(), action.transition_ms);
+			if transition.duration_ms > 0 && transition.curve != "none" {
+				opts.animator_action_transitions.insert(id, transition);
+			}
+		}
+		for id in &ids {
+			opts.animator_action_modes.entry(id.clone()).or_insert_with(|| "toggle".to_string());
+		}
+		opts.animator_action_ids = ids;
+		opts.animator_bindings = self
+			.bindings
+			.unwrap_or_default()
+			.into_iter()
+			.filter_map(animator_binding_from_manifest)
+			.collect();
+	}
+}
+
+fn animator_transition_from_fields(curve: Option<&str>, duration_ms: Option<u32>) -> AnimatorActionTransitionOptions {
+	let curve = match curve.unwrap_or("none").trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => "linear",
+		"ease_in" | "easein" | "ease_in_quad" => "ease_in",
+		"ease_out" | "easeout" | "ease_out_quad" => "ease_out",
+		"ease_in_out" | "easeinout" | "ease_in_out_quad" => "ease_in_out",
+		_ => "none",
+	}
+	.to_string();
+	AnimatorActionTransitionOptions {
+		curve,
+		duration_ms: duration_ms.unwrap_or(0).min(3000),
+	}
+}
+
+fn animator_binding_from_manifest(binding: AnimatorBindingManifest) -> Option<AnimatorActionBindingOptions> {
+	let action_id = binding.action_id?.trim().to_string();
+	if action_id.is_empty() {
+		return None;
+	}
+	let kind = match binding
+		.kind
+		.unwrap_or_else(|| "keyboard".to_string())
+		.trim()
+		.to_ascii_lowercase()
+		.as_str()
+	{
+		"keyboard" => WardrobeBindingKind::Keyboard,
+		"midi_note" | "midinote" | "midi note" => WardrobeBindingKind::MidiNote,
+		_ => return None,
+	};
+	let binding_text = binding.binding.unwrap_or_default().trim().to_string();
+	let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+	let note = binding.note.filter(|note| *note <= 127);
+	if kind == WardrobeBindingKind::Keyboard && binding_text.is_empty() {
+		return None;
+	}
+	if kind == WardrobeBindingKind::MidiNote && (channel.is_none() || note.is_none()) {
+		return None;
+	}
+	Some(AnimatorActionBindingOptions {
+		action_id,
+		kind,
+		binding: binding_text,
+		device: binding
+			.device
+			.map(|device| device.trim().to_string())
+			.filter(|device| !device.is_empty()),
+		channel,
+		note,
+	})
+}
+
+impl ProfileManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		let profile_key = self.id.or(self.display_name);
+		if let Some(profile_key) = profile_key {
+			if let Some(app_id) = renderer_profile_app_user_model_id(&profile_key) {
+				opts.app_user_model_id = Some(app_id);
+			}
+		}
+	}
+}
+
+fn renderer_profile_app_user_model_id(profile_key: &str) -> Option<String> {
+	let mut slug = String::new();
+	let mut last_dash = false;
+	for ch in profile_key.trim().chars() {
+		let replacement = if ch.is_ascii_alphanumeric() {
+			Some(ch.to_ascii_lowercase())
+		} else if matches!(ch, '.' | '-') {
+			Some(ch)
+		} else if matches!(ch, '_' | ' ' | '\t' | '\n' | '\r') {
+			Some('-')
+		} else {
+			None
+		};
+		let Some(ch) = replacement else {
+			continue;
+		};
+		if ch == '-' {
+			if last_dash {
+				continue;
+			}
+			last_dash = true;
+		} else {
+			last_dash = false;
+		}
+		slug.push(ch);
+	}
+	let slug = slug.trim_matches(['.', '-']).to_string();
+	if slug.is_empty() {
+		return None;
+	}
+	let max_slug_len = 128usize.saturating_sub("UsagiNetwork.UNAvatar.Renderer.Profile.".len());
+	let slug = if slug.len() > max_slug_len {
+		slug.chars().take(max_slug_len).collect::<String>()
+	} else {
+		slug
+	};
+	Some(format!("UsagiNetwork.UNAvatar.Renderer.Profile.{slug}"))
 }
 
 impl EnvironmentManifest {
@@ -716,18 +1020,6 @@ impl AvatarEffectsManifest {
 		if let Some(outline) = self.outline {
 			outline.apply_to(diagnostics);
 		}
-		if let Some(rim) = self.rim {
-			rim.apply_to(diagnostics);
-		}
-		if let Some(matcap) = self.matcap {
-			matcap.apply_to(diagnostics);
-		}
-		if let Some(specular) = self.specular {
-			specular.apply_to(diagnostics);
-		}
-		if let Some(ambient_occlusion) = self.ambient_occlusion {
-			ambient_occlusion.apply_to(diagnostics);
-		}
 		if let Some(contact_shadow) = self.contact_shadow {
 			contact_shadow.apply_to(&mut opts.contact_shadow);
 		}
@@ -754,60 +1046,6 @@ impl AvatarOutlineManifest {
 		if let Some(roundness) = self.roundness {
 			diagnostics.avatar_outline.roundness = Some(roundness.clamp(0.0, 1.0));
 		}
-	}
-}
-
-impl AvatarRimManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		if let Some(policy) = self.policy.as_deref().and_then(parse_rim_policy) {
-			diagnostics.avatar_rim.policy = policy;
-		}
-		if let Some(color) = self.color {
-			diagnostics.avatar_rim.color = Some(clamp_rgb(color));
-		}
-		if let Some(intensity) = self.intensity {
-			diagnostics.avatar_rim.intensity = Some(intensity.clamp(0.0, 4.0));
-		}
-		if let Some(lighting_mix) = self.lighting_mix {
-			diagnostics.avatar_rim.lighting_mix = Some(lighting_mix.clamp(0.0, 1.0));
-		}
-		if let Some(power) = self.fresnel_power {
-			diagnostics.avatar_rim.fresnel_power = Some(power.max(0.00001));
-		}
-		if let Some(lift) = self.lift {
-			diagnostics.avatar_rim.lift = Some(lift.clamp(-1.0, 1.0));
-		}
-	}
-}
-
-impl AvatarMatcapManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		if let Some(scale) = self.scale {
-			diagnostics.avatar_matcap = AvatarMatcapOptions {
-				scale: scale.clamp(0.0, 2.0),
-			};
-		}
-	}
-}
-
-impl AvatarSpecularManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		diagnostics.avatar_specular = AvatarSpecularOptions {
-			enabled: self.enabled.unwrap_or(diagnostics.avatar_specular.enabled),
-			intensity: self.intensity.unwrap_or(diagnostics.avatar_specular.intensity).clamp(0.0, 2.0),
-			power: self.power.unwrap_or(diagnostics.avatar_specular.power).clamp(1.0, 128.0),
-		};
-	}
-}
-
-impl AvatarAmbientOcclusionManifest {
-	fn apply_to(self, diagnostics: &mut SceneMeshLoadOpts) {
-		diagnostics.avatar_ambient_occlusion = AvatarAmbientOcclusionOptions {
-			strength: self
-				.strength
-				.unwrap_or(diagnostics.avatar_ambient_occlusion.strength)
-				.clamp(0.0, 2.0),
-		};
 	}
 }
 
@@ -840,18 +1078,9 @@ fn parse_outline_policy(value: &str) -> Option<AvatarOutlinePolicy> {
 	}
 }
 
-fn parse_rim_policy(value: &str) -> Option<AvatarRimPolicy> {
-	match value.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some(AvatarRimPolicy::Authored),
-		"off" | "none" | "disabled" => Some(AvatarRimPolicy::Off),
-		"override" | "custom" => Some(AvatarRimPolicy::Override),
-		_ => None,
-	}
-}
-
 fn parse_outline_kind(value: &str) -> Option<AvatarOutlineKind> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -978,13 +1207,54 @@ impl MotionManifest {
 	}
 }
 
+impl AudioLinkManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(source) = self.source {
+			opts.audio_link.source = source;
+		}
+		if let Some(device_id) = self.input_device_id {
+			let trimmed = device_id.trim();
+			opts.audio_link.input_device_id = (!trimmed.is_empty()).then(|| trimmed.to_string());
+		}
+		if let Some(name_hint) = self.input_device_name_hint {
+			let trimmed = name_hint.trim();
+			opts.audio_link.input_device_name_hint = (!trimmed.is_empty()).then(|| trimmed.to_string());
+		}
+	}
+}
+
 impl PhysicsManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
 		if let Some(bone_colliders) = self.bone_colliders {
 			bone_colliders.apply_to(&mut opts.bone_colliders);
 		}
+		if let Some(contacts) = self.contacts {
+			contacts.apply_to(opts);
+		}
 		if let Some(spring_bone) = self.spring_bone {
 			opts.spring_bone_physics = spring_bone.normalized();
+		}
+		if let Some(dynamics) = self.dynamics {
+			dynamics.apply_to(opts);
+		}
+	}
+}
+
+impl DynamicsPhysicsManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(enabled) = self.enabled {
+			opts.dynamics_enabled = enabled;
+		}
+		if let Some(solver) = self.solver {
+			opts.spring_bone_physics = solver.normalized();
+		}
+	}
+}
+
+impl ContactsPhysicsManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(enabled) = self.parameter_emission.or(self.parameter_emission_enabled) {
+			opts.contact_parameter_emission = enabled;
 		}
 	}
 }
@@ -1170,6 +1440,12 @@ impl MeshDiagnosticsManifest {
 		if let Some(value) = self.skin_legacy_no_inv_mesh {
 			diagnostics.debug_skin_legacy_no_inv_mesh = value;
 		}
+		if let Some(value) = self.disable_reflection {
+			diagnostics.debug_disable_reflection = value;
+		}
+		if let Some(value) = self.disable_fur {
+			diagnostics.disable_fur = value;
+		}
 	}
 }
 
@@ -1183,16 +1459,33 @@ mod tests {
 			r#"
 title = "Manifest Title"
 avatar_path = "target/tmp/model1.vrm"
+wardrobe_set = "noble1"
 icon_path = "assets/brand/un-avatar-artwork-renderer.png"
 vmc_address = "127.0.0.1:39539"
 transparent = true
 input_passthrough = true
 clear_color = [0.0, 0.0, 0.0, 0.0]
 
+[wardrobe]
+shortcuts = [
+  { set_id = "", shortcut = "Ctrl+Alt+B" },
+]
+bindings = [
+  { set_id = "noble1", kind = "keyboard", binding = "Ctrl+Alt+1" },
+  { set_id = "noble2", kind = "midi_note", device = "Launchkey Mini", channel = 1, note = 60 },
+]
+
+[wardrobe.transition]
+billboard_anchor = "spine"
+billboard_y_offset_mm = 35.0
+
+[profile]
+id = "mizuki-copy"
+
 [render_quality]
 aa = "fxaa"
 texture_resolution_limit = "4k"
-texture_compression = "advanced"
+texture_compression = "balanced"
 mipmap_filter = "lanczos3"
 processed_texture_cache = false
 skin_tone_matching = true
@@ -1212,6 +1505,11 @@ enabled = true
 port = 39540
 address = "0.0.0.0:39541"
 
+[audio_link]
+source = "input_device"
+input_device_id = "cpal:device-1"
+input_device_name_hint = "Main Mix"
+
 [spout]
 enabled = false
 name = "UN Avatar Spout"
@@ -1223,6 +1521,37 @@ enabled = true
 name = "UN Avatar Spout2"
 width = 1920
 height = 1080
+
+[animator]
+action_ids = ["animator:0:0:hat_off:0"]
+
+[[animator.actions]]
+id = "animator:0:0:beam:0"
+mode = "one_shot"
+value = 0.45
+transition_curve = "ease_out"
+transition_ms = 250
+
+[[animator.actions]]
+id = "animator:0:0:debug_hidden:0"
+mode = "off"
+
+[[animator.bindings]]
+action_id = "animator:0:0:beam:0"
+kind = "keyboard"
+binding = "F8"
+
+[[animator.bindings]]
+action_id = "expression:angry"
+kind = "midi_note"
+device = "Launchkey Mini"
+channel = 1
+note = 61
+
+[window]
+width = 640
+height = 360
+minimized = true
 
 [debug]
 vmc = true
@@ -1244,7 +1573,7 @@ tint = -0.15
 
 [effects.avatar.outline]
 policy = "override"
-type = "mtoon"
+type = "silhouette"
 width = 0.004
 color = [0.02, 0.01, 0.03]
 lighting_mix = 0.25
@@ -1292,16 +1621,19 @@ head = 1.0
 head = 180
 hands = 70
 
-[physics.spring_bone]
+[physics.contacts]
+parameter_emission = true
+
+[physics.dynamics.solver]
 simulation_hz = 240
 substeps = 2
 
-[[physics.spring_bone.categories]]
+[[physics.dynamics.solver.categories]]
 id = "ears"
 name = "Ears"
 matches = ["ears", "耳", "ミミ"]
 
-[[physics.spring_bone.overrides]]
+[[physics.dynamics.solver.overrides]]
 category = "ears"
 solver = "xpbd"
 damping_half_life_ms = 90
@@ -1315,17 +1647,39 @@ constraint_iterations = 6
 
 		assert_eq!(opts.title, "Manifest Title");
 		assert_eq!(opts.gltf_path.as_deref(), Some(std::path::Path::new("target/tmp/model1.vrm")));
+		assert_eq!(opts.wardrobe_set.as_deref(), Some("noble1"));
+		assert_eq!(opts.wardrobe_bindings.len(), 3);
+		assert_eq!(opts.wardrobe_bindings[0].set_id, "");
+		assert_eq!(opts.wardrobe_bindings[0].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.wardrobe_bindings[0].binding, "Ctrl+Alt+B");
+		assert_eq!(opts.wardrobe_bindings[1].set_id, "noble1");
+		assert_eq!(opts.wardrobe_bindings[1].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.wardrobe_bindings[1].binding, "Ctrl+Alt+1");
+		assert_eq!(opts.wardrobe_bindings[2].set_id, "noble2");
+		assert_eq!(opts.wardrobe_bindings[2].kind, WardrobeBindingKind::MidiNote);
+		assert_eq!(opts.wardrobe_bindings[2].device.as_deref(), Some("Launchkey Mini"));
+		assert_eq!(opts.wardrobe_bindings[2].channel, Some(1));
+		assert_eq!(opts.wardrobe_bindings[2].note, Some(60));
+		assert_eq!(opts.wardrobe_billboard_anchor, "spine");
+		assert_eq!(opts.wardrobe_billboard_y_offset_m, 0.035);
 		assert_eq!(
 			opts.icon_path.as_deref(),
 			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
 		);
+		assert_eq!(
+			opts.app_user_model_id.as_deref(),
+			Some("UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy")
+		);
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
+		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
+		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));
+		assert_eq!(opts.audio_link.input_device_name_hint.as_deref(), Some("Main Mix"));
 		assert!(opts.transparent);
 		assert!(opts.input_passthrough);
 		assert_eq!(opts.clear_color.a, 0.0);
 		assert_eq!(opts.aa, AaMode::Fxaa);
 		assert_eq!(opts.texture_resolution_limit, TextureResolutionLimit::K4);
-		assert_eq!(opts.texture_compression, TextureCompressionMode::Advanced);
+		assert_eq!(opts.texture_compression, TextureCompressionMode::Balanced);
 		assert_eq!(opts.mipmap_filter, TextureMipmapFilter::Lanczos3);
 		assert_eq!(
 			opts.texture_compression_advanced.clothing,
@@ -1337,10 +1691,39 @@ constraint_iterations = 6
 		);
 		assert!(!opts.processed_texture_cache);
 		assert!(opts.skin_tone_matching);
+		assert_eq!(
+			opts.animator_action_ids,
+			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]
+		);
+		assert_eq!(
+			opts.animator_action_modes.get("animator:0:0:hat_off:0").map(String::as_str),
+			Some("toggle")
+		);
+		assert_eq!(
+			opts.animator_action_modes.get("animator:0:0:beam:0").map(String::as_str),
+			Some("one_shot")
+		);
+		assert_eq!(opts.animator_action_values.get("animator:0:0:beam:0").copied(), Some(0.45));
+		assert_eq!(
+			opts.animator_action_transitions
+				.get("animator:0:0:beam:0")
+				.map(|transition| (transition.curve.as_str(), transition.duration_ms)),
+			Some(("ease_out", 250))
+		);
+		assert_eq!(opts.animator_bindings.len(), 2);
+		assert_eq!(opts.animator_bindings[0].action_id, "animator:0:0:beam:0");
+		assert_eq!(opts.animator_bindings[0].kind, WardrobeBindingKind::Keyboard);
+		assert_eq!(opts.animator_bindings[0].binding, "F8");
+		assert_eq!(opts.animator_bindings[1].action_id, "expression:angry");
+		assert_eq!(opts.animator_bindings[1].kind, WardrobeBindingKind::MidiNote);
+		assert_eq!(opts.animator_bindings[1].note, Some(61));
 		assert!(opts.spout.enabled);
 		assert_eq!(opts.spout.name, "UN Avatar Spout2");
 		assert_eq!(opts.spout.width, Some(1920));
 		assert_eq!(opts.spout.height, Some(1080));
+		assert_eq!(opts.window_width, 640);
+		assert_eq!(opts.window_height, 360);
+		assert!(opts.start_minimized);
 		assert!(opts.debug.vmc);
 		assert!(opts.debug.scene);
 		assert!(opts.disable_expression_morphs);
@@ -1359,11 +1742,6 @@ constraint_iterations = 6
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.color, Some([0.02, 0.01, 0.03]));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.lighting_mix, Some(0.25));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.roundness, Some(0.5));
-		assert_eq!(opts.mesh_diagnostics.avatar_matcap.scale, 1.35);
-		assert!(opts.mesh_diagnostics.avatar_specular.enabled);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.intensity, 0.5);
-		assert_eq!(opts.mesh_diagnostics.avatar_specular.power, 32.0);
-		assert_eq!(opts.mesh_diagnostics.avatar_ambient_occlusion.strength, 1.4);
 		assert!(opts.contact_shadow.enabled);
 		assert_eq!(opts.contact_shadow.strength, 0.4);
 		assert_eq!(opts.contact_shadow.radius, 0.7);
@@ -1383,6 +1761,8 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.head, 180.0);
 		assert_eq!(opts.bone_colliders.radius_mm.hands, 70.0);
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
+		assert!(opts.contact_parameter_emission);
+		assert!(opts.dynamics_enabled);
 		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
 		assert_eq!(opts.spring_bone_physics.substeps, 2);
 		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");
@@ -1398,6 +1778,103 @@ constraint_iterations = 6
 	}
 
 	#[test]
+	fn toml_manifest_reads_legacy_spring_bone_solver_schema() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[physics.spring_bone]
+simulation_hz = 120
+substeps = 3
+
+[[physics.spring_bone.overrides]]
+category = "hair"
+solver = "xpbd"
+xpbd_compliance = 0.03
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert_eq!(opts.spring_bone_physics.simulation_hz, 120.0);
+		assert_eq!(opts.spring_bone_physics.substeps, 3);
+		assert_eq!(opts.spring_bone_physics.overrides[0].category, "hair");
+		assert_eq!(
+			opts.spring_bone_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+		);
+	}
+
+	#[test]
+	fn toml_manifest_ignores_legacy_spring_bones_for_unphysics_enabled() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+spring_bones = false
+
+[physics.dynamics]
+enabled = true
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert!(opts.dynamics_enabled);
+	}
+
+	#[test]
+	fn toml_manifest_reads_legacy_spring_bones_for_unphysics_enabled() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+spring_bones = false
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert!(!opts.dynamics_enabled);
+	}
+
+	#[test]
+	fn toml_manifest_reads_legacy_root_migration_keys() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+aa = "smaa"
+icon_path = "assets/brand/un-avatar-artwork-renderer.png"
+transparent = true
+input_passthrough = true
+decorations = false
+vmc_address = "127.0.0.1:39539"
+spring_bones = false
+
+[spout]
+enabled = true
+name = "Legacy Spout"
+width = 1280
+height = 720
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert_eq!(opts.aa, AaMode::Smaa);
+		assert_eq!(
+			opts.icon_path.as_deref(),
+			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
+		);
+		assert!(opts.transparent);
+		assert!(opts.input_passthrough);
+		assert!(!opts.decorations);
+		assert_eq!(opts.vmc_address, Some("127.0.0.1:39539".parse().unwrap()));
+		assert!(opts.spout.enabled);
+		assert_eq!(opts.spout.name, "Legacy Spout");
+		assert_eq!(opts.spout.width, Some(1280));
+		assert_eq!(opts.spout.height, Some(720));
+		assert!(!opts.dynamics_enabled);
+	}
+
+	#[test]
 	fn toml_manifest_applies_root_aa_mode() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
@@ -1409,5 +1886,27 @@ aa = "msaa"
 		manifest.apply_to(&mut opts);
 
 		assert_eq!(opts.aa, AaMode::Msaa);
+	}
+
+	#[test]
+	fn toml_manifest_applies_partial_texture_compression_advanced_options() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[render_quality]
+texture_compression = "balanced"
+
+[render_quality.texture_compression_advanced]
+data = "high_quality"
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert_eq!(
+			opts.texture_compression_advanced.data,
+			crate::TextureCompressionPreference::HighQuality
+		);
+		assert_eq!(opts.texture_compression_advanced.face, crate::TextureCompressionPreference::Source);
 	}
 }

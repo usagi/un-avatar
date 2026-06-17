@@ -1,0 +1,327 @@
+<script lang="ts">
+	import { _ } from "svelte-i18n";
+	import { Move, RotateCcw, ZoomIn } from "lucide-svelte";
+	import type { UnavatarMetadataDialogState, UnavatarPreviewSet, UnavatarProfileIconCrop } from "./unavatarMetadata";
+
+	export let modal: UnavatarMetadataDialogState;
+	export let busy = false;
+	export let profileIconCrop: UnavatarProfileIconCrop;
+	export let onClose: () => void | Promise<void>;
+	export let onAcceptAndUse: () => void | Promise<void>;
+	export let onSaveProfileIcon: () => void | Promise<void>;
+
+	$: metadata = modal.metadata;
+	$: title = metadata.name?.trim() || metadata.file_name;
+	let selectedSetId = "";
+	let selectedPreviewIndex = 0;
+	let cropFrame: HTMLDivElement | null = null;
+	let dragStart: { pointerId: number; x: number; y: number; offsetX: number; offsetY: number } | null = null;
+	let naturalPreviewSize: { dataUrl: string; width: number; height: number } | null = null;
+	$: previewSets = metadata.preview_sets.length
+		? metadata.preview_sets
+		: metadata.preview_images.length
+			? [{ id: "", name: $_("unavatar_rights.default_preview_set"), preview_images: metadata.preview_images }]
+			: [];
+	$: selectedMetadataSetId = matchingPreviewSetId(previewSets, metadata.preview_images);
+	$: if (!previewSets.some((set) => set.id === selectedSetId)) selectedSetId = selectedMetadataSetId ?? previewSets[0]?.id ?? "";
+	$: selectedSet = previewSets.find((set) => set.id === selectedSetId) ?? previewSets[0] ?? null;
+	$: selectedPreviews = selectedSet?.preview_images ?? [];
+	$: if (selectedPreviewIndex >= selectedPreviews.length) selectedPreviewIndex = 0;
+	$: selectedPreview = selectedPreviews[selectedPreviewIndex] ?? null;
+	$: selectedPreviewLabel =
+		selectedPreview?.view?.trim() ||
+		$_("unavatar_rights.preview_image_title", { values: { index: selectedPreviewIndex + 1 } });
+	$: canEditProfileIcon = Boolean(modal.pendingPath || modal.iconSelectionOnly);
+	$: if (profileIconCrop.imageDataUrl !== (selectedPreview?.data_url ?? null)) {
+		profileIconCrop = {
+			...profileIconCrop,
+			imageDataUrl: selectedPreview?.data_url ?? null,
+			zoom: 1,
+			offsetX: 0,
+			offsetY: 0,
+		};
+	}
+	$: stats = [
+		[$_("unavatar_rights.stats.wardrobe"), metadata.wardrobe_set_count],
+		[$_("unavatar_rights.stats.dynamics"), metadata.dynamics_count],
+		[$_("unavatar_rights.stats.contacts"), metadata.contact_count],
+		[$_("unavatar_rights.stats.modular_avatar"), metadata.modular_avatar_component_count],
+	];
+	$: cropLayout = previewCropLayout(
+		selectedPreview?.width ?? (naturalPreviewSize?.dataUrl === selectedPreview?.data_url ? naturalPreviewSize.width : null),
+		selectedPreview?.height ?? (naturalPreviewSize?.dataUrl === selectedPreview?.data_url ? naturalPreviewSize.height : null),
+		Number(profileIconCrop.zoom) || 1,
+		Number(profileIconCrop.offsetX) || 0,
+		Number(profileIconCrop.offsetY) || 0
+	);
+	$: cropEdges = {
+		left: clamp(cropLayout.left - cropLayout.side * 0.5, 0, 100),
+		right: clamp(100 - (cropLayout.left + cropLayout.side * 0.5), 0, 100),
+		top: clamp(cropLayout.top - cropLayout.side * 0.5, 0, 100),
+		bottom: clamp(100 - (cropLayout.top + cropLayout.side * 0.5), 0, 100),
+	};
+
+	function clamp(value: number, min: number, max: number) {
+		return Math.min(max, Math.max(min, value));
+	}
+
+	function matchingPreviewSetId(sets: UnavatarPreviewSet[], previews: UnavatarPreviewSet["preview_images"]): string | null {
+		if (!previews.length) return null;
+		return (
+			sets.find(
+				(set) =>
+					set.preview_images.length === previews.length &&
+					set.preview_images.every((preview, index) => preview.data_url === previews[index]?.data_url)
+			)?.id ?? null
+		);
+	}
+
+	function previewCropLayout(width: number | null, height: number | null, zoomValue: number, offsetX: number, offsetY: number) {
+		const safeWidth = width && width > 0 ? width : 1;
+		const safeHeight = height && height > 0 ? height : 1;
+		const aspect = safeWidth / safeHeight;
+		const imageWidth = aspect >= 1 ? 100 : 100 * aspect;
+		const imageHeight = aspect >= 1 ? 100 / aspect : 100;
+		const imageLeft = (100 - imageWidth) * 0.5;
+		const imageTop = (100 - imageHeight) * 0.5;
+		const side = Math.min(imageWidth, imageHeight) / clamp(zoomValue, 1, 4);
+		const imageCenterX = imageLeft + imageWidth * 0.5;
+		const imageCenterY = imageTop + imageHeight * 0.5;
+		const minCenterX = imageLeft + side * 0.5;
+		const maxCenterX = imageLeft + imageWidth - side * 0.5;
+		const minCenterY = imageTop + side * 0.5;
+		const maxCenterY = imageTop + imageHeight - side * 0.5;
+		const centerX = clamp(imageCenterX + clamp(offsetX, -1, 1) * imageWidth * 0.5, minCenterX, maxCenterX);
+		const centerY = clamp(imageCenterY + clamp(offsetY, -1, 1) * imageHeight * 0.5, minCenterY, maxCenterY);
+		return {
+			side,
+			left: centerX,
+			top: centerY,
+			imageWidth,
+			imageHeight,
+		};
+	}
+
+	function setCropEnabled(enabled: boolean) {
+		profileIconCrop = { ...profileIconCrop, enabled };
+	}
+
+	function setZoom(value: string | number) {
+		profileIconCrop = {
+			...profileIconCrop,
+			zoom: clamp(Number(value) || 1, 1, 4),
+		};
+	}
+
+	function resetCrop() {
+		profileIconCrop = {
+			...profileIconCrop,
+			zoom: 1,
+			offsetX: 0,
+			offsetY: 0,
+		};
+	}
+
+	function beginCropDrag(event: PointerEvent) {
+		if (!canEditProfileIcon || !profileIconCrop.enabled || !selectedPreview || !cropFrame) return;
+		dragStart = {
+			pointerId: event.pointerId,
+			x: event.clientX,
+			y: event.clientY,
+			offsetX: Number(profileIconCrop.offsetX) || 0,
+			offsetY: Number(profileIconCrop.offsetY) || 0,
+		};
+		cropFrame.setPointerCapture(event.pointerId);
+		event.preventDefault();
+	}
+
+	function moveCropDrag(event: PointerEvent) {
+		if (!dragStart || dragStart.pointerId !== event.pointerId || !cropFrame) return;
+		const rect = cropFrame.getBoundingClientRect();
+		const imageHalfWidthPx = Math.max(1, rect.width * (cropLayout.imageWidth / 100) * 0.5);
+		const imageHalfHeightPx = Math.max(1, rect.height * (cropLayout.imageHeight / 100) * 0.5);
+		profileIconCrop = {
+			...profileIconCrop,
+			offsetX: clamp(dragStart.offsetX + (event.clientX - dragStart.x) / imageHalfWidthPx, -1, 1),
+			offsetY: clamp(dragStart.offsetY + (event.clientY - dragStart.y) / imageHalfHeightPx, -1, 1),
+		};
+	}
+
+	function endCropDrag(event: PointerEvent) {
+		if (!dragStart || dragStart.pointerId !== event.pointerId) return;
+		cropFrame?.releasePointerCapture(event.pointerId);
+		dragStart = null;
+	}
+
+	function updateNaturalPreviewSize(event: Event) {
+		const image = event.currentTarget as HTMLImageElement;
+		if (!selectedPreview || image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
+		naturalPreviewSize = {
+			dataUrl: selectedPreview.data_url,
+			width: image.naturalWidth,
+			height: image.naturalHeight,
+		};
+	}
+</script>
+
+<div class="vrm-metadata-backdrop" role="presentation">
+	<div class="vrm-metadata-dialog unavatar-rights-dialog" role="dialog" aria-modal="true" aria-label={$_("unavatar_rights.title")}>
+		<div class="vrm-metadata-portrait">
+			{#if selectedPreview}
+				<div
+					class="vrm-metadata-preview-frame unavatar-crop-frame"
+					class:disabled={!canEditProfileIcon || !profileIconCrop.enabled}
+					bind:this={cropFrame}
+					role={canEditProfileIcon ? "application" : "img"}
+					aria-label={canEditProfileIcon ? $_("unavatar_rights.icon_drag_hint") : selectedPreviewLabel}
+					onpointerdown={beginCropDrag}
+					onpointermove={moveCropDrag}
+					onpointerup={endCropDrag}
+					onpointercancel={endCropDrag}
+				>
+					<img
+						class="vrm-metadata-thumbnail"
+						src={selectedPreview.data_url}
+						alt=""
+						onload={updateNaturalPreviewSize}
+					/>
+					{#if selectedPreview && canEditProfileIcon && profileIconCrop.enabled}
+						<span class="unavatar-icon-mask-region top" style={`height: ${cropEdges.top}%;`}></span>
+						<span class="unavatar-icon-mask-region bottom" style={`height: ${cropEdges.bottom}%;`}></span>
+						<span
+							class="unavatar-icon-mask-region left"
+							style={`top: ${cropEdges.top}%; bottom: ${cropEdges.bottom}%; width: ${cropEdges.left}%;`}
+						></span>
+						<span
+							class="unavatar-icon-mask-region right"
+							style={`top: ${cropEdges.top}%; bottom: ${cropEdges.bottom}%; width: ${cropEdges.right}%;`}
+						></span>
+						<span
+							class="unavatar-icon-crop-border"
+							style={`width: ${cropLayout.side}%; left: ${cropLayout.left}%; top: ${cropLayout.top}%;`}
+						></span>
+					{/if}
+				</div>
+			{:else}
+				<div class="vrm-metadata-sigil">UN</div>
+			{/if}
+			{#if selectedPreview}
+				<div class="unavatar-selected-preview-caption">
+					<strong>{selectedPreviewLabel}</strong>
+					<span>{selectedSet?.name || $_("unavatar_rights.default_preview_set")}</span>
+				</div>
+			{/if}
+			{#if selectedPreview && canEditProfileIcon}
+				<div class="unavatar-icon-crop-panel" class:enabled={profileIconCrop.enabled}>
+					<div class="unavatar-crop-tools">
+						<div class="unavatar-crop-tool-row">
+							<span><ZoomIn size={15} />{$_("unavatar_rights.icon_zoom")}</span>
+							<input
+								type="range"
+								min="1"
+								max="4"
+								step="0.01"
+								value={profileIconCrop.zoom}
+								disabled={!profileIconCrop.enabled}
+								aria-label={$_("unavatar_rights.icon_zoom")}
+								oninput={(event) => setZoom(event.currentTarget.value)}
+							/>
+							<output>{Number(profileIconCrop.zoom).toFixed(2)}x</output>
+						</div>
+						<div class="unavatar-crop-tool-row compact">
+							<span><Move size={15} />{$_("unavatar_rights.icon_position")}</span>
+							<span class="unavatar-crop-instruction">{$_("unavatar_rights.icon_drag_hint")}</span>
+							<button type="button" disabled={!profileIconCrop.enabled} title={$_("unavatar_rights.icon_reset")} onclick={resetCrop}
+								><RotateCcw size={14} />{$_("unavatar_rights.icon_reset")}</button
+							>
+						</div>
+					</div>
+				</div>
+			{/if}
+			{#if previewSets.length > 1}
+				<select
+					class="unavatar-preview-set-select"
+					aria-label={$_("unavatar_rights.preview_set")}
+					bind:value={selectedSetId}
+					onchange={() => (selectedPreviewIndex = 0)}
+				>
+					{#each previewSets as set}
+						<option value={set.id}>{set.name || set.id}</option>
+					{/each}
+				</select>
+			{/if}
+			{#if selectedPreviews.length > 1}
+				<div class="unavatar-preview-strip" aria-label={$_("unavatar_rights.preview_images")}>
+					{#each selectedPreviews as preview, index}
+						<button
+							type="button"
+							class:active={index === selectedPreviewIndex}
+							title={preview.view ?? $_("unavatar_rights.preview_image_title", { values: { index: index + 1 } })}
+							onclick={() => (selectedPreviewIndex = index)}
+						>
+							<img src={preview.data_url} alt="" />
+							<span>{preview.view ?? index + 1}</span>
+						</button>
+					{/each}
+				</div>
+			{/if}
+			<span>.unavatar {metadata.spec_version ?? ""}</span>
+		</div>
+		<div class="vrm-metadata-body">
+			<header class="vrm-metadata-header">
+				<div>
+					<p>{$_("unavatar_rights.eyebrow")}</p>
+					<h2>{title}</h2>
+					<span>{metadata.source_type ?? "UN Avatar"}{metadata.export_mode ? ` / ${metadata.export_mode}` : ""}</span>
+				</div>
+			</header>
+			<div class="vrm-metadata-scroll">
+				<section class="vrm-tech-list" aria-label={$_("unavatar_rights.summary")}>
+					{#each stats as [label, value]}
+						<div>
+							<span>{label}</span>
+							<strong>{value}</strong>
+						</div>
+					{/each}
+				</section>
+				<section class="vrm-license-block unavatar-rights-warning">
+					<h3>{$_("unavatar_rights.important")}</h3>
+					<p>{$_("unavatar_rights.body_1")}</p>
+					<p>{$_("unavatar_rights.body_2")}</p>
+					<p>{$_("unavatar_rights.body_3")}</p>
+					<p>{$_("unavatar_rights.body_4")}</p>
+				</section>
+				<section class="vrm-license-block">
+					<h3>{$_("unavatar_rights.confirm_heading")}</h3>
+					<ul class="unavatar-rights-checks">
+						<li>{$_("unavatar_rights.check_terms")}</li>
+						<li>{$_("unavatar_rights.check_usage")}</li>
+						<li>{$_("unavatar_rights.check_responsibility")}</li>
+					</ul>
+				</section>
+			</div>
+			<footer class="vrm-metadata-actions">
+				{#if selectedPreview && canEditProfileIcon}
+					<label class="vrm-thumbnail-icon-toggle" title={$_("unavatar_rights.use_preview_as_profile_icon")}>
+						<input type="checkbox" checked={profileIconCrop.enabled} onchange={(event) => setCropEnabled(event.currentTarget.checked)} />
+						<span>{$_("unavatar_rights.use_preview_as_profile_icon")}</span>
+					</label>
+				{:else}
+					<span class="metadata-action-mode">
+						{modal.pendingPath
+							? $_("unavatar_rights.eyebrow")
+							: modal.iconSelectionOnly
+								? $_("unavatar_rights.profile_icon")
+								: $_("unavatar_rights.title")}
+					</span>
+				{/if}
+				<button class="secondary" onclick={() => onClose()}>{modal.pendingPath ? $_("common.cancel") : $_("common.close")}</button>
+				{#if modal.pendingPath}
+					<button class="primary" disabled={busy} onclick={() => onAcceptAndUse()}>{$_("unavatar_rights.accept_and_use")}</button>
+				{:else if modal.iconSelectionOnly}
+					<button class="primary" disabled={busy || !profileIconCrop.enabled || !profileIconCrop.imageDataUrl} onclick={() => onSaveProfileIcon()}>{$_("unavatar_rights.save_profile_icon")}</button>
+				{/if}
+			</footer>
+		</div>
+	</div>
+</div>

@@ -8,6 +8,15 @@ UN Avatar v1 では、VRM SpringBone を単なる互換機能ではなく、モ�
 - UN Avatar 独自の安定した物理表現を選べるようにする。
 - 将来の PhysBone / Unity model importer / glTF 汎用物理へ拡張できる設計にする。
 
+## v2 Migration Note
+
+v2 では、この文書の solver / collider 実装資産を利用してよいが、入力 schema の正本は VRM SpringBone 生データではなく UNPhysics umbrella 下の UNDynamics runtime model とする。
+
+- VRM SpringBone と VRC PhysBone は source metadata を保持しつつ、UNDynamics group / chain / collider / parameter / limit / interaction view へ正規化する。
+- `SpringBoneSimulator` は互換 shim として残してよいが、新規 behavior は UNDynamics runtime state を入力にし、format-specific な VRM / VRC / Unity component 判定を solver 内へ持ち込まない。
+- PhysBone は v2 初期では完全再現ではなく、UNDynamics の SpringBone-like runtime primitive への近似 lower を最初の実装目標にする。
+- Wardrobe / action / animation による dynamics enable state は、source scene を直接 mutate するのではなく resolved runtime state と pose buffer へ反映する。
+
 ## Solver Modes
 
 v1 で扱う solver は 2 種に限定する。

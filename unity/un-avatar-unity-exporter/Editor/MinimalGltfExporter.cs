@@ -1,0 +1,903 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using UnityEditor;
+using UnityEngine;
+
+namespace UNAvatar.UnityExporter
+{
+    internal static partial class MinimalGltfExporter
+    {
+        private const uint JsonChunkType = 0x4E4F534A;
+        private const uint BinChunkType = 0x004E4942;
+        private const uint GlbMagic = 0x46546C67;
+
+        public sealed class ExportResult
+        {
+            public string Path;
+            public List<ExportedTextureRecord> Textures = new List<ExportedTextureRecord>();
+            public List<UnavatarTextureAssetRecord> TextureAssets = new List<UnavatarTextureAssetRecord>();
+            public List<UnavatarRendererAssetRecord> RendererAssets = new List<UnavatarRendererAssetRecord>();
+        }
+
+        public static ExportResult ExportGlb(
+            GameObject root,
+            string directory,
+            string fileName,
+            HashSet<string> morphTargetNames,
+            IEnumerable<Texture> extraTextureAssets = null)
+        {
+            var writer = new Writer(root, morphTargetNames);
+            var path = Path.Combine(directory, fileName + ".glb");
+            writer.Export(path);
+            writer.ExportAdditionalTextureAssets(extraTextureAssets);
+            return new ExportResult
+            {
+                Path = path,
+                Textures = writer.ExportedTextures,
+                TextureAssets = writer.TextureAssets,
+                RendererAssets = writer.RendererAssets
+            };
+        }
+
+        private sealed partial class Writer
+        {
+            private readonly GameObject root;
+            private readonly BinaryBuffer buffer = new BinaryBuffer();
+            private readonly HashSet<string> morphTargetNames;
+            private readonly Dictionary<Transform, int> nodeIndices;
+            private readonly Dictionary<Material, int> materialIndices = new Dictionary<Material, int>();
+            private readonly Dictionary<Texture, int> textureIndices = new Dictionary<Texture, int>();
+            private readonly Dictionary<Texture, UnavatarTextureAssetRecord> textureAssetIndices = new Dictionary<Texture, UnavatarTextureAssetRecord>();
+            private readonly Dictionary<Texture, TextureSourceInfo> textureSourceInfos = new Dictionary<Texture, TextureSourceInfo>();
+            private readonly Dictionary<string, byte[]> textureSourceBytes = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+            private readonly Dictionary<MaterialPropertyKey, Texture> materialTextureCache = new Dictionary<MaterialPropertyKey, Texture>();
+            private readonly Dictionary<MaterialPropertyKey, bool> materialPropertyCache = new Dictionary<MaterialPropertyKey, bool>();
+            private readonly Dictionary<string, int> samplerIndices = new Dictionary<string, int>(StringComparer.Ordinal);
+            private int defaultMaterialIndex = -1;
+            private readonly List<object> nodes;
+            private readonly List<object> meshes = new List<object>();
+            private readonly List<object> skins = new List<object>();
+            private readonly List<object> accessors = new List<object>();
+            private readonly List<object> bufferViews = new List<object>();
+            private readonly List<object> materials = new List<object>();
+            private readonly List<object> images = new List<object>();
+            private readonly List<object> textures = new List<object>();
+            private readonly List<object> samplers = new List<object>();
+            private readonly List<ExportedTextureRecord> exportedTextures = new List<ExportedTextureRecord>();
+            private readonly List<UnavatarTextureAssetRecord> textureAssets = new List<UnavatarTextureAssetRecord>();
+            private readonly List<UnavatarRendererAssetRecord> rendererAssets = new List<UnavatarRendererAssetRecord>();
+            private bool usesTextureTransform;
+
+            public List<ExportedTextureRecord> ExportedTextures => exportedTextures;
+            public List<UnavatarTextureAssetRecord> TextureAssets => textureAssets;
+            public List<UnavatarRendererAssetRecord> RendererAssets => rendererAssets;
+
+            private struct MaterialPropertyKey : IEquatable<MaterialPropertyKey>
+            {
+                private readonly int materialId;
+                private readonly string property;
+
+                public MaterialPropertyKey(Material material, string property)
+                {
+                    materialId = material.GetInstanceID();
+                    this.property = property ?? "";
+                }
+
+                public bool Equals(MaterialPropertyKey other)
+                {
+                    return materialId == other.materialId && string.Equals(property, other.property, StringComparison.Ordinal);
+                }
+
+                public override bool Equals(object obj)
+                {
+                    return obj is MaterialPropertyKey other && Equals(other);
+                }
+
+                public override int GetHashCode()
+                {
+                    unchecked
+                    {
+                        return (materialId * 397) ^ StringComparer.Ordinal.GetHashCode(property);
+                    }
+                }
+            }
+
+            public Writer(GameObject root, HashSet<string> morphTargetNames)
+            {
+                this.root = root;
+                this.morphTargetNames = morphTargetNames ?? new HashSet<string>(StringComparer.Ordinal);
+                var transformCount = CountTransforms(root != null ? root.transform : null);
+                nodeIndices = new Dictionary<Transform, int>(transformCount);
+                nodes = new List<object>(transformCount);
+            }
+
+            private static int CountTransforms(Transform transform)
+            {
+                if (transform == null)
+                {
+                    return 0;
+                }
+                var count = 1;
+                for (var i = 0; i < transform.childCount; i++)
+                {
+                    count += CountTransforms(transform.GetChild(i));
+                }
+                return count;
+            }
+
+            public void Export(string path)
+            {
+                BuildNodeTree(root.transform);
+                AttachRenderers(root.transform);
+
+                var gltf = new Dictionary<string, object>
+                {
+                    ["asset"] = new Dictionary<string, object>
+                    {
+                        ["version"] = "2.0",
+                        ["generator"] = "U.N. Avatar Unity Exporter built-in GLB writer 0.1.0-preview"
+                    },
+                    ["scene"] = 0,
+                    ["scenes"] = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["name"] = root.name,
+                            ["nodes"] = new List<object> { 0 }
+                        }
+                    },
+                    ["nodes"] = nodes,
+                    ["meshes"] = meshes,
+                    ["accessors"] = accessors,
+                    ["bufferViews"] = bufferViews,
+                    ["materials"] = materials
+                };
+
+                if (skins.Count > 0)
+                {
+                    gltf["skins"] = skins;
+                }
+                if (images.Count > 0)
+                {
+                    gltf["images"] = images;
+                    gltf["textures"] = textures;
+                    gltf["samplers"] = samplers;
+                }
+                if (usesTextureTransform)
+                {
+                    gltf["extensionsUsed"] = new List<object> { "KHR_texture_transform" };
+                }
+                if (buffer.Length > 0)
+                {
+                    gltf["buffers"] = new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            ["byteLength"] = buffer.Length
+                        }
+                    };
+                }
+
+                WriteGlb(path, MiniJson.Serialize(gltf), buffer.ToArray());
+            }
+
+            private void BuildNodeTree(Transform transform)
+            {
+                var index = nodes.Count;
+                nodeIndices[transform] = index;
+                var isExportRoot = transform == root.transform;
+                var translation = isExportRoot ? Vector3.zero : UnityVectorToGltf(transform.localPosition);
+                var rotation = UnityRotationToGltf(transform.localRotation);
+                var node = new Dictionary<string, object>
+                {
+                    ["name"] = transform.name,
+                    ["translation"] = FloatArray(translation.x, translation.y, translation.z),
+                    ["rotation"] = FloatArray(rotation.x, rotation.y, rotation.z, rotation.w),
+                    ["scale"] = FloatArray(transform.localScale.x, transform.localScale.y, transform.localScale.z),
+                    ["extras"] = new Dictionary<string, object>
+                    {
+                        ["UN_avatar_node"] = new Dictionary<string, object>
+                        {
+                            ["nodeId"] = WardrobeSnapshotCapture.NodeIdFor(root.transform, transform),
+                            ["path"] = VariantExtractor.TransformPath(root.transform, transform)
+                        }
+                    }
+                };
+                nodes.Add(node);
+
+                var children = new List<object>(transform.childCount);
+                for (var i = 0; i < transform.childCount; i++)
+                {
+                    var child = transform.GetChild(i);
+                    BuildNodeTree(child);
+                    children.Add(nodeIndices[child]);
+                }
+                if (children.Count > 0)
+                {
+                    node["children"] = children;
+                }
+            }
+
+            private void AttachRenderers(Transform transform)
+            {
+                var meshRenderer = transform.GetComponent<MeshRenderer>();
+                if (meshRenderer != null)
+                {
+                    var filter = transform.GetComponent<MeshFilter>();
+                    if (filter != null && filter.sharedMesh != null)
+                    {
+                        var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
+                        var mesh = ExportMesh(filter.sharedMesh, meshRenderer.sharedMaterials, null);
+                        if (mesh >= 0)
+                        {
+                            node["mesh"] = mesh;
+                            RecordRendererAsset(transform, mesh);
+                        }
+                    }
+                }
+
+                var skinned = transform.GetComponent<SkinnedMeshRenderer>();
+                if (skinned != null)
+                {
+                    if (skinned.sharedMesh != null)
+                    {
+                        var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
+                        var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned);
+                        if (mesh >= 0)
+                        {
+                            node["mesh"] = mesh;
+                            RecordRendererAsset(transform, mesh);
+                        }
+                        var skin = ExportSkin(skinned);
+                        if (skin >= 0)
+                        {
+                            node["skin"] = skin;
+                        }
+                    }
+                }
+
+                for (var i = 0; i < transform.childCount; i++)
+                {
+                    AttachRenderers(transform.GetChild(i));
+                }
+            }
+
+            private void RecordRendererAsset(Transform transform, int meshIndex)
+            {
+                var record = new UnavatarRendererAssetRecord
+                {
+                    nodeId = WardrobeSnapshotCapture.NodeIdFor(root.transform, transform),
+                    path = VariantExtractor.TransformPath(root.transform, transform),
+                    mesh = meshIndex
+                };
+                foreach (var primitiveIndex in PrimitiveIndicesForMesh(meshIndex))
+                {
+                    if (!record.primitives.Contains(primitiveIndex))
+                    {
+                        record.primitives.Add(primitiveIndex);
+                    }
+                }
+                foreach (var materialIndex in MaterialIndicesForMesh(meshIndex))
+                {
+                    if (!record.materials.Contains(materialIndex))
+                    {
+                        record.materials.Add(materialIndex);
+                    }
+                    foreach (var imageIndex in ImageIndicesForMaterial(materialIndex))
+                    {
+                        if (!record.images.Contains(imageIndex))
+                        {
+                            record.images.Add(imageIndex);
+                        }
+                    }
+                }
+                record.primitives.Sort();
+                record.materials.Sort();
+                record.images.Sort();
+                rendererAssets.Add(record);
+            }
+
+            private IEnumerable<int> PrimitiveIndicesForMesh(int meshIndex)
+            {
+                if (meshIndex < 0 || meshIndex >= meshes.Count || !(meshes[meshIndex] is Dictionary<string, object> mesh))
+                {
+                    yield break;
+                }
+                if (!mesh.TryGetValue("primitives", out var rawPrimitives) || !(rawPrimitives is List<object> primitives))
+                {
+                    yield break;
+                }
+                for (var primitiveIndex = 0; primitiveIndex < primitives.Count; primitiveIndex++)
+                {
+                    yield return primitiveIndex;
+                }
+            }
+
+            private IEnumerable<int> MaterialIndicesForMesh(int meshIndex)
+            {
+                if (meshIndex < 0 || meshIndex >= meshes.Count || !(meshes[meshIndex] is Dictionary<string, object> mesh))
+                {
+                    yield break;
+                }
+                if (!mesh.TryGetValue("primitives", out var rawPrimitives) || !(rawPrimitives is List<object> primitives))
+                {
+                    yield break;
+                }
+                foreach (var primitiveObject in primitives)
+                {
+                    if (primitiveObject is Dictionary<string, object> primitive &&
+                        primitive.TryGetValue("material", out var rawMaterial) &&
+                        rawMaterial is int materialIndex)
+                    {
+                        yield return materialIndex;
+                    }
+                }
+            }
+
+            private IEnumerable<int> ImageIndicesForMaterial(int materialIndex)
+            {
+                if (materialIndex < 0 || materialIndex >= materials.Count || !(materials[materialIndex] is Dictionary<string, object> material))
+                {
+                    yield break;
+                }
+                foreach (var textureIndex in TextureIndicesForMaterial(material))
+                {
+                    if (textureIndex < 0 || textureIndex >= textures.Count || !(textures[textureIndex] is Dictionary<string, object> texture))
+                    {
+                        continue;
+                    }
+                    if (texture.TryGetValue("source", out var rawSource) && rawSource is int imageIndex)
+                    {
+                        yield return imageIndex;
+                    }
+                }
+            }
+
+            private static IEnumerable<int> TextureIndicesForMaterial(Dictionary<string, object> material)
+            {
+                if (material.TryGetValue("pbrMetallicRoughness", out var rawPbr) && rawPbr is Dictionary<string, object> pbr)
+                {
+                    foreach (var textureIndex in TextureIndicesForTextureInfo(pbr, "baseColorTexture"))
+                    {
+                        yield return textureIndex;
+                    }
+                    foreach (var textureIndex in TextureIndicesForTextureInfo(pbr, "metallicRoughnessTexture"))
+                    {
+                        yield return textureIndex;
+                    }
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "normalTexture"))
+                {
+                    yield return textureIndex;
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "occlusionTexture"))
+                {
+                    yield return textureIndex;
+                }
+                foreach (var textureIndex in TextureIndicesForTextureInfo(material, "emissiveTexture"))
+                {
+                    yield return textureIndex;
+                }
+                if (material.TryGetValue("extras", out var rawExtras) &&
+                    rawExtras is Dictionary<string, object> extras &&
+                    extras.TryGetValue("UN_avatar_material", out var rawUnAvatarMaterial) &&
+                    rawUnAvatarMaterial is Dictionary<string, object> unAvatarMaterial &&
+                    unAvatarMaterial.TryGetValue("mtoon", out var rawMtoon) &&
+                    rawMtoon is Dictionary<string, object> mtoon)
+                {
+                    foreach (var item in mtoon)
+                    {
+                        if (item.Key.EndsWith("TextureIndex", StringComparison.Ordinal) && item.Value is int textureIndex)
+                        {
+                            yield return textureIndex;
+                        }
+                    }
+                }
+            }
+
+            private static IEnumerable<int> TextureIndicesForTextureInfo(Dictionary<string, object> dictionary, string key)
+            {
+                if (dictionary.TryGetValue(key, out var rawTextureInfo) &&
+                    rawTextureInfo is Dictionary<string, object> textureInfo &&
+                    textureInfo.TryGetValue("index", out var rawIndex) &&
+                    rawIndex is int textureIndex)
+                {
+                    yield return textureIndex;
+                }
+            }
+
+            private int ExportMesh(Mesh mesh, Material[] sourceMaterials, SkinnedMeshRenderer skinned)
+            {
+                var vertices = mesh.vertices;
+                if (vertices == null || vertices.Length == 0)
+                {
+                    return -1;
+                }
+
+                var normals = mesh.normals;
+                var tangents = mesh.tangents;
+                var uv = mesh.uv;
+                var colors = mesh.colors;
+                var boneWeights = skinned != null ? mesh.boneWeights : null;
+
+                var positionAccessor = AddVec3Accessor(vertices, true, true);
+                var normalAccessor = normals != null && normals.Length == vertices.Length ? AddVec3Accessor(normals, false, true) : -1;
+                var tangentAccessor = tangents != null && tangents.Length == vertices.Length ? AddVec4Accessor(tangents, true) : -1;
+                var uvAccessor = uv != null && uv.Length == vertices.Length ? AddVec2Accessor(uv) : -1;
+                var colorAccessor = colors != null && colors.Length == vertices.Length ? AddColorAccessor(colors) : -1;
+                var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddJointsAccessor(boneWeights) : -1;
+                var weightsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddWeightsAccessor(boneWeights) : -1;
+                var morphTargets = BuildMorphTargets(mesh, vertices.Length);
+                var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>(0);
+
+                var primitives = new List<object>(mesh.subMeshCount);
+                for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
+                {
+                    var indices = mesh.GetIndices(submesh);
+                    if (indices == null || indices.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    var attributes = new Dictionary<string, object> { ["POSITION"] = positionAccessor };
+                    if (normalAccessor >= 0) attributes["NORMAL"] = normalAccessor;
+                    if (tangentAccessor >= 0) attributes["TANGENT"] = tangentAccessor;
+                    if (uvAccessor >= 0) attributes["TEXCOORD_0"] = uvAccessor;
+                    if (colorAccessor >= 0) attributes["COLOR_0"] = colorAccessor;
+                    if (jointsAccessor >= 0 && weightsAccessor >= 0)
+                    {
+                        attributes["JOINTS_0"] = jointsAccessor;
+                        attributes["WEIGHTS_0"] = weightsAccessor;
+                    }
+                    var targets = new List<object>(morphTargets.Count);
+                    foreach (var target in morphTargets)
+                    {
+                        targets.Add(target.ToJson());
+                    }
+
+                    var material = sourceMaterials != null && submesh < sourceMaterials.Length ? sourceMaterials[submesh] : null;
+                    var primitive = new Dictionary<string, object>
+                    {
+                        ["attributes"] = attributes,
+                        ["indices"] = AddIndicesAccessor(indices, true),
+                        ["material"] = ExportMaterial(material),
+                        ["mode"] = 4
+                    };
+                    if (targets.Count > 0)
+                    {
+                        primitive["targets"] = targets;
+                    }
+                    primitives.Add(primitive);
+                }
+                if (primitives.Count == 0)
+                {
+                    return -1;
+                }
+
+                var gltfMesh = new Dictionary<string, object>
+                {
+                    ["name"] = mesh.name,
+                    ["primitives"] = primitives
+                };
+                if (morphWeights.Count > 0)
+                {
+                    gltfMesh["weights"] = morphWeights;
+                }
+                if (morphTargets.Count > 0)
+                {
+                    gltfMesh["extras"] = new Dictionary<string, object>
+                    {
+                        ["targetNames"] = MorphTargetNames(morphTargets)
+                    };
+                }
+                meshes.Add(gltfMesh);
+                return meshes.Count - 1;
+            }
+
+            private static List<object> MorphTargetNames(List<MorphTargetRecord> morphTargets)
+            {
+                var names = new List<object>(morphTargets.Count);
+                foreach (var target in morphTargets)
+                {
+                    names.Add(target.Name);
+                }
+                return names;
+            }
+
+            private static Vector3 UnityVectorToGltf(Vector3 value)
+            {
+                return new Vector3(-value.x, value.y, value.z);
+            }
+
+            private static Quaternion UnityRotationToGltf(Quaternion value)
+            {
+                return new Quaternion(value.x, -value.y, -value.z, value.w);
+            }
+
+            private static Vector4 UnityTangentToGltf(Vector4 value)
+            {
+                return new Vector4(-value.x, value.y, value.z, -value.w);
+            }
+
+            private static Matrix4x4 UnityMatrixToGltf(Matrix4x4 value)
+            {
+                for (var row = 0; row < 4; row++)
+                {
+                    value[row, 0] = -value[row, 0];
+                }
+                for (var col = 0; col < 4; col++)
+                {
+                    value[0, col] = -value[0, col];
+                }
+                return value;
+            }
+
+            private int AddVec3Accessor(Vector3[] values, bool minMax, bool convertUnityToGltf)
+            {
+                var bytes = new byte[values.Length * 12];
+                var min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+                var max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+                for (var i = 0; i < values.Length; i++)
+                {
+                    var value = convertUnityToGltf ? UnityVectorToGltf(values[i]) : values[i];
+                    WriteFloat(bytes, i * 12, value.x);
+                    WriteFloat(bytes, i * 12 + 4, value.y);
+                    WriteFloat(bytes, i * 12 + 8, value.z);
+                    min = Vector3.Min(min, value);
+                    max = Vector3.Max(max, value);
+                }
+                var view = AddBufferView(bytes);
+                var accessor = Accessor(view, values.Length, 5126, "VEC3");
+                if (minMax)
+                {
+                    accessor["min"] = FloatArray(min.x, min.y, min.z);
+                    accessor["max"] = FloatArray(max.x, max.y, max.z);
+                }
+                accessors.Add(accessor);
+                return accessors.Count - 1;
+            }
+
+            private int AddVec4Accessor(Vector4[] values, bool convertUnityTangentToGltf)
+            {
+                var bytes = new byte[values.Length * 16];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    var value = convertUnityTangentToGltf ? UnityTangentToGltf(values[i]) : values[i];
+                    WriteFloat(bytes, i * 16, value.x);
+                    WriteFloat(bytes, i * 16 + 4, value.y);
+                    WriteFloat(bytes, i * 16 + 8, value.z);
+                    WriteFloat(bytes, i * 16 + 12, value.w);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Length, 5126, "VEC4"));
+                return accessors.Count - 1;
+            }
+
+            private int AddVec2Accessor(Vector2[] values)
+            {
+                var bytes = new byte[values.Length * 8];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    WriteFloat(bytes, i * 8, values[i].x);
+                    WriteFloat(bytes, i * 8 + 4, 1.0f - values[i].y);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Length, 5126, "VEC2"));
+                return accessors.Count - 1;
+            }
+
+            private static float GltfTextureOffsetY(float unityOffsetY, float unityScaleY)
+            {
+                return 1.0f - unityScaleY - unityOffsetY;
+            }
+
+            private int AddColorAccessor(Color[] values)
+            {
+                var bytes = new byte[values.Length * 16];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    WriteFloat(bytes, i * 16, values[i].r);
+                    WriteFloat(bytes, i * 16 + 4, values[i].g);
+                    WriteFloat(bytes, i * 16 + 8, values[i].b);
+                    WriteFloat(bytes, i * 16 + 12, values[i].a);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Length, 5126, "VEC4"));
+                return accessors.Count - 1;
+            }
+
+            private int AddJointsAccessor(BoneWeight[] values)
+            {
+                var bytes = new byte[values.Length * 8];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    WriteUShort(bytes, i * 8, values[i].boneIndex0);
+                    WriteUShort(bytes, i * 8 + 2, values[i].boneIndex1);
+                    WriteUShort(bytes, i * 8 + 4, values[i].boneIndex2);
+                    WriteUShort(bytes, i * 8 + 6, values[i].boneIndex3);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Length, 5123, "VEC4"));
+                return accessors.Count - 1;
+            }
+
+            private int AddWeightsAccessor(BoneWeight[] values)
+            {
+                var bytes = new byte[values.Length * 16];
+                for (var i = 0; i < values.Length; i++)
+                {
+                    WriteFloat(bytes, i * 16, values[i].weight0);
+                    WriteFloat(bytes, i * 16 + 4, values[i].weight1);
+                    WriteFloat(bytes, i * 16 + 8, values[i].weight2);
+                    WriteFloat(bytes, i * 16 + 12, values[i].weight3);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Length, 5126, "VEC4"));
+                return accessors.Count - 1;
+            }
+
+            private int AddMat4Accessor(List<Matrix4x4> values)
+            {
+                var bytes = new byte[values.Count * 64];
+                for (var i = 0; i < values.Count; i++)
+                {
+                    var offset = i * 64;
+                    var m = values[i];
+                    WriteFloat(bytes, offset, m.m00);
+                    WriteFloat(bytes, offset + 4, m.m10);
+                    WriteFloat(bytes, offset + 8, m.m20);
+                    WriteFloat(bytes, offset + 12, m.m30);
+                    WriteFloat(bytes, offset + 16, m.m01);
+                    WriteFloat(bytes, offset + 20, m.m11);
+                    WriteFloat(bytes, offset + 24, m.m21);
+                    WriteFloat(bytes, offset + 28, m.m31);
+                    WriteFloat(bytes, offset + 32, m.m02);
+                    WriteFloat(bytes, offset + 36, m.m12);
+                    WriteFloat(bytes, offset + 40, m.m22);
+                    WriteFloat(bytes, offset + 44, m.m32);
+                    WriteFloat(bytes, offset + 48, m.m03);
+                    WriteFloat(bytes, offset + 52, m.m13);
+                    WriteFloat(bytes, offset + 56, m.m23);
+                    WriteFloat(bytes, offset + 60, m.m33);
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, values.Count, 5126, "MAT4"));
+                return accessors.Count - 1;
+            }
+
+            private int AddIndicesAccessor(int[] indices, bool reverseWinding)
+            {
+                var useUshort = true;
+                for (var i = 0; i < indices.Length; i++)
+                {
+                    if (indices[i] < 0 || indices[i] > ushort.MaxValue)
+                    {
+                        useUshort = false;
+                        break;
+                    }
+                }
+                var bytes = new byte[indices.Length * (useUshort ? 2 : 4)];
+                for (var i = 0; i < indices.Length; i++)
+                {
+                    var value = indices[i];
+                    if (reverseWinding)
+                    {
+                        var triangleOffset = i % 3;
+                        var triangleStart = i - triangleOffset;
+                        if (triangleStart + 2 < indices.Length)
+                        {
+                            if (triangleOffset == 1)
+                            {
+                                value = indices[i + 1];
+                            }
+                            else if (triangleOffset == 2)
+                            {
+                                value = indices[i - 1];
+                            }
+                        }
+                    }
+                    if (useUshort)
+                    {
+                        WriteUShort(bytes, i * 2, value);
+                    }
+                    else
+                    {
+                        WriteUInt(bytes, i * 4, (uint)value);
+                    }
+                }
+                var view = AddBufferView(bytes);
+                accessors.Add(Accessor(view, indices.Length, useUshort ? 5123 : 5125, "SCALAR"));
+                return accessors.Count - 1;
+            }
+
+            private int AddBufferView(byte[] bytes)
+            {
+                var offset = buffer.Append(bytes);
+                bufferViews.Add(new Dictionary<string, object>
+                {
+                    ["buffer"] = 0,
+                    ["byteOffset"] = offset,
+                    ["byteLength"] = bytes.Length
+                });
+                return bufferViews.Count - 1;
+            }
+
+            private static Dictionary<string, object> Accessor(int bufferView, int count, int componentType, string type)
+            {
+                return new Dictionary<string, object>
+                {
+                    ["bufferView"] = bufferView,
+                    ["byteOffset"] = 0,
+                    ["componentType"] = componentType,
+                    ["count"] = count,
+                    ["type"] = type
+                };
+            }
+
+            private bool HasProperty(Material material, string property)
+            {
+                if (material == null || string.IsNullOrEmpty(property))
+                {
+                    return false;
+                }
+                var key = new MaterialPropertyKey(material, property);
+                if (materialPropertyCache.TryGetValue(key, out var hasProperty))
+                {
+                    return hasProperty;
+                }
+                hasProperty = material.HasProperty(property);
+                materialPropertyCache[key] = hasProperty;
+                return hasProperty;
+            }
+
+            private Color ReadColor(Material material, string property, Color fallback)
+            {
+                return HasProperty(material, property) ? material.GetColor(property) : fallback;
+            }
+
+            private float ReadFloat(Material material, string property, float fallback)
+            {
+                return HasProperty(material, property) ? material.GetFloat(property) : fallback;
+            }
+
+            private Vector4 ReadVector(Material material, string property, Vector4 fallback)
+            {
+                return HasProperty(material, property) ? material.GetVector(property) : fallback;
+            }
+
+            private Texture ReadTexture(Material material, string property)
+            {
+                if (material == null || string.IsNullOrEmpty(property))
+                {
+                    return null;
+                }
+                var key = new MaterialPropertyKey(material, property);
+                if (materialTextureCache.TryGetValue(key, out var texture))
+                {
+                    return texture;
+                }
+                texture = HasProperty(material, property) ? material.GetTexture(property) : null;
+                materialTextureCache[key] = texture;
+                return texture;
+            }
+
+            private static void WriteGlb(string path, string json, byte[] bin)
+            {
+                var jsonBytes = Pad(Encoding.UTF8.GetBytes(json), 0x20);
+                var binBytes = Pad(bin ?? Array.Empty<byte>(), 0x00);
+                var total = 12 + 8 + jsonBytes.Length + (binBytes.Length > 0 ? 8 + binBytes.Length : 0);
+                using (var stream = File.Create(path))
+                using (var writer = new BinaryWriter(stream))
+                {
+                    writer.Write(GlbMagic);
+                    writer.Write((uint)2);
+                    writer.Write((uint)total);
+                    writer.Write((uint)jsonBytes.Length);
+                    writer.Write(JsonChunkType);
+                    writer.Write(jsonBytes);
+                    if (binBytes.Length > 0)
+                    {
+                        writer.Write((uint)binBytes.Length);
+                        writer.Write(BinChunkType);
+                        writer.Write(binBytes);
+                    }
+                }
+            }
+
+            private static List<object> FloatArray(params float[] values)
+            {
+                var result = new List<object>(values.Length);
+                foreach (var value in values)
+                {
+                    result.Add(value);
+                }
+                return result;
+            }
+
+            private static byte[] Pad(byte[] data, byte value)
+            {
+                var length = (data.Length + 3) & ~3;
+                if (length == data.Length)
+                {
+                    return data;
+                }
+                var padded = new byte[length];
+                Buffer.BlockCopy(data, 0, padded, 0, data.Length);
+                for (var i = data.Length; i < padded.Length; i++)
+                {
+                    padded[i] = value;
+                }
+                return padded;
+            }
+
+            private static void WriteFloat(byte[] bytes, int offset, float value)
+            {
+                Buffer.BlockCopy(BitConverter.GetBytes(value), 0, bytes, offset, 4);
+            }
+
+            private static void WriteUShort(byte[] bytes, int offset, int value)
+            {
+                Buffer.BlockCopy(BitConverter.GetBytes((ushort)value), 0, bytes, offset, 2);
+            }
+
+            private static void WriteUInt(byte[] bytes, int offset, uint value)
+            {
+                Buffer.BlockCopy(BitConverter.GetBytes(value), 0, bytes, offset, 4);
+            }
+        }
+
+        private sealed class MorphTargetRecord
+        {
+            public string Name;
+            public int PositionAccessor;
+            public int NormalAccessor;
+
+            public Dictionary<string, object> ToJson()
+            {
+                var json = new Dictionary<string, object>();
+                if (PositionAccessor >= 0)
+                {
+                    json["POSITION"] = PositionAccessor;
+                }
+                if (NormalAccessor >= 0)
+                {
+                    json["NORMAL"] = NormalAccessor;
+                }
+                return json;
+            }
+        }
+
+        private sealed class BinaryBuffer
+        {
+            private readonly List<byte> bytes = new List<byte>();
+
+            public int Length => bytes.Count;
+
+            public int Append(byte[] data)
+            {
+                while ((bytes.Count & 3) != 0)
+                {
+                    bytes.Add(0);
+                }
+                var offset = bytes.Count;
+                bytes.AddRange(data);
+                while ((bytes.Count & 3) != 0)
+                {
+                    bytes.Add(0);
+                }
+                return offset;
+            }
+
+            public byte[] ToArray()
+            {
+                return bytes.ToArray();
+            }
+        }
+    }
+}

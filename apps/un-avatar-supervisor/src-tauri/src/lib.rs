@@ -1,9 +1,11 @@
 use std::{
 	collections::{BTreeMap, BTreeSet},
-	env, fs,
-	io::{BufRead, BufReader},
+	env,
+	ffi::OsStr,
+	fs,
+	io::{BufRead, BufReader, Read, Seek, SeekFrom},
 	net::SocketAddr,
-	path::{Path, PathBuf},
+	path::{Component, Path, PathBuf},
 	process::{Child, ChildStderr, Command, Stdio},
 	sync::{
 		atomic::{AtomicBool, Ordering},
@@ -13,13 +15,14 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use image::ImageEncoder as _;
 use serde::{Deserialize, Serialize};
 use tauri::{
 	image::Image,
 	menu::{Menu, MenuItem, Submenu},
 	plugin::PermissionState,
 	tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-	Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+	Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
 
@@ -47,6 +50,9 @@ fn app_title_with_version() -> String {
 const MAX_RENDERER_LOG_LINES: usize = 120;
 const MAX_STOPPED_RENDERER_HISTORY: usize = 20;
 const MAX_DIAGNOSTICS_PREVIEW_BYTES: u64 = 1024 * 1024;
+const MAX_UNAVATAR_METADATA_JSON_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_METADATA_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = MAX_METADATA_IMAGE_BYTES;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -57,6 +63,9 @@ type SpringBoneAuthoredParamsCache = BTreeMap<String, SpringBoneAuthoredParamsBy
 static SPRING_BONE_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<SpringBoneAuthoredParamsCache>> = OnceLock::new();
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
+const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
+const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
+const UN_AVATAR_LAUNCHER_APP_ID: &str = "UsagiNetwork.UNAvatar.Launcher";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -92,6 +101,9 @@ struct AppRuntimeSettings {
 	/// 直前に選択していたアバター設定 ID。Renderers/Avatar Settings 画面の Launch 対象と編集対象。
 	/// 起動時に存在するなら復元し、ユーザーが選び直したら都度書き戻す。
 	last_selected_setting_id: Option<String>,
+	/// Windows taskbar Jump List に表示する profile ids。削除済み profile は起動時や更新時に prune する。
+	#[serde(default)]
+	pinned_taskbar_profile_ids: Vec<String>,
 	/// Avatar model picker の直近ディレクトリ。未選択ならユーザーの Documents を初期位置にする。
 	last_avatar_model_dir: Option<String>,
 	/// 終了時の Supervisor Console ウィンドウの outer 位置（px）。None なら OS 既定位置で起動。
@@ -122,6 +134,7 @@ impl Default for AppRuntimeSettings {
 			auto_launch_selected_on_startup: false,
 			show_developer_controls: false,
 			last_selected_setting_id: None,
+			pinned_taskbar_profile_ids: Vec::new(),
 			last_avatar_model_dir: None,
 			console_window_x: None,
 			console_window_y: None,
@@ -131,7 +144,6 @@ impl Default for AppRuntimeSettings {
 		}
 	}
 }
-
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum QuitBehavior {
@@ -142,7 +154,7 @@ enum QuitBehavior {
 
 struct ManagedRenderer {
 	info: RendererInstance,
-	child: Child,
+	child: Option<Child>,
 	started_at: Instant,
 	runtime_bus_key: String,
 	runtime_status_cache: Arc<Mutex<RendererRuntimeTelemetryCache>>,
@@ -156,6 +168,10 @@ struct RendererRuntimeTelemetryCache {
 	telemetry: Option<RendererRuntimeTelemetry>,
 	updated_at: Option<Instant>,
 	last_error: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+	!*value
 }
 
 #[derive(Clone, Serialize)]
@@ -222,9 +238,31 @@ struct RendererRuntimeStatus {
 	connected: bool,
 	protocol: Option<String>,
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_cpu_total_ms: Option<f32>,
+	frame_motion_apply_ms: Option<f32>,
+	frame_dynamics_step_ms: Option<f32>,
+	frame_globals_ms: Option<f32>,
+	frame_surface_acquire_ms: Option<f32>,
+	frame_target_prepare_ms: Option<f32>,
+	frame_draw_state_refresh_ms: Option<f32>,
+	frame_scene_world_ms: Option<f32>,
+	frame_draw_skin_palette_ms: Option<f32>,
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	frame_draw_expression_values_ms: Option<f32>,
+	frame_draw_morph_weights_ms: Option<f32>,
+	frame_draw_transform_loop_ms: Option<f32>,
+	frame_bone_collider_debug_ms: Option<f32>,
+	frame_command_encode_ms: Option<f32>,
+	frame_submit_present_ms: Option<f32>,
+	frame_spout_cpu_ms: Option<f32>,
+	frame_contact_eval_ms: Option<f32>,
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -235,6 +273,10 @@ struct RendererRuntimeStatus {
 	mipmap_filter: Option<String>,
 	processed_texture_cache: Option<bool>,
 	texture_summary: Option<TextureRuntimeSummary>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	wardrobe_asset_upload: Option<serde_json::Value>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
 	spout_available: bool,
 	spout_enabled: bool,
 	spout_name: Option<String>,
@@ -274,6 +316,8 @@ struct RendererRuntimeStatus {
 	unmotion_zenoh_received_frames: u64,
 	#[serde(default)]
 	motion_applied_frames: u64,
+	#[serde(default)]
+	audio_link_texture_needed: bool,
 	/// `"vmc"` / `"unmotion_zenoh"`。VMC と UNMotion 同時受信時の primary 選択値。
 	#[serde(default)]
 	primary_motion_source: String,
@@ -285,6 +329,108 @@ struct RendererRuntimeStatus {
 	bone_collider_count: u32,
 	#[serde(default)]
 	bone_collider_source: String,
+	#[serde(default)]
+	dynamics_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_source_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_override_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_group_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_group_count: u32,
+	#[serde(default)]
+	dynamics_unknown_group_count: u32,
+	#[serde(default)]
+	dynamics_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_angle_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_rotation_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_candidate_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_target_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_target_group_count: u32,
+	#[serde(default)]
+	dynamics_grabbing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_posing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_collider_count: u32,
+	#[serde(default)]
+	dynamics_unknown_collider_count: u32,
+	#[serde(default)]
+	dynamics_contact_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_sender_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_receiver_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_declaration_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_would_emit_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emission_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emitted_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_reset_to_zero_count: u32,
+	#[serde(default)]
+	dynamics_constraint_ref_count: u32,
+	#[serde(default)]
+	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_definitions: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_parameter_conflicts: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_actions: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_target_write_collisions: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_readiness: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_baseline_candidates: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_baseline_capture_plan: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	runtime_action_restore_apply_plan: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_action_candidates: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	menu_wardrobe_candidates: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_declarations: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "is_false")]
+	contact_parameter_emission_enabled: bool,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_parameter_emissions: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	contact_probes: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_groups: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_interaction_hooks: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_colliders: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_constraint_refs: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_warnings: Vec<String>,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -340,6 +486,75 @@ struct VrmMetadataInfo {
 	permissions: Vec<VrmMetadataField>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+struct UnavatarMetadataInfo {
+	path: String,
+	file_name: String,
+	name: Option<String>,
+	spec_version: Option<String>,
+	generator: Option<String>,
+	source_type: Option<String>,
+	export_mode: Option<String>,
+	created_utc: Option<String>,
+	wardrobe_set_count: u32,
+	dynamics_count: u32,
+	contact_count: u32,
+	modular_avatar_component_count: u32,
+	redistribution_allowed: Option<bool>,
+	preview_images: Vec<UnavatarPreviewImage>,
+	preview_sets: Vec<UnavatarPreviewSet>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct UnavatarPreviewImage {
+	view: Option<String>,
+	width: Option<u32>,
+	height: Option<u32>,
+	data_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct UnavatarPreviewSet {
+	id: String,
+	name: String,
+	preview_images: Vec<UnavatarPreviewImage>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+struct ProfileIconCropRequest {
+	zoom: f32,
+	offset_x: f32,
+	offset_y: f32,
+}
+
+#[derive(Clone, Debug)]
+enum GltfMetadataSource {
+	Glb { path: PathBuf, bin_offset: u64 },
+	Json { path: PathBuf, bytes: Vec<u8> },
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarWardrobeOptions {
+	available: bool,
+	base_label: String,
+	sets: Vec<UnavatarWardrobeSetOption>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarWardrobeSetOption {
+	id: String,
+	name: String,
+}
+
+#[derive(Clone, Serialize)]
+struct MidiNoteCaptureResult {
+	device: String,
+	channel: u8,
+	note: u8,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 struct RendererCameraSnapshot {
 	target: [f32; 3],
@@ -355,6 +570,12 @@ struct TextureRuntimeSummary {
 	image_count: u32,
 	#[serde(default)]
 	resized_count: u32,
+	#[serde(default)]
+	cubemap_count: u32,
+	#[serde(default)]
+	cubemap_converted_count: u32,
+	#[serde(default)]
+	cubemap_fallback_count: u32,
 	#[serde(default)]
 	compression_mode: Option<String>,
 	#[serde(default)]
@@ -388,6 +609,8 @@ struct TextureRuntimeSummary {
 	#[serde(default)]
 	uploaded_mip_bytes: u64,
 	#[serde(default)]
+	cubemap_uploaded_bytes: u64,
+	#[serde(default)]
 	max_source_dimension: u32,
 	#[serde(default)]
 	max_uploaded_dimension: u32,
@@ -399,12 +622,56 @@ struct TextureRuntimeSummary {
 struct RendererRuntimeTelemetry {
 	connected: bool,
 	#[serde(default)]
+	pid: Option<u32>,
+	#[serde(default)]
 	protocol: Option<String>,
 	#[serde(default)]
 	control_capabilities: Vec<String>,
+	#[serde(default)]
+	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	#[serde(default)]
+	frame_cpu_total_ms: Option<f32>,
+	#[serde(default)]
+	frame_motion_apply_ms: Option<f32>,
+	#[serde(default)]
+	frame_dynamics_step_ms: Option<f32>,
+	#[serde(default)]
+	frame_globals_ms: Option<f32>,
+	#[serde(default)]
+	frame_surface_acquire_ms: Option<f32>,
+	#[serde(default)]
+	frame_target_prepare_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_state_refresh_ms: Option<f32>,
+	#[serde(default)]
+	frame_scene_world_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_skin_palette_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_skin_palette_write_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_fur_source_vertices_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_expression_values_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_morph_weights_ms: Option<f32>,
+	#[serde(default)]
+	frame_draw_transform_loop_ms: Option<f32>,
+	#[serde(default)]
+	frame_bone_collider_debug_ms: Option<f32>,
+	#[serde(default)]
+	frame_command_encode_ms: Option<f32>,
+	#[serde(default)]
+	frame_submit_present_ms: Option<f32>,
+	#[serde(default)]
+	frame_spout_cpu_ms: Option<f32>,
+	#[serde(default)]
+	frame_contact_eval_ms: Option<f32>,
+	#[serde(default)]
+	frame_runtime_action_eval_ms: Option<f32>,
 	gpu_ms: Option<f32>,
 	ram_mb: Option<u64>,
 	surface_width: Option<u32>,
@@ -427,6 +694,10 @@ struct RendererRuntimeTelemetry {
 	processed_texture_cache: Option<bool>,
 	#[serde(default)]
 	texture_summary: Option<TextureRuntimeSummary>,
+	#[serde(default)]
+	wardrobe_asset_upload: Option<serde_json::Value>,
+	#[serde(default)]
+	active_wardrobe_set: Option<String>,
 	#[serde(default)]
 	spout_available: bool,
 	spout_enabled: bool,
@@ -472,6 +743,8 @@ struct RendererRuntimeTelemetry {
 	#[serde(default)]
 	motion_applied_frames: u64,
 	#[serde(default)]
+	audio_link_texture_needed: bool,
+	#[serde(default)]
 	primary_motion_source: String,
 	#[serde(default)]
 	show_axes: bool,
@@ -481,6 +754,108 @@ struct RendererRuntimeTelemetry {
 	bone_collider_count: u32,
 	#[serde(default)]
 	bone_collider_source: String,
+	#[serde(default)]
+	dynamics_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_source_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_enabled_override_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_group_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_group_count: u32,
+	#[serde(default)]
+	dynamics_unknown_group_count: u32,
+	#[serde(default)]
+	dynamics_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_angle_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_limit_group_count: u32,
+	#[serde(default)]
+	dynamics_rotation_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_candidate_count: u32,
+	#[serde(default)]
+	dynamics_translation_writeback_target_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_group_count: u32,
+	#[serde(default)]
+	dynamics_stretch_translation_writeback_target_group_count: u32,
+	#[serde(default)]
+	dynamics_grabbing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_posing_enabled_group_count: u32,
+	#[serde(default)]
+	dynamics_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrm_spring_bone_collider_count: u32,
+	#[serde(default)]
+	dynamics_vrc_physbone_collider_count: u32,
+	#[serde(default)]
+	dynamics_unknown_collider_count: u32,
+	#[serde(default)]
+	dynamics_contact_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_sender_count: u32,
+	#[serde(default)]
+	dynamics_vrc_contact_receiver_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_declaration_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_count: u32,
+	#[serde(default)]
+	dynamics_contact_probe_would_emit_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emission_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_emitted_count: u32,
+	#[serde(default)]
+	dynamics_contact_parameter_reset_to_zero_count: u32,
+	#[serde(default)]
+	dynamics_constraint_ref_count: u32,
+	#[serde(default)]
+	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default)]
+	runtime_parameter_definitions: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_parameter_conflicts: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_actions: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_action_target_write_collisions: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_action_restore_readiness: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_action_restore_baseline_candidates: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_action_restore_baseline_capture_plan: Vec<serde_json::Value>,
+	#[serde(default)]
+	runtime_action_restore_apply_plan: Vec<serde_json::Value>,
+	#[serde(default)]
+	menu_action_candidates: Vec<serde_json::Value>,
+	#[serde(default)]
+	menu_wardrobe_candidates: Vec<serde_json::Value>,
+	#[serde(default)]
+	contact_parameter_declarations: Vec<serde_json::Value>,
+	#[serde(default)]
+	contact_parameter_emission_enabled: bool,
+	#[serde(default)]
+	contact_parameter_emissions: Vec<serde_json::Value>,
+	#[serde(default)]
+	contact_probes: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_groups: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_interaction_hooks: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_colliders: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_constraint_refs: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_warnings: Vec<String>,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -524,6 +899,8 @@ struct SupervisorProfileDiagnostics {
 	seed_dir: String,
 	user_dir: String,
 	settings: Vec<AvatarSetting>,
+	launcher_settings: Vec<AvatarSetting>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
 	tray_launch_settings: Vec<AvatarSetting>,
 	error: Option<String>,
 }
@@ -543,6 +920,13 @@ struct DiagnosticsExportEntry {
 	modified_at_secs: Option<u64>,
 	size_bytes: u64,
 	archive_size_bytes: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+struct PrewarmSceneCacheResult {
+	profile_name: String,
+	elapsed_secs: f64,
+	detail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -607,11 +991,11 @@ struct RendererSpringBonePhysicsParams {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct RendererSpringBoneSetting {
-	spring_bones: bool,
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_enabled: bool,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -635,6 +1019,127 @@ struct RendererCameraTransition {
 struct AvatarSettingValueUpdate {
 	field: String,
 	value: serde_json::Value,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct AnimatorActionSetting {
+	id: String,
+	mode: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	value: Option<f64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	transition_curve: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	transition_ms: Option<u32>,
+}
+
+impl Default for AnimatorActionSetting {
+	fn default() -> Self {
+		Self {
+			id: String::new(),
+			mode: "off".to_string(),
+			value: None,
+			transition_curve: None,
+			transition_ms: None,
+		}
+	}
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct AnimatorBindingSetting {
+	action_id: String,
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	binding: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	device: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	channel: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	note: Option<u8>,
+}
+
+impl Default for AnimatorBindingSetting {
+	fn default() -> Self {
+		Self {
+			action_id: String::new(),
+			kind: "keyboard".to_string(),
+			binding: None,
+			device: None,
+			channel: None,
+			note: None,
+		}
+	}
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct WardrobeShortcutSetting {
+	set_id: String,
+	shortcut: String,
+}
+
+impl Default for WardrobeShortcutSetting {
+	fn default() -> Self {
+		Self {
+			set_id: String::new(),
+			shortcut: String::new(),
+		}
+	}
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
+struct WardrobeBindingSetting {
+	set_id: String,
+	kind: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	binding: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	device: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	channel: Option<u8>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	note: Option<u8>,
+}
+
+impl Default for WardrobeBindingSetting {
+	fn default() -> Self {
+		Self {
+			set_id: String::new(),
+			kind: "keyboard".to_string(),
+			binding: None,
+			device: None,
+			channel: None,
+			note: None,
+		}
+	}
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarAnimatorActionCandidate {
+	id: String,
+	label: String,
+	controller: String,
+	layer: String,
+	state_path: String,
+	effect_count: usize,
+	condition_count: usize,
+	selected_mode: String,
+}
+
+#[derive(Clone, Serialize)]
+struct UnavatarAnimatorActionPage {
+	available: bool,
+	total_count: usize,
+	matched_count: usize,
+	selected_count: usize,
+	offset: usize,
+	limit: usize,
+	candidates: Vec<UnavatarAnimatorActionCandidate>,
+	error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -670,6 +1175,18 @@ enum RendererControlCommand {
 	SetExpressionOverride {
 		name: String,
 		weight: f32,
+	},
+	ActivateAction {
+		#[serde(skip_serializing_if = "Option::is_none")]
+		action_id: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		menu_path: Option<String>,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		wardrobe_set_id: Option<String>,
+	},
+	SetParameter {
+		name: String,
+		value: f32,
 	},
 	ClearExpressionOverrides,
 	SetLookAt {
@@ -725,11 +1242,27 @@ enum RendererControlCommand {
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
 	},
-	SetSpringBones {
+	SetDynamics {
 		enabled: bool,
 		bone_colliders: RendererBoneColliderConfig,
 		#[serde(skip_serializing_if = "Option::is_none")]
 		physics_config: Option<RendererSpringBonePhysicsConfig>,
+	},
+	SetDynamicsEnabled {
+		source_id: String,
+		enabled: bool,
+	},
+	SetAnimatorProfile {
+		actions: Vec<AnimatorActionSetting>,
+		bindings: Vec<AnimatorBindingSetting>,
+	},
+	SetInputBindings {
+		wardrobe_bindings: Vec<WardrobeBindingSetting>,
+		animator_bindings: Vec<AnimatorBindingSetting>,
+	},
+	SetWardrobeTransition {
+		billboard_anchor: String,
+		billboard_y_offset_mm: f32,
 	},
 	SetAvatarOutline {
 		policy: Option<String>,
@@ -739,25 +1272,6 @@ enum RendererControlCommand {
 		color: Option<[f32; 3]>,
 		lighting_mix: Option<f32>,
 		roundness: Option<f32>,
-	},
-	SetAvatarRim {
-		policy: Option<String>,
-		color: Option<[f32; 3]>,
-		intensity: Option<f32>,
-		lighting_mix: Option<f32>,
-		fresnel_power: Option<f32>,
-		lift: Option<f32>,
-	},
-	SetAvatarMatcap {
-		scale: Option<f32>,
-	},
-	SetAvatarSpecular {
-		enabled: Option<bool>,
-		intensity: Option<f32>,
-		power: Option<f32>,
-	},
-	SetAvatarAmbientOcclusion {
-		strength: Option<f32>,
 	},
 	SetLighting {
 		environment_enabled: Option<bool>,
@@ -823,24 +1337,37 @@ struct AvatarSetting {
 	storage: ProfileStorage,
 	manifest_path: String,
 	avatar_path: Option<String>,
+	wardrobe_set: Option<String>,
+	wardrobe_billboard_anchor: String,
+	wardrobe_billboard_y_offset_mm: f32,
+	wardrobe_shortcuts: Vec<WardrobeShortcutSetting>,
+	wardrobe_bindings: Vec<WardrobeBindingSetting>,
+	animator_actions: Vec<AnimatorActionSetting>,
+	animator_bindings: Vec<AnimatorBindingSetting>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion_vmc_enabled: bool,
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
+	audio_link_source: String,
+	audio_link_input_device_id: Option<String>,
+	audio_link_input_device_name_hint: Option<String>,
 	look_at_enabled: bool,
 	look_at_clamp_deg: Option<f32>,
 	/// VMC と UNMF/Z の両方を受信可能な構成で primary 側として実際にアバターに反映する
 	/// motion source の選択。manifest `[motion] primary_source` に対応。
 	/// 値は `"vmc"` / `"unmotion_zenoh"`。未指定時は VMC（Phase 1 からの既存挙動）。
 	primary_motion_source: String,
-	/// VRM SpringBone（揺れもの）シミュレーションを有効化するか。manifest `spring_bones` に対応。
-	/// 既定 true（VRM アバターの基本機能）。
-	spring_bones: bool,
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	/// UNPhysics / UNDynamics の runtime solver を有効化するか。
+	/// manifest `[physics.dynamics] enabled` に対応。
+	dynamics_enabled: bool,
+	/// VRC Contact Receiver の runtime parameter emission を有効化するか。
+	/// manifest `[physics.contacts] parameter_emission` に対応。既定 false。
+	contact_parameter_emission: bool,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	/// VMC `/VMC/Ext/Root/Pos` の translation を scene root へ加算するか。
 	/// manifest `[motion] apply_vmc_root_translation` に対応。既定 false（Waidayo 等の calibration 都合で
 	/// 意図せず非ゼロな translation が送られアバターが前後にズレる問題を防ぐため）。フルボディトラッカー
@@ -858,7 +1385,7 @@ struct AvatarSetting {
 	block_compression_encoder: String,
 	block_compression_cpu_threads: usize,
 	/// Advanced モードで参照する、テクスチャ用途別の圧縮 preference。
-	/// `Source` / `Auto` 時は無視。8 役割 × 5 preference (source/auto/high_quality/small/gpu_native)。
+	/// 開発者向けの用途別 override。8 役割 × 5 preference (source/auto/high_quality/small/gpu_native)。
 	texture_compression_advanced: TextureCompressionAdvancedSetting,
 	processed_texture_cache: bool,
 	skin_tone_matching: bool,
@@ -880,10 +1407,10 @@ struct AvatarSetting {
 	bone_collider_upper_arms: f32,
 	bone_collider_lower_arms: f32,
 	bone_collider_hands: f32,
-	/// MToon outline 描画を無効化する診断 toggle。`[debug] disable_mtoon_outlines` に対応。
-	/// 一部 VRM モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
+	/// UNToon geometry outline 描画を無効化する診断 toggle。`[debug] disable_mtoon_outlines` に対応。
+	/// 一部 toon material で目周辺に肌色寄りの太い outline が出る現象の切り分け用。
 	debug_disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle。`[debug] disable_rim_lighting` に対応。
+	/// UNToon parametric Rim Lighting 寄与を 0 にする診断 toggle。`[debug] disable_rim_lighting` に対応。
 	debug_disable_rim_lighting: bool,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle。
 	/// `[debug] force_shading_shift_zero` に対応。
@@ -892,21 +1419,21 @@ struct AvatarSetting {
 	debug_disable_matcap: bool,
 	/// emissive 寄与を 0 にする診断 toggle。`[debug] disable_emissive` に対応。
 	debug_disable_emissive: bool,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断 toggle。`[debug] disable_shade_color` に対応。
+	/// UNToon shade color/texture の代わりに base を使う診断 toggle。`[debug] disable_shade_color` に対応。
 	debug_disable_shade_color: bool,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断 toggle。`[debug] disable_normal_map` に対応。
 	debug_disable_normal_map: bool,
-	/// fs_mtoon を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
+	/// UNToon fragment path を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
 	debug_base_texture_only: bool,
-	/// アバター outline の扱い。`[effects.avatar.outline] policy` に対応。
+	/// UN Avatar silhouette outline の扱い。`[effects.avatar.outline] policy` に対応。
 	outline_policy: String,
-	/// アバター outline の種類。v1 は `mtoon` のみ描画差分あり。`ink` / `brush` / `double` は予約値。
+	/// UN Avatar silhouette outline の種類。v2 UI では固定。`ink` / `brush` / `double` は予約値。
 	outline_type: String,
-	/// アバター outline の幅（メートル）。`None` は authored 値。
+	/// UN Avatar silhouette outline の幅（メートル）。`None` は既定値。
 	outline_width: Option<f32>,
-	/// アバター outline の色（linear RGB 0..1）。`None` は authored 値。
+	/// UN Avatar silhouette outline の色（linear RGB 0..1）。`None` は既定値。
 	outline_color: Option<[f32; 3]>,
-	/// アバター outline にライティングを混ぜる量。0 は完全な指定色、1 は authored lighting mix 相当。
+	/// UN Avatar silhouette outline にライティングを混ぜる量。0 は完全な指定色、1 は scene lighting 寄り。
 	outline_lighting_mix: Option<f32>,
 	/// UNAvatar screen-space outline の角の丸み。0 は角張る、1 は丸い。
 	outline_roundness: Option<f32>,
@@ -976,6 +1503,9 @@ struct AvatarSetting {
 	allow_multiple_renderers: bool,
 	notes: Option<String>,
 	group: String,
+	scene_cache_fingerprint: String,
+	scene_cache_prewarmed_fingerprint: Option<String>,
+	scene_cache_prewarmed_at: Option<String>,
 }
 
 struct PostEffectSettings {
@@ -1053,10 +1583,12 @@ struct DebugSettings {
 }
 
 struct PhysicsSettings {
-	spring_bone_physics_configured: bool,
-	spring_bone_simulation_hz: f32,
-	spring_bone_substeps: u32,
-	spring_bone_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_enabled: Option<bool>,
+	contact_parameter_emission: bool,
+	dynamics_physics_configured: bool,
+	dynamics_simulation_hz: f32,
+	dynamics_substeps: u32,
+	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -1089,6 +1621,12 @@ struct MotionSettings {
 	look_at_clamp_deg: Option<f32>,
 	apply_vmc_root_translation: bool,
 	primary_motion_source: String,
+}
+
+struct AudioLinkSettings {
+	source: String,
+	input_device_id: Option<String>,
+	input_device_name_hint: Option<String>,
 }
 
 struct WindowSettings {
@@ -1125,7 +1663,7 @@ struct SpringBoneCategoryOverrideSetting {
 	category: String,
 	name: String,
 	mode: String,
-	spring_bone_count: usize,
+	dynamics_group_count: usize,
 	solver: String,
 	damping_configured: bool,
 	damping_half_life_ms: f32,
@@ -1201,6 +1739,14 @@ struct ManifestProfile {
 	allow_multiple_renderers: Option<bool>,
 	notes: Option<String>,
 	group: Option<String>,
+	scene_cache: Option<ManifestProfileSceneCache>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestProfileSceneCache {
+	fingerprint: Option<String>,
+	prewarmed_at: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1225,6 +1771,14 @@ struct ManifestMotion {
 	/// VMC と UNMF/Z 両方を受信可能なときに、どちらをアバターに反映させるか。
 	/// 旧 manifest 互換の primary source。現在の renderer は姿勢入力を key 単位で後着優先マージする。
 	primary_source: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAudioLink {
+	source: Option<String>,
+	input_device_id: Option<String>,
+	input_device_name_hint: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1305,6 +1859,68 @@ struct ManifestWindow {
 	minimized: Option<bool>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimator {
+	action_ids: Option<Vec<String>>,
+	actions: Option<Vec<ManifestAnimatorAction>>,
+	bindings: Option<Vec<ManifestAnimatorBinding>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimatorAction {
+	id: Option<String>,
+	mode: Option<String>,
+	value: Option<f64>,
+	transition_curve: Option<String>,
+	transition_ms: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestAnimatorBinding {
+	action_id: Option<String>,
+	kind: Option<String>,
+	binding: Option<String>,
+	device: Option<String>,
+	channel: Option<u8>,
+	note: Option<u8>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobe {
+	shortcuts: Option<Vec<ManifestWardrobeShortcut>>,
+	bindings: Option<Vec<ManifestWardrobeBinding>>,
+	transition: Option<ManifestWardrobeTransition>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeTransition {
+	billboard_anchor: Option<String>,
+	billboard_y_offset_mm: Option<f32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeShortcut {
+	set_id: Option<String>,
+	shortcut: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestWardrobeBinding {
+	set_id: Option<String>,
+	kind: Option<String>,
+	binding: Option<String>,
+	device: Option<String>,
+	channel: Option<u8>,
+	note: Option<u8>,
+}
+
 fn manifest_background_color(manifest: &AvatarManifestSummary) -> [f32; 3] {
 	if let Some(color) = manifest.background_color {
 		return clamp_rgb(color);
@@ -1334,20 +1950,36 @@ struct ManifestDebug {
 #[serde(default)]
 struct ManifestPhysics {
 	bone_colliders: Option<ManifestBoneColliders>,
-	spring_bone: Option<ManifestSpringBonePhysics>,
+	contacts: Option<ManifestContactsPhysics>,
+	dynamics: Option<ManifestDynamicsPhysics>,
+	spring_bone: Option<ManifestDynamicsSolverPhysics>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct ManifestSpringBonePhysics {
+struct ManifestContactsPhysics {
+	parameter_emission: Option<bool>,
+	parameter_emission_enabled: Option<bool>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsPhysics {
+	enabled: Option<bool>,
+	solver: Option<ManifestDynamicsSolverPhysics>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsSolverPhysics {
 	simulation_hz: Option<f32>,
 	substeps: Option<u32>,
-	overrides: Option<Vec<ManifestSpringBoneCategoryOverride>>,
+	overrides: Option<Vec<ManifestDynamicsSolverCategoryOverride>>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct ManifestSpringBoneCategoryOverride {
+struct ManifestDynamicsSolverCategoryOverride {
 	category: String,
 	solver: Option<String>,
 	damping_half_life_ms: Option<f32>,
@@ -1551,10 +2183,13 @@ struct ManifestContactShadow {
 struct AvatarManifestSummary {
 	title: Option<String>,
 	avatar_path: Option<PathBuf>,
+	wardrobe_set: Option<String>,
+	wardrobe: Option<ManifestWardrobe>,
 	icon_path: Option<PathBuf>,
 	vmc_address: Option<String>,
 	vmc_port: Option<u16>,
 	motion: Option<ManifestMotion>,
+	audio_link: Option<ManifestAudioLink>,
 	physics: Option<ManifestPhysics>,
 	output: Option<ManifestOutput>,
 	aa: Option<String>,
@@ -1567,21 +2202,277 @@ struct AvatarManifestSummary {
 	profile: Option<ManifestProfile>,
 	spout: Option<ManifestSpout>,
 	window: Option<ManifestWindow>,
+	animator: Option<ManifestAnimator>,
 	debug: Option<ManifestDebug>,
 	camera: Option<ManifestCameraSetting>,
 	environment: Option<ManifestEnvironment>,
 	effects: Option<ManifestEffects>,
-	/// VRM SpringBone を毎フレーム計算するか。`spring_bones = true|false` の top-level bool。
-	/// 既定 true（renderer 側で `enable_spring_bones: true`）。
-	spring_bones: Option<bool>,
+}
+
+fn manifest_animator_action_settings(animator: Option<&ManifestAnimator>) -> Vec<AnimatorActionSetting> {
+	let Some(animator) = animator else {
+		return Vec::new();
+	};
+	let mut actions = Vec::new();
+	for id in animator.action_ids.iter().flatten() {
+		let id = id.trim();
+		if id.is_empty() || actions.iter().any(|action: &AnimatorActionSetting| action.id == id) {
+			continue;
+		}
+		actions.push(AnimatorActionSetting {
+			id: id.to_string(),
+			mode: "toggle".to_string(),
+			value: None,
+			transition_curve: None,
+			transition_ms: None,
+		});
+	}
+	for action in animator.actions.iter().flatten() {
+		let id = action.id.as_deref().unwrap_or("").trim();
+		let mode = normalize_animator_action_mode(action.mode.as_deref().unwrap_or("off"));
+		if id.is_empty() || !animator_action_mode_is_enabled(&mode) {
+			continue;
+		}
+		if let Some(existing) = actions.iter_mut().find(|existing| existing.id == id) {
+			existing.mode = mode;
+			existing.value = action.value.filter(|value| value.is_finite());
+			existing.transition_curve = normalize_animator_transition_curve_opt(action.transition_curve.as_deref());
+			existing.transition_ms = action.transition_ms.map(|value| value.min(3000)).filter(|value| *value > 0);
+		} else {
+			actions.push(AnimatorActionSetting {
+				id: id.to_string(),
+				mode,
+				value: action.value.filter(|value| value.is_finite()),
+				transition_curve: normalize_animator_transition_curve_opt(action.transition_curve.as_deref()),
+				transition_ms: action.transition_ms.map(|value| value.min(3000)).filter(|value| *value > 0),
+			});
+		}
+	}
+	actions
+}
+
+fn manifest_animator_binding_settings(animator: Option<&ManifestAnimator>) -> Vec<AnimatorBindingSetting> {
+	let Some(animator) = animator else {
+		return Vec::new();
+	};
+	animator
+		.bindings
+		.iter()
+		.flatten()
+		.filter_map(|binding| {
+			let action_id = binding.action_id.as_deref().unwrap_or("").trim();
+			if action_id.is_empty() {
+				return None;
+			}
+			let kind = normalize_wardrobe_binding_kind(binding.kind.as_deref().unwrap_or("keyboard"));
+			if kind == "keyboard" {
+				let value = binding.binding.as_deref().unwrap_or("").trim();
+				if value.is_empty() {
+					return None;
+				}
+				Some(AnimatorBindingSetting {
+					action_id: action_id.to_string(),
+					kind,
+					binding: Some(value.to_string()),
+					device: None,
+					channel: None,
+					note: None,
+				})
+			} else if kind == "midi_note" {
+				let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+				let note = binding.note.filter(|note| *note <= 127);
+				if channel.is_none() || note.is_none() {
+					return None;
+				}
+				Some(AnimatorBindingSetting {
+					action_id: action_id.to_string(),
+					kind,
+					binding: None,
+					device: binding
+						.device
+						.as_ref()
+						.map(|device| device.trim().to_string())
+						.filter(|device| !device.is_empty()),
+					channel,
+					note,
+				})
+			} else {
+				None
+			}
+		})
+		.collect()
+}
+
+fn manifest_wardrobe_shortcut_settings(wardrobe: Option<&ManifestWardrobe>) -> Vec<WardrobeShortcutSetting> {
+	let Some(wardrobe) = wardrobe else {
+		return Vec::new();
+	};
+	let mut shortcuts = Vec::new();
+	for shortcut in wardrobe.shortcuts.iter().flatten() {
+		let set_id = shortcut.set_id.as_deref().unwrap_or("").trim();
+		let shortcut_value = shortcut.shortcut.as_deref().unwrap_or("").trim();
+		if shortcut_value.is_empty() || shortcuts.iter().any(|existing: &WardrobeShortcutSetting| existing.set_id == set_id) {
+			continue;
+		}
+		shortcuts.push(WardrobeShortcutSetting {
+			set_id: set_id.to_string(),
+			shortcut: shortcut_value.to_string(),
+		});
+	}
+	shortcuts
+}
+
+fn manifest_wardrobe_binding_settings(wardrobe: Option<&ManifestWardrobe>) -> Vec<WardrobeBindingSetting> {
+	let Some(wardrobe) = wardrobe else {
+		return Vec::new();
+	};
+	let mut bindings = Vec::new();
+	for shortcut in wardrobe.shortcuts.iter().flatten() {
+		let set_id = shortcut.set_id.as_deref().unwrap_or("").trim();
+		let shortcut_value = shortcut.shortcut.as_deref().unwrap_or("").trim();
+		if shortcut_value.is_empty() {
+			continue;
+		}
+		bindings.push(WardrobeBindingSetting {
+			set_id: set_id.to_string(),
+			kind: "keyboard".to_string(),
+			binding: Some(shortcut_value.to_string()),
+			device: None,
+			channel: None,
+			note: None,
+		});
+	}
+	for binding in wardrobe.bindings.iter().flatten() {
+		let set_id = binding.set_id.as_deref().unwrap_or("").trim();
+		let kind = normalize_wardrobe_binding_kind(binding.kind.as_deref().unwrap_or("keyboard"));
+		if kind == "keyboard" {
+			let value = binding.binding.as_deref().unwrap_or("").trim();
+			if value.is_empty() {
+				continue;
+			}
+			bindings.push(WardrobeBindingSetting {
+				set_id: set_id.to_string(),
+				kind,
+				binding: Some(value.to_string()),
+				device: None,
+				channel: None,
+				note: None,
+			});
+		} else if kind == "midi_note" {
+			let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+			let note = binding.note.filter(|note| *note <= 127);
+			if channel.is_none() || note.is_none() {
+				continue;
+			}
+			bindings.push(WardrobeBindingSetting {
+				set_id: set_id.to_string(),
+				kind,
+				binding: None,
+				device: binding
+					.device
+					.as_ref()
+					.map(|device| device.trim().to_string())
+					.filter(|device| !device.is_empty()),
+				channel,
+				note,
+			});
+		}
+	}
+	bindings
+}
+
+fn manifest_wardrobe_billboard_anchor(wardrobe: Option<&ManifestWardrobe>) -> String {
+	let value = wardrobe
+		.and_then(|wardrobe| wardrobe.transition.as_ref())
+		.and_then(|transition| transition.billboard_anchor.as_deref())
+		.unwrap_or("neck")
+		.trim()
+		.to_ascii_lowercase();
+	match value.as_str() {
+		"head" | "neck" | "spine" => value,
+		_ => "neck".to_string(),
+	}
+}
+
+fn manifest_wardrobe_billboard_y_offset_mm(wardrobe: Option<&ManifestWardrobe>) -> f32 {
+	wardrobe
+		.and_then(|wardrobe| wardrobe.transition.as_ref())
+		.and_then(|transition| transition.billboard_y_offset_mm)
+		.filter(|value| value.is_finite())
+		.unwrap_or(0.0)
+		.clamp(-1000.0, 1000.0)
+}
+
+fn normalize_wardrobe_binding_kind(kind: &str) -> String {
+	match kind.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"midi_note" | "midinote" | "midi note" => "midi_note".to_string(),
+		_ => "keyboard".to_string(),
+	}
+}
+
+fn read_manifest_animator_action_settings(path: &Path) -> Result<Vec<AnimatorActionSetting>, String> {
+	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+	Ok(manifest_animator_action_settings(manifest.animator.as_ref()))
+}
+
+fn normalize_animator_action_mode(mode: &str) -> String {
+	match mode.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"toggle" => "toggle".to_string(),
+		"one_shot" | "oneshot" | "one shot" => "one_shot".to_string(),
+		_ => "off".to_string(),
+	}
+}
+
+fn normalize_animator_transition_curve_opt(curve: Option<&str>) -> Option<String> {
+	let curve = match curve.unwrap_or("none").trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"linear" => "linear",
+		"ease_in" | "easein" => "ease_in",
+		"ease_out" | "easeout" => "ease_out",
+		"ease_in_out" | "easeinout" => "ease_in_out",
+		_ => "none",
+	};
+	(curve != "none").then(|| curve.to_string())
+}
+
+fn animator_action_mode_is_enabled(mode: &str) -> bool {
+	matches!(normalize_animator_action_mode(mode).as_str(), "toggle" | "one_shot")
 }
 
 pub fn run() {
+	if let Err(error) = set_process_app_user_model_id() {
+		eprintln!("un-avatar-supervisor: set AppUserModelID failed: {error}");
+	}
+	match run_startup_proxy_command() {
+		Ok(true) => return,
+		Ok(false) => {}
+		Err(error) => eprintln!("un-avatar-supervisor: startup proxy command failed: {error}"),
+	}
 	// Phase E settings policy (decision 1+2): user dir が空のとき限定で
 	// bundled テンプレートをコピーする。app builder 構築前 (Tauri 依存無し)
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
 	ensure_user_profiles_seeded();
 	let mut initial_settings = load_app_settings();
+	if prune_pinned_taskbar_profile_ids(&mut initial_settings).unwrap_or_else(|error| {
+		eprintln!("un-avatar-supervisor: failed to prune taskbar profile pins: {error}");
+		false
+	}) {
+		if let Err(error) = write_app_settings(&initial_settings) {
+			eprintln!("un-avatar-supervisor: failed to save pruned taskbar profile pins: {error}");
+		}
+	}
+	if let Err(error) = update_taskbar_launcher_profile_tasks(&initial_settings) {
+		eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
+	}
+	let startup_open_profile_manifest = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
+		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
+		None
+	});
+	if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
+		if let Ok(setting) = read_avatar_setting(manifest_path, ProfileStorage::User) {
+			initial_settings.last_selected_setting_id = Some(setting.id);
+		}
+	}
 	// AppRuntimeSettings.locale が未設定 / 未サポートなら OS → ja-JP の順で解決し、
 	// rust-i18n のグローバル locale を反映する (tray menu / native notification 用)。
 	// 解決済の値は initial_settings 内に書き戻し、Mutex 化されたあともクライアントに
@@ -1593,6 +2484,27 @@ pub fn run() {
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
 	tauri::Builder::default()
+		.plugin(tauri_plugin_single_instance::init(
+			|app, args, _cwd| match startup_proxy_manifest_arg(args.clone()).and_then(|manifest_path| {
+				if let Some(manifest_path) = manifest_path {
+					launch_renderer_manifest_in_existing_app(app, &manifest_path).map(|_| true)
+				} else {
+					Ok(false)
+				}
+			}) {
+				Ok(true) => {}
+				Ok(false) => {
+					if let Some(manifest_path) = startup_open_profile_manifest_arg(args).ok().flatten() {
+						let _ = request_open_profile_manifest_in_existing_app(app, &manifest_path);
+					}
+					show_main_window(app);
+				}
+				Err(error) => {
+					eprintln!("un-avatar-supervisor: single-instance proxy command failed: {error}");
+					show_main_window(app);
+				}
+			},
+		))
 		.plugin(tauri_plugin_notification::init())
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))
@@ -1601,6 +2513,11 @@ pub fn run() {
 			prewarm_runtime_control_session();
 			if initial_settings.system_tray_enabled {
 				setup_tray(app.handle())?;
+			}
+			if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
+				if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
+					let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
+				}
 			}
 			let window = setup_main_window(app)?;
 			if initial_settings.system_tray_enabled && initial_settings.start_minimized_to_tray {
@@ -1627,17 +2544,28 @@ pub fn run() {
 			list_renderers,
 			launch_renderer,
 			new_avatar_setting,
+			prewarm_renderer_scene_cache,
+			create_renderer_desktop_shortcut,
+			create_taskbar_launcher_shortcuts,
+			set_taskbar_profile_pinned,
+			clear_taskbar_profile_pins,
 			pick_file_path,
+			capture_midi_note_binding,
 			read_vrm_metadata,
+			read_unavatar_metadata,
 			save_avatar_thumbnail_icon,
+			save_profile_icon_from_data_url,
 			read_diagnostics_export,
 			reveal_profiles_dir,
 			reorder_avatar_settings,
 			reveal_path,
 			save_supervisor_logs,
+			log_frontend_error,
 			reveal_supervisor_logs_dir,
 			capture_renderer_screenshot,
 			set_renderer_expression_override,
+			activate_renderer_runtime_action,
+			set_renderer_runtime_parameter,
 			clear_renderer_expression_overrides,
 			set_renderer_look_at,
 			set_renderer_show_axes,
@@ -1645,13 +2573,10 @@ pub fn run() {
 			set_renderer_camera_lock,
 			set_renderer_apply_vmc_root_translation,
 			set_renderer_motion_receivers,
-			set_renderer_spring_bones,
+			set_renderer_dynamics,
+			set_renderer_dynamics_enabled,
 			set_renderer_primary_motion_source,
 			set_renderer_avatar_outline,
-			set_renderer_avatar_rim,
-			set_renderer_avatar_matcap,
-			set_renderer_avatar_specular,
-			set_renderer_avatar_ambient_occlusion,
 			set_renderer_lighting,
 			set_renderer_environment_color,
 			set_renderer_bloom,
@@ -1661,6 +2586,8 @@ pub fn run() {
 			set_renderer_camera_state,
 			save_renderer_camera_to_profile,
 			restore_renderer_camera_from_profile,
+			save_renderer_spout_profile,
+			restore_renderer_output_from_profile,
 			save_renderer_window_to_profile,
 			restore_renderer_window_from_profile,
 			reset_renderer_camera,
@@ -1672,6 +2599,8 @@ pub fn run() {
 			stop_renderer,
 			stop_all_renderers,
 			sync_app_settings,
+			read_unavatar_wardrobe_options,
+			read_unavatar_animator_action_page,
 			set_last_selected_setting_id,
 			update_avatar_setting_path,
 			update_avatar_setting_value,
@@ -2091,8 +3020,8 @@ fn native_notification_status(app: &tauri::AppHandle) -> Result<NativeNotificati
 fn send_test_native_notification(app: tauri::AppHandle) -> Result<(), String> {
 	app.notification()
 		.builder()
-		.title("UN Avatar notification test")
-		.body("Native crash notifications are ready.")
+		.title(t!("notifications.test.title"))
+		.body(t!("notifications.test.body"))
 		.show()
 		.map_err(|error| format!("native notification test failed: {error}"))
 }
@@ -2194,6 +3123,7 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 		Ok(settings) => SupervisorProfileDiagnostics {
 			seed_dir: profiles_dir().display().to_string(),
 			user_dir: user_profiles_dir().display().to_string(),
+			launcher_settings: settings.clone(),
 			tray_launch_settings: settings.clone(),
 			settings,
 			error: None,
@@ -2202,6 +3132,7 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 			seed_dir: profiles_dir().display().to_string(),
 			user_dir: user_profiles_dir().display().to_string(),
 			settings: Vec::new(),
+			launcher_settings: Vec::new(),
 			tray_launch_settings: Vec::new(),
 			error: Some(error),
 		},
@@ -2210,10 +3141,12 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 
 #[tauri::command]
 fn get_app_settings(settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
-	settings
-		.lock()
-		.map(|settings| settings.clone())
-		.map_err(|_| "app settings state poisoned".to_string())
+	let mut settings = settings.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if prune_pinned_taskbar_profile_ids(&mut settings)? {
+		write_app_settings(&settings)?;
+		update_taskbar_launcher_profile_tasks(&settings)?;
+	}
+	Ok(settings.clone())
 }
 
 /// Renderers / Avatar Settings 画面の選択中アバター設定 ID を記録し、終了 → 再起動時に復元できるようにする。
@@ -2252,11 +3185,6 @@ fn sync_app_settings(
 	state: State<'_, Mutex<AppRuntimeSettings>>,
 ) -> Result<(), String> {
 	normalize_app_settings(&mut settings);
-	let _reserved_for_future_runtime_hooks = (
-		settings.start_minimized_to_tray,
-		settings.crash_notifications,
-		settings.theme_mode.as_str(),
-	);
 	let (old_system_tray_enabled, old_locale) = {
 		let state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
 		(state.system_tray_enabled, state.locale.clone())
@@ -2305,6 +3233,33 @@ fn normalize_app_settings(settings: &mut AppRuntimeSettings) {
 		tracing::warn!(locale = %settings.locale, "i18n: unsupported locale value, resetting to auto");
 		settings.locale.clear();
 	}
+	settings.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&settings.pinned_taskbar_profile_ids);
+}
+
+fn normalized_taskbar_profile_ids(ids: &[String]) -> Vec<String> {
+	let mut seen = BTreeSet::new();
+	let mut normalized = Vec::new();
+	for id in ids {
+		let id = id.trim();
+		if id.is_empty() || !seen.insert(id.to_string()) {
+			continue;
+		}
+		normalized.push(id.to_string());
+	}
+	normalized
+}
+
+fn prune_pinned_taskbar_profile_ids(settings: &mut AppRuntimeSettings) -> Result<bool, String> {
+	let available = list_avatar_settings()?
+		.into_iter()
+		.map(|setting| setting.id)
+		.collect::<BTreeSet<_>>();
+	let before = settings.pinned_taskbar_profile_ids.clone();
+	settings.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&settings.pinned_taskbar_profile_ids)
+		.into_iter()
+		.filter(|id| available.contains(id))
+		.collect();
+	Ok(before != settings.pinned_taskbar_profile_ids)
 }
 
 fn write_app_settings(settings: &AppRuntimeSettings) -> Result<(), String> {
@@ -2321,6 +3276,7 @@ fn duplicate_avatar_setting(setting_id: String, app: tauri::AppHandle) -> Result
 	let source = resolve_avatar_setting(&setting_id)?;
 	let source_path = PathBuf::from(&source.manifest_path);
 	let mut manifest = read_manifest_value(&source_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	let copy_name = unique_profile_name(&format!("{} Copy", source.name))?;
 	let created_at = current_timestamp_compact();
 	if let Some(table) = manifest.as_table_mut() {
@@ -2355,10 +3311,6 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 	let created_at = current_timestamp_compact();
 	let mut manifest = toml::map::Map::new();
 	manifest.insert("title".to_string(), toml::Value::String(name.clone()));
-	manifest.insert("transparent".to_string(), toml::Value::Boolean(false));
-	manifest.insert("input_passthrough".to_string(), toml::Value::Boolean(false));
-	manifest.insert("decorations".to_string(), toml::Value::Boolean(true));
-	manifest.insert("aa".to_string(), toml::Value::String("off".to_string()));
 	manifest.insert(
 		"background_color".to_string(),
 		toml::Value::Array(
@@ -2386,9 +3338,9 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 		toml::Value::Table(toml::map::Map::from_iter([
 			("aa".to_string(), toml::Value::String("off".to_string())),
 			("texture_resolution_limit".to_string(), toml::Value::String("off".to_string())),
-			("texture_compression".to_string(), toml::Value::String("source".to_string())),
+			("texture_compression".to_string(), toml::Value::String("balanced".to_string())),
 			("mipmap_filter".to_string(), toml::Value::String("mitchell".to_string())),
-			("render_backend".to_string(), toml::Value::String("dx12".to_string())),
+			("render_backend".to_string(), toml::Value::String("vulkan".to_string())),
 			("block_compression_encoder".to_string(), toml::Value::String("gpu".to_string())),
 			("block_compression_cpu_threads".to_string(), toml::Value::Integer(4)),
 			("processed_texture_cache".to_string(), toml::Value::Boolean(true)),
@@ -2457,13 +3409,6 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 				("name".to_string(), toml::Value::String("UN Avatar Spout".to_string())),
 			])),
 		)])),
-	);
-	manifest.insert(
-		"spout".to_string(),
-		toml::Value::Table(toml::map::Map::from_iter([
-			("enabled".to_string(), toml::Value::Boolean(false)),
-			("name".to_string(), toml::Value::String("UN Avatar Spout".to_string())),
-		])),
 	);
 	let path = unique_user_profile_path(&profile_file_stem(&created_at, &name));
 	if let Some(dir) = path.parent() {
@@ -2547,6 +3492,23 @@ fn save_supervisor_logs(content: String, file_prefix: String) -> Result<String, 
 }
 
 #[tauri::command]
+fn log_frontend_error(message: String) -> Result<(), String> {
+	let dir = supervisor_logs_dir();
+	std::fs::create_dir_all(&dir).map_err(|e| format!("create logs dir: {e}"))?;
+	let ts = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let line = format!("[{ts}] {message}\n");
+	std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(dir.join("frontend-errors.log"))
+		.and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()))
+		.map_err(|e| format!("write frontend error log: {e}"))
+}
+
+#[tauri::command]
 fn reveal_supervisor_logs_dir() -> Result<(), String> {
 	let dir = supervisor_logs_dir();
 	std::fs::create_dir_all(&dir).map_err(|e| format!("create logs dir: {e}"))?;
@@ -2585,7 +3547,11 @@ fn activate_renderer_window(id: u32, state: State<'_, Mutex<SupervisorState>>) -
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	refresh_renderer_states(&mut state, false, None);
 	let renderer = state.renderers.get(&id).ok_or_else(|| format!("renderer not found: {id}"))?;
-	let pid = renderer.info.pid.ok_or_else(|| format!("renderer {id} is not running"))?;
+	let pid = renderer
+		.info
+		.pid
+		.or_else(|| cached_runtime_telemetry(renderer).0.and_then(|telemetry| telemetry.pid))
+		.ok_or_else(|| format!("renderer {id} is not running"))?;
 	// renderer プロセス自身に winit::Window::focus_window() を呼ばせる。
 	// renderer は Supervisor の子プロセスなので Windows のフォアグラウンドポリシー(2) を通常満たし、
 	// PowerShell 経由で別プロセスから SetForegroundWindow するより確実。失敗時のみ PowerShell へフォールバック。
@@ -2606,7 +3572,7 @@ fn pick_file_path(kind: String, settings: State<'_, Mutex<AppRuntimeSettings>>) 
 	let mut dialog = rfd::FileDialog::new().set_directory(start_dir);
 	dialog = match kind.as_str() {
 		"avatar" => dialog
-			.add_filter("Avatar model", &["vrm", "gltf", "glb"])
+			.add_filter("Avatar model", &["vrm", "gltf", "glb", "unavatar"])
 			.add_filter("All files", &["*"]),
 		"icon" => dialog
 			.add_filter("Image", &["png", "jpg", "jpeg", "ico", "webp"])
@@ -2709,6 +3675,1016 @@ fn read_vrm_metadata(path: String, manifest_path: Option<String>) -> Result<Opti
 	}))
 }
 
+#[tauri::command]
+fn read_unavatar_metadata(
+	path: String,
+	manifest_path: Option<String>,
+	wardrobe_set: Option<String>,
+) -> Result<Option<UnavatarMetadataInfo>, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let (root, source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let Some(unavatar) = root.get("extensions").and_then(|extensions| extensions.get("UN_avatar")) else {
+		return Ok(None);
+	};
+	let manifest = unavatar.get("manifest").unwrap_or(&serde_json::Value::Null);
+	let provenance = unavatar.get("provenance").unwrap_or(&serde_json::Value::Null);
+	let wardrobe_set_count = unavatar
+		.get("wardrobe")
+		.map(|wardrobe| unavatar_metadata_count(wardrobe, &["sets"], &["setCount", "wardrobeSetCount"]))
+		.unwrap_or_default();
+	let modular_avatar_component_count = unavatar
+		.get("modularAvatar")
+		.map(|ma| unavatar_metadata_count(ma, &["components"], &["componentCount"]))
+		.unwrap_or_default();
+	let file_name = resolved
+		.file_name()
+		.and_then(|name| name.to_str())
+		.unwrap_or(path.as_str())
+		.to_string();
+	let preview_sets = unavatar_wardrobe_preview_sets(unavatar, &root, &source);
+	let preview_images = unavatar_preview_images(unavatar, &root, &source, wardrobe_set.as_deref(), &preview_sets);
+	Ok(Some(UnavatarMetadataInfo {
+		path,
+		file_name,
+		name: first_meta_string(manifest, &["name", "title"]),
+		spec_version: first_meta_string(unavatar, &["specVersion", "spec_version"]),
+		generator: first_meta_string(unavatar, &["generator"]),
+		source_type: first_meta_string(manifest, &["sourceType", "source_type"]),
+		export_mode: first_meta_string(manifest, &["exportMode", "export_mode"]),
+		created_utc: first_meta_string(manifest, &["createdUtc", "created_utc"]),
+		wardrobe_set_count,
+		dynamics_count: unavatar
+			.get("dynamics")
+			.map(|dynamics| unavatar_metadata_count(dynamics, &["groups"], &["groupCount", "dynamicsGroupCount"]))
+			.unwrap_or_default(),
+		contact_count: unavatar
+			.get("contacts")
+			.map(|contacts| unavatar_metadata_count(contacts, &["contacts", "samples"], &["contactCount"]))
+			.unwrap_or_default(),
+		modular_avatar_component_count,
+		redistribution_allowed: provenance.get("redistributionAllowed").and_then(serde_json::Value::as_bool),
+		preview_images,
+		preview_sets,
+	}))
+}
+
+fn unavatar_preview_images(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+	wardrobe_set: Option<&str>,
+	preview_sets: &[UnavatarPreviewSet],
+) -> Vec<UnavatarPreviewImage> {
+	let mut out = unavatar_selected_preview_images(unavatar, preview_sets, wardrobe_set);
+	if out.is_empty() {
+		out = unavatar_sample_screenshot_images(unavatar, root, source);
+	}
+	out
+}
+
+fn unavatar_metadata_count(value: &serde_json::Value, array_keys: &[&str], count_keys: &[&str]) -> u32 {
+	if let Some(len) = value.as_array().and_then(|items| u32::try_from(items.len()).ok()) {
+		return len;
+	}
+	for key in count_keys {
+		if let Some(count) = value
+			.get(*key)
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|count| u32::try_from(count).ok())
+		{
+			return count;
+		}
+	}
+	for key in array_keys {
+		if let Some(len) = value
+			.get(*key)
+			.and_then(serde_json::Value::as_array)
+			.and_then(|items| u32::try_from(items.len()).ok())
+		{
+			return len;
+		}
+	}
+	0
+}
+
+fn unavatar_selected_preview_images(
+	unavatar: &serde_json::Value,
+	preview_sets: &[UnavatarPreviewSet],
+	wardrobe_set: Option<&str>,
+) -> Vec<UnavatarPreviewImage> {
+	let selected = wardrobe_set
+		.and_then(|id| {
+			let id = id.trim();
+			(!id.is_empty()).then_some(id)
+		})
+		.and_then(|id| preview_sets.iter().find(|set| set.id == id))
+		.or_else(|| {
+			unavatar
+				.get("wardrobe")
+				.and_then(|wardrobe| wardrobe.get("baseSet"))
+				.and_then(serde_json::Value::as_str)
+				.and_then(|base| preview_sets.iter().find(|set| set.id == base))
+		})
+		.or_else(|| preview_sets.first());
+	selected.map(|set| set.preview_images.clone()).unwrap_or_default()
+}
+
+fn unavatar_wardrobe_preview_sets(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Vec<UnavatarPreviewSet> {
+	let Some(wardrobe) = unavatar.get("wardrobe") else {
+		return Vec::new();
+	};
+	let Some(sets) = wardrobe.get("sets").and_then(serde_json::Value::as_array) else {
+		return Vec::new();
+	};
+	let base_set_id = wardrobe
+		.get("baseSet")
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.unwrap_or("");
+	let base_set_name = unavatar_wardrobe_base_label(wardrobe);
+	sets.iter()
+		.filter_map(|set| {
+			let id = set.get("id").and_then(serde_json::Value::as_str).map(str::trim).unwrap_or("");
+			let previews = unavatar_set_preview_images(set)?;
+			let preview_images = previews
+				.iter()
+				.filter_map(|preview| unavatar_preview_image_from_item(preview, root, source))
+				.collect::<Vec<_>>();
+			(!preview_images.is_empty()).then(|| UnavatarPreviewSet {
+				id: id.to_string(),
+				name: unavatar_wardrobe_set_label(set, id, base_set_id, &base_set_name),
+				preview_images,
+			})
+		})
+		.collect()
+}
+
+fn unavatar_wardrobe_base_label(wardrobe: &serde_json::Value) -> String {
+	wardrobe
+		.get("baseName")
+		.or_else(|| wardrobe.get("baseLabel"))
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.unwrap_or("Base")
+		.to_string()
+}
+
+fn unavatar_wardrobe_set_label(set: &serde_json::Value, id: &str, base_set_id: &str, base_label: &str) -> String {
+	set.get("name")
+		.or_else(|| set.get("displayName"))
+		.or_else(|| set.get("label"))
+		.and_then(serde_json::Value::as_str)
+		.map(str::trim)
+		.filter(|name| !name.is_empty())
+		.unwrap_or(if id.is_empty() || (!base_set_id.is_empty() && id == base_set_id) {
+			base_label
+		} else {
+			id
+		})
+		.to_string()
+}
+
+fn unavatar_set_preview_images(set: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+	set.get("previewImages")
+		.and_then(serde_json::Value::as_array)
+		.filter(|images| !images.is_empty())
+}
+
+fn unavatar_sample_screenshot_images(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Vec<UnavatarPreviewImage> {
+	let Some(images) = root.get("images").and_then(serde_json::Value::as_array) else {
+		return unavatar_direct_sample_screenshot_images(unavatar, root, source);
+	};
+	let mut out = Vec::new();
+	let mut seen = BTreeSet::new();
+	for item in unavatar_sample_screenshot_items(unavatar) {
+		if let Some(buffer_view) = item.get("bufferView").and_then(serde_json::Value::as_u64) {
+			let key = format!("bufferView:{buffer_view}");
+			if !seen.insert(key) {
+				continue;
+			}
+			if let Some(image) = unavatar_preview_image_from_buffer_view(item, root, source) {
+				out.push(image);
+			}
+			continue;
+		}
+		let Some(index) = unavatar_preview_image_index_from_object(item) else {
+			continue;
+		};
+		let key = format!("image:{index}");
+		if !seen.insert(key) {
+			continue;
+		}
+		let Some(image) = images.get(index as usize) else {
+			continue;
+		};
+		let Some(bytes) = gltf_image_bytes_from_metadata_source(image, root, source) else {
+			continue;
+		};
+		let Some(mime) = image_mime_type(image, "") else {
+			continue;
+		};
+		out.push(UnavatarPreviewImage {
+			view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+			width: item
+				.get("width")
+				.and_then(serde_json::Value::as_u64)
+				.and_then(|value| u32::try_from(value).ok()),
+			height: item
+				.get("height")
+				.and_then(serde_json::Value::as_u64)
+				.and_then(|value| u32::try_from(value).ok()),
+			data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+		});
+	}
+	out
+}
+
+fn unavatar_direct_sample_screenshot_images(
+	unavatar: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Vec<UnavatarPreviewImage> {
+	let mut out = Vec::new();
+	let mut seen = BTreeSet::new();
+	for item in unavatar_sample_screenshot_items(unavatar) {
+		let Some(buffer_view) = item.get("bufferView").and_then(serde_json::Value::as_u64) else {
+			continue;
+		};
+		if !seen.insert(buffer_view) {
+			continue;
+		}
+		if let Some(image) = unavatar_preview_image_from_buffer_view(item, root, source) {
+			out.push(image);
+		}
+	}
+	out
+}
+
+fn unavatar_preview_image_from_buffer_view(
+	item: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<UnavatarPreviewImage> {
+	let buffer_view = item.get("bufferView").and_then(serde_json::Value::as_u64)? as usize;
+	let bytes = gltf_buffer_view_bytes_from_source(root, source, buffer_view)?;
+	let mime = item
+		.get("mimeType")
+		.and_then(serde_json::Value::as_str)
+		.and_then(supported_image_mime_type)?;
+	Some(UnavatarPreviewImage {
+		view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+		width: item
+			.get("width")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		height: item
+			.get("height")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+	})
+}
+
+fn unavatar_preview_image_from_item(
+	item: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<UnavatarPreviewImage> {
+	if item.get("bufferView").is_some() {
+		return unavatar_preview_image_from_buffer_view(item, root, source);
+	}
+	let images = root.get("images").and_then(serde_json::Value::as_array)?;
+	let index = unavatar_preview_image_index_from_object(item)? as usize;
+	let image = images.get(index)?;
+	let bytes = gltf_image_bytes_from_metadata_source(image, root, source)?;
+	let mime = item
+		.get("mimeType")
+		.and_then(serde_json::Value::as_str)
+		.and_then(supported_image_mime_type)
+		.or_else(|| image_mime_type(image, ""))?;
+	Some(UnavatarPreviewImage {
+		view: item.get("view").and_then(serde_json::Value::as_str).map(str::to_string),
+		width: item
+			.get("width")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		height: item
+			.get("height")
+			.and_then(serde_json::Value::as_u64)
+			.and_then(|value| u32::try_from(value).ok()),
+		data_url: format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes)),
+	})
+}
+
+fn unavatar_sample_screenshot_items(unavatar: &serde_json::Value) -> Vec<&serde_json::Value> {
+	let mut out = Vec::new();
+	for key in ["previewImages", "sampleScreenshots", "screenshots", "previews"] {
+		if let Some(items) = unavatar.get(key).and_then(serde_json::Value::as_array) {
+			out.extend(items);
+		}
+	}
+	for object in [
+		unavatar.get("preview"),
+		unavatar.get("manifest"),
+		unavatar.get("sample"),
+		unavatar.get("thumbnail"),
+	]
+	.into_iter()
+	.flatten()
+	{
+		out.push(object);
+	}
+	out
+}
+
+fn unavatar_preview_image_index_from_object(object: &serde_json::Value) -> Option<u64> {
+	for key in ["sampleScreenshotImage", "screenshotImage", "thumbnailImage", "image", "imageIndex"] {
+		if let Some(index) = object.get(key).and_then(serde_json::Value::as_u64) {
+			return Some(index);
+		}
+	}
+	None
+}
+
+fn read_gltf_metadata_root_and_source(path: &Path) -> Result<(serde_json::Value, GltfMetadataSource), String> {
+	let mut file = fs::File::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+	let mut header = [0u8; 12];
+	let read = file.read(&mut header).map_err(|e| format!("read {} header: {e}", path.display()))?;
+	if read == header.len() && &header[0..4] == b"glTF" && u32::from_le_bytes(header[4..8].try_into().expect("slice")) == 2 {
+		let mut json: Option<Vec<u8>> = None;
+		let mut bin_offset: Option<u64> = None;
+		loop {
+			let mut chunk_header = [0u8; 8];
+			match file.read_exact(&mut chunk_header) {
+				Ok(()) => {}
+				Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+				Err(e) => return Err(format!("read {} GLB chunk header: {e}", path.display())),
+			}
+			let length = u32::from_le_bytes(chunk_header[0..4].try_into().expect("slice")) as u64;
+			let chunk_type = u32::from_le_bytes(chunk_header[4..8].try_into().expect("slice"));
+			let payload_offset = file
+				.stream_position()
+				.map_err(|e| format!("tell {} GLB chunk: {e}", path.display()))?;
+			match chunk_type {
+				0x4E4F534A => {
+					if length > MAX_UNAVATAR_METADATA_JSON_BYTES {
+						return Err(format!("GLB JSON chunk is too large in {}: {} bytes", path.display(), length));
+					}
+					let length = usize::try_from(length).map_err(|_| format!("GLB JSON chunk is too large in {}", path.display()))?;
+					let mut bytes = vec![0u8; length];
+					file.read_exact(&mut bytes)
+						.map_err(|e| format!("read {} GLB JSON chunk: {e}", path.display()))?;
+					json = Some(bytes);
+				}
+				0x004E4942 => {
+					bin_offset = Some(payload_offset);
+					file.seek(SeekFrom::Current(length as i64))
+						.map_err(|e| format!("skip {} GLB BIN chunk: {e}", path.display()))?;
+				}
+				_ => {
+					file.seek(SeekFrom::Current(length as i64))
+						.map_err(|e| format!("skip {} GLB chunk: {e}", path.display()))?;
+				}
+			}
+			if json.is_some() && bin_offset.is_some() {
+				break;
+			}
+		}
+		let json = json.ok_or_else(|| format!("GLB JSON chunk is missing in {}", path.display()))?;
+		let root = serde_json::from_slice::<serde_json::Value>(&json).map_err(|e| format!("GLB JSON: {e}"))?;
+		return Ok((
+			root,
+			GltfMetadataSource::Glb {
+				path: path.to_path_buf(),
+				bin_offset: bin_offset.unwrap_or(0),
+			},
+		));
+	}
+
+	file.seek(SeekFrom::Start(0)).map_err(|e| format!("seek {}: {e}", path.display()))?;
+	let file_len = file.metadata().map_err(|e| format!("stat {}: {e}", path.display()))?.len();
+	if file_len > MAX_UNAVATAR_METADATA_JSON_BYTES {
+		return Err(format!("glTF JSON is too large in {}: {} bytes", path.display(), file_len));
+	}
+	let mut bytes = Vec::new();
+	file.read_to_end(&mut bytes).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let root = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| format!("glTF JSON: {e}"))?;
+	Ok((
+		root,
+		GltfMetadataSource::Json {
+			path: path.to_path_buf(),
+			bytes,
+		},
+	))
+}
+
+fn gltf_image_bytes_from_metadata_source(
+	image: &serde_json::Value,
+	root: &serde_json::Value,
+	source: &GltfMetadataSource,
+) -> Option<Vec<u8>> {
+	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
+		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
+			return decode_limited_metadata_image_base64(encoded);
+		}
+		return read_limited_gltf_external_image(gltf_metadata_source_path(source), uri);
+	}
+	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
+	gltf_buffer_view_bytes_from_source(root, source, buffer_view_index)
+}
+
+fn decode_limited_metadata_image_base64(encoded: &str) -> Option<Vec<u8>> {
+	if base64_decoded_len_upper_bound(encoded)? > MAX_METADATA_IMAGE_BYTES as usize {
+		return None;
+	}
+	let bytes = BASE64_STANDARD.decode(encoded).ok()?;
+	(bytes.len() as u64 <= MAX_METADATA_IMAGE_BYTES).then_some(bytes)
+}
+
+fn read_limited_gltf_external_image(source_path: &Path, uri: &str) -> Option<Vec<u8>> {
+	let path = safe_gltf_external_uri_path(source_path, uri)?;
+	if fs::metadata(&path).ok()?.len() > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
+	let bytes = fs::read(path).ok()?;
+	(bytes.len() as u64 <= MAX_METADATA_IMAGE_BYTES).then_some(bytes)
+}
+
+fn safe_gltf_external_uri_path(source_path: &Path, uri: &str) -> Option<PathBuf> {
+	let relative = Path::new(uri);
+	if uri.trim().is_empty() || relative.is_absolute() {
+		return None;
+	}
+	if relative
+		.components()
+		.any(|component| matches!(component, Component::Prefix(_) | Component::RootDir | Component::ParentDir))
+	{
+		return None;
+	}
+	Some(source_path.parent()?.join(relative))
+}
+
+fn base64_decoded_len_upper_bound(encoded: &str) -> Option<usize> {
+	let full_chunks = encoded.len() / 4;
+	let remainder = encoded.len() % 4;
+	full_chunks.checked_mul(3)?.checked_add(remainder.min(3))
+}
+
+fn gltf_metadata_source_path(source: &GltfMetadataSource) -> &Path {
+	match source {
+		GltfMetadataSource::Glb { path, .. } | GltfMetadataSource::Json { path, .. } => path,
+	}
+}
+
+fn gltf_buffer_view_bytes_from_source(root: &serde_json::Value, source: &GltfMetadataSource, buffer_view_index: usize) -> Option<Vec<u8>> {
+	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
+	let buffer_index = buffer_view.get("buffer").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+	if buffer_index != 0 {
+		return None;
+	}
+	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0);
+	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())?;
+	if length > MAX_UNAVATAR_PREVIEW_IMAGE_BYTES {
+		return None;
+	}
+	let end = offset.checked_add(length)?;
+	if let Some(buffer_length) = root
+		.get("buffers")
+		.and_then(serde_json::Value::as_array)
+		.and_then(|buffers| buffers.get(buffer_index))
+		.and_then(|buffer| buffer.get("byteLength"))
+		.and_then(serde_json::Value::as_u64)
+	{
+		if end > buffer_length {
+			return None;
+		}
+	}
+	match source {
+		GltfMetadataSource::Glb { path, bin_offset } => {
+			let start = bin_offset.checked_add(offset)?;
+			let mut file = fs::File::open(path).ok()?;
+			file.seek(SeekFrom::Start(start)).ok()?;
+			let mut bytes = vec![0u8; length as usize];
+			file.read_exact(&mut bytes).ok()?;
+			Some(bytes)
+		}
+		GltfMetadataSource::Json { bytes, .. } => {
+			let start = offset as usize;
+			let end = start.checked_add(length as usize)?;
+			bytes.get(start..end).map(|slice| slice.to_vec())
+		}
+	}
+}
+
+#[tauri::command]
+fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -> Result<UnavatarWardrobeOptions, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read .unavatar metadata: {e}"))?;
+	let Some(wardrobe) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("wardrobe"))
+	else {
+		return Ok(UnavatarWardrobeOptions {
+			available: false,
+			base_label: "Base".to_string(),
+			sets: Vec::new(),
+			error: None,
+		});
+	};
+	let base_set_id = wardrobe
+		.get("baseSet")
+		.and_then(|value| value.as_str())
+		.map(str::trim)
+		.unwrap_or("");
+	let base_label = unavatar_wardrobe_base_label(wardrobe);
+	let sets = wardrobe
+		.get("sets")
+		.and_then(|value| value.as_array())
+		.into_iter()
+		.flatten()
+		.filter_map(|set| {
+			let id = set.get("id").and_then(|value| value.as_str())?.trim();
+			if id.is_empty() || id == base_set_id {
+				return None;
+			}
+			Some(UnavatarWardrobeSetOption {
+				id: id.to_string(),
+				name: unavatar_wardrobe_set_label(set, id, base_set_id, &base_label),
+			})
+		})
+		.collect::<Vec<_>>();
+	Ok(UnavatarWardrobeOptions {
+		available: true,
+		base_label,
+		sets,
+		error: None,
+	})
+}
+
+#[tauri::command]
+fn capture_midi_note_binding(timeout_ms: Option<u64>) -> Result<MidiNoteCaptureResult, String> {
+	let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(500, 30_000));
+	let discovery = midir::MidiInput::new("un-avatar-supervisor-midi-discovery").map_err(|e| format!("MIDI input unavailable: {e}"))?;
+	let ports = discovery.ports();
+	if ports.is_empty() {
+		return Err("no MIDI input ports available".to_string());
+	}
+	let port_names = ports
+		.iter()
+		.enumerate()
+		.map(|(index, port)| {
+			(
+				index,
+				discovery.port_name(port).unwrap_or_else(|_| format!("unknown MIDI input {index}")),
+			)
+		})
+		.collect::<Vec<_>>();
+	let (tx, rx) = std::sync::mpsc::channel();
+	let mut connections = Vec::new();
+	for (port_index, port_name) in port_names {
+		let mut input = midir::MidiInput::new(&format!("un-avatar-supervisor-midi-{port_index}"))
+			.map_err(|e| format!("create MIDI input for {port_name}: {e}"))?;
+		input.ignore(midir::Ignore::None);
+		let ports = input.ports();
+		let Some(port) = ports.get(port_index).cloned() else {
+			continue;
+		};
+		let tx = tx.clone();
+		let device = port_name.clone();
+		match input.connect(
+			&port,
+			&format!("un-avatar-supervisor-learn-{port_index}"),
+			move |_timestamp, message, _| {
+				if let Some((channel, note)) = midi_note_on_event(message) {
+					let _ = tx.send(MidiNoteCaptureResult {
+						device: device.clone(),
+						channel,
+						note,
+					});
+				}
+			},
+			(),
+		) {
+			Ok(connection) => connections.push(connection),
+			Err(error) => eprintln!("failed to open MIDI input {port_name}: {error}"),
+		}
+	}
+	drop(tx);
+	if connections.is_empty() {
+		return Err("no MIDI input ports could be opened".to_string());
+	}
+	rx.recv_timeout(timeout).map_err(|_| "MIDI note capture timed out".to_string())
+}
+
+fn midi_note_on_event(message: &[u8]) -> Option<(u8, u8)> {
+	if message.len() < 3 {
+		return None;
+	}
+	let status = message[0];
+	if status & 0xF0 != 0x90 || message[2] == 0 {
+		return None;
+	}
+	Some(((status & 0x0F) + 1, message[1]))
+}
+
+#[tauri::command]
+async fn read_unavatar_animator_action_page(
+	path: String,
+	manifest_path: Option<String>,
+	query: Option<String>,
+	offset: Option<usize>,
+	limit: Option<usize>,
+) -> Result<UnavatarAnimatorActionPage, String> {
+	tauri::async_runtime::spawn_blocking(move || read_unavatar_animator_action_page_blocking(path, manifest_path, query, offset, limit))
+		.await
+		.map_err(|e| format!("read UNAnimator candidates task failed: {e}"))?
+}
+
+fn read_unavatar_animator_action_page_blocking(
+	path: String,
+	manifest_path: Option<String>,
+	query: Option<String>,
+	offset: Option<usize>,
+	limit: Option<usize>,
+) -> Result<UnavatarAnimatorActionPage, String> {
+	let resolved = resolve_avatar_metadata_path(&path, manifest_path.as_deref());
+	if !resolved.is_file() {
+		return Err(format!("avatar file not found: {}", resolved.display()));
+	}
+	let selected_actions = manifest_path
+		.as_deref()
+		.and_then(|path| read_manifest_animator_action_settings(Path::new(path)).ok())
+		.unwrap_or_default();
+	let selected_modes = selected_actions
+		.iter()
+		.filter(|action| animator_action_mode_is_enabled(&action.mode))
+		.map(|action| (action.id.as_str(), action.mode.as_str()))
+		.collect::<BTreeMap<_, _>>();
+	let selected_count = selected_modes.len();
+	let (root, _source) = read_gltf_metadata_root_and_source(&resolved).map_err(|e| format!("read avatar metadata: {e}"))?;
+	let candidates = if let Some(animator) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("source"))
+		.and_then(|source| source.get("animator"))
+	{
+		unavatar_animator_action_candidates(animator, &selected_modes)
+	} else if let Some(vrm) = root.get("extensions").and_then(|extensions| extensions.get("VRM")) {
+		vrm0_expression_action_candidates(vrm, &selected_modes)
+	} else if let Some(vrm) = root.get("extensions").and_then(|extensions| extensions.get("VRMC_vrm")) {
+		vrm1_expression_action_candidates(vrm, &selected_modes)
+	} else {
+		return Ok(UnavatarAnimatorActionPage {
+			available: false,
+			total_count: 0,
+			matched_count: 0,
+			selected_count,
+			offset: offset.unwrap_or(0),
+			limit: limit.unwrap_or(80).clamp(1, 2000),
+			candidates: Vec::new(),
+			error: None,
+		});
+	};
+	let total_count = candidates.len();
+	let query = query.unwrap_or_default().trim().to_ascii_lowercase();
+	let mut matched = candidates
+		.into_iter()
+		.filter(|candidate| {
+			query.is_empty()
+				|| candidate.label.to_ascii_lowercase().contains(&query)
+				|| candidate.controller.to_ascii_lowercase().contains(&query)
+				|| candidate.layer.to_ascii_lowercase().contains(&query)
+				|| candidate.state_path.to_ascii_lowercase().contains(&query)
+		})
+		.collect::<Vec<_>>();
+	matched.sort_by(|a, b| {
+		let a_enabled = animator_action_mode_is_enabled(&a.selected_mode);
+		let b_enabled = animator_action_mode_is_enabled(&b.selected_mode);
+		b_enabled
+			.cmp(&a_enabled)
+			.then_with(|| a.controller.cmp(&b.controller))
+			.then_with(|| a.layer.cmp(&b.layer))
+			.then_with(|| a.label.cmp(&b.label))
+	});
+	let matched_count = matched.len();
+	let offset = offset.unwrap_or(0).min(matched_count);
+	let limit = limit.unwrap_or(80).clamp(1, 2000);
+	let candidates = matched.into_iter().skip(offset).take(limit).collect();
+	Ok(UnavatarAnimatorActionPage {
+		available: true,
+		total_count,
+		matched_count,
+		selected_count,
+		offset,
+		limit,
+		candidates,
+		error: None,
+	})
+}
+
+fn unavatar_animator_action_candidates(
+	animator: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(controllers) = animator.get("controllers").and_then(serde_json::Value::as_array) else {
+		return Vec::new();
+	};
+	let mut candidates = Vec::new();
+	for (controller_index, controller) in controllers.iter().enumerate() {
+		let controller_name = controller
+			.get("name")
+			.and_then(serde_json::Value::as_str)
+			.filter(|value| !value.is_empty())
+			.unwrap_or("Animator");
+		let Some(layers) = controller.get("layers").and_then(serde_json::Value::as_array) else {
+			continue;
+		};
+		for (layer_index, layer) in layers.iter().enumerate() {
+			let layer_name = layer
+				.get("name")
+				.and_then(serde_json::Value::as_str)
+				.filter(|value| !value.is_empty())
+				.unwrap_or("Layer");
+			let Some(states) = layer.get("states").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			let Some(transitions) = layer.get("anyStateTransitions").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			let mut transitions_by_destination: BTreeMap<&str, Vec<(usize, &serde_json::Value)>> = BTreeMap::new();
+			for (transition_index, transition) in transitions.iter().enumerate() {
+				let Some(destination) = transition
+					.get("destinationState")
+					.and_then(serde_json::Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				transitions_by_destination
+					.entry(destination)
+					.or_default()
+					.push((transition_index, transition));
+			}
+			for state in states {
+				let Some(state_name) = state
+					.get("name")
+					.and_then(serde_json::Value::as_str)
+					.filter(|value| !value.is_empty())
+				else {
+					continue;
+				};
+				let Some(state_transitions) = transitions_by_destination.get(state_name) else {
+					continue;
+				};
+				let effect_count = unavatar_animator_motion_effect_count(state.get("motion")).min(64);
+				if effect_count == 0 {
+					continue;
+				}
+				let state_path = state.get("path").and_then(serde_json::Value::as_str).unwrap_or(state_name);
+				for (transition_index, transition) in state_transitions {
+					let condition_count = transition
+						.get("conditions")
+						.and_then(serde_json::Value::as_array)
+						.map(|conditions| {
+							conditions
+								.iter()
+								.filter(|condition| unavatar_animator_condition_has_parameter(condition))
+								.count()
+						})
+						.unwrap_or(0);
+					if condition_count == 0 {
+						continue;
+					}
+					let id = format!(
+						"animator:{controller_index}:{layer_index}:{}:{transition_index}",
+						stable_identifier(state_path)
+					);
+					let selected_mode = selected_modes.get(id.as_str()).copied().unwrap_or("off").to_string();
+					candidates.push(UnavatarAnimatorActionCandidate {
+						id,
+						label: if layer_name.is_empty() {
+							state_path.to_string()
+						} else {
+							format!("{layer_name} / {state_path}")
+						},
+						controller: controller_name.to_string(),
+						layer: layer_name.to_string(),
+						state_path: state_path.to_string(),
+						effect_count,
+						condition_count,
+						selected_mode,
+					});
+				}
+			}
+		}
+	}
+	candidates
+}
+
+fn vrm0_expression_action_candidates(
+	vrm: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(groups) = vrm
+		.get("blendShapeMaster")
+		.or_else(|| vrm.get("blend_shape_master"))
+		.and_then(|master| master.get("blendShapeGroups").or_else(|| master.get("blend_shape_groups")))
+		.and_then(serde_json::Value::as_array)
+	else {
+		return Vec::new();
+	};
+	groups
+		.iter()
+		.filter_map(|group| {
+			let preset_name = group
+				.get("presetName")
+				.or_else(|| group.get("preset_name"))
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or("")
+				.trim();
+			let group_name = group.get("name").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+			let name = vrm0_expression_action_name(preset_name, group_name)?;
+			let id_name = vrm0_expression_action_id_name(preset_name, group_name, name);
+			let bind_count = group.get("binds").and_then(serde_json::Value::as_array).map(Vec::len).unwrap_or(0);
+			vrm_expression_action_candidate_with_id_name(name, id_name.as_str(), bind_count, selected_modes)
+		})
+		.collect()
+}
+
+fn vrm0_expression_action_name<'a>(preset_name: &'a str, group_name: &'a str) -> Option<&'a str> {
+	let preset_name = preset_name.trim();
+	let group_name = group_name.trim();
+	if !group_name.is_empty() && (preset_name.is_empty() || preset_name.eq_ignore_ascii_case("unknown")) {
+		return Some(group_name);
+	}
+	if !preset_name.is_empty() {
+		return Some(preset_name);
+	}
+	if !group_name.is_empty() {
+		return Some(group_name);
+	}
+	None
+}
+
+fn vrm0_expression_action_id_name(preset_name: &str, group_name: &str, display_name: &str) -> String {
+	let preset_name = preset_name.trim();
+	let group_name = group_name.trim();
+	if !group_name.is_empty() && !preset_name.is_empty() && !preset_name.eq_ignore_ascii_case(group_name) {
+		format!("{preset_name}:{group_name}")
+	} else {
+		display_name.to_string()
+	}
+}
+
+fn vrm1_expression_action_candidates(
+	vrm: &serde_json::Value,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Vec<UnavatarAnimatorActionCandidate> {
+	let Some(expressions) = vrm.get("expressions") else {
+		return Vec::new();
+	};
+	let mut candidates = Vec::new();
+	for group_key in ["preset", "custom"] {
+		let Some(group) = expressions.get(group_key).and_then(serde_json::Value::as_object) else {
+			continue;
+		};
+		for (name, expression) in group {
+			let bind_count = expression
+				.get("morphTargetBinds")
+				.or_else(|| expression.get("morph_target_binds"))
+				.and_then(serde_json::Value::as_array)
+				.map(Vec::len)
+				.unwrap_or(0);
+			if let Some(candidate) = vrm_expression_action_candidate(name, bind_count, selected_modes) {
+				candidates.push(candidate);
+			}
+		}
+	}
+	candidates
+}
+
+fn vrm_expression_action_candidate(
+	name: &str,
+	bind_count: usize,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Option<UnavatarAnimatorActionCandidate> {
+	vrm_expression_action_candidate_with_id_name(name, name, bind_count, selected_modes)
+}
+
+fn vrm_expression_action_candidate_with_id_name(
+	name: &str,
+	id_name: &str,
+	bind_count: usize,
+	selected_modes: &BTreeMap<&str, &str>,
+) -> Option<UnavatarAnimatorActionCandidate> {
+	let name = name.trim();
+	if name.is_empty() || !vrm_expression_is_user_action_candidate(name) {
+		return None;
+	}
+	let id_name = id_name.trim();
+	let id = format!("expression:{}", stable_identifier(if id_name.is_empty() { name } else { id_name }));
+	Some(UnavatarAnimatorActionCandidate {
+		id: id.clone(),
+		label: format!("Expression / {name}"),
+		controller: "VRM Expression".to_string(),
+		layer: "Expression".to_string(),
+		state_path: name.to_string(),
+		effect_count: bind_count.max(1),
+		condition_count: 0,
+		selected_mode: selected_modes.get(id.as_str()).copied().unwrap_or("off").to_string(),
+	})
+}
+
+fn vrm_expression_is_user_action_candidate(name: &str) -> bool {
+	let normalized = name.trim().to_ascii_lowercase().replace('-', "_");
+	if normalized.is_empty() {
+		return false;
+	}
+	if matches!(
+		normalized.as_str(),
+		"neutral"
+			| "aa" | "ih"
+			| "ou" | "ee"
+			| "oh" | "blink"
+			| "blink_l"
+			| "blink_r"
+			| "look_up"
+			| "look_down"
+			| "look_left"
+			| "look_right"
+			| "lookup"
+			| "lookdown"
+			| "lookleft"
+			| "lookright"
+			| "jawopen"
+	) {
+		return false;
+	}
+	!normalized.starts_with("jaw_")
+		&& !normalized.starts_with("eye_")
+		&& !normalized.starts_with("mouth_")
+		&& !normalized.starts_with("tongue_")
+		&& !normalized.starts_with("cheek_")
+		&& !normalized.starts_with("brow_")
+}
+
+fn unavatar_animator_motion_effect_count(motion: Option<&serde_json::Value>) -> usize {
+	let Some(motion) = motion else {
+		return 0;
+	};
+	let bindings = motion
+		.get("curveBindings")
+		.and_then(serde_json::Value::as_array)
+		.map(|bindings| bindings.len())
+		.unwrap_or(0);
+	let children = motion
+		.get("children")
+		.and_then(serde_json::Value::as_array)
+		.map(|children| {
+			children
+				.iter()
+				.map(|child| unavatar_animator_motion_effect_count(Some(child)))
+				.sum()
+		})
+		.unwrap_or(0);
+	bindings.saturating_add(children)
+}
+
+fn unavatar_animator_condition_has_parameter(condition: &serde_json::Value) -> bool {
+	condition
+		.get("parameter")
+		.and_then(serde_json::Value::as_str)
+		.is_some_and(|value| !value.is_empty())
+}
+
+fn stable_identifier(value: &str) -> String {
+	let mut out = String::with_capacity(value.len());
+	for ch in value.chars() {
+		if ch.is_ascii_alphanumeric() {
+			out.push(ch.to_ascii_lowercase());
+		} else if !out.ends_with('_') {
+			out.push('_');
+		}
+	}
+	out.trim_matches('_').to_string()
+}
+
 fn resolve_avatar_metadata_path(path: &str, manifest_path: Option<&str>) -> PathBuf {
 	let trimmed = path.trim();
 	let path = PathBuf::from(trimmed);
@@ -2770,10 +4746,10 @@ fn vrm_metadata_thumbnail_image(
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if uri.starts_with("data:image/") {
 			let (mime, encoded) = data_image_base64_parts(uri)?;
-			let bytes = BASE64_STANDARD.decode(encoded).ok()?;
+			let bytes = decode_limited_metadata_image_base64(encoded)?;
 			return Some((mime, bytes));
 		}
-		let bytes = fs::read(path.parent()?.join(uri)).ok()?;
+		let bytes = read_limited_gltf_external_image(path, uri)?;
 		let mime = image_mime_type(image, uri)?;
 		return Some((mime, bytes));
 	}
@@ -2781,6 +4757,9 @@ fn vrm_metadata_thumbnail_image(
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
 	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
 	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())? as usize;
+	if length as u64 > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
 	let glb = gltf::Glb::from_slice(source_bytes).ok()?;
 	let bin = glb.bin?;
 	let end = offset.checked_add(length)?;
@@ -2805,12 +4784,19 @@ fn data_image_base64_parts(uri: &str) -> Option<(&'static str, &str)> {
 
 fn image_mime_type(image: &serde_json::Value, uri: &str) -> Option<&'static str> {
 	match image.get("mimeType").and_then(|value| value.as_str()) {
-		Some("image/png") => Some("image/png"),
-		Some("image/jpeg") => Some("image/jpeg"),
-		Some("image/webp") => Some("image/webp"),
+		Some(mime) => supported_image_mime_type(mime),
 		_ if uri.ends_with(".png") => Some("image/png"),
 		_ if uri.ends_with(".jpg") || uri.ends_with(".jpeg") => Some("image/jpeg"),
 		_ if uri.ends_with(".webp") => Some("image/webp"),
+		_ => None,
+	}
+}
+
+fn supported_image_mime_type(mime: &str) -> Option<&'static str> {
+	match mime {
+		"image/png" => Some("image/png"),
+		"image/jpeg" => Some("image/jpeg"),
+		"image/webp" => Some("image/webp"),
 		_ => None,
 	}
 }
@@ -2836,6 +4822,41 @@ fn encode_profile_icon_thumbnail_webp(bytes: &[u8]) -> Result<Vec<u8>, String> {
 	Ok(output)
 }
 
+fn encode_profile_icon_crop_webp(bytes: &[u8], crop: ProfileIconCropRequest) -> Result<Vec<u8>, String> {
+	let image = image::load_from_memory(bytes).map_err(|e| format!("decode profile icon source: {e}"))?;
+	let width = image.width();
+	let height = image.height();
+	if width == 0 || height == 0 {
+		return Err("profile icon source image is empty".to_string());
+	}
+	let base = width.min(height) as f32;
+	let zoom = crop.zoom.clamp(1.0, 4.0);
+	let side = (base / zoom).round().clamp(1.0, base) as u32;
+	let max_x = width.saturating_sub(side);
+	let max_y = height.saturating_sub(side);
+	let center_x = (width as f32 * 0.5) + crop.offset_x.clamp(-1.0, 1.0) * (max_x as f32 * 0.5);
+	let center_y = (height as f32 * 0.5) + crop.offset_y.clamp(-1.0, 1.0) * (max_y as f32 * 0.5);
+	let x = (center_x - side as f32 * 0.5).round().clamp(0.0, max_x as f32) as u32;
+	let y = (center_y - side as f32 * 0.5).round().clamp(0.0, max_y as f32) as u32;
+	let cropped = image.crop_imm(x, y, side, side);
+	let resized = cropped.resize(
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		image::imageops::FilterType::Lanczos3,
+	);
+	let mut output = Vec::new();
+	let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut output);
+	encoder
+		.write_image(
+			resized.to_rgba8().as_raw(),
+			resized.width(),
+			resized.height(),
+			image::ExtendedColorType::Rgba8,
+		)
+		.map_err(|e| format!("encode profile icon WebP: {e}"))?;
+	Ok(output)
+}
+
 fn remove_profile_icon_thumbnail_files(cache_dir: &Path, stem: &str) {
 	for extension in ["webp", "png", "jpg", "jpeg"] {
 		let _ = fs::remove_file(cache_dir.join(format!("{stem}.{extension}")));
@@ -2846,6 +4867,37 @@ fn remove_profile_icon_thumbnail_cache(setting: &AvatarSetting) {
 	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
 	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
 	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
+}
+
+fn save_profile_icon_thumbnail_bytes(
+	setting: &AvatarSetting,
+	manifest_path: &Path,
+	bytes: Vec<u8>,
+	app: &tauri::AppHandle,
+) -> Result<AvatarSetting, String> {
+	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
+	fs::create_dir_all(&cache_dir).map_err(|e| format!("create {}: {e}", cache_dir.display()))?;
+	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
+	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
+	let file_name = format!("{file_stem}.webp");
+	let icon_path = cache_dir.join(file_name);
+	fs::write(&icon_path, bytes).map_err(|e| format!("write {}: {e}", icon_path.display()))?;
+
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let icon_path_text = icon_path.display().to_string();
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
+	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
+	ensure_avatar_profile_metadata(&mut manifest, manifest_path, None)?;
+	write_manifest_value(manifest_path, &manifest)?;
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	let manifest_path = rename_avatar_setting_file_if_needed(manifest_path, &setting)?;
+	let setting = if manifest_path == Path::new(&setting.manifest_path) {
+		Ok(setting)
+	} else {
+		read_avatar_setting(&manifest_path, ProfileStorage::User)
+	}?;
+	refresh_tray_menu(app)?;
+	Ok(setting)
 }
 
 fn thumbnail_protocol_response(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
@@ -2935,29 +4987,25 @@ fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, a
 	let (_mime, thumbnail_bytes) =
 		vrm_metadata_thumbnail_image(meta, &root, &bytes, &resolved_avatar).ok_or_else(|| "avatar thumbnail not found".to_string())?;
 	let thumbnail_bytes = encode_profile_icon_thumbnail_webp(&thumbnail_bytes)?;
-	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
-	fs::create_dir_all(&cache_dir).map_err(|e| format!("create {}: {e}", cache_dir.display()))?;
-	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
-	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
-	let file_name = format!("{file_stem}.webp");
-	let icon_path = cache_dir.join(file_name);
-	fs::write(&icon_path, thumbnail_bytes).map_err(|e| format!("write {}: {e}", icon_path.display()))?;
+	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, thumbnail_bytes, &app)
+}
 
-	let mut manifest = read_manifest_value(&manifest_path)?;
-	let icon_path_text = icon_path.display().to_string();
-	set_optional_root_string(&mut manifest, "icon_path", icon_path_text.clone())?;
-	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
-	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
-	write_manifest_value(&manifest_path, &manifest)?;
-	let setting = read_avatar_setting(&manifest_path, ProfileStorage::User)?;
-	let manifest_path = rename_avatar_setting_file_if_needed(&manifest_path, &setting)?;
-	let setting = if manifest_path == Path::new(&setting.manifest_path) {
-		Ok(setting)
-	} else {
-		read_avatar_setting(&manifest_path, ProfileStorage::User)
-	}?;
-	refresh_tray_menu(&app)?;
-	Ok(setting)
+#[tauri::command]
+fn save_profile_icon_from_data_url(
+	setting_id: String,
+	image_data_url: String,
+	crop: ProfileIconCropRequest,
+	app: tauri::AppHandle,
+) -> Result<AvatarSetting, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = editable_avatar_setting_path(&setting)?;
+	let (_mime, encoded) =
+		data_image_base64_parts(&image_data_url).ok_or_else(|| "profile icon image must be a data:image/* base64 URL".to_string())?;
+	let bytes = BASE64_STANDARD
+		.decode(encoded)
+		.map_err(|e| format!("decode profile icon image: {e}"))?;
+	let icon_bytes = encode_profile_icon_crop_webp(&bytes, crop)?;
+	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, icon_bytes, &app)
 }
 
 #[derive(Default)]
@@ -3119,14 +5167,17 @@ fn accessor_count(accessors: Option<&Vec<serde_json::Value>>, index: &serde_json
 fn gltf_image_bytes(image: &serde_json::Value, root: &serde_json::Value, source_bytes: &[u8], path: &Path) -> Option<Vec<u8>> {
 	if let Some(uri) = image.get("uri").and_then(|value| value.as_str()) {
 		if let Some((_, encoded)) = uri.split_once(";base64,").filter(|(prefix, _)| prefix.starts_with("data:image/")) {
-			return BASE64_STANDARD.decode(encoded).ok();
+			return decode_limited_metadata_image_base64(encoded);
 		}
-		return fs::read(path.parent()?.join(uri)).ok();
+		return read_limited_gltf_external_image(path, uri);
 	}
 	let buffer_view_index = image.get("bufferView").and_then(|value| value.as_u64())? as usize;
 	let buffer_view = root.get("bufferViews")?.as_array()?.get(buffer_view_index)?;
 	let offset = buffer_view.get("byteOffset").and_then(|value| value.as_u64()).unwrap_or(0) as usize;
 	let length = buffer_view.get("byteLength").and_then(|value| value.as_u64())? as usize;
+	if length as u64 > MAX_METADATA_IMAGE_BYTES {
+		return None;
+	}
 	let glb = gltf::Glb::from_slice(source_bytes).ok()?;
 	let bin = glb.bin?;
 	let end = offset.checked_add(length)?;
@@ -3383,6 +5434,7 @@ fn update_avatar_setting_path(setting_id: String, field: String, path: String, a
 	let setting = resolve_avatar_setting_direct(&setting_id)?;
 	let manifest_path = editable_avatar_setting_path(&setting)?;
 	let mut manifest = read_manifest_value(&manifest_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	match field.as_str() {
 		"avatar_path" => {
@@ -3392,7 +5444,6 @@ fn update_avatar_setting_path(setting_id: String, field: String, path: String, a
 			);
 		}
 		"icon_path" => {
-			table.insert("icon_path".to_string(), toml::Value::String(path.clone()));
 			let window = table
 				.entry("window")
 				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
@@ -3464,6 +5515,7 @@ fn update_avatar_setting_manifest(
 	let setting = resolve_avatar_setting(setting_id)?;
 	let manifest_path = editable_avatar_setting_path(&setting)?;
 	let mut manifest = read_manifest_value(&manifest_path)?;
+	migrate_avatar_manifest_to_v2(&mut manifest)?;
 	apply(&setting, &mut manifest)?;
 	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
 	write_manifest_value(&manifest_path, &manifest)?;
@@ -3490,26 +5542,6 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			apply_avatar_outline_to_matching_renderers,
 		),
 		(
-			"effects.avatar.rim.",
-			"apply avatar rim to running renderers",
-			apply_avatar_rim_to_matching_renderers,
-		),
-		(
-			"effects.avatar.matcap.",
-			"apply avatar matcap to running renderers",
-			apply_avatar_matcap_to_matching_renderers,
-		),
-		(
-			"effects.avatar.specular.",
-			"apply avatar specular to running renderers",
-			apply_avatar_specular_to_matching_renderers,
-		),
-		(
-			"effects.avatar.ambient_occlusion.",
-			"apply avatar ambient occlusion to running renderers",
-			apply_avatar_ambient_occlusion_to_matching_renderers,
-		),
-		(
 			"environment.color.",
 			"apply environment color to running renderers",
 			apply_environment_color_to_matching_renderers,
@@ -3534,6 +5566,26 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply contact shadow to running renderers",
 			apply_contact_shadow_to_matching_renderers,
 		),
+		(
+			"animator.",
+			"apply UNAnimator profile to running renderers",
+			apply_animator_profile_to_matching_renderers,
+		),
+		(
+			"wardrobe.bindings",
+			"apply input bindings to running renderers",
+			apply_input_bindings_to_matching_renderers,
+		),
+		(
+			"wardrobe.transition.",
+			"apply wardrobe transition settings to running renderers",
+			apply_wardrobe_transition_to_matching_renderers,
+		),
+		(
+			"output.spout2.",
+			"apply Spout2 output settings to running renderers",
+			apply_spout_output_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -3551,8 +5603,8 @@ fn apply_avatar_setting_value(
 	field: &str,
 	value: serde_json::Value,
 ) -> Result<(), String> {
-	match field {
-		"avatar_path" => {
+	match avatar_setting_field_domain(field).ok_or_else(|| format!("unsupported setting field: {field}"))? {
+		AvatarSettingFieldDomain::AvatarPath => {
 			let path = json_string(&value, field)?;
 			set_optional_root_string(
 				manifest,
@@ -3560,53 +5612,344 @@ fn apply_avatar_setting_value(
 				avatar_path_for_manifest_value(&path, Path::new(&setting.manifest_path)),
 			)?;
 		}
-		"icon_path" => {
+		AvatarSettingFieldDomain::WardrobeSet => {
+			apply_wardrobe_setting_value(manifest, field, value)?;
+		}
+		AvatarSettingFieldDomain::IconPath => {
 			let path = json_string(&value, field)?;
-			set_optional_root_string(manifest, "icon_path", path.clone())?;
 			set_optional_nested_string(manifest, &["window", "icon_path"], path)?;
 		}
-		field if field.starts_with("profile.") => {
+		AvatarSettingFieldDomain::Profile => {
 			apply_profile_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("motion.") => {
+		AvatarSettingFieldDomain::Motion => {
 			apply_motion_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("render_quality.") => {
+		AvatarSettingFieldDomain::AudioLink => {
+			apply_audio_link_setting_value(manifest, field, value)?;
+		}
+		AvatarSettingFieldDomain::RenderQuality => {
 			apply_render_quality_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.avatar.contact_shadow.") => {
+		AvatarSettingFieldDomain::ContactShadow => {
 			apply_contact_shadow_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.avatar.") => {
+		AvatarSettingFieldDomain::AvatarEffect => {
 			apply_avatar_effect_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("environment.") => {
+		AvatarSettingFieldDomain::Environment => {
 			apply_environment_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("effects.post.") => {
+		AvatarSettingFieldDomain::PostEffect => {
 			apply_post_effect_setting_value(manifest, field, value)?;
 		}
-		"spring_bones" | "physics.spring_bone.simulation_hz" | "physics.spring_bone.substeps" => {
+		AvatarSettingFieldDomain::Physics => {
 			apply_physics_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("physics.") => {
-			apply_physics_setting_value(manifest, setting, field, value)?;
-		}
-		field if field.starts_with("window.") => {
+		AvatarSettingFieldDomain::Window => {
 			apply_window_setting_value(manifest, setting, field, value)?;
 		}
-		field if field.starts_with("debug.") => {
+		AvatarSettingFieldDomain::Debug => {
 			apply_debug_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("camera.") => {
+		AvatarSettingFieldDomain::Camera => {
 			apply_camera_setting_value(manifest, field, value)?;
 		}
-		field if field.starts_with("output.") => {
+		AvatarSettingFieldDomain::Output => {
 			apply_output_setting_value(manifest, field, value)?;
 		}
-		_ => return Err(format!("unsupported setting field: {field}")),
+		AvatarSettingFieldDomain::Animator => {
+			apply_animator_setting_value(manifest, field, value)?;
+		}
 	}
 	Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AvatarSettingFieldDomain {
+	AvatarPath,
+	WardrobeSet,
+	IconPath,
+	Profile,
+	Motion,
+	AudioLink,
+	RenderQuality,
+	ContactShadow,
+	AvatarEffect,
+	Environment,
+	PostEffect,
+	Physics,
+	Window,
+	Debug,
+	Camera,
+	Output,
+	Animator,
+}
+
+fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> {
+	match field {
+		"avatar_path" => Some(AvatarSettingFieldDomain::AvatarPath),
+		"wardrobe_set" => Some(AvatarSettingFieldDomain::WardrobeSet),
+		_ if field.starts_with("wardrobe.") => Some(AvatarSettingFieldDomain::WardrobeSet),
+		"icon_path" => Some(AvatarSettingFieldDomain::IconPath),
+		"dynamics_enabled" | "spring_bones" => Some(AvatarSettingFieldDomain::Physics),
+		_ if field.starts_with("profile.") => Some(AvatarSettingFieldDomain::Profile),
+		_ if field.starts_with("motion.") => Some(AvatarSettingFieldDomain::Motion),
+		_ if field.starts_with("audio_link.") => Some(AvatarSettingFieldDomain::AudioLink),
+		_ if field.starts_with("render_quality.") => Some(AvatarSettingFieldDomain::RenderQuality),
+		_ if field.starts_with("effects.avatar.contact_shadow.") => Some(AvatarSettingFieldDomain::ContactShadow),
+		_ if field.starts_with("effects.avatar.") => Some(AvatarSettingFieldDomain::AvatarEffect),
+		_ if field.starts_with("environment.") => Some(AvatarSettingFieldDomain::Environment),
+		_ if field.starts_with("effects.post.") => Some(AvatarSettingFieldDomain::PostEffect),
+		_ if field.starts_with("physics.") => Some(AvatarSettingFieldDomain::Physics),
+		_ if field.starts_with("window.") => Some(AvatarSettingFieldDomain::Window),
+		_ if field.starts_with("debug.") => Some(AvatarSettingFieldDomain::Debug),
+		_ if field.starts_with("camera.") => Some(AvatarSettingFieldDomain::Camera),
+		_ if field.starts_with("output.") => Some(AvatarSettingFieldDomain::Output),
+		_ if field.starts_with("animator.") => Some(AvatarSettingFieldDomain::Animator),
+		_ => None,
+	}
+}
+
+fn apply_wardrobe_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"wardrobe_set" => set_optional_root_string(manifest, "wardrobe_set", json_string(&value, field)?.trim().to_string()),
+		"wardrobe.transition.billboard_anchor" => {
+			let anchor = json_string(&value, field)?.trim().to_ascii_lowercase();
+			let anchor = match anchor.as_str() {
+				"head" | "neck" | "spine" => anchor,
+				_ => "neck".to_string(),
+			};
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			let wardrobe = root
+				.entry("wardrobe".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe must be a table".to_string())?;
+			let transition = wardrobe
+				.entry("transition".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe.transition must be a table".to_string())?;
+			transition.insert("billboard_anchor".to_string(), toml::Value::String(anchor));
+			Ok(())
+		}
+		"wardrobe.transition.billboard_y_offset_mm" => {
+			let offset = json_f32(&value, field)?.clamp(-1000.0, 1000.0);
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			let wardrobe = root
+				.entry("wardrobe".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe must be a table".to_string())?;
+			let transition = wardrobe
+				.entry("transition".to_string())
+				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+				.as_table_mut()
+				.ok_or_else(|| "wardrobe.transition must be a table".to_string())?;
+			transition.insert("billboard_y_offset_mm".to_string(), toml::Value::Float(f64::from(offset)));
+			Ok(())
+		}
+		"wardrobe.shortcuts" => {
+			let shortcuts: Vec<WardrobeShortcutSetting> =
+				serde_json::from_value(value).map_err(|e| format!("wardrobe.shortcuts must be a shortcut array: {e}"))?;
+			let mut out = Vec::new();
+			for shortcut in shortcuts {
+				let set_id = shortcut.set_id.trim();
+				let shortcut_value = shortcut.shortcut.trim();
+				if shortcut_value.is_empty() {
+					continue;
+				}
+				if out.iter().any(|existing: &toml::Value| {
+					existing
+						.as_table()
+						.and_then(|table| table.get("set_id"))
+						.and_then(toml::Value::as_str)
+						== Some(set_id)
+				}) {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("set_id".to_string(), toml::Value::String(set_id.to_string()));
+				table.insert("shortcut".to_string(), toml::Value::String(shortcut_value.to_string()));
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(wardrobe) = root.get_mut("wardrobe").and_then(toml::Value::as_table_mut) {
+					wardrobe.remove("shortcuts");
+					if wardrobe.is_empty() {
+						root.remove("wardrobe");
+					}
+				}
+			} else {
+				let wardrobe = root
+					.entry("wardrobe".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "wardrobe must be a table".to_string())?;
+				wardrobe.insert("shortcuts".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		"wardrobe.bindings" => {
+			let bindings: Vec<WardrobeBindingSetting> =
+				serde_json::from_value(value).map_err(|e| format!("wardrobe.bindings must be a binding array: {e}"))?;
+			let mut out = Vec::new();
+			for binding in bindings {
+				let set_id = binding.set_id.trim();
+				let kind = normalize_wardrobe_binding_kind(&binding.kind);
+				let mut table = toml::map::Map::new();
+				table.insert("set_id".to_string(), toml::Value::String(set_id.to_string()));
+				table.insert("kind".to_string(), toml::Value::String(kind.clone()));
+				if kind == "keyboard" {
+					let binding_value = binding.binding.as_deref().unwrap_or("").trim();
+					if binding_value.is_empty() {
+						continue;
+					}
+					table.insert("binding".to_string(), toml::Value::String(binding_value.to_string()));
+				} else if kind == "midi_note" {
+					let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+					let note = binding.note.filter(|note| *note <= 127);
+					let (Some(channel), Some(note)) = (channel, note) else {
+						continue;
+					};
+					if let Some(device) = binding.device.as_deref().map(str::trim).filter(|device| !device.is_empty()) {
+						table.insert("device".to_string(), toml::Value::String(device.to_string()));
+					}
+					table.insert("channel".to_string(), toml::Value::Integer(i64::from(channel)));
+					table.insert("note".to_string(), toml::Value::Integer(i64::from(note)));
+				}
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(wardrobe) = root.get_mut("wardrobe").and_then(toml::Value::as_table_mut) {
+					wardrobe.remove("bindings");
+					if wardrobe.is_empty() {
+						root.remove("wardrobe");
+					}
+				}
+			} else {
+				let wardrobe = root
+					.entry("wardrobe".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "wardrobe must be a table".to_string())?;
+				wardrobe.remove("shortcuts");
+				wardrobe.insert("bindings".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		_ => Err(format!("unsupported wardrobe setting field: {field}")),
+	}
+}
+
+fn apply_animator_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"animator.actions" => {
+			let actions: Vec<AnimatorActionSetting> =
+				serde_json::from_value(value).map_err(|e| format!("animator.actions must be an action array: {e}"))?;
+			let mut out = Vec::new();
+			for action in actions {
+				let id = action.id.trim();
+				let mode = normalize_animator_action_mode(&action.mode);
+				if id.is_empty() || !animator_action_mode_is_enabled(&mode) {
+					continue;
+				}
+				if out.iter().any(|existing: &toml::Value| {
+					existing.as_table().and_then(|table| table.get("id")).and_then(toml::Value::as_str) == Some(id)
+				}) {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("id".to_string(), toml::Value::String(id.to_string()));
+				table.insert("mode".to_string(), toml::Value::String(mode));
+				if let Some(value) = action.value.filter(|value| value.is_finite()) {
+					table.insert("value".to_string(), toml::Value::Float(value));
+				}
+				if let Some(curve) = normalize_animator_transition_curve_opt(action.transition_curve.as_deref()) {
+					let duration_ms = action.transition_ms.unwrap_or(0).min(3000);
+					if duration_ms > 0 {
+						table.insert("transition_curve".to_string(), toml::Value::String(curve));
+						table.insert("transition_ms".to_string(), toml::Value::Integer(i64::from(duration_ms)));
+					}
+				}
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(animator) = root.get_mut("animator").and_then(toml::Value::as_table_mut) {
+					animator.remove("actions");
+					animator.remove("action_ids");
+					if animator.is_empty() {
+						root.remove("animator");
+					}
+				}
+			} else {
+				let animator = root
+					.entry("animator".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "animator must be a table".to_string())?;
+				animator.remove("action_ids");
+				animator.insert("actions".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		"animator.bindings" => {
+			let bindings: Vec<AnimatorBindingSetting> =
+				serde_json::from_value(value).map_err(|e| format!("animator.bindings must be a binding array: {e}"))?;
+			let mut out = Vec::new();
+			for binding in bindings {
+				let action_id = binding.action_id.trim();
+				let kind = normalize_wardrobe_binding_kind(&binding.kind);
+				if action_id.is_empty() {
+					continue;
+				}
+				let mut table = toml::map::Map::new();
+				table.insert("action_id".to_string(), toml::Value::String(action_id.to_string()));
+				table.insert("kind".to_string(), toml::Value::String(kind.clone()));
+				if kind == "keyboard" {
+					let binding_value = binding.binding.as_deref().unwrap_or("").trim();
+					if binding_value.is_empty() {
+						continue;
+					}
+					table.insert("binding".to_string(), toml::Value::String(binding_value.to_string()));
+				} else if kind == "midi_note" {
+					let channel = binding.channel.filter(|channel| (1..=16).contains(channel));
+					let note = binding.note.filter(|note| *note <= 127);
+					let (Some(channel), Some(note)) = (channel, note) else {
+						continue;
+					};
+					if let Some(device) = binding.device.as_deref().map(str::trim).filter(|device| !device.is_empty()) {
+						table.insert("device".to_string(), toml::Value::String(device.to_string()));
+					}
+					table.insert("channel".to_string(), toml::Value::Integer(i64::from(channel)));
+					table.insert("note".to_string(), toml::Value::Integer(i64::from(note)));
+				}
+				out.push(toml::Value::Table(table));
+			}
+			let root = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+			if out.is_empty() {
+				if let Some(animator) = root.get_mut("animator").and_then(toml::Value::as_table_mut) {
+					animator.remove("bindings");
+					if animator.is_empty() {
+						root.remove("animator");
+					}
+				}
+			} else {
+				let animator = root
+					.entry("animator".to_string())
+					.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+					.as_table_mut()
+					.ok_or_else(|| "animator must be a table".to_string())?;
+				animator.insert("bindings".to_string(), toml::Value::Array(out));
+			}
+			Ok(())
+		}
+		_ => Err(format!("unsupported animator setting field: {field}")),
+	}
 }
 
 fn apply_environment_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
@@ -3727,6 +6070,26 @@ fn apply_environment_setting_value(manifest: &mut toml::Value, field: &str, valu
 	}
 }
 
+fn apply_audio_link_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"audio_link.source" => {
+			let source = match json_string(&value, field)?.trim().to_ascii_lowercase().as_str() {
+				"none" => "none".to_string(),
+				"input_device" => "input_device".to_string(),
+				other => return Err(format!("invalid {field}: {other}; expected none or input_device")),
+			};
+			set_nested_string(manifest, &["audio_link", "source"], source)
+		}
+		"audio_link.input_device_id" => {
+			set_optional_nested_string(manifest, &["audio_link", "input_device_id"], json_string(&value, field)?)
+		}
+		"audio_link.input_device_name_hint" => {
+			set_optional_nested_string(manifest, &["audio_link", "input_device_name_hint"], json_string(&value, field)?)
+		}
+		_ => Err(format!("unsupported setting field: {field}")),
+	}
+}
+
 fn apply_avatar_effect_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
 	match field {
 		"effects.avatar.outline.policy" => set_nested_string(
@@ -3765,75 +6128,6 @@ fn apply_avatar_effect_setting_value(manifest: &mut toml::Value, field: &str, va
 			field,
 			0.0..=1.0,
 			"[0.0, 1.0]",
-		),
-		"effects.avatar.rim.policy" => {
-			set_nested_string(manifest, &["effects", "avatar", "rim", "policy"], json_rim_policy(&value, field)?)
-		}
-		"effects.avatar.rim.color" => set_nested_rgb_array(manifest, &["effects", "avatar", "rim", "color"], json_rgb(&value, field)?),
-		"effects.avatar.rim.intensity" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "intensity"],
-			&value,
-			field,
-			0.0..=4.0,
-			"[0.0, 4.0]",
-		),
-		"effects.avatar.rim.lighting_mix" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "lighting_mix"],
-			&value,
-			field,
-			0.0..=1.0,
-			"[0.0, 1.0]",
-		),
-		"effects.avatar.rim.fresnel_power" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "fresnel_power"],
-			&value,
-			field,
-			0.00001..=32.0,
-			"[0.00001, 32.0]",
-		),
-		"effects.avatar.rim.lift" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "rim", "lift"],
-			&value,
-			field,
-			-1.0..=1.0,
-			"[-1.0, 1.0]",
-		),
-		"effects.avatar.matcap.scale" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "matcap", "scale"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
-		),
-		"effects.avatar.specular.enabled" => set_nested_json_bool(manifest, &["effects", "avatar", "specular", "enabled"], &value, field),
-		"effects.avatar.specular.intensity" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "specular", "intensity"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
-		),
-		"effects.avatar.specular.power" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "specular", "power"],
-			&value,
-			field,
-			1.0..=128.0,
-			"[1.0, 128.0]",
-		),
-		"effects.avatar.ambient_occlusion.strength" => set_nested_ranged_float(
-			manifest,
-			&["effects", "avatar", "ambient_occlusion", "strength"],
-			&value,
-			field,
-			0.0..=2.0,
-			"[0.0, 2.0]",
 		),
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
@@ -3992,25 +6286,26 @@ fn apply_window_setting_value(
 		}
 		"window.decorations" => {
 			let decorations = json_bool(&value, field)?;
-			set_root_bool(manifest, "decorations", decorations)?;
+			remove_root_key(manifest, "decorations")?;
 			set_nested_bool(manifest, &["window", "decorations"], decorations)
 		}
 		"window.transparent" => {
 			let transparent = json_bool(&value, field)?;
-			set_root_bool(manifest, "transparent", transparent)?;
+			remove_root_key(manifest, "transparent")?;
 			set_nested_bool(manifest, &["window", "transparent"], transparent)?;
 			if !transparent {
-				set_root_bool(manifest, "input_passthrough", false)?;
+				remove_root_key(manifest, "input_passthrough")?;
 				set_nested_bool(manifest, &["window", "input_passthrough"], false)?;
 			}
 			Ok(())
 		}
 		"window.input_passthrough" => {
 			let input_passthrough = json_bool(&value, field)?;
-			if input_passthrough && !setting.transparent {
+			let transparent = manifest_window_bool(manifest, "transparent", setting.transparent);
+			if input_passthrough && !transparent {
 				return Err("Click-through requires Transparent to be enabled".to_string());
 			}
-			set_root_bool(manifest, "input_passthrough", input_passthrough)?;
+			remove_root_key(manifest, "input_passthrough")?;
 			set_nested_bool(manifest, &["window", "input_passthrough"], input_passthrough)
 		}
 		"window.always_on_top" => set_nested_json_bool(manifest, &["window", "always_on_top"], &value, field),
@@ -4033,6 +6328,14 @@ fn apply_window_setting_value(
 		"window.minimized" => set_nested_json_bool(manifest, &["window", "minimized"], &value, field),
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
+}
+
+fn manifest_window_bool(manifest: &toml::Value, key: &str, fallback: bool) -> bool {
+	manifest
+		.get("window")
+		.and_then(|window| window.get(key))
+		.and_then(toml::Value::as_bool)
+		.unwrap_or(fallback)
 }
 
 fn apply_debug_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
@@ -4102,19 +6405,33 @@ fn apply_physics_setting_value(
 	value: serde_json::Value,
 ) -> Result<(), String> {
 	match field {
-		"spring_bones" => set_nested_json_bool(manifest, &["spring_bones"], &value, field),
-		"physics.spring_bone.simulation_hz" => set_nested_ranged_float(
-			manifest,
-			&["physics", "spring_bone", "simulation_hz"],
-			&value,
-			field,
-			30.0..=240.0,
-			"[30, 240]",
-		),
-		"physics.spring_bone.substeps" => {
-			set_nested_ranged_u32(manifest, &["physics", "spring_bone", "substeps"], &value, field, 1..=8, "[1, 8]")
+		"dynamics_enabled" | "spring_bones" => set_nested_json_bool(manifest, &["physics", "dynamics", "enabled"], &value, field),
+		"physics.contacts.parameter_emission" => {
+			set_nested_json_bool(manifest, &["physics", "contacts", "parameter_emission"], &value, field)
 		}
-		field if field.starts_with("physics.spring_bone.overrides.") => {
+		"physics.dynamics.solver.simulation_hz" | "physics.spring_bone.simulation_hz" => {
+			migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+			set_nested_ranged_float(
+				manifest,
+				&["physics", "dynamics", "solver", "simulation_hz"],
+				&value,
+				field,
+				30.0..=240.0,
+				"[30, 240]",
+			)
+		}
+		"physics.dynamics.solver.substeps" | "physics.spring_bone.substeps" => {
+			migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+			set_nested_ranged_u32(
+				manifest,
+				&["physics", "dynamics", "solver", "substeps"],
+				&value,
+				field,
+				1..=8,
+				"[1, 8]",
+			)
+		}
+		field if field.starts_with("physics.dynamics.solver.overrides.") || field.starts_with("physics.spring_bone.overrides.") => {
 			apply_spring_bone_category_override_value(manifest, setting, field, value)
 		}
 		"physics.bone_colliders.enabled" => {
@@ -4141,7 +6458,6 @@ fn apply_render_quality_setting_value(manifest: &mut toml::Value, field: &str, v
 	match field {
 		"render_quality.aa" => {
 			let aa = json_aa_mode(&value, field)?;
-			set_root_string(manifest, "aa", aa.clone())?;
 			set_nested_string(manifest, &["render_quality", "aa"], aa)
 		}
 		"render_quality.texture_resolution_limit" => set_nested_string(
@@ -4234,15 +6550,17 @@ fn launch_renderer_in_state(
 	let setting = resolve_avatar_setting(setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let manifest_path_text = manifest_path.display().to_string();
-	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-	if !setting.allow_multiple_renderers {
-		if let Some(renderer) = state.renderers.values().find(|renderer| {
-			!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
-				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text.as_str())
-		}) {
-			return Ok(renderer.info.clone());
+	{
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+			return Ok(info);
 		}
 	}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+		return Ok(info);
+	}
+	push_transparent_window_backend_warning(&mut state, &setting);
 	state.next_id = state.next_id.saturating_add(1);
 	let id = state.next_id;
 	let runtime_bus_key = renderer_runtime_bus_key(id);
@@ -4251,6 +6569,7 @@ fn launch_renderer_in_state(
 		&runtime_bus_key,
 		&app_settings.renderer_close_hotkey,
 		resolve_renderer_window_icon_path(&setting).as_deref(),
+		Some(&renderer_profile_app_user_model_id(&setting.id)),
 	)?;
 	configure_hidden_child(&mut command);
 	let mut child = command
@@ -4296,9 +6615,9 @@ fn launch_renderer_in_state(
 		id,
 		ManagedRenderer {
 			info,
-			child,
+			child: Some(child),
 			started_at: Instant::now(),
-			runtime_bus_key,
+			runtime_bus_key: runtime_bus_key.clone(),
 			runtime_status_cache,
 			runtime_status_stream_stop,
 			stderr_tail,
@@ -4307,6 +6626,312 @@ fn launch_renderer_in_state(
 	);
 	prewarm_runtime_control_session();
 	Ok(info_for_return)
+}
+
+fn attach_standalone_renderer_manifest_in_state(manifest_path: &Path, state: &Mutex<SupervisorState>) -> Result<RendererInstance, String> {
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let manifest_path_text = manifest_path.display().to_string();
+	{
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+			return Ok(info);
+		}
+	}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
+		return Ok(info);
+	}
+	state.next_id = state.next_id.saturating_add(1);
+	let id = state.next_id;
+	let runtime_bus_key = standalone_renderer_runtime_bus_key(&manifest_path);
+	let (runtime_status_cache, runtime_status_stream_stop) =
+		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
+	let info = RendererInstance {
+		id,
+		name: setting.name,
+		state: RendererState::Running,
+		pid: None,
+		uptime_secs: 0,
+		avatar_path: setting.avatar_path,
+		manifest_path: Some(manifest_path_text),
+		vmc_address: setting.vmc_address,
+		vmc_port: setting.vmc_port,
+		motion_vmc_enabled: setting.motion_vmc_enabled,
+		motion_unmotion_enabled: setting.motion_unmotion_enabled,
+		unmotion_zenoh_key: setting.unmotion_zenoh_key,
+		primary_motion_source: setting.primary_motion_source,
+		spout_enabled: setting.spout_enabled,
+		spout_name: setting.spout_name,
+		spout_width: setting.spout_width,
+		spout_height: setting.spout_height,
+		transparent: setting.transparent,
+		input_passthrough: setting.input_passthrough,
+		decorations: setting.decorations,
+		always_on_top: setting.always_on_top,
+		window_width: setting.window_width,
+		window_height: setting.window_height,
+		last_stderr: None,
+		stderr_tail: Vec::new(),
+		exit_code: None,
+	};
+	let info_for_return = info.clone();
+	state.renderers.insert(
+		id,
+		ManagedRenderer {
+			info,
+			child: None,
+			started_at: Instant::now(),
+			runtime_bus_key,
+			runtime_status_cache,
+			runtime_status_stream_stop,
+			stderr_tail: Arc::new(Mutex::new(Vec::new())),
+			crash_notified: false,
+		},
+	);
+	prewarm_runtime_control_session();
+	Ok(info_for_return)
+}
+
+#[tauri::command]
+fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let renderer_exe = renderer_executable_path();
+	if !renderer_exe.is_file() {
+		return Err(format!("renderer executable not found: {}", renderer_exe.display()));
+	}
+	let desktop_dir = dirs::desktop_dir().ok_or_else(|| "desktop directory was not found".to_string())?;
+	fs::create_dir_all(&desktop_dir).map_err(|e| format!("create desktop dir {}: {e}", desktop_dir.display()))?;
+	let shortcut_path = desktop_dir.join(format!("{}.lnk", sanitize_shortcut_file_stem(&setting.name)));
+	let working_dir = renderer_shortcut_working_dir(&renderer_exe);
+	let icon_path = shortcut_icon_path_for_creation(&setting, &renderer_exe);
+	let app_id = renderer_profile_app_user_model_id(&setting.id);
+	create_windows_shortcut(
+		&shortcut_path,
+		&renderer_exe,
+		&format!("--manifest {}", quote_windows_arg(&manifest_path)),
+		&working_dir,
+		icon_path.as_deref(),
+		Some(&app_id),
+	)?;
+	Ok(shortcut_path.display().to_string())
+}
+
+#[tauri::command]
+fn create_taskbar_launcher_shortcuts(setting_id: String, state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<String, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
+		state.pinned_taskbar_profile_ids.push(setting.id);
+	}
+	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
+	let path = update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(path)
+}
+
+#[tauri::command]
+fn set_taskbar_profile_pinned(
+	setting_id: String,
+	pinned: bool,
+	state: State<'_, Mutex<AppRuntimeSettings>>,
+) -> Result<AppRuntimeSettings, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	if pinned {
+		if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
+			state.pinned_taskbar_profile_ids.push(setting.id);
+		}
+	} else {
+		state.pinned_taskbar_profile_ids.retain(|id| id != &setting.id);
+	}
+	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
+	update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(state.clone())
+}
+
+#[tauri::command]
+fn clear_taskbar_profile_pins(state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	state.pinned_taskbar_profile_ids.clear();
+	update_taskbar_launcher_profile_tasks(&state)?;
+	write_app_settings(&state)?;
+	Ok(state.clone())
+}
+
+fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Result<String, String> {
+	let supervisor_exe = supervisor_executable_path()?;
+	let start_menu_dir = start_menu_un_avatar_dir()?;
+	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
+	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	let launcher_path = start_menu_dir.join("UN Avatar.lnk");
+	create_windows_shortcut(
+		&launcher_path,
+		&supervisor_exe,
+		"",
+		&supervisor_working_dir,
+		Some(&supervisor_exe),
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
+	)?;
+	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
+	let visible_settings = list_avatar_settings()?;
+	let pinned_ids = settings
+		.pinned_taskbar_profile_ids
+		.iter()
+		.map(String::as_str)
+		.collect::<BTreeSet<_>>();
+	let pinned_settings = visible_settings
+		.iter()
+		.filter(|setting| pinned_ids.contains(setting.id.as_str()))
+		.cloned()
+		.collect::<Vec<_>>();
+	update_windows_jump_lists(&supervisor_exe, &supervisor_working_dir, &visible_settings, &pinned_settings)?;
+	Ok(start_menu_dir.display().to_string())
+}
+
+fn remove_legacy_profile_launcher_shortcuts(start_menu_dir: &Path) {
+	let Ok(entries) = fs::read_dir(start_menu_dir) else {
+		return;
+	};
+	for entry in entries.flatten() {
+		let path = entry.path();
+		let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+			continue;
+		};
+		if name.starts_with("UN Avatar - ") && name.ends_with(".lnk") {
+			let _ = fs::remove_file(path);
+		}
+	}
+}
+
+fn renderer_profile_app_user_model_ids(settings: &[AvatarSetting]) -> Vec<String> {
+	let mut seen = BTreeSet::new();
+	settings
+		.into_iter()
+		.map(|setting| renderer_profile_app_user_model_id(&setting.id))
+		.filter(|app_id| seen.insert(app_id.clone()))
+		.collect()
+}
+
+#[tauri::command]
+fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<PrewarmSceneCacheResult, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
+	let started = Instant::now();
+	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
+	configure_hidden_child(&mut command);
+	let output = command
+		.stdin(Stdio::null())
+		.output()
+		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
+	let elapsed = started.elapsed().as_secs_f64();
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	if output.status.success() {
+		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
+		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		let detail = prewarm_renderer_scene_cache_detail(&stderr);
+		let elapsed_secs = format!("{elapsed:.1}");
+		let message = detail
+			.as_ref()
+			.map(|detail| {
+				t!(
+					"notifications.cache.ready_body_detail",
+					name = &setting.name,
+					seconds = &elapsed_secs,
+					detail = detail
+				)
+				.to_string()
+			})
+			.unwrap_or_else(|| t!("notifications.cache.ready_body", name = &setting.name, seconds = &elapsed_secs).to_string());
+		push_notification(
+			&mut state,
+			NotificationLevel::Info,
+			t!("notifications.cache.ready_title").to_string(),
+			message.clone(),
+		);
+		return Ok(PrewarmSceneCacheResult {
+			profile_name: setting.name,
+			elapsed_secs: elapsed,
+			detail,
+		});
+	}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+	let last_line = stderr
+		.lines()
+		.rev()
+		.find(|line| !line.trim().is_empty())
+		.unwrap_or("no stderr output");
+	let elapsed_secs = format!("{elapsed:.1}");
+	let message = t!(
+		"notifications.cache.failed_body",
+		name = &setting.name,
+		seconds = &elapsed_secs,
+		error = last_line
+	)
+	.to_string();
+	push_notification(
+		&mut state,
+		NotificationLevel::Warning,
+		t!("notifications.cache.failed_title").to_string(),
+		message.clone(),
+	);
+	Err(message)
+}
+
+fn prewarm_renderer_scene_cache_detail(stderr: &str) -> Option<String> {
+	let texture_line = stderr
+		.lines()
+		.rev()
+		.find(|line| line.contains("gpu scene texture prepare summary:"));
+	let mut parts = Vec::new();
+	if let Some(line) = texture_line {
+		if let Some(processed) = metric_token(line, "processed_cache=") {
+			parts.push(format!("processed {processed}"));
+		}
+		if let Some(compressed) = metric_token(line, "compressed_cache=") {
+			parts.push(format!("compressed {compressed}"));
+		}
+	}
+	if stderr.lines().any(|line| line.contains("pipeline cache store")) {
+		parts.push("pipeline cache stored".to_string());
+	}
+	(!parts.is_empty()).then(|| parts.join(", "))
+}
+
+fn metric_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+	let start = line.find(key)? + key.len();
+	let tail = &line[start..];
+	let end = tail.find(char::is_whitespace).unwrap_or(tail.len());
+	let token = &tail[..end];
+	(!token.is_empty()).then_some(token)
+}
+
+fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSetting, manifest_path_text: &str) -> Option<RendererInstance> {
+	if setting.allow_multiple_renderers {
+		return None;
+	}
+	state
+		.renderers
+		.values()
+		.find(|renderer| {
+			!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
+				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text)
+		})
+		.map(|renderer| renderer.info.clone())
+}
+
+fn push_transparent_window_backend_warning(state: &mut SupervisorState, setting: &AvatarSetting) {
+	if !(cfg!(windows) && setting.transparent && setting.render_backend == "vulkan") {
+		return;
+	}
+	push_notification(
+		state,
+		NotificationLevel::Warning,
+		t!("notifications.transparent_dx12.title").to_string(),
+		t!("notifications.transparent_dx12.body").to_string(),
+	);
 }
 
 #[tauri::command]
@@ -4374,6 +6999,8 @@ fn set_renderer_camera_orbit(
 }
 
 #[tauri::command]
+// Tauri command parameters mirror the frontend invoke payload; grouping them would break the public command shape.
+#[allow(clippy::too_many_arguments)]
 fn set_renderer_camera_state(
 	id: u32,
 	target: Option<[f32; 3]>,
@@ -4443,6 +7070,172 @@ fn set_renderer_spout_output(
 			},
 		)
 	})
+}
+
+#[tauri::command]
+fn save_renderer_spout_profile(
+	id: u32,
+	state: State<'_, Mutex<SupervisorState>>,
+	app: tauri::AppHandle,
+) -> Result<RendererRuntimeStatus, String> {
+	let (output, manifest_path) = {
+		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		refresh_renderer_states(&mut state, false, None);
+		let renderer = state.renderers.get(&id).ok_or_else(|| format!("renderer not found: {id}"))?;
+		if matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed) {
+			return Err(format!("renderer {id} is not running"));
+		}
+		let (telemetry, _telemetry_err) = cached_runtime_telemetry(renderer);
+		let telemetry = telemetry.ok_or_else(|| format!("renderer {id} has not reported output state yet"))?;
+		let output = RendererSpoutProfileState {
+			spout_enabled: telemetry.spout_enabled,
+			spout_name: telemetry.spout_name.or_else(|| renderer.info.spout_name.clone()),
+			spout_width: telemetry.spout_width.or(telemetry.spout_sender_width).or(renderer.info.spout_width),
+			spout_height: telemetry
+				.spout_height
+				.or(telemetry.spout_sender_height)
+				.or(renderer.info.spout_height),
+		};
+		let manifest_path = renderer.info.manifest_path.clone();
+		(output, manifest_path)
+	};
+	let manifest_path = manifest_path.ok_or_else(|| format!("renderer {id} has no manifest path"))?;
+	write_spout_state_to_manifest(Path::new(&manifest_path), &output)?;
+	refresh_tray_menu(&app)?;
+	get_renderer_runtime_status(id, state)
+}
+
+#[tauri::command]
+fn restore_renderer_output_from_profile(id: u32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+	let manifest_path = renderer_manifest_path(id, state.inner())?;
+	let manifest = read_manifest_value(Path::new(&manifest_path))?;
+	let output = read_output_state_from_manifest(&manifest, &manifest_path)?;
+	if output.spout_enabled {
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetSpoutOutput {
+				enabled: true,
+				name: output.spout_name.clone(),
+				width: output.spout_width,
+				height: output.spout_height,
+			},
+		)?;
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: Some(output.minimized),
+				width: None,
+				height: None,
+			},
+		)
+	} else {
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetWindow {
+				decorations: None,
+				transparent: None,
+				input_passthrough: None,
+				always_on_top: None,
+				minimized: Some(output.minimized),
+				width: None,
+				height: None,
+			},
+		)?;
+		send_renderer_command_by_id(
+			id,
+			state.inner(),
+			RendererControlCommand::SetSpoutOutput {
+				enabled: false,
+				name: output.spout_name,
+				width: output.spout_width,
+				height: output.spout_height,
+			},
+		)
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererOutputProfileState {
+	spout_enabled: bool,
+	spout_name: Option<String>,
+	spout_width: Option<u32>,
+	spout_height: Option<u32>,
+	minimized: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererSpoutProfileState {
+	spout_enabled: bool,
+	spout_name: Option<String>,
+	spout_width: Option<u32>,
+	spout_height: Option<u32>,
+}
+
+fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) -> Result<RendererOutputProfileState, String> {
+	let root = manifest
+		.as_table()
+		.ok_or_else(|| format!("manifest {manifest_path} root must be a table"))?;
+	let output_table = root.get("output").and_then(toml::Value::as_table);
+	let spout2_table = output_table
+		.and_then(|output| output.get("spout2"))
+		.and_then(toml::Value::as_table)
+		.or_else(|| root.get("spout").and_then(toml::Value::as_table));
+	let spout2_table = spout2_table.ok_or_else(|| format!("manifest {manifest_path} has no [output.spout2] section"))?;
+	let window_table = root.get("window").and_then(toml::Value::as_table);
+	Ok(RendererOutputProfileState {
+		spout_enabled: spout2_table.get("enabled").and_then(toml::Value::as_bool).unwrap_or(false),
+		spout_name: spout2_table
+			.get("name")
+			.and_then(toml::Value::as_str)
+			.map(str::trim)
+			.filter(|value| !value.is_empty())
+			.map(ToOwned::to_owned),
+		spout_width: spout2_table
+			.get("width")
+			.and_then(toml::Value::as_integer)
+			.and_then(|value| u32::try_from(value).ok()),
+		spout_height: spout2_table
+			.get("height")
+			.and_then(toml::Value::as_integer)
+			.and_then(|value| u32::try_from(value).ok()),
+		minimized: window_table
+			.and_then(|window| window.get("minimized"))
+			.and_then(toml::Value::as_bool)
+			.unwrap_or(false),
+	})
+}
+
+fn write_spout_state_to_manifest(manifest_path: &Path, output: &RendererSpoutProfileState) -> Result<(), String> {
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
+	let output_table = table
+		.entry("output".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [output] must be a table".to_string())?;
+	let spout2_table = output_table
+		.entry("spout2".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "manifest [output.spout2] must be a table".to_string())?;
+	spout2_table.insert("enabled".to_string(), toml::Value::Boolean(output.spout_enabled));
+	if let Some(name) = output.spout_name.as_deref().map(str::trim).filter(|name| !name.is_empty()) {
+		spout2_table.insert("name".to_string(), toml::Value::String(name.to_string()));
+	}
+	if let Some(width) = output.spout_width {
+		spout2_table.insert("width".to_string(), toml::Value::Integer(i64::from(width)));
+	}
+	if let Some(height) = output.spout_height {
+		spout2_table.insert("height".to_string(), toml::Value::Integer(i64::from(height)));
+	}
+	write_manifest_value(manifest_path, &manifest)
 }
 
 #[tauri::command]
@@ -4522,6 +7315,42 @@ fn set_renderer_expression_override(id: u32, name: String, weight: f32, state: S
 }
 
 #[tauri::command]
+fn activate_renderer_runtime_action(
+	id: u32,
+	action_id: Option<String>,
+	menu_path: Option<String>,
+	wardrobe_set_id: Option<String>,
+	state: State<'_, Mutex<SupervisorState>>,
+) -> Result<(), String> {
+	let action_id = action_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let menu_path = menu_path.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+	let wardrobe_set_id = wardrobe_set_id
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty());
+	if action_id.is_none() && menu_path.is_none() {
+		return Err("action_id or menu_path is required".to_string());
+	}
+	send_renderer_command_by_id(
+		id,
+		state.inner(),
+		RendererControlCommand::ActivateAction {
+			action_id,
+			menu_path,
+			wardrobe_set_id,
+		},
+	)
+}
+
+#[tauri::command]
+fn set_renderer_runtime_parameter(id: u32, name: String, value: f32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+	let name = name.trim().to_string();
+	if name.is_empty() {
+		return Err("parameter name is required".to_string());
+	}
+	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetParameter { name, value })
+}
+
+#[tauri::command]
 fn clear_renderer_expression_overrides(id: u32, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::ClearExpressionOverrides)
 }
@@ -4579,16 +7408,30 @@ fn set_renderer_motion_receivers(
 }
 
 #[tauri::command]
-fn set_renderer_spring_bones(id: u32, setting: RendererSpringBoneSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(
 		id,
 		state.inner(),
-		RendererControlCommand::SetSpringBones {
-			enabled: setting.spring_bones,
+		RendererControlCommand::SetDynamics {
+			enabled: setting.dynamics_enabled,
 			bone_colliders: renderer_bone_collider_config(&setting),
 			physics_config: renderer_spring_bone_physics_config(&setting),
 		},
 	)
+}
+
+#[tauri::command]
+fn set_renderer_dynamics_enabled(
+	id: u32,
+	source_id: String,
+	enabled: bool,
+	state: State<'_, Mutex<SupervisorState>>,
+) -> Result<(), String> {
+	let source_id = source_id.trim().to_string();
+	if source_id.is_empty() {
+		return Err("source_id must not be empty".to_string());
+	}
+	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetDynamicsEnabled { source_id, enabled })
 }
 
 /// 旧 UI / IPC 互換の primary motion source 更新。
@@ -4603,7 +7446,7 @@ fn set_renderer_primary_motion_source(id: u32, source: String, state: State<'_, 
 	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetPrimaryMotionSource { source })
 }
 
-/// 実行中レンダラーの Avatar outline effect をライブ更新する。
+/// 実行中レンダラーの UN Avatar silhouette outline effect をライブ更新する。
 /// プロファイルの永続化は `update_avatar_setting_value` が担当し、ここでは runtime 反映だけを行う。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -4617,15 +7460,13 @@ fn set_renderer_avatar_outline(
 	roundness: Option<f32>,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<(), String> {
-	if let Some(policy) = policy.as_deref() {
-		match policy {
-			"authored" | "off" | "override" => {}
-			_ => return Err(format!("invalid avatar outline policy: {policy}")),
-		}
-	}
+	let policy = policy
+		.as_deref()
+		.map(|policy| normalize_outline_policy(policy).ok_or_else(|| format!("invalid avatar outline policy: {policy}")))
+		.transpose()?;
 	if let Some(outline_type) = outline_type.as_deref() {
 		match outline_type {
-			"mtoon" | "ink" | "brush" | "double" => {}
+			"silhouette" | "mtoon" | "ink" | "brush" | "double" => {}
 			_ => return Err(format!("invalid avatar outline type: {outline_type}")),
 		}
 	}
@@ -4645,72 +7486,6 @@ fn set_renderer_avatar_outline(
 			roundness,
 		},
 	)
-}
-
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-fn set_renderer_avatar_rim(
-	id: u32,
-	policy: Option<String>,
-	color: Option<[f32; 3]>,
-	intensity: Option<f32>,
-	lighting_mix: Option<f32>,
-	fresnel_power: Option<f32>,
-	lift: Option<f32>,
-	state: State<'_, Mutex<SupervisorState>>,
-) -> Result<(), String> {
-	if let Some(policy) = policy.as_deref() {
-		match policy {
-			"authored" | "off" | "override" => {}
-			_ => return Err(format!("invalid avatar rim policy: {policy}")),
-		}
-	}
-	validate_optional_f32_range(intensity, "avatar rim intensity", 0.0..=4.0, "0..=4")?;
-	validate_optional_f32_range(lighting_mix, "avatar rim lighting_mix", 0.0..=1.0, "0..=1")?;
-	validate_optional_f32_range(fresnel_power, "avatar rim fresnel_power", 0.00001..=32.0, "0.00001..=32")?;
-	validate_optional_f32_range(lift, "avatar rim lift", -1.0..=1.0, "-1..=1")?;
-	let color = color.map(clamp_rgb);
-	send_renderer_command_by_id(
-		id,
-		state.inner(),
-		RendererControlCommand::SetAvatarRim {
-			policy,
-			color,
-			intensity,
-			lighting_mix,
-			fresnel_power,
-			lift,
-		},
-	)
-}
-
-#[tauri::command]
-fn set_renderer_avatar_matcap(id: u32, scale: Option<f32>, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	validate_optional_f32_range(scale, "avatar matcap scale", 0.0..=2.0, "0..=2")?;
-	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetAvatarMatcap { scale })
-}
-
-#[tauri::command]
-fn set_renderer_avatar_specular(
-	id: u32,
-	enabled: Option<bool>,
-	intensity: Option<f32>,
-	power: Option<f32>,
-	state: State<'_, Mutex<SupervisorState>>,
-) -> Result<(), String> {
-	validate_optional_f32_range(intensity, "avatar specular intensity", 0.0..=2.0, "0..=2")?;
-	validate_optional_f32_range(power, "avatar specular power", 1.0..=128.0, "1..=128")?;
-	send_renderer_command_by_id(
-		id,
-		state.inner(),
-		RendererControlCommand::SetAvatarSpecular { enabled, intensity, power },
-	)
-}
-
-#[tauri::command]
-fn set_renderer_avatar_ambient_occlusion(id: u32, strength: Option<f32>, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	validate_optional_f32_range(strength, "avatar ambient occlusion strength", 0.0..=2.0, "0..=2")?;
-	send_renderer_command_by_id(id, state.inner(), RendererControlCommand::SetAvatarAmbientOcclusion { strength })
 }
 
 #[tauri::command]
@@ -5196,13 +7971,19 @@ fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration)
 			continue;
 		};
 		let exited = if graceful_requested {
-			wait_renderer_exit_until(&mut renderer.child, deadline).unwrap_or(false)
+			renderer
+				.child
+				.as_mut()
+				.map(|child| wait_renderer_exit_until(child, deadline).unwrap_or(false))
+				.unwrap_or(true)
 		} else {
 			false
 		};
 		if !exited {
-			let _ = renderer.child.kill();
-			let _ = renderer.child.wait();
+			if let Some(child) = renderer.child.as_mut() {
+				let _ = child.kill();
+				let _ = child.wait();
+			}
 		}
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
@@ -5215,14 +7996,21 @@ fn stop_managed_renderer(id: u32, renderer: &mut ManagedRenderer) -> Result<(), 
 	renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 	let graceful_requested = send_managed_renderer_shutdown(renderer).is_ok();
 	drop_renderer_control_session(renderer);
-	if graceful_requested && wait_renderer_exit(&mut renderer.child, RENDERER_STOP_GRACE_NORMAL)? {
+	if renderer.child.is_none() {
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
 		refresh_renderer_stderr(renderer);
 		return Ok(());
 	}
-	renderer.child.kill().map_err(|e| format!("stop renderer {id}: {e}"))?;
-	let _ = renderer.child.wait();
+	let child = renderer.child.as_mut().expect("checked child above");
+	if graceful_requested && wait_renderer_exit(child, RENDERER_STOP_GRACE_NORMAL)? {
+		renderer.info.state = RendererState::Exited;
+		renderer.info.pid = None;
+		refresh_renderer_stderr(renderer);
+		return Ok(());
+	}
+	child.kill().map_err(|e| format!("stop renderer {id}: {e}"))?;
+	let _ = child.wait();
 	renderer.info.state = RendererState::Exited;
 	renderer.info.pid = None;
 	refresh_renderer_stderr(renderer);
@@ -5279,15 +8067,40 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 	RendererRuntimeStatus {
 		id: info.id,
 		state: info.state.clone(),
-		pid: info.pid,
+		pid: info.pid.or_else(|| telemetry.as_ref().and_then(|telemetry| telemetry.pid)),
 		connected: telemetry.as_ref().is_some_and(|telemetry| telemetry.connected),
 		protocol: telemetry.as_ref().and_then(|telemetry| telemetry.protocol.clone()),
 		control_capabilities: telemetry
 			.as_ref()
 			.map_or_else(Vec::new, |telemetry| telemetry.control_capabilities.clone()),
+		scene_state: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.scene_state.clone())
+			.filter(|state| !state.is_empty())
+			.unwrap_or_else(|| "unknown".to_string()),
 		uptime_secs: telemetry.as_ref().map_or(info.uptime_secs, |telemetry| telemetry.uptime_secs),
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
+		frame_cpu_total_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_cpu_total_ms),
+		frame_motion_apply_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_motion_apply_ms),
+		frame_dynamics_step_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_dynamics_step_ms),
+		frame_globals_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_globals_ms),
+		frame_surface_acquire_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_surface_acquire_ms),
+		frame_target_prepare_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_target_prepare_ms),
+		frame_draw_state_refresh_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_state_refresh_ms),
+		frame_scene_world_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_scene_world_ms),
+		frame_draw_skin_palette_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_skin_palette_ms),
+		frame_draw_skin_palette_write_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_skin_palette_write_ms),
+		frame_draw_fur_source_vertices_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_fur_source_vertices_ms),
+		frame_draw_expression_values_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_expression_values_ms),
+		frame_draw_morph_weights_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_morph_weights_ms),
+		frame_draw_transform_loop_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_draw_transform_loop_ms),
+		frame_bone_collider_debug_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_bone_collider_debug_ms),
+		frame_command_encode_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_command_encode_ms),
+		frame_submit_present_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_submit_present_ms),
+		frame_spout_cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_spout_cpu_ms),
+		frame_contact_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_contact_eval_ms),
+		frame_runtime_action_eval_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_runtime_action_eval_ms),
 		gpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.gpu_ms),
 		ram_mb: telemetry.as_ref().and_then(|telemetry| telemetry.ram_mb),
 		surface_width: telemetry
@@ -5304,6 +8117,8 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		mipmap_filter: telemetry.as_ref().and_then(|telemetry| telemetry.mipmap_filter.clone()),
 		processed_texture_cache: telemetry.as_ref().and_then(|telemetry| telemetry.processed_texture_cache),
 		texture_summary: telemetry.as_ref().and_then(|telemetry| telemetry.texture_summary.clone()),
+		wardrobe_asset_upload: telemetry.as_ref().and_then(|telemetry| telemetry.wardrobe_asset_upload.clone()),
+		active_wardrobe_set: telemetry.as_ref().and_then(|telemetry| telemetry.active_wardrobe_set.clone()),
 		spout_available: telemetry.as_ref().is_some_and(|telemetry| telemetry.spout_available),
 		spout_enabled: telemetry.as_ref().map_or(info.spout_enabled, |telemetry| telemetry.spout_enabled),
 		spout_name: telemetry
@@ -5339,6 +8154,7 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.unwrap_or_else(|| info.unmotion_zenoh_key.clone().unwrap_or_default()),
 		unmotion_zenoh_received_frames: telemetry.as_ref().map_or(0, |telemetry| telemetry.unmotion_zenoh_received_frames),
 		motion_applied_frames: telemetry.as_ref().map_or(0, |telemetry| telemetry.motion_applied_frames),
+		audio_link_texture_needed: telemetry.as_ref().is_some_and(|telemetry| telemetry.audio_link_texture_needed),
 		primary_motion_source: telemetry
 			.as_ref()
 			.map(|telemetry| telemetry.primary_motion_source.clone())
@@ -5351,6 +8167,155 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.as_ref()
 			.map(|telemetry| telemetry.bone_collider_source.clone())
 			.unwrap_or_else(|| "off".to_string()),
+		dynamics_group_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_group_count),
+		dynamics_enabled_group_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_enabled_group_count),
+		dynamics_source_enabled_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_source_enabled_group_count),
+		dynamics_enabled_override_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_enabled_override_count),
+		dynamics_vrm_spring_bone_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrm_spring_bone_group_count),
+		dynamics_vrc_physbone_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrc_physbone_group_count),
+		dynamics_unknown_group_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_unknown_group_count),
+		dynamics_limit_group_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_limit_group_count),
+		dynamics_angle_limit_group_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_angle_limit_group_count),
+		dynamics_stretch_limit_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_stretch_limit_group_count),
+		dynamics_rotation_translation_writeback_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_rotation_translation_writeback_group_count),
+		dynamics_translation_writeback_candidate_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_translation_writeback_candidate_count),
+		dynamics_translation_writeback_target_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_translation_writeback_target_count),
+		dynamics_stretch_translation_writeback_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_stretch_translation_writeback_group_count),
+		dynamics_stretch_translation_writeback_target_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_stretch_translation_writeback_target_group_count),
+		dynamics_grabbing_enabled_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_grabbing_enabled_group_count),
+		dynamics_posing_enabled_group_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_posing_enabled_group_count),
+		dynamics_collider_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_collider_count),
+		dynamics_vrm_spring_bone_collider_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrm_spring_bone_collider_count),
+		dynamics_vrc_physbone_collider_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrc_physbone_collider_count),
+		dynamics_unknown_collider_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_unknown_collider_count),
+		dynamics_contact_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_contact_count),
+		dynamics_vrc_contact_sender_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrc_contact_sender_count),
+		dynamics_vrc_contact_receiver_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrc_contact_receiver_count),
+		dynamics_contact_parameter_declaration_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_contact_parameter_declaration_count),
+		dynamics_contact_probe_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_contact_probe_count),
+		dynamics_contact_probe_would_emit_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_contact_probe_would_emit_count),
+		dynamics_contact_parameter_emission_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_contact_parameter_emission_count),
+		dynamics_contact_parameter_emitted_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_contact_parameter_emitted_count),
+		dynamics_contact_parameter_reset_to_zero_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_contact_parameter_reset_to_zero_count),
+		dynamics_constraint_ref_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_constraint_ref_count),
+		dynamics_vrc_constraint_ref_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_vrc_constraint_ref_count),
+		runtime_parameter_definitions: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_parameter_definitions.clone())
+			.unwrap_or_default(),
+		runtime_parameter_conflicts: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_parameter_conflicts.clone())
+			.unwrap_or_default(),
+		runtime_actions: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_actions.clone())
+			.unwrap_or_default(),
+		runtime_action_target_write_collisions: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_action_target_write_collisions.clone())
+			.unwrap_or_default(),
+		runtime_action_restore_readiness: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_action_restore_readiness.clone())
+			.unwrap_or_default(),
+		runtime_action_restore_baseline_candidates: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_action_restore_baseline_candidates.clone())
+			.unwrap_or_default(),
+		runtime_action_restore_baseline_capture_plan: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_action_restore_baseline_capture_plan.clone())
+			.unwrap_or_default(),
+		runtime_action_restore_apply_plan: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.runtime_action_restore_apply_plan.clone())
+			.unwrap_or_default(),
+		menu_action_candidates: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.menu_action_candidates.clone())
+			.unwrap_or_default(),
+		menu_wardrobe_candidates: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.menu_wardrobe_candidates.clone())
+			.unwrap_or_default(),
+		contact_parameter_declarations: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.contact_parameter_declarations.clone())
+			.unwrap_or_default(),
+		contact_parameter_emission_enabled: telemetry
+			.as_ref()
+			.is_some_and(|telemetry| telemetry.contact_parameter_emission_enabled),
+		contact_parameter_emissions: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.contact_parameter_emissions.clone())
+			.unwrap_or_default(),
+		contact_probes: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.contact_probes.clone())
+			.unwrap_or_default(),
+		dynamics_groups: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_groups.clone())
+			.unwrap_or_default(),
+		dynamics_interaction_hooks: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_interaction_hooks.clone())
+			.unwrap_or_default(),
+		dynamics_colliders: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_colliders.clone())
+			.unwrap_or_default(),
+		dynamics_constraint_refs: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_constraint_refs.clone())
+			.unwrap_or_default(),
+		dynamics_warnings: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_warnings.clone())
+			.unwrap_or_default(),
 		camera_locked: telemetry.as_ref().is_some_and(|telemetry| telemetry.camera_locked),
 		window_focused: telemetry.as_ref().is_some_and(|telemetry| telemetry.window_focused),
 		window_activation_seq: telemetry.as_ref().map_or(0, |telemetry| telemetry.window_activation_seq),
@@ -5395,10 +8360,16 @@ fn spout_runtime_note(telemetry: &RendererRuntimeTelemetry) -> Option<String> {
 }
 
 fn texture_runtime_note(telemetry: &RendererRuntimeTelemetry) -> Option<String> {
+	let summary = telemetry.texture_summary.as_ref()?;
+	if summary.cubemap_fallback_count > 0 {
+		return Some(format!(
+			"Cubemap upload used fallback for {}/{} cube texture(s); re-export or check sourceLayout metadata",
+			summary.cubemap_fallback_count, summary.cubemap_count
+		));
+	}
 	if telemetry.texture_compression.as_deref() == Some("source") {
 		return None;
 	}
-	let summary = telemetry.texture_summary.as_ref()?;
 	if summary.compression_fallback_count == 0 {
 		return None;
 	}
@@ -5451,6 +8422,21 @@ fn runtime_session_id() -> &'static str {
 
 fn renderer_runtime_bus_key(renderer_id: u32) -> String {
 	format!("un-avatar/runtime/{}/renderer/{renderer_id}", runtime_session_id())
+}
+
+fn standalone_renderer_runtime_bus_key(manifest_path: &Path) -> String {
+	format!("un-avatar/runtime/standalone/{:016x}", stable_manifest_path_hash(manifest_path))
+}
+
+fn stable_manifest_path_hash(path: &Path) -> u64 {
+	let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let key = canonical.display().to_string().replace('\\', "/").to_ascii_lowercase();
+	let mut hash = 0xcbf2_9ce4_8422_2325u64;
+	for byte in key.as_bytes() {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x1000_0000_01b3);
+	}
+	hash
 }
 
 #[cfg(test)]
@@ -5568,18 +8554,18 @@ fn renderer_bone_collider_config(setting: &RendererSpringBoneSetting) -> Rendere
 }
 
 fn renderer_spring_bone_physics_config(setting: &RendererSpringBoneSetting) -> Option<RendererSpringBonePhysicsConfig> {
-	if !setting.spring_bone_physics_configured {
+	if !setting.dynamics_physics_configured {
 		return None;
 	}
 	let overrides: Vec<_> = setting
-		.spring_bone_category_overrides
+		.dynamics_category_overrides
 		.iter()
 		.filter_map(renderer_spring_bone_category_override)
 		.collect();
 	Some(RendererSpringBonePhysicsConfig {
 		time_mode: "time_based".to_string(),
-		simulation_hz: setting.spring_bone_simulation_hz.clamp(30.0, 240.0),
-		substeps: setting.spring_bone_substeps.clamp(1, 8),
+		simulation_hz: setting.dynamics_simulation_hz.clamp(30.0, 240.0),
+		substeps: setting.dynamics_substeps.clamp(1, 8),
 		overrides,
 	})
 }
@@ -5660,53 +8646,6 @@ fn apply_avatar_outline_to_matching_renderers(setting: &AvatarSetting, state: &M
 	)
 }
 
-fn apply_avatar_rim_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarRim {
-			policy: Some(setting.rim_policy.clone()),
-			color: setting.rim_color,
-			intensity: setting.rim_intensity,
-			lighting_mix: setting.rim_lighting_mix,
-			fresnel_power: setting.rim_fresnel_power,
-			lift: setting.rim_lift,
-		},
-	)
-}
-
-fn apply_avatar_matcap_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarMatcap {
-			scale: Some(setting.matcap_scale),
-		},
-	)
-}
-
-fn apply_avatar_specular_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarSpecular {
-			enabled: Some(setting.specular_enabled),
-			intensity: Some(setting.specular_intensity),
-			power: Some(setting.specular_power),
-		},
-	)
-}
-
-fn apply_avatar_ambient_occlusion_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
-	send_renderer_command_to_matching_renderers(
-		setting,
-		state,
-		&RendererControlCommand::SetAvatarAmbientOcclusion {
-			strength: Some(setting.ambient_occlusion_strength),
-		},
-	)
-}
-
 fn apply_lighting_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
 	send_renderer_command_to_matching_renderers(
 		setting,
@@ -5780,6 +8719,52 @@ fn apply_contact_shadow_to_matching_renderers(setting: &AvatarSetting, state: &M
 			radius: Some(setting.contact_shadow_radius),
 			softness: Some(setting.contact_shadow_softness),
 			height: Some(setting.contact_shadow_height),
+		},
+	)
+}
+
+fn apply_animator_profile_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetAnimatorProfile {
+			actions: setting.animator_actions.clone(),
+			bindings: setting.animator_bindings.clone(),
+		},
+	)
+}
+
+fn apply_input_bindings_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetInputBindings {
+			wardrobe_bindings: setting.wardrobe_bindings.clone(),
+			animator_bindings: setting.animator_bindings.clone(),
+		},
+	)
+}
+
+fn apply_wardrobe_transition_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor: setting.wardrobe_billboard_anchor.clone(),
+			billboard_y_offset_mm: setting.wardrobe_billboard_y_offset_mm,
+		},
+	)
+}
+
+fn apply_spout_output_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetSpoutOutput {
+			enabled: setting.spout_enabled,
+			name: setting.spout_name.clone(),
+			width: setting.spout_width,
+			height: setting.spout_height,
 		},
 	)
 }
@@ -5995,7 +8980,11 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 		if matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed) {
 			continue;
 		}
-		match renderer.child.try_wait() {
+		let Some(child) = renderer.child.as_mut() else {
+			renderer.info.state = RendererState::Running;
+			continue;
+		};
+		match child.try_wait() {
 			Ok(Some(status)) => {
 				renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 				renderer.info.exit_code = status.code();
@@ -6018,10 +9007,10 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 		}
 	}
 	for (name, code, last_stderr) in notifications {
-		let title = format!("{name} crashed");
+		let title = t!("notifications.renderer_crashed.title", name = &name).to_string();
 		let body = last_stderr.unwrap_or_else(|| match code {
-			Some(code) => format!("Renderer exited with code {code}"),
-			None => "Renderer exited without an exit code".to_string(),
+			Some(code) => t!("notifications.renderer_crashed.exit_code", code = code).to_string(),
+			None => t!("notifications.renderer_crashed.no_exit_code").to_string(),
 		});
 		push_notification(state, NotificationLevel::Error, title.clone(), body.clone());
 		if let Some(app) = app {
@@ -6111,11 +9100,21 @@ fn refresh_renderer_stderr(renderer: &mut ManagedRenderer) {
 
 fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+	let manifest_value: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+	let scene_cache_fingerprint = scene_cache_manifest_fingerprint(&manifest_value);
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
+	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
+	let animator_bindings = manifest_animator_binding_settings(manifest.animator.as_ref());
+	let wardrobe_shortcuts = manifest_wardrobe_shortcut_settings(manifest.wardrobe.as_ref());
+	let wardrobe_bindings = manifest_wardrobe_binding_settings(manifest.wardrobe.as_ref());
+	let wardrobe_billboard_anchor = manifest_wardrobe_billboard_anchor(manifest.wardrobe.as_ref());
+	let wardrobe_billboard_y_offset_mm = manifest_wardrobe_billboard_y_offset_mm(manifest.wardrobe.as_ref());
 	let profile = manifest.profile.unwrap_or_default();
+	let scene_cache = profile.scene_cache.as_ref();
 	let file_stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("avatar");
 	let motion = motion_settings(manifest.motion.unwrap_or_default(), manifest.vmc_address, manifest.vmc_port);
+	let audio_link = audio_link_settings(manifest.audio_link.unwrap_or_default());
 	let output = output_settings(manifest.output, manifest.spout);
 	let avatar_path_for_spring_bones = manifest.avatar_path.clone();
 	let window = window_settings(
@@ -6145,20 +9144,33 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		avatar_path: manifest
 			.avatar_path
 			.map(|avatar_path| avatar_path_for_manifest_value(&avatar_path.display().to_string(), path)),
+		wardrobe_set: manifest.wardrobe_set.and_then(|set| {
+			let set = set.trim().to_string();
+			(!set.is_empty()).then_some(set)
+		}),
+		wardrobe_billboard_anchor,
+		wardrobe_billboard_y_offset_mm,
+		wardrobe_shortcuts,
+		wardrobe_bindings,
+		animator_actions,
+		animator_bindings,
 		vmc_address: motion.vmc_address,
 		vmc_port: motion.vmc_port,
 		motion_vmc_enabled: motion.motion_vmc_enabled,
 		motion_unmotion_enabled: motion.motion_unmotion_enabled,
 		unmotion_zenoh_key: motion.unmotion_zenoh_key,
+		audio_link_source: audio_link.source,
+		audio_link_input_device_id: audio_link.input_device_id,
+		audio_link_input_device_name_hint: audio_link.input_device_name_hint,
 		look_at_enabled: motion.look_at_enabled,
 		look_at_clamp_deg: motion.look_at_clamp_deg,
 		primary_motion_source: motion.primary_motion_source,
-		// 既定 true（VRM 揺れもの表現は基本機能）。manifest で明示的に false を書いたときだけ OFF。
-		spring_bones: manifest.spring_bones.unwrap_or(true),
-		spring_bone_physics_configured: physics.spring_bone_physics_configured,
-		spring_bone_simulation_hz: physics.spring_bone_simulation_hz,
-		spring_bone_substeps: physics.spring_bone_substeps,
-		spring_bone_category_overrides: physics.spring_bone_category_overrides,
+		dynamics_enabled: physics.dynamics_enabled.unwrap_or(true),
+		contact_parameter_emission: physics.contact_parameter_emission,
+		dynamics_physics_configured: physics.dynamics_physics_configured,
+		dynamics_simulation_hz: physics.dynamics_simulation_hz,
+		dynamics_substeps: physics.dynamics_substeps,
+		dynamics_category_overrides: physics.dynamics_category_overrides,
 		apply_vmc_root_translation: motion.apply_vmc_root_translation,
 		spout_enabled: output.spout_enabled,
 		spout_name: output.spout_name,
@@ -6260,6 +9272,9 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		allow_multiple_renderers: profile.allow_multiple_renderers.unwrap_or(false),
 		notes: profile.notes,
 		group: profile.group.unwrap_or_default().trim().to_string(),
+		scene_cache_fingerprint,
+		scene_cache_prewarmed_fingerprint: scene_cache.and_then(|cache| cache.fingerprint.clone()),
+		scene_cache_prewarmed_at: scene_cache.and_then(|cache| cache.prewarmed_at.clone()),
 	})
 }
 
@@ -6309,7 +9324,13 @@ fn resolve_avatar_setting_direct(setting_id: &str) -> Result<AvatarSetting, Stri
 	Err(format!("avatar setting not found: {setting_id}"))
 }
 
-fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &str, icon_path: Option<&Path>) -> Result<Command, String> {
+fn renderer_command(
+	manifest_path: &Path,
+	runtime_bus_key: &str,
+	close_hotkey: &str,
+	icon_path: Option<&Path>,
+	app_user_model_id: Option<&str>,
+) -> Result<Command, String> {
 	let repo = repo_root();
 	let exe = renderer_executable_path();
 	if exe.is_file() {
@@ -6323,6 +9344,9 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 			.arg(close_hotkey);
 		if let Some(icon_path) = icon_path {
 			command.arg("--icon").arg(icon_path);
+		}
+		if let Some(app_user_model_id) = app_user_model_id {
+			command.arg("--app-user-model-id").arg(app_user_model_id);
 		}
 		prepend_spout2_runtime_path(&mut command);
 		return Ok(command);
@@ -6340,6 +9364,29 @@ fn renderer_command(manifest_path: &Path, runtime_bus_key: &str, close_hotkey: &
 	if let Some(icon_path) = icon_path {
 		command.arg("--icon").arg(icon_path);
 	}
+	if let Some(app_user_model_id) = app_user_model_id {
+		command.arg("--app-user-model-id").arg(app_user_model_id);
+	}
+	prepend_spout2_runtime_path(&mut command);
+	Ok(command)
+}
+
+fn renderer_scene_cache_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
+	let repo = repo_root();
+	let exe = renderer_executable_path();
+	if exe.is_file() {
+		let mut command = Command::new(exe);
+		command.arg("--manifest").arg(manifest_path).arg("--prewarm-scene-cache");
+		prepend_spout2_runtime_path(&mut command);
+		return Ok(command);
+	}
+	let mut command = Command::new("cargo");
+	command
+		.current_dir(repo)
+		.args(["run", "-q", "-p", "un-avatar-render-wgpu", "--bin", "un-avatar-renderer", "--"])
+		.arg("--manifest")
+		.arg(manifest_path)
+		.arg("--prewarm-scene-cache");
 	prepend_spout2_runtime_path(&mut command);
 	Ok(command)
 }
@@ -6353,6 +9400,349 @@ fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf>
 			let fallback = repo_root().join("assets").join("brand").join("un-avatar-artwork-renderer.png");
 			fallback.is_file().then_some(fallback)
 		})
+}
+
+fn run_startup_proxy_command() -> Result<bool, String> {
+	run_startup_proxy_args(env::args_os().skip(1))
+}
+
+fn run_startup_proxy_args<I, S>(args: I) -> Result<bool, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	if let Some(manifest_path) = startup_proxy_manifest_arg(args)? {
+		spawn_standalone_renderer_manifest(&manifest_path)?;
+		return Ok(true);
+	}
+	Ok(false)
+}
+
+fn launch_renderer_manifest_in_existing_app(app: &tauri::AppHandle, manifest_path: &Path) -> Result<RendererInstance, String> {
+	let state = app.state::<Mutex<SupervisorState>>();
+	let settings = app.state::<Mutex<AppRuntimeSettings>>();
+	let settings = settings
+		.inner()
+		.lock()
+		.map(|settings| settings.clone())
+		.map_err(|_| "app settings state poisoned".to_string())?;
+	let renderer = launch_renderer_in_state(&manifest_path.display().to_string(), state.inner(), &settings)?;
+	if let Some(pid) = renderer.pid {
+		let _ = activate_process_window(pid);
+	}
+	Ok(renderer)
+}
+
+fn request_open_profile_manifest_in_existing_app(app: &tauri::AppHandle, manifest_path: &Path) -> Result<(), String> {
+	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
+	if let Some(state) = app.try_state::<Mutex<AppRuntimeSettings>>() {
+		let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+		state.last_selected_setting_id = Some(setting.id.clone());
+	}
+	if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
+		let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
+	}
+	app.emit("profile-open-requested", setting.id)
+		.map_err(|error| format!("emit profile-open-requested: {error}"))
+}
+
+fn startup_proxy_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	startup_path_arg(args, SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG)
+}
+
+fn startup_open_profile_manifest_arg<I, S>(args: I) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	startup_path_arg(args, SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG)
+}
+
+fn startup_path_arg<I, S>(args: I, flag: &str) -> Result<Option<PathBuf>, String>
+where
+	I: IntoIterator<Item = S>,
+	S: AsRef<OsStr>,
+{
+	let mut args = args.into_iter();
+	while let Some(arg) = args.next() {
+		if arg.as_ref() != OsStr::new(flag) {
+			continue;
+		}
+		let manifest_path = args
+			.next()
+			.map(|path| PathBuf::from(path.as_ref()))
+			.ok_or_else(|| format!("{flag} requires a manifest path"))?;
+		return Ok(Some(manifest_path));
+	}
+	Ok(None)
+}
+
+fn spawn_standalone_renderer_manifest(manifest_path: &Path) -> Result<(), String> {
+	let exe = renderer_executable_path();
+	if !exe.is_file() {
+		return Err(format!("renderer executable not found: {}", exe.display()));
+	}
+	let mut command = Command::new(&exe);
+	command.arg("--manifest").arg(manifest_path);
+	if let Ok(setting) = read_avatar_setting(manifest_path, ProfileStorage::User) {
+		if let Some(icon_path) = resolve_renderer_window_icon_path(&setting) {
+			command.arg("--icon").arg(icon_path);
+		}
+		command
+			.arg("--app-user-model-id")
+			.arg(renderer_profile_app_user_model_id(&setting.id));
+	}
+	if let Some(parent) = exe.parent() {
+		command.current_dir(parent);
+	}
+	prepend_spout2_runtime_path(&mut command);
+	configure_hidden_child(&mut command);
+	command
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::null())
+		.spawn()
+		.map_err(|e| format!("launch renderer from supervisor proxy: {e}"))?;
+	Ok(())
+}
+
+fn supervisor_executable_path() -> Result<PathBuf, String> {
+	let exe = env::current_exe().map_err(|e| format!("current supervisor executable: {e}"))?;
+	if exe.is_file() {
+		Ok(exe)
+	} else {
+		Err(format!("supervisor executable not found: {}", exe.display()))
+	}
+}
+
+fn start_menu_un_avatar_dir() -> Result<PathBuf, String> {
+	let appdata = env::var_os("APPDATA").ok_or_else(|| "APPDATA is not set".to_string())?;
+	Ok(PathBuf::from(appdata)
+		.join("Microsoft")
+		.join("Windows")
+		.join("Start Menu")
+		.join("Programs")
+		.join("UN Avatar"))
+}
+
+fn shortcut_icon_path_for_creation(setting: &AvatarSetting, renderer_exe: &Path) -> Option<PathBuf> {
+	if let Some(icon_path) = resolve_renderer_window_icon_path(setting) {
+		if icon_path
+			.extension()
+			.and_then(|ext| ext.to_str())
+			.is_some_and(|ext| ext.eq_ignore_ascii_case("ico"))
+		{
+			return Some(icon_path);
+		}
+		if let Some(generated) = generate_shortcut_ico(setting, &icon_path) {
+			return Some(generated);
+		}
+	}
+	renderer_exe.is_file().then_some(renderer_exe.to_path_buf())
+}
+
+fn generate_shortcut_ico(setting: &AvatarSetting, source_path: &Path) -> Option<PathBuf> {
+	let bytes = fs::read(source_path).ok()?;
+	let output = encode_shortcut_ico(&bytes).ok()?;
+	let cache_dir = user_profiles_dir().join("assets").join("shortcut-icons");
+	fs::create_dir_all(&cache_dir).ok()?;
+	let path = cache_dir.join(format!("{}-shortcut.ico", unique_profile_id(&setting.id)));
+	fs::write(&path, output).ok()?;
+	Some(path)
+}
+
+fn encode_shortcut_ico(bytes: &[u8]) -> Result<Vec<u8>, String> {
+	let image = image::load_from_memory(bytes).map_err(|e| format!("decode shortcut icon: {e}"))?;
+	let image = image.resize(256, 256, image::imageops::FilterType::Lanczos3).to_rgba8();
+	let mut output = Vec::new();
+	image::codecs::ico::IcoEncoder::new(&mut output)
+		.write_image(image.as_raw(), image.width(), image.height(), image::ExtendedColorType::Rgba8)
+		.map_err(|e| format!("encode shortcut icon ICO: {e}"))?;
+	Ok(output)
+}
+
+fn sanitize_shortcut_file_stem(name: &str) -> String {
+	let mut out = String::new();
+	for ch in name.trim().chars() {
+		let replacement = match ch {
+			'<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+			ch if ch.is_control() => '_',
+			ch => ch,
+		};
+		out.push(replacement);
+	}
+	let out = out.trim().trim_matches('.').to_string();
+	if out.is_empty() {
+		"UN Avatar Renderer".to_string()
+	} else {
+		out
+	}
+}
+
+fn quote_windows_arg(path: &Path) -> String {
+	let raw = path.display().to_string();
+	format!("\"{}\"", raw.replace('"', "\\\""))
+}
+
+fn renderer_profile_app_user_model_id(profile_id: &str) -> String {
+	let mut slug = String::new();
+	let mut last_dash = false;
+	for ch in profile_id.trim().chars() {
+		let replacement = if ch.is_ascii_alphanumeric() {
+			Some(ch.to_ascii_lowercase())
+		} else if matches!(ch, '.' | '-') {
+			Some(ch)
+		} else if matches!(ch, '_' | ' ' | '\t' | '\n' | '\r') {
+			Some('-')
+		} else {
+			None
+		};
+		let Some(ch) = replacement else {
+			continue;
+		};
+		if ch == '-' {
+			if last_dash {
+				continue;
+			}
+			last_dash = true;
+		} else {
+			last_dash = false;
+		}
+		slug.push(ch);
+	}
+	let slug = slug.trim_matches(['.', '-']).to_string();
+	let slug = if slug.is_empty() { unique_profile_id(profile_id) } else { slug };
+	let prefix = "UsagiNetwork.UNAvatar.Renderer.Profile.";
+	let max_slug_len = 128usize.saturating_sub(prefix.len());
+	let slug = if slug.len() > max_slug_len {
+		slug.chars().take(max_slug_len).collect::<String>()
+	} else {
+		slug
+	};
+	format!("{prefix}{slug}")
+}
+
+#[cfg(windows)]
+fn create_windows_shortcut(
+	shortcut_path: &Path,
+	target_path: &Path,
+	arguments: &str,
+	working_dir: &Path,
+	icon_path: Option<&Path>,
+	app_id: Option<&str>,
+) -> Result<(), String> {
+	windows_integration::create_shortcut(shortcut_path, target_path, arguments, working_dir, icon_path, app_id)
+		.map_err(|e| format!("create shortcut {}: {e}", shortcut_path.display()))
+}
+
+#[cfg(not(windows))]
+fn create_windows_shortcut(
+	_shortcut_path: &Path,
+	_target_path: &Path,
+	_arguments: &str,
+	_working_dir: &Path,
+	_icon_path: Option<&Path>,
+	_app_id: Option<&str>,
+) -> Result<(), String> {
+	Err("shortcut creation is currently implemented for Windows only".to_string())
+}
+
+#[cfg(windows)]
+fn set_process_app_user_model_id() -> Result<(), String> {
+	windows_integration::set_process_app_user_model_id(UN_AVATAR_LAUNCHER_APP_ID)
+}
+
+#[cfg(not(windows))]
+fn set_process_app_user_model_id() -> Result<(), String> {
+	Ok(())
+}
+
+#[cfg(windows)]
+fn update_windows_jump_lists(
+	supervisor_exe: &Path,
+	working_dir: &Path,
+	visible_settings: &[AvatarSetting],
+	pinned_settings: &[AvatarSetting],
+) -> Result<(), String> {
+	let profiles = pinned_settings
+		.iter()
+		.map(|setting| LauncherTaskProfile {
+			name: setting.name.clone(),
+			manifest_path: PathBuf::from(&setting.manifest_path),
+			icon: shortcut_icon_path_for_creation(setting, supervisor_exe),
+		})
+		.collect::<Vec<_>>();
+	let tasks = build_launcher_task_specs(supervisor_exe, working_dir, &profiles);
+	let tasks = tasks
+		.into_iter()
+		.map(|task| windows_integration::JumpListTask {
+			title: task.title,
+			target: task.target,
+			arguments: task.arguments,
+			working_dir: task.working_dir,
+			icon: task.icon,
+		})
+		.collect::<Vec<_>>();
+	let renderer_app_ids = renderer_profile_app_user_model_ids(visible_settings);
+	let active_app_ids = std::iter::once(UN_AVATAR_LAUNCHER_APP_ID.to_string())
+		.chain(renderer_app_ids.iter().cloned())
+		.collect::<Vec<_>>();
+	windows_integration::replace_jump_lists(UN_AVATAR_LAUNCHER_APP_ID, &renderer_app_ids, &active_app_ids, &tasks)
+}
+
+#[cfg(not(windows))]
+fn update_windows_jump_lists(
+	_supervisor_exe: &Path,
+	_working_dir: &Path,
+	_visible_settings: &[AvatarSetting],
+	_pinned_settings: &[AvatarSetting],
+) -> Result<(), String> {
+	Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherTaskProfile {
+	name: String,
+	manifest_path: PathBuf,
+	icon: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LauncherTaskSpec {
+	title: String,
+	target: PathBuf,
+	arguments: String,
+	working_dir: PathBuf,
+	icon: Option<PathBuf>,
+}
+
+fn build_launcher_task_specs(supervisor_exe: &Path, working_dir: &Path, profiles: &[LauncherTaskProfile]) -> Vec<LauncherTaskSpec> {
+	let mut tasks = Vec::with_capacity(profiles.len() + 1);
+	tasks.push(LauncherTaskSpec {
+		title: "Open Supervisor".to_string(),
+		target: supervisor_exe.to_path_buf(),
+		arguments: String::new(),
+		working_dir: working_dir.to_path_buf(),
+		icon: Some(supervisor_exe.to_path_buf()),
+	});
+	for profile in profiles {
+		tasks.push(LauncherTaskSpec {
+			title: format!("Launch {}", profile.name),
+			target: supervisor_exe.to_path_buf(),
+			arguments: format!(
+				"{} {}",
+				SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG,
+				quote_windows_arg(&profile.manifest_path)
+			),
+			working_dir: working_dir.to_path_buf(),
+			icon: profile.icon.clone().or_else(|| Some(supervisor_exe.to_path_buf())),
+		});
+	}
+	tasks
 }
 
 fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathBuf> {
@@ -6406,6 +9796,15 @@ fn prepend_spout2_runtime_path(command: &mut Command) {
 
 fn spout2_runtime_dir() -> Option<PathBuf> {
 	spout2_runtime_candidates().into_iter().find(|dir| dir.join("Spout.dll").is_file())
+}
+
+fn renderer_shortcut_working_dir(renderer_exe: &Path) -> PathBuf {
+	if renderer_exe.parent().is_some_and(|dir| dir.join("Spout.dll").is_file()) {
+		return renderer_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
+	}
+	spout2_runtime_dir()
+		.or_else(|| renderer_exe.parent().map(Path::to_path_buf))
+		.unwrap_or_else(repo_root)
 }
 
 fn spout2_runtime_candidates() -> Vec<PathBuf> {
@@ -6622,6 +10021,47 @@ fn ensure_avatar_profile_metadata(manifest: &mut toml::Value, path: &Path, sort_
 		.unwrap_or(u32::MAX);
 	profile.insert("sort_order".to_string(), toml::Value::Integer(order as i64));
 	Ok(())
+}
+
+fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
+	let mut normalized = manifest.clone();
+	if let Some(profile) = normalized
+		.as_table_mut()
+		.and_then(|table| table.get_mut("profile"))
+		.and_then(toml::Value::as_table_mut)
+	{
+		profile.remove("scene_cache");
+	}
+	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
+	format!("{:016x}", fnv1a64(serialized.as_bytes()))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+	let mut hash = 0xcbf29ce484222325u64;
+	for byte in bytes {
+		hash ^= u64::from(*byte);
+		hash = hash.wrapping_mul(0x100000001b3);
+	}
+	hash
+}
+
+fn mark_scene_cache_prewarmed(manifest_path: &Path, fingerprint: &str) -> Result<(), String> {
+	let mut manifest = read_manifest_value(manifest_path)?;
+	let profile = manifest
+		.as_table_mut()
+		.ok_or_else(|| "manifest root must be a table".to_string())?
+		.entry("profile".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "profile must be a table".to_string())?;
+	let scene_cache = profile
+		.entry("scene_cache".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "profile.scene_cache must be a table".to_string())?;
+	scene_cache.insert("fingerprint".to_string(), toml::Value::String(fingerprint.to_string()));
+	scene_cache.insert("prewarmed_at".to_string(), toml::Value::String(current_timestamp_compact()));
+	write_manifest_value(manifest_path, &manifest)
 }
 
 fn rename_avatar_setting_file_if_needed(path: &Path, setting: &AvatarSetting) -> Result<PathBuf, String> {
@@ -6886,7 +10326,7 @@ fn json_texture_resolution_limit(value: &serde_json::Value, field: &str) -> Resu
 }
 
 fn json_texture_compression_preference(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	let preference = json_string(value, field)?;
+	let preference = json_string(value, field)?.trim().to_ascii_lowercase().replace('-', "_");
 	match preference.as_str() {
 		"source" | "auto" | "high_quality" | "small" | "gpu_native" => Ok(preference),
 		_ => Err(format!("{field} must be one of source, auto, high_quality, small, gpu_native")),
@@ -6894,7 +10334,16 @@ fn json_texture_compression_preference(value: &serde_json::Value, field: &str) -
 }
 
 fn json_texture_compression_mode(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	json_lowercase_choice(value, field, &["source", "auto", "advanced"])
+	let mode = json_string(value, field)?;
+	normalize_texture_compression_mode(&mode).ok_or_else(|| format!("{field} must be one of source, balanced, memory, compat"))
+}
+
+fn normalize_texture_compression_mode(value: &str) -> Option<String> {
+	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"auto" | "advanced" => Some("balanced".to_string()),
+		"source" | "balanced" | "memory" | "compat" => Some(value.trim().to_ascii_lowercase().replace('-', "_")),
+		_ => None,
+	}
 }
 
 fn json_mipmap_filter(value: &serde_json::Value, field: &str) -> Result<String, String> {
@@ -6915,7 +10364,10 @@ fn json_block_compression_encoder(value: &serde_json::Value, field: &str) -> Res
 
 fn normalize_outline_policy(value: &str) -> Option<String> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"authored" => Some("authored".to_string()),
+		// v1/v2-dev used `authored` for a broad material-outline override mode.
+		// v2 Supervisor profile outline is the independent UN Avatar silhouette
+		// post effect, so the legacy value migrates to "not using silhouette".
+		"authored" => Some("off".to_string()),
 		"off" | "none" | "disabled" => Some("off".to_string()),
 		"override" | "custom" => Some("override".to_string()),
 		_ => None,
@@ -6924,7 +10376,7 @@ fn normalize_outline_policy(value: &str) -> Option<String> {
 
 fn normalize_outline_type(value: &str) -> Option<String> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"mtoon" | "geometry" => Some("mtoon".to_string()),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some("silhouette".to_string()),
 		"ink" => Some("ink".to_string()),
 		"brush" | "hake" | "fude" => Some("brush".to_string()),
 		"double" | "double_outline" => Some("double".to_string()),
@@ -6975,7 +10427,7 @@ fn normalize_spring_bone_solver(value: &str) -> Option<String> {
 }
 
 fn validate_spring_bone_solver(value: &str) -> Result<String, String> {
-	normalize_spring_bone_solver(value).ok_or_else(|| "spring bone solver must be one of verlet, xpbd".to_string())
+	normalize_spring_bone_solver(value).ok_or_else(|| "UNPhysics solver must be one of verlet, xpbd".to_string())
 }
 
 fn normalize_spring_bone_category_id(value: &str) -> String {
@@ -6999,7 +10451,7 @@ fn builtin_spring_bone_categories() -> &'static [(&'static str, &'static str)] {
 }
 
 fn spring_bone_category_override_settings(
-	physics: Option<&ManifestSpringBonePhysics>,
+	physics: Option<&ManifestDynamicsSolverPhysics>,
 	avatar_path: Option<&PathBuf>,
 	manifest_path: &Path,
 ) -> Vec<SpringBoneCategoryOverrideSetting> {
@@ -7090,7 +10542,7 @@ fn spring_bone_category_setting(
 		category: category.to_string(),
 		name,
 		mode: "authored".to_string(),
-		spring_bone_count: authored.count,
+		dynamics_group_count: authored.count,
 		solver: "verlet".to_string(),
 		damping_configured: false,
 		damping_half_life_ms: 120.0,
@@ -7322,17 +10774,25 @@ fn debug_settings(debug: Option<&ManifestDebug>) -> DebugSettings {
 
 fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&PathBuf>, manifest_path: &Path) -> PhysicsSettings {
 	let bone_colliders = physics.and_then(|physics| physics.bone_colliders.as_ref());
-	let spring_bone_physics = physics.and_then(|physics| physics.spring_bone.as_ref());
+	let contacts = physics.and_then(|physics| physics.contacts.as_ref());
+	let dynamics = physics.and_then(|physics| physics.dynamics.as_ref());
+	let dynamics_solver = dynamics
+		.and_then(|dynamics| dynamics.solver.as_ref())
+		.or_else(|| physics.and_then(|physics| physics.spring_bone.as_ref()));
 	let bone_collider_radius_mm = bone_colliders.and_then(|bone_colliders| bone_colliders.radius_mm.as_ref());
 	PhysicsSettings {
-		spring_bone_physics_configured: spring_bone_physics.is_some(),
-		spring_bone_simulation_hz: spring_bone_physics
+		dynamics_enabled: dynamics.and_then(|dynamics| dynamics.enabled),
+		contact_parameter_emission: contacts
+			.and_then(|contacts| contacts.parameter_emission.or(contacts.parameter_emission_enabled))
+			.unwrap_or(false),
+		dynamics_physics_configured: dynamics_solver.is_some(),
+		dynamics_simulation_hz: dynamics_solver
 			.and_then(|physics| physics.simulation_hz)
 			.filter(|value| value.is_finite())
 			.unwrap_or(60.0)
 			.clamp(30.0, 240.0),
-		spring_bone_substeps: spring_bone_physics.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
-		spring_bone_category_overrides: spring_bone_category_override_settings(spring_bone_physics, avatar_path, manifest_path),
+		dynamics_substeps: dynamics_solver.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
+		dynamics_category_overrides: spring_bone_category_override_settings(dynamics_solver, avatar_path, manifest_path),
 		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
@@ -7347,7 +10807,11 @@ fn render_quality_settings(render_quality: ManifestRenderQuality, legacy_aa: Opt
 	RenderQualitySettings {
 		aa: render_quality.aa.or(legacy_aa).unwrap_or_else(|| "off".to_string()),
 		texture_resolution_limit: render_quality.texture_resolution_limit.unwrap_or_else(|| "off".to_string()),
-		texture_compression: render_quality.texture_compression.unwrap_or_else(|| "source".to_string()),
+		texture_compression: render_quality
+			.texture_compression
+			.as_deref()
+			.and_then(normalize_texture_compression_mode)
+			.unwrap_or_else(|| "balanced".to_string()),
 		mipmap_filter: render_quality.mipmap_filter.unwrap_or_else(|| "mitchell".to_string()),
 		render_backend: render_quality.render_backend.unwrap_or_else(|| "vulkan".to_string()),
 		block_compression_encoder: render_quality.block_compression_encoder.unwrap_or_else(|| "gpu".to_string()),
@@ -7388,6 +10852,22 @@ fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, l
 		look_at_clamp_deg: Some(clamped_f32_or(look_at.clamp_deg, 30.0, 0.0, 90.0)),
 		apply_vmc_root_translation: motion.apply_vmc_root_translation.unwrap_or(false),
 		primary_motion_source,
+	}
+}
+
+fn audio_link_settings(audio_link: ManifestAudioLink) -> AudioLinkSettings {
+	let source = match audio_link.source.as_deref().map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+		Some("input_device") => "input_device".to_string(),
+		_ => "none".to_string(),
+	};
+	AudioLinkSettings {
+		source,
+		input_device_id: audio_link
+			.input_device_id
+			.and_then(|value| (!value.trim().is_empty()).then(|| value.trim().to_string())),
+		input_device_name_hint: audio_link
+			.input_device_name_hint
+			.and_then(|value| (!value.trim().is_empty()).then(|| value.trim().to_string())),
 	}
 }
 
@@ -7481,8 +10961,8 @@ fn post_effect_settings(post: Option<ManifestPostEffects>) -> PostEffectSettings
 
 fn avatar_effect_settings(avatar_effects: Option<ManifestAvatarEffects>) -> AvatarEffectSettings {
 	let mut settings = AvatarEffectSettings {
-		outline_policy: "authored".to_string(),
-		outline_type: "mtoon".to_string(),
+		outline_policy: "off".to_string(),
+		outline_type: "silhouette".to_string(),
 		outline_width: None,
 		outline_color: None,
 		outline_lighting_mix: None,
@@ -7608,17 +11088,12 @@ fn validate_bloom_quality(value: &str) -> Result<String, String> {
 
 fn json_outline_policy(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let raw = json_string(value, field)?;
-	normalize_outline_policy(&raw).ok_or_else(|| format!("{field} must be one of authored, off, override"))
-}
-
-fn json_rim_policy(value: &serde_json::Value, field: &str) -> Result<String, String> {
-	let raw = json_string(value, field)?;
-	normalize_rim_policy(&raw).ok_or_else(|| format!("{field} must be one of authored, off, override"))
+	normalize_outline_policy(&raw).ok_or_else(|| format!("{field} must be off or override"))
 }
 
 fn json_outline_type(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	let raw = json_string(value, field)?;
-	normalize_outline_type(&raw).ok_or_else(|| format!("{field} must be one of mtoon, ink, brush, double"))
+	normalize_outline_type(&raw).ok_or_else(|| format!("{field} must be one of silhouette, ink, brush, double"))
 }
 
 fn clamp_rgb(rgb: [f32; 3]) -> [f32; 3] {
@@ -7689,6 +11164,62 @@ fn write_manifest_value(path: &Path, manifest: &toml::Value) -> Result<(), Strin
 	fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+fn manifest_has_nested_key(manifest: &toml::Value, path: &[&str]) -> bool {
+	let Some((leaf, parents)) = path.split_last() else {
+		return false;
+	};
+	let mut table = match manifest.as_table() {
+		Some(table) => table,
+		None => return false,
+	};
+	for parent in parents {
+		let Some(next) = table.get(*parent) else {
+			return false;
+		};
+		table = match next.as_table() {
+			Some(table) => table,
+			None => return false,
+		};
+	}
+	table.contains_key(*leaf)
+}
+
+fn migrate_root_key_to_nested_if_missing(manifest: &mut toml::Value, root_key: &str, nested_path: &[&str]) -> Result<(), String> {
+	let value = manifest.as_table().and_then(|table| table.get(root_key)).cloned();
+	if let Some(value) = value {
+		if !manifest_has_nested_key(manifest, nested_path) {
+			set_nested_value(manifest, nested_path, value)?;
+		}
+		remove_root_key(manifest, root_key)?;
+	}
+	Ok(())
+}
+
+fn migrate_avatar_manifest_to_v2(manifest: &mut toml::Value) -> Result<(), String> {
+	migrate_root_key_to_nested_if_missing(manifest, "aa", &["render_quality", "aa"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "icon_path", &["window", "icon_path"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "transparent", &["window", "transparent"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "input_passthrough", &["window", "input_passthrough"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "decorations", &["window", "decorations"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "vmc_address", &["motion", "vmc_udp", "address"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "vmc_port", &["motion", "vmc_udp", "port"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "spout", &["output", "spout2"])?;
+	migrate_root_key_to_nested_if_missing(manifest, "spring_bones", &["physics", "dynamics", "enabled"])?;
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	Ok(())
+}
+
+fn migrate_legacy_spring_bone_solver_to_v2(manifest: &mut toml::Value) -> Result<(), String> {
+	let legacy = manifest.get("physics").and_then(|physics| physics.get("spring_bone")).cloned();
+	let Some(legacy) = legacy else {
+		return Ok(());
+	};
+	if !manifest_has_nested_key(manifest, &["physics", "dynamics", "solver"]) {
+		set_nested_value(manifest, &["physics", "dynamics", "solver"], legacy)?;
+	}
+	remove_nested_key(manifest, &["physics", "spring_bone"])
+}
+
 fn remove_root_key(manifest: &mut toml::Value, key: &str) -> Result<(), String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	table.remove(key);
@@ -7701,12 +11232,6 @@ fn set_optional_root_string(manifest: &mut toml::Value, key: &str, value: String
 	} else {
 		set_root_string(manifest, key, value)
 	}
-}
-
-fn set_root_bool(manifest: &mut toml::Value, key: &str, value: bool) -> Result<(), String> {
-	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
-	table.insert(key.to_string(), toml::Value::Boolean(value));
-	Ok(())
 }
 
 fn set_root_string(manifest: &mut toml::Value, key: &str, value: String) -> Result<(), String> {
@@ -7840,12 +11365,14 @@ fn apply_spring_bone_category_override_value(
 	field: &str,
 	value: serde_json::Value,
 ) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
 	let rest = field
-		.strip_prefix("physics.spring_bone.overrides.")
-		.ok_or_else(|| format!("invalid SpringBone override field: {field}"))?;
+		.strip_prefix("physics.dynamics.solver.overrides.")
+		.or_else(|| field.strip_prefix("physics.spring_bone.overrides."))
+		.ok_or_else(|| format!("invalid UNPhysics override field: {field}"))?;
 	let (category, key) = rest
 		.split_once('.')
-		.ok_or_else(|| format!("invalid SpringBone override field: {field}"))?;
+		.ok_or_else(|| format!("invalid UNPhysics override field: {field}"))?;
 	let category = normalize_spring_bone_category_id(category);
 	let authored = spring_bone_authored_params_for_setting(setting, &category);
 	if key == "mode" {
@@ -7855,7 +11382,7 @@ fn apply_spring_bone_category_override_value(
 	}
 	if key == "reset" {
 		let mode = setting
-			.spring_bone_category_overrides
+			.dynamics_category_overrides
 			.iter()
 			.find(|item| item.category == category)
 			.map(|item| item.mode.as_str())
@@ -7867,7 +11394,7 @@ fn apply_spring_bone_category_override_value(
 	if key == "preset" {
 		let preset = json_string(&value, field)?;
 		if spring_bone_category_override_solver(manifest, &category).as_deref() != Some("xpbd") {
-			return Err(format!("{field} can be applied only when SpringBone mode is Override: XPBD"));
+			return Err(format!("{field} can be applied only when UNPhysics mode is Override: XPBD"));
 		}
 		set_spring_bone_category_recommended_preset(manifest, &category, &preset)?;
 		return Ok(());
@@ -7884,15 +11411,14 @@ fn apply_spring_bone_category_override_value(
 		"stiffness_hz" => ("stiffness_hz", ranged_float_toml_value(&value, field, 0.0..=60.0, "[0, 60]")?),
 		"xpbd_compliance" => ("xpbd_compliance", ranged_float_toml_value(&value, field, 0.0..=10.0, "[0, 10]")?),
 		"constraint_iterations" => ("constraint_iterations", ranged_u32_toml_value(&value, field, 1..=32, "[1, 32]")?),
-		_ => return Err(format!("unknown SpringBone override field: {field}")),
+		_ => return Err(format!("unknown UNPhysics override field: {field}")),
 	};
 	set_spring_bone_category_override_value(manifest, &category, toml_key, toml_value)
 }
 
 fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) -> Option<String> {
-	manifest
-		.get("physics")?
-		.get("spring_bone")?
+	dynamics_solver_table(manifest)
+		.or_else(|| manifest.get("physics")?.get("spring_bone"))?
 		.get("overrides")?
 		.as_array()?
 		.iter()
@@ -7909,11 +11435,11 @@ fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) 
 
 fn spring_bone_authored_params_for_setting(setting: &AvatarSetting, category: &str) -> SpringBoneCategoryAuthoredParams {
 	setting
-		.spring_bone_category_overrides
+		.dynamics_category_overrides
 		.iter()
 		.find(|item| normalize_spring_bone_category_id(&item.category) == category)
 		.map(|item| SpringBoneCategoryAuthoredParams {
-			count: item.spring_bone_count,
+			count: item.dynamics_group_count,
 			stiffness_hz: item.authored_stiffness_hz,
 			xpbd_compliance: item.authored_xpbd_compliance,
 		})
@@ -7925,7 +11451,7 @@ fn validate_spring_bone_override_mode(value: &str) -> Result<String, String> {
 		"authored" | "authored_verlet" => Ok("authored".to_string()),
 		"override_verlet" | "verlet" => Ok("override_verlet".to_string()),
 		"override_xpbd" | "xpbd" => Ok("override_xpbd".to_string()),
-		_ => Err("spring bone override mode must be authored, override_verlet, or override_xpbd".to_string()),
+		_ => Err("UNPhysics override mode must be authored, override_verlet, or override_xpbd".to_string()),
 	}
 }
 
@@ -7960,13 +11486,13 @@ fn set_spring_bone_category_mode(
 				("constraint_iterations".to_string(), toml::Value::Integer(4)),
 			],
 		),
-		_ => Err("spring bone override mode must be authored, override_verlet, or override_xpbd".to_string()),
+		_ => Err("UNPhysics override mode must be authored, override_verlet, or override_xpbd".to_string()),
 	}
 }
 
 fn set_spring_bone_category_recommended_preset(manifest: &mut toml::Value, category: &str, preset: &str) -> Result<(), String> {
 	let preset = spring_bone_recommended_preset(category, preset)
-		.ok_or_else(|| format!("unknown SpringBone recommended preset: {category}.{preset}"))?;
+		.ok_or_else(|| format!("unknown UNPhysics recommended preset: {category}.{preset}"))?;
 	replace_spring_bone_category_override(
 		manifest,
 		category,
@@ -8065,12 +11591,12 @@ fn replace_spring_bone_category_override<const N: usize>(
 	values: [(String, toml::Value); N],
 ) -> Result<(), String> {
 	remove_spring_bone_category_override(manifest, category)?;
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let overrides = spring_bone
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let overrides = solver
 		.entry("overrides".to_string())
 		.or_insert_with(|| toml::Value::Array(Vec::new()))
 		.as_array_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides must be an array".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides must be an array".to_string())?;
 	let mut table = toml::map::Map::new();
 	table.insert("category".to_string(), toml::Value::String(category.to_string()));
 	for (key, value) in values {
@@ -8086,12 +11612,12 @@ fn set_spring_bone_category_override_value(
 	key: &str,
 	value: toml::Value,
 ) -> Result<(), String> {
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let overrides = spring_bone
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let overrides = solver
 		.entry("overrides".to_string())
 		.or_insert_with(|| toml::Value::Array(Vec::new()))
 		.as_array_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides must be an array".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides must be an array".to_string())?;
 	let index = overrides
 		.iter()
 		.position(|item| {
@@ -8108,14 +11634,14 @@ fn set_spring_bone_category_override_value(
 		});
 	let table = overrides[index]
 		.as_table_mut()
-		.ok_or_else(|| "physics.spring_bone.overrides item must be a table".to_string())?;
+		.ok_or_else(|| "physics.dynamics.solver.overrides item must be a table".to_string())?;
 	table.insert(key.to_string(), value);
 	Ok(())
 }
 
 fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &str) -> Result<(), String> {
-	let spring_bone = spring_bone_table_mut(manifest)?;
-	let Some(overrides) = spring_bone.get_mut("overrides").and_then(toml::Value::as_array_mut) else {
+	let solver = dynamics_solver_table_mut(manifest)?;
+	let Some(overrides) = solver.get_mut("overrides").and_then(toml::Value::as_array_mut) else {
 		return Ok(());
 	};
 	overrides.retain(|item| {
@@ -8128,18 +11654,27 @@ fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &s
 	Ok(())
 }
 
-fn spring_bone_table_mut(manifest: &mut toml::Value) -> Result<&mut toml::map::Map<String, toml::Value>, String> {
+fn dynamics_solver_table(manifest: &toml::Value) -> Option<&toml::Value> {
+	manifest.get("physics")?.get("dynamics")?.get("solver")
+}
+
+fn dynamics_solver_table_mut(manifest: &mut toml::Value) -> Result<&mut toml::map::Map<String, toml::Value>, String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let physics = table
 		.entry("physics".to_string())
 		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
 		.as_table_mut()
 		.ok_or_else(|| "physics must be a table".to_string())?;
-	physics
-		.entry("spring_bone".to_string())
+	let dynamics = physics
+		.entry("dynamics".to_string())
 		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
 		.as_table_mut()
-		.ok_or_else(|| "physics.spring_bone must be a table".to_string())
+		.ok_or_else(|| "physics.dynamics must be a table".to_string())?;
+	dynamics
+		.entry("solver".to_string())
+		.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+		.as_table_mut()
+		.ok_or_else(|| "physics.dynamics.solver must be a table".to_string())
 }
 
 /// `[camera] target = [x, y, z]` の特定軸だけを更新する。
@@ -8386,36 +11921,239 @@ fn exe_name(name: &str) -> String {
 	}
 }
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+// Windows Shell COM bindings require unsafe calls; keep that exception at this OS boundary.
+mod windows_integration {
+	use std::path::{Path, PathBuf};
+
+	use windows::{
+		core::{Interface, PCWSTR},
+		Win32::{
+			Foundation::RPC_E_CHANGED_MODE,
+			Storage::EnhancedStorage::{PKEY_AppUserModel_ID, PKEY_Title},
+			System::Com::StructuredStorage::PROPVARIANT,
+			System::Com::{CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED},
+			UI::Shell::{
+				Common::{IObjectArray, IObjectCollection},
+				DestinationList, EnumerableObjectCollection, ICustomDestinationList, IShellLinkW,
+				PropertiesSystem::IPropertyStore,
+				SetCurrentProcessExplicitAppUserModelID, ShellLink,
+			},
+		},
+	};
+
+	pub(crate) struct JumpListTask {
+		pub(crate) title: String,
+		pub(crate) target: PathBuf,
+		pub(crate) arguments: String,
+		pub(crate) working_dir: PathBuf,
+		pub(crate) icon: Option<PathBuf>,
+	}
+
+	pub(crate) fn set_process_app_user_model_id(app_id: &str) -> Result<(), String> {
+		let app_id = WideString::new(app_id);
+		unsafe { SetCurrentProcessExplicitAppUserModelID(app_id.as_pcwstr()) }.map_err(format_windows_error)
+	}
+
+	pub(crate) fn create_shortcut(
+		shortcut_path: &Path,
+		target_path: &Path,
+		arguments: &str,
+		working_dir: &Path,
+		icon_path: Option<&Path>,
+		app_id: Option<&str>,
+	) -> Result<(), String> {
+		ensure_com_initialized()?;
+		unsafe {
+			let link = create_shell_link(target_path, arguments, working_dir, icon_path, app_id, None)?;
+			let persist: IPersistFile = link.cast().map_err(format_windows_error)?;
+			let shortcut = WideString::from_path(shortcut_path);
+			persist.Save(shortcut.as_pcwstr(), true).map_err(format_windows_error)?;
+		}
+		Ok(())
+	}
+
+	pub(crate) fn replace_jump_lists(
+		launcher_app_id: &str,
+		renderer_app_ids: &[String],
+		active_app_ids: &[String],
+		tasks: &[JumpListTask],
+	) -> Result<(), String> {
+		ensure_com_initialized()?;
+		unsafe {
+			delete_jump_list(launcher_app_id)?;
+			for app_id in renderer_app_ids {
+				delete_jump_list(app_id)?;
+			}
+			for app_id in active_app_ids {
+				write_jump_list(app_id, tasks)?;
+			}
+		}
+		Ok(())
+	}
+
+	unsafe fn write_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
+		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let app_id_wide = WideString::new(app_id);
+		list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
+		let mut min_slots = 0;
+		let _removed: IObjectArray = list.BeginList(&mut min_slots).map_err(format_windows_error)?;
+		let collection: IObjectCollection =
+			CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		for task in tasks {
+			let link = create_shell_link(
+				&task.target,
+				&task.arguments,
+				&task.working_dir,
+				task.icon.as_deref(),
+				Some(app_id),
+				Some(&task.title),
+			)?;
+			collection.AddObject(&link).map_err(format_windows_error)?;
+		}
+		let array: IObjectArray = collection.cast().map_err(format_windows_error)?;
+		list.AddUserTasks(&array).map_err(format_windows_error)?;
+		list.CommitList().map_err(format_windows_error)?;
+		Ok(())
+	}
+
+	unsafe fn delete_jump_list(app_id: &str) -> Result<(), String> {
+		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let app_id = WideString::new(app_id);
+		let _ = list.DeleteList(app_id.as_pcwstr());
+		Ok(())
+	}
+
+	unsafe fn create_shell_link(
+		target_path: &Path,
+		arguments: &str,
+		working_dir: &Path,
+		icon_path: Option<&Path>,
+		app_id: Option<&str>,
+		title: Option<&str>,
+	) -> Result<IShellLinkW, String> {
+		let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
+		let target = WideString::from_path(target_path);
+		link.SetPath(target.as_pcwstr()).map_err(format_windows_error)?;
+		if !arguments.is_empty() {
+			let arguments = WideString::new(arguments);
+			link.SetArguments(arguments.as_pcwstr()).map_err(format_windows_error)?;
+		}
+		let working_dir = WideString::from_path(working_dir);
+		link.SetWorkingDirectory(working_dir.as_pcwstr()).map_err(format_windows_error)?;
+		if let Some(icon_path) = icon_path {
+			let icon = WideString::from_path(icon_path);
+			link.SetIconLocation(icon.as_pcwstr(), 0).map_err(format_windows_error)?;
+		}
+		let properties: IPropertyStore = link.cast().map_err(format_windows_error)?;
+		if let Some(app_id) = app_id {
+			let app_id_prop = PROPVARIANT::from(app_id);
+			properties
+				.SetValue(&PKEY_AppUserModel_ID, &app_id_prop)
+				.map_err(format_windows_error)?;
+		}
+		if let Some(title) = title {
+			let title_prop = PROPVARIANT::from(title);
+			properties.SetValue(&PKEY_Title, &title_prop).map_err(format_windows_error)?;
+		}
+		properties.Commit().map_err(format_windows_error)?;
+		Ok(link)
+	}
+
+	fn ensure_com_initialized() -> Result<(), String> {
+		let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+		if hr.is_ok() || hr == RPC_E_CHANGED_MODE {
+			Ok(())
+		} else {
+			Err(format_windows_error(hr.into()))
+		}
+	}
+
+	fn format_windows_error(error: windows::core::Error) -> String {
+		error.message().to_string()
+	}
+
+	struct WideString {
+		inner: Vec<u16>,
+	}
+
+	impl WideString {
+		fn new(value: &str) -> Self {
+			let mut inner: Vec<u16> = value.encode_utf16().collect();
+			inner.push(0);
+			Self { inner }
+		}
+
+		fn from_path(path: &Path) -> Self {
+			Self::new(&path.display().to_string())
+		}
+
+		fn as_pcwstr(&self) -> PCWSTR {
+			PCWSTR(self.inner.as_ptr())
+		}
+	}
+}
+
 #[cfg(test)]
 mod tests {
+	use base64::Engine;
 	use std::{
+		collections::{BTreeMap, BTreeSet},
 		fs,
 		io::{BufRead, BufReader, Cursor, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
-		path::Path,
+		path::{Path, PathBuf},
 		sync::{atomic::Ordering, Arc, Mutex},
 		thread,
 		time::{Duration, Instant},
 	};
 
 	use super::{
-		apply_avatar_setting_value, avatar_model_picker_parent, data_image_base64_parts, diagnostics_archive_path,
-		diagnostics_generated_at_secs, encode_profile_icon_thumbnail_webp, parse_manifest_value, path_for_manifest, percent_decode_utf8,
-		perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry, read_vrm_metadata, repo_root,
+		apply_avatar_setting_value, attach_standalone_renderer_manifest_in_state, avatar_model_picker_parent, avatar_setting_field_domain,
+		build_launcher_task_specs, data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs,
+		encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, midi_note_on_event,
+		migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count,
+		read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
 		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, AvatarSetting, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry,
-		TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, standalone_renderer_runtime_bus_key,
+		startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
+		unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate,
+		write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
+		ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, RendererSpoutProfileState,
+		SupervisorState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
 		RendererRuntimeTelemetry {
 			connected: true,
+			pid: Some(std::process::id()),
 			protocol: Some("local-tcp-json-v2".to_string()),
 			control_capabilities: Vec::new(),
+			scene_state: "avatar_scene".to_string(),
 			uptime_secs: 1,
 			fps: Some(60.0),
 			cpu_ms: Some(1.0),
+			frame_cpu_total_ms: Some(1.4),
+			frame_motion_apply_ms: None,
+			frame_dynamics_step_ms: Some(0.2),
+			frame_globals_ms: None,
+			frame_surface_acquire_ms: None,
+			frame_target_prepare_ms: None,
+			frame_draw_state_refresh_ms: None,
+			frame_scene_world_ms: None,
+			frame_draw_skin_palette_ms: None,
+			frame_draw_skin_palette_write_ms: None,
+			frame_draw_fur_source_vertices_ms: None,
+			frame_draw_expression_values_ms: None,
+			frame_draw_morph_weights_ms: None,
+			frame_draw_transform_loop_ms: None,
+			frame_bone_collider_debug_ms: None,
+			frame_command_encode_ms: None,
+			frame_submit_present_ms: None,
+			frame_spout_cpu_ms: None,
+			frame_contact_eval_ms: Some(0.1),
+			frame_runtime_action_eval_ms: Some(0.1),
 			gpu_ms: Some(2.0),
 			ram_mb: None,
 			surface_width: Some(1280),
@@ -8432,6 +12170,8 @@ mod tests {
 				uploaded_mip_bytes: 2048,
 				..TextureRuntimeSummary::default()
 			}),
+			wardrobe_asset_upload: None,
+			active_wardrobe_set: None,
 			spout_available: true,
 			spout_enabled: true,
 			spout_name: Some("UN Avatar Spout".to_string()),
@@ -8456,11 +12196,63 @@ mod tests {
 			unmotion_zenoh_key: String::new(),
 			unmotion_zenoh_received_frames: 0,
 			motion_applied_frames: 0,
+			audio_link_texture_needed: false,
 			primary_motion_source: "vmc".to_string(),
 			show_axes: false,
 			show_bone_colliders: false,
 			bone_collider_count: 0,
 			bone_collider_source: "off".to_string(),
+			dynamics_group_count: 0,
+			dynamics_enabled_group_count: 0,
+			dynamics_source_enabled_group_count: 0,
+			dynamics_enabled_override_count: 0,
+			dynamics_vrm_spring_bone_group_count: 0,
+			dynamics_vrc_physbone_group_count: 0,
+			dynamics_unknown_group_count: 0,
+			dynamics_limit_group_count: 0,
+			dynamics_angle_limit_group_count: 0,
+			dynamics_stretch_limit_group_count: 0,
+			dynamics_rotation_translation_writeback_group_count: 0,
+			dynamics_translation_writeback_candidate_count: 0,
+			dynamics_translation_writeback_target_count: 0,
+			dynamics_stretch_translation_writeback_group_count: 0,
+			dynamics_stretch_translation_writeback_target_group_count: 0,
+			dynamics_grabbing_enabled_group_count: 0,
+			dynamics_posing_enabled_group_count: 0,
+			dynamics_collider_count: 0,
+			dynamics_vrm_spring_bone_collider_count: 0,
+			dynamics_vrc_physbone_collider_count: 0,
+			dynamics_unknown_collider_count: 0,
+			dynamics_contact_count: 0,
+			dynamics_vrc_contact_sender_count: 0,
+			dynamics_vrc_contact_receiver_count: 0,
+			dynamics_contact_parameter_declaration_count: 0,
+			dynamics_contact_probe_count: 0,
+			dynamics_contact_probe_would_emit_count: 0,
+			dynamics_contact_parameter_emission_count: 0,
+			dynamics_contact_parameter_emitted_count: 0,
+			dynamics_contact_parameter_reset_to_zero_count: 0,
+			dynamics_constraint_ref_count: 0,
+			dynamics_vrc_constraint_ref_count: 0,
+			runtime_parameter_definitions: Vec::new(),
+			runtime_parameter_conflicts: Vec::new(),
+			runtime_actions: Vec::new(),
+			runtime_action_target_write_collisions: Vec::new(),
+			runtime_action_restore_readiness: Vec::new(),
+			runtime_action_restore_baseline_candidates: Vec::new(),
+			runtime_action_restore_baseline_capture_plan: Vec::new(),
+			runtime_action_restore_apply_plan: Vec::new(),
+			menu_action_candidates: Vec::new(),
+			menu_wardrobe_candidates: Vec::new(),
+			contact_parameter_declarations: Vec::new(),
+			contact_parameter_emission_enabled: false,
+			contact_parameter_emissions: Vec::new(),
+			contact_probes: Vec::new(),
+			dynamics_groups: Vec::new(),
+			dynamics_interaction_hooks: Vec::new(),
+			dynamics_colliders: Vec::new(),
+			dynamics_constraint_refs: Vec::new(),
+			dynamics_warnings: Vec::new(),
 			camera_locked: false,
 			window_focused: false,
 			window_activation_seq: 0,
@@ -8474,6 +12266,113 @@ mod tests {
 			startup_message: None,
 			note: None,
 		}
+	}
+
+	fn collect_static_i18n_keys_from_source_dir(dir: &Path, out: &mut BTreeSet<String>) {
+		let Ok(entries) = fs::read_dir(dir) else { return };
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.is_dir() {
+				collect_static_i18n_keys_from_source_dir(&path, out);
+				continue;
+			}
+			let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+				continue;
+			};
+			if !matches!(ext, "svelte" | "ts") {
+				continue;
+			}
+			let Ok(text) = fs::read_to_string(&path) else {
+				continue;
+			};
+			collect_static_i18n_keys_from_text(&text, out);
+		}
+	}
+
+	fn collect_static_i18n_keys_from_text(text: &str, out: &mut BTreeSet<String>) {
+		for marker in ["$_(\"", "translate(\"", "labelKey: \"", "hintKey: \""] {
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let key_start = pos + marker.len();
+				let after = &rest[key_start..];
+				let Some(key_end) = after.find('"') else { break };
+				let key = &after[..key_end];
+				if key.contains("${") || key.ends_with('.') {
+					rest = &after[key_end + 1..];
+					continue;
+				}
+				out.insert(key.to_string());
+				rest = &after[key_end + 1..];
+			}
+		}
+
+		let mut rest = text;
+		while let Some(pos) = rest.find("\"profiles.") {
+			let after = &rest[pos + 1..];
+			let Some(key_end) = after.find('"') else { break };
+			let key = &after[..key_end];
+			if !key.contains("${") && !key.ends_with('.') {
+				out.insert(key.to_string());
+			}
+			rest = &after[key_end + 1..];
+		}
+	}
+
+	fn collect_literal_frontend_invokes_from_source_dir(dir: &Path, out: &mut BTreeSet<String>) {
+		let Ok(entries) = fs::read_dir(dir) else { return };
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.is_dir() {
+				collect_literal_frontend_invokes_from_source_dir(&path, out);
+				continue;
+			}
+			let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+				continue;
+			};
+			if !matches!(ext, "svelte" | "ts") {
+				continue;
+			}
+			let Ok(text) = fs::read_to_string(&path) else {
+				continue;
+			};
+			collect_literal_frontend_invokes_from_text(&text, out);
+		}
+	}
+
+	fn collect_literal_frontend_invokes_from_text(text: &str, out: &mut BTreeSet<String>) {
+		for marker in ["invoke(\"", "invoke('"] {
+			let quote = marker.as_bytes()[marker.len() - 1] as char;
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let command_start = pos + marker.len();
+				let after = &rest[command_start..];
+				let Some(command_end) = after.find(quote) else { break };
+				let command = &after[..command_end];
+				if !command.is_empty() && !command.contains("${") {
+					out.insert(command.to_string());
+				}
+				rest = &after[command_end + quote.len_utf8()..];
+			}
+		}
+	}
+
+	fn collect_dev_ipc_mock_cases_from_text(text: &str) -> BTreeSet<String> {
+		let mut cases = BTreeSet::new();
+		for marker in ["case \"", "case '"] {
+			let quote = marker.as_bytes()[marker.len() - 1] as char;
+			let mut rest = text;
+			while let Some(pos) = rest.find(marker) {
+				let command_start = pos + marker.len();
+				let after = &rest[command_start..];
+				let Some(command_end) = after.find(quote) else { break };
+				let command = &after[..command_end];
+				if !command.is_empty() {
+					cases.insert(command.to_string());
+				}
+				rest = &after[command_end + quote.len_utf8()..];
+			}
+		}
+		cases
 	}
 
 	#[test]
@@ -8509,6 +12408,156 @@ mod tests {
 	}
 
 	#[test]
+	fn launcher_task_specs_include_every_profile_without_app_cap() {
+		let supervisor = Path::new(r"C:\Program Files\UN Avatar\un-avatar-supervisor.exe");
+		let working_dir = Path::new(r"C:\Program Files\UN Avatar");
+		let profiles = (0..16)
+			.map(|index| LauncherTaskProfile {
+				name: format!("Profile {index}"),
+				manifest_path: Path::new("target")
+					.join("tmp")
+					.join("profiles with spaces")
+					.join(format!("profile {index}.toml")),
+				icon: None,
+			})
+			.collect::<Vec<_>>();
+
+		let tasks = build_launcher_task_specs(supervisor, working_dir, &profiles);
+
+		assert_eq!(tasks.len(), profiles.len() + 1);
+		assert_eq!(tasks[0].title, "Open Supervisor");
+		assert_eq!(tasks[1].title, "Launch Profile 0");
+		assert_eq!(tasks[16].title, "Launch Profile 15");
+		assert_eq!(tasks[16].target, supervisor);
+		assert_eq!(tasks[16].working_dir, working_dir);
+		assert!(tasks[16].arguments.starts_with("--launch-renderer-manifest "));
+		assert!(tasks[16].arguments.contains(r#""target\tmp\profiles with spaces\profile 15.toml""#));
+	}
+
+	#[test]
+	fn launcher_task_specs_keep_profile_icons_when_available() {
+		let supervisor = Path::new(r"C:\UN Avatar\un-avatar-supervisor.exe");
+		let working_dir = Path::new(r"C:\UN Avatar");
+		let icon = Path::new(r"C:\Users\the\Pictures\profile.ico").to_path_buf();
+		let profiles = vec![LauncherTaskProfile {
+			name: "Usagi".to_string(),
+			manifest_path: PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"),
+			icon: Some(icon.clone()),
+		}];
+
+		let tasks = build_launcher_task_specs(supervisor, working_dir, &profiles);
+
+		assert_eq!(tasks[1].icon.as_ref(), Some(&icon));
+		assert_eq!(
+			tasks[1].arguments,
+			r#"--launch-renderer-manifest "C:\Users\the\Profiles\usagi.toml""#
+		);
+	}
+
+	#[test]
+	fn renderer_profile_app_user_model_id_is_profile_scoped() {
+		assert_eq!(
+			crate::renderer_profile_app_user_model_id("mizuki-copy"),
+			"UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy"
+		);
+		assert_eq!(
+			crate::renderer_profile_app_user_model_id("Model 1_Copy"),
+			"UsagiNetwork.UNAvatar.Renderer.Profile.model-1-copy"
+		);
+	}
+
+	#[test]
+	fn legacy_profile_launcher_shortcuts_are_removed_without_touching_main_launcher() {
+		let dir = std::env::temp_dir().join(format!(
+			"un-avatar-launcher-test-{}",
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		std::fs::create_dir_all(&dir).unwrap();
+		let main = dir.join("UN Avatar.lnk");
+		let profile = dir.join("UN Avatar - usagi.lnk");
+		let unrelated = dir.join("Other.lnk");
+		std::fs::write(&main, b"main").unwrap();
+		std::fs::write(&profile, b"profile").unwrap();
+		std::fs::write(&unrelated, b"other").unwrap();
+
+		crate::remove_legacy_profile_launcher_shortcuts(&dir);
+
+		assert!(main.exists());
+		assert!(!profile.exists());
+		assert!(unrelated.exists());
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn startup_proxy_manifest_arg_accepts_single_instance_argv_shape() {
+		let args = [
+			r"C:\UN Avatar\un-avatar-supervisor.exe",
+			"--launch-renderer-manifest",
+			r"C:\Users\the\Profiles\usagi.toml",
+		];
+
+		let manifest = startup_proxy_manifest_arg(args).unwrap().unwrap();
+
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"));
+	}
+
+	#[test]
+	fn startup_proxy_manifest_arg_requires_manifest_path() {
+		let error = startup_proxy_manifest_arg(["--launch-renderer-manifest"]).unwrap_err();
+
+		assert!(error.contains("--launch-renderer-manifest requires a manifest path"));
+	}
+
+	#[test]
+	fn startup_open_profile_manifest_arg_accepts_renderer_tray_argv_shape() {
+		let args = [
+			r"C:\UN Avatar\un-avatar-supervisor.exe",
+			"--open-profile-manifest",
+			r"C:\Users\the\Profiles\mizuki-split.toml",
+		];
+
+		let manifest = startup_open_profile_manifest_arg(args).unwrap().unwrap();
+
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\mizuki-split.toml"));
+	}
+
+	#[test]
+	fn open_profile_manifest_registers_standalone_renderer_without_child_process() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-attach-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let manifest = dir.join("mizuki.toml");
+		std::fs::write(
+			&manifest,
+			r#"
+title = "Mizuki"
+avatar_path = "mizuki.unavatar"
+
+[profile]
+id = "mizuki"
+display_name = "Mizuki"
+"#,
+		)
+		.unwrap();
+		let state = Mutex::new(SupervisorState::default());
+
+		let info = attach_standalone_renderer_manifest_in_state(&manifest, &state).unwrap();
+
+		assert_eq!(info.name, "Mizuki");
+		assert_eq!(info.pid, None);
+		let mut state = state.lock().unwrap();
+		assert_eq!(state.renderers.len(), 1);
+		let renderer = state.renderers.values_mut().next().unwrap();
+		assert!(renderer.child.is_none());
+		assert_eq!(renderer.runtime_bus_key, standalone_renderer_runtime_bus_key(&manifest));
+		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
 	fn runtime_telemetry_reads_json_snapshot() {
 		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
 		let address = listener.local_addr().unwrap();
@@ -8516,7 +12565,7 @@ mod tests {
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"active_wardrobe_set":"field_drape","wardrobe_asset_upload":{{"mode":"scoped","active_asset_groups":["","outfit:field_drape"],"resident_mesh_primitive_count":80,"resident_material_count":23,"resident_image_count":58,"resident_dynamics_count":76,"last_mesh_buffer_scoped_load_count":4,"last_mesh_buffer_scoped_unload_count":2,"last_image_texture_scoped_load_count":6,"last_image_texture_scoped_unload_count":3,"last_material_slot_scoped_upload_count":5,"scoped_upload_supported":true,"all_resident":false}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_rotation_translation_writeback_group_count":2,"dynamics_translation_writeback_candidate_count":3,"dynamics_translation_writeback_target_count":2,"dynamics_stretch_translation_writeback_group_count":1,"dynamics_stretch_translation_writeback_target_group_count":1,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_interaction_hooks":[{{"group_index":0,"source_id":"physbone:hair","parameter":"HairPB","suffix_parameters":["HairPB_IsGrabbed"],"metadata_only":true}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver"],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -8533,7 +12582,148 @@ mod tests {
 		assert_eq!(telemetry.texture_compression.as_deref(), Some("auto"));
 		assert_eq!(telemetry.processed_texture_cache, Some(true));
 		assert_eq!(telemetry.texture_summary.as_ref().map(|summary| summary.image_count), Some(3));
+		assert_eq!(telemetry.active_wardrobe_set.as_deref(), Some("field_drape"));
+		let wardrobe_upload = telemetry.wardrobe_asset_upload.as_ref().expect("wardrobe asset upload");
+		assert_eq!(wardrobe_upload.get("mode").and_then(serde_json::Value::as_str), Some("scoped"));
+		assert_eq!(
+			wardrobe_upload
+				.get("last_image_texture_scoped_load_count")
+				.and_then(serde_json::Value::as_u64),
+			Some(6)
+		);
+		assert_eq!(
+			wardrobe_upload.get("scoped_upload_supported").and_then(serde_json::Value::as_bool),
+			Some(true)
+		);
 		assert_eq!(telemetry.fps, Some(59.5));
+		assert_eq!(telemetry.dynamics_group_count, 9);
+		assert_eq!(telemetry.dynamics_limit_group_count, 8);
+		assert_eq!(telemetry.dynamics_angle_limit_group_count, 7);
+		assert_eq!(telemetry.dynamics_stretch_limit_group_count, 6);
+		assert_eq!(telemetry.dynamics_rotation_translation_writeback_group_count, 2);
+		assert_eq!(telemetry.dynamics_translation_writeback_candidate_count, 3);
+		assert_eq!(telemetry.dynamics_translation_writeback_target_count, 2);
+		assert_eq!(telemetry.dynamics_stretch_translation_writeback_group_count, 1);
+		assert_eq!(telemetry.dynamics_stretch_translation_writeback_target_group_count, 1);
+		assert_eq!(telemetry.dynamics_grabbing_enabled_group_count, 5);
+		assert_eq!(telemetry.dynamics_posing_enabled_group_count, 4);
+		assert_eq!(telemetry.dynamics_contact_count, 3);
+		assert_eq!(telemetry.dynamics_contact_parameter_declaration_count, 2);
+		assert_eq!(telemetry.dynamics_contact_probe_count, 1);
+		assert_eq!(telemetry.dynamics_contact_probe_would_emit_count, 1);
+		assert_eq!(telemetry.dynamics_contact_parameter_emission_count, 1);
+		assert_eq!(telemetry.dynamics_contact_parameter_emitted_count, 1);
+		assert_eq!(telemetry.dynamics_contact_parameter_reset_to_zero_count, 0);
+		assert_eq!(telemetry.dynamics_constraint_ref_count, 2);
+		assert_eq!(
+			telemetry
+				.runtime_parameter_definitions
+				.first()
+				.and_then(|value| value.get("name"))
+				.and_then(serde_json::Value::as_str),
+			Some("Hat")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_parameter_conflicts
+				.first()
+				.and_then(|value| value.get("reason"))
+				.and_then(serde_json::Value::as_str),
+			Some("contact_transient_overlaps_action_parameter")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_actions
+				.first()
+				.and_then(|value| value.get("current_condition_state"))
+				.and_then(serde_json::Value::as_str),
+			Some("active")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_action_target_write_collisions
+				.first()
+				.and_then(|value| value.get("target_key"))
+				.and_then(serde_json::Value::as_str),
+			Some("Root/Hat")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_action_restore_readiness
+				.first()
+				.and_then(|value| value.get("reason"))
+				.and_then(serde_json::Value::as_str),
+			Some("baseline_not_captured")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_action_restore_baseline_candidates
+				.first()
+				.and_then(|value| value.get("baseline_value"))
+				.and_then(serde_json::Value::as_bool),
+			Some(true)
+		);
+		assert_eq!(
+			telemetry
+				.runtime_action_restore_baseline_capture_plan
+				.first()
+				.and_then(|value| value.get("target_key"))
+				.and_then(serde_json::Value::as_str),
+			Some("Root/Hat")
+		);
+		assert_eq!(
+			telemetry
+				.runtime_action_restore_apply_plan
+				.first()
+				.and_then(|value| value.get("ready"))
+				.and_then(serde_json::Value::as_bool),
+			Some(true)
+		);
+		assert_eq!(
+			telemetry
+				.menu_wardrobe_candidates
+				.first()
+				.and_then(|value| value.get("wardrobe_set_id"))
+				.and_then(serde_json::Value::as_str),
+			Some("field_drape")
+		);
+		assert_eq!(
+			telemetry
+				.contact_parameter_declarations
+				.first()
+				.and_then(|value| value.get("parameter"))
+				.and_then(serde_json::Value::as_str),
+			Some("ContactHand")
+		);
+		assert!(telemetry.contact_parameter_emission_enabled);
+		assert_eq!(
+			telemetry
+				.contact_parameter_emissions
+				.first()
+				.and_then(|value| value.get("value"))
+				.and_then(serde_json::Value::as_f64),
+			Some(1.0)
+		);
+		assert_eq!(
+			telemetry
+				.dynamics_interaction_hooks
+				.first()
+				.and_then(|value| value.get("parameter"))
+				.and_then(serde_json::Value::as_str),
+			Some("HairPB")
+		);
+		assert_eq!(
+			telemetry
+				.dynamics_colliders
+				.first()
+				.and_then(|value| value.get("node_path"))
+				.and_then(serde_json::Value::as_str),
+			Some("root/collider")
+		);
+		assert_eq!(
+			telemetry.dynamics_warnings.first().map(String::as_str),
+			Some("6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver")
+		);
 	}
 
 	#[test]
@@ -8623,6 +12813,996 @@ mod tests {
 	}
 
 	#[test]
+	fn gltf_image_metadata_skips_oversized_data_uri_before_decode() {
+		let encoded_len = ((crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES as usize + 1) * 4).div_ceil(3);
+		let image = serde_json::json!({
+			"uri": format!("data:image/png;base64,{}", "A".repeat(encoded_len))
+		});
+		let source = crate::GltfMetadataSource::Json {
+			path: std::env::temp_dir().join("un-avatar-oversized-data-uri.gltf"),
+			bytes: Vec::new(),
+		};
+
+		assert!(crate::gltf_image_bytes_from_metadata_source(&image, &serde_json::json!({}), &source).is_none());
+	}
+
+	#[test]
+	fn gltf_image_metadata_skips_oversized_external_preview_file() {
+		let dir = std::env::temp_dir().join(format!(
+			"un-avatar-oversized-external-preview-{}-{}",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let gltf_path = dir.join("avatar.gltf");
+		let preview_path = dir.join("preview.png");
+		fs::File::create(&preview_path)
+			.unwrap()
+			.set_len(crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES + 1)
+			.unwrap();
+		let image = serde_json::json!({ "uri": "preview.png" });
+		let source = crate::GltfMetadataSource::Json {
+			path: gltf_path,
+			bytes: Vec::new(),
+		};
+
+		assert!(crate::gltf_image_bytes_from_metadata_source(&image, &serde_json::json!({}), &source).is_none());
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn gltf_external_preview_uri_stays_under_source_directory() {
+		let source_path = PathBuf::from("C:/avatars/model/avatar.gltf");
+
+		let safe = crate::safe_gltf_external_uri_path(&source_path, "textures/preview.png").unwrap();
+		assert!(safe.ends_with(Path::new("textures/preview.png")));
+
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "../preview.png").is_none());
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "/preview.png").is_none());
+		assert!(crate::safe_gltf_external_uri_path(&source_path, "C:/preview.png").is_none());
+	}
+
+	#[test]
+	fn gltf_image_bytes_rejects_external_traversal_and_oversized_data_uri() {
+		let source_path = PathBuf::from("C:/avatars/model/avatar.gltf");
+		let traversal = serde_json::json!({ "uri": "../preview.png" });
+		assert!(crate::gltf_image_bytes(&traversal, &serde_json::json!({}), &[], &source_path).is_none());
+
+		let encoded_len = ((crate::MAX_METADATA_IMAGE_BYTES as usize + 1) * 4).div_ceil(3);
+		let oversized = serde_json::json!({
+			"uri": format!("data:image/png;base64,{}", "A".repeat(encoded_len))
+		});
+		assert!(crate::gltf_image_bytes(&oversized, &serde_json::json!({}), &[], &source_path).is_none());
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_summary_and_preview_image() {
+		let path = std::env::temp_dir().join(format!("un-avatar-unavatar-metadata-{}.unavatar", crate::current_unix_secs()));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 68 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "generator": "Unit Test Exporter",
+      "manifest": {
+        "name": "Metadata UNAvatar",
+        "sourceType": "VRChat Avatar",
+        "exportMode": "Split Wardrobe",
+        "createdUtc": "2026-06-14T00:00:00Z"
+      },
+      "dynamics": [{}, {}],
+      "contacts": [{}],
+      "wardrobe": {
+        "baseSet": "base",
+        "sets": [
+          { "id": "base" },
+          {
+            "id": "field",
+            "previewImages": [
+              {
+                "id": "front",
+                "view": "front",
+                "width": 1024,
+                "height": 1024,
+                "mimeType": "image/png",
+                "pixelFormat": "RGBA8",
+                "colorSpace": "sRGB",
+                "bufferView": 0
+              }
+            ]
+          }
+        ]
+      },
+      "modularAvatar": { "componentCount": 7 },
+      "provenance": { "redistributionAllowed": false }
+    }
+  }
+}"#,
+			&preview_png,
+		);
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, Some("field".to_string()))
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+		assert_eq!(metadata.name.as_deref(), Some("Metadata UNAvatar"));
+		assert_eq!(metadata.spec_version.as_deref(), Some("0.1-preview"));
+		assert_eq!(metadata.generator.as_deref(), Some("Unit Test Exporter"));
+		assert_eq!(metadata.source_type.as_deref(), Some("VRChat Avatar"));
+		assert_eq!(metadata.export_mode.as_deref(), Some("Split Wardrobe"));
+		assert_eq!(metadata.wardrobe_set_count, 2);
+		assert_eq!(metadata.dynamics_count, 2);
+		assert_eq!(metadata.contact_count, 1);
+		assert_eq!(metadata.modular_avatar_component_count, 7);
+		assert_eq!(metadata.redistribution_allowed, Some(false));
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "field");
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 1);
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_does_not_require_full_glb_bin_payload() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-sparse-bin-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_declared_bin_len_and_prefix(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [{{ "buffer": 0, "byteOffset": 0, "byteLength": {} }}],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Sparse BIN UNAvatar" }},
+      "previewImages": [
+        {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}
+      ]
+    }}
+  }}
+}}"#,
+				crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+				preview_png.len()
+			),
+			crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Sparse BIN UNAvatar"));
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_rejects_oversized_glb_json_chunk_before_allocation() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-huge-json-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		write_glb_with_declared_json_len(&path, crate::MAX_UNAVATAR_METADATA_JSON_BYTES + 1);
+
+		let error = crate::read_unavatar_metadata(path.display().to_string(), None, None).unwrap_err();
+		let _ = fs::remove_file(&path);
+
+		assert!(error.contains("GLB JSON chunk is too large"), "{error}");
+	}
+
+	#[test]
+	fn read_unavatar_metadata_rejects_oversized_json_gltf_before_allocation() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-huge-json-gltf-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		fs::File::create(&path)
+			.unwrap()
+			.set_len(crate::MAX_UNAVATAR_METADATA_JSON_BYTES + 1)
+			.unwrap();
+
+		let error = crate::read_unavatar_metadata(path.display().to_string(), None, None).unwrap_err();
+		let _ = fs::remove_file(&path);
+
+		assert!(error.contains("glTF JSON is too large"), "{error}");
+	}
+
+	#[test]
+	fn read_unavatar_metadata_accepts_object_summary_counts() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-object-counts-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 0 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Object Count UNAvatar" },
+      "wardrobe": {
+        "setCount": 4
+      },
+      "dynamics": {
+        "groupCount": 131
+      },
+      "contacts": {
+        "contactCount": 7
+      },
+      "modularAvatar": {
+        "components": [{}, {}, {}]
+      }
+    }
+  }
+}"#,
+			&[],
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 4);
+		assert_eq!(metadata.dynamics_count, 131);
+		assert_eq!(metadata.contact_count, 7);
+		assert_eq!(metadata.modular_avatar_component_count, 3);
+	}
+
+	#[test]
+	fn read_unavatar_metadata_uses_base_and_selected_wardrobe_previews() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-wardrobe-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Wardrobe Preview UNAvatar" }},
+      "dynamics": [{{}}, {{}}],
+      "contacts": [{{}}],
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}
+            ]
+          }},
+          {{
+            "id": "field_drape",
+            "displayName": "field_drape",
+            "previewImages": [
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 1 }},
+              {{ "view": "back", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 2 }}
+            ]
+          }}
+        ]
+      }},
+      "modularAvatar": {{ "components": [{{}}, {{}}, {{}}] }}
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len,
+				len * 2,
+				len
+			),
+			&bin,
+		);
+
+		let base_metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let field_metadata = crate::read_unavatar_metadata(path.display().to_string(), None, Some("field_drape".to_string()))
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(base_metadata.wardrobe_set_count, 2);
+		assert_eq!(base_metadata.dynamics_count, 2);
+		assert_eq!(base_metadata.contact_count, 1);
+		assert_eq!(base_metadata.modular_avatar_component_count, 3);
+		assert_eq!(base_metadata.preview_images.len(), 1);
+		assert_eq!(base_metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(base_metadata.preview_images[0].width, Some(1));
+		assert_eq!(base_metadata.preview_images[0].height, Some(1));
+		assert_eq!(field_metadata.preview_sets.len(), 2);
+		assert_eq!(field_metadata.preview_images.len(), 2);
+		assert_eq!(field_metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(field_metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert_eq!(field_metadata.preview_images[0].width, Some(1));
+		assert_eq!(field_metadata.preview_images[0].height, Some(1));
+		assert!(field_metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_wardrobe_preview_image_indices() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-wardrobe-image-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "images": [
+    {{ "mimeType": "image/png", "bufferView": 0 }},
+    {{ "mimeType": "image/png", "bufferView": 1 }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Wardrobe Image Preview UNAvatar" }},
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "front", "width": 1, "height": 1, "image": 0 }},
+              {{ "view": "back", "width": 1, "height": 1, "imageIndex": 1 }}
+            ]
+          }}
+        ]
+      }}
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len
+			),
+			&bin,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 2);
+		assert_eq!(metadata.preview_images.len(), 2);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_keeps_all_wardrobe_preview_images() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-many-wardrobe-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let preview_items = (0..8)
+			.map(|index| format!(r#"{{ "view": "view{index}", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }}"#))
+			.collect::<Vec<_>>()
+			.join(",\n              ");
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Many Preview UNAvatar" }},
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {}
+            ]
+          }}
+        ]
+      }}
+    }}
+  }}
+}}"#,
+				preview_png.len(),
+				preview_png.len(),
+				preview_items
+			),
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 8);
+		assert_eq!(metadata.preview_images.len(), 8);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("view0"));
+		assert_eq!(metadata.preview_images[7].view.as_deref(), Some("view7"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_skips_broken_preview_items_without_dropping_valid_samples() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-mixed-preview-validity-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Mixed Preview Validity UNAvatar" }},
+      "wardrobe": {{
+        "baseSet": "base",
+        "sets": [
+          {{
+            "id": "base",
+            "displayName": "Base",
+            "previewImages": [
+              {{ "view": "missing", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 99 }},
+              {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }},
+              {{ "view": "unsupported", "width": 1, "height": 1, "mimeType": "image/svg+xml", "bufferView": 0 }}
+            ]
+          }}
+        ]
+      }}
+    }}
+  }}
+}}"#,
+				preview_png.len(),
+				preview_png.len()
+			),
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].preview_images.len(), 1);
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_all_global_sample_screenshots() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-global-samples-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "images": [
+    {{ "mimeType": "image/png", "bufferView": 0 }},
+    {{ "mimeType": "image/png", "bufferView": 1 }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Global Samples UNAvatar" }},
+      "sampleScreenshots": [
+        {{ "view": "front", "width": 800, "height": 800, "image": 0 }},
+        {{ "view": "side", "width": 800, "height": 800, "image": 1 }}
+      ]
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len
+			),
+			&bin,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_images.len(), 2);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("side"));
+		assert_eq!(metadata.preview_images[0].width, Some(800));
+		assert_eq!(metadata.preview_images[1].height, Some(800));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_global_direct_preview_images() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-global-direct-previews-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let mut bin = Vec::new();
+		bin.extend_from_slice(&preview_png);
+		bin.extend_from_slice(&preview_png);
+		let len = preview_png.len();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			&format!(
+				r#"{{
+  "asset": {{ "version": "2.0" }},
+  "buffers": [{{ "byteLength": {} }}],
+  "bufferViews": [
+    {{ "buffer": 0, "byteOffset": 0, "byteLength": {} }},
+    {{ "buffer": 0, "byteOffset": {}, "byteLength": {} }}
+  ],
+  "extensions": {{
+    "UN_avatar": {{
+      "specVersion": "0.1-preview",
+      "manifest": {{ "name": "Direct Samples UNAvatar" }},
+      "previewImages": [
+        {{ "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }},
+        {{ "view": "back", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 1 }}
+      ]
+    }}
+  }}
+}}"#,
+				bin.len(),
+				len,
+				len,
+				len
+			),
+			&bin,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.preview_images.len(), 2);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert_eq!(metadata.preview_images[1].view.as_deref(), Some("back"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+		assert!(metadata.preview_images[1].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_keeps_empty_base_wardrobe_preview_set() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-empty-base-preview-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		write_glb_with_json_and_bin_bytes(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 68 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Empty Base Preview UNAvatar" },
+      "wardrobe": {
+        "baseSet": "",
+        "baseName": "Base",
+        "sets": [
+          {
+            "id": "",
+            "previewImages": [
+              { "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#,
+			&preview_png,
+		);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "");
+		assert_eq!(metadata.preview_sets[0].name, "Base");
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_labels_named_base_set_with_base_label() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-named-base-label-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		fs::write(
+			&path,
+			r#"{
+  "asset": { "version": "2.0" },
+  "images": [
+    {
+      "mimeType": "image/png",
+      "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    }
+  ],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Named Base Preview UNAvatar" },
+      "wardrobe": {
+        "baseSet": "base",
+        "baseName": "Base Costume",
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "view": "front", "width": 1, "height": 1, "mimeType": "image/png", "image": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#,
+		)
+		.unwrap();
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_sets[0].id, "base");
+		assert_eq!(metadata.preview_sets[0].name, "Base Costume");
+		assert_eq!(metadata.preview_images.len(), 1);
+	}
+
+	#[test]
+	fn read_unavatar_metadata_reads_only_json_and_preview_buffer_view_ranges() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-partial-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let json = r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 1073741824 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Partial UNAvatar" },
+      "wardrobe": {
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "id": "front", "view": "front", "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#;
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let declared_bin_len = 1024_u32 * 1024 * 1024;
+		let total_len = 12_u32 + 8 + json_bytes.len() as u32 + 8 + declared_bin_len;
+		let mut file = fs::File::create(&path).unwrap();
+		file.write_all(&0x46546C67u32.to_le_bytes()).unwrap();
+		file.write_all(&2u32.to_le_bytes()).unwrap();
+		file.write_all(&total_len.to_le_bytes()).unwrap();
+		file.write_all(&(json_bytes.len() as u32).to_le_bytes()).unwrap();
+		file.write_all(&0x4E4F534Au32.to_le_bytes()).unwrap();
+		file.write_all(&json_bytes).unwrap();
+		file.write_all(&declared_bin_len.to_le_bytes()).unwrap();
+		file.write_all(&0x004E4942u32.to_le_bytes()).unwrap();
+		file.write_all(&preview_png).unwrap();
+		drop(file);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Partial UNAvatar"));
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_images.len(), 1);
+		assert_eq!(metadata.preview_sets.len(), 1);
+		assert_eq!(metadata.preview_images[0].view.as_deref(), Some("front"));
+		assert!(metadata.preview_images[0].data_url.starts_with("data:image/png;base64,"));
+	}
+
+	#[test]
+	fn read_unavatar_metadata_skips_preview_buffer_view_past_declared_buffer_length() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unavatar-metadata-oob-preview-{}-{}.unavatar",
+			std::process::id(),
+			crate::current_unix_secs()
+		));
+		let preview_png = crate::BASE64_STANDARD
+			.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+			.unwrap();
+		let json = r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [{ "byteLength": 16 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 32, "byteLength": 68 }],
+  "extensions": {
+    "UN_avatar": {
+      "specVersion": "0.1-preview",
+      "manifest": { "name": "Out Of Range Preview UNAvatar" },
+      "wardrobe": {
+        "sets": [
+          {
+            "id": "base",
+            "previewImages": [
+              { "id": "front", "view": "front", "mimeType": "image/png", "bufferView": 0 }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}"#;
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let bin_len = 32_u32 + preview_png.len() as u32;
+		let total_len = 12_u32 + 8 + json_bytes.len() as u32 + 8 + bin_len;
+		let mut file = fs::File::create(&path).unwrap();
+		file.write_all(&0x46546C67u32.to_le_bytes()).unwrap();
+		file.write_all(&2u32.to_le_bytes()).unwrap();
+		file.write_all(&total_len.to_le_bytes()).unwrap();
+		file.write_all(&(json_bytes.len() as u32).to_le_bytes()).unwrap();
+		file.write_all(&0x4E4F534Au32.to_le_bytes()).unwrap();
+		file.write_all(&json_bytes).unwrap();
+		file.write_all(&bin_len.to_le_bytes()).unwrap();
+		file.write_all(&0x004E4942u32.to_le_bytes()).unwrap();
+		file.write_all(&[0u8; 32]).unwrap();
+		file.write_all(&preview_png).unwrap();
+		drop(file);
+
+		let metadata = crate::read_unavatar_metadata(path.display().to_string(), None, None)
+			.unwrap()
+			.unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(metadata.name.as_deref(), Some("Out Of Range Preview UNAvatar"));
+		assert_eq!(metadata.wardrobe_set_count, 1);
+		assert_eq!(metadata.preview_images.len(), 0);
+		assert_eq!(metadata.preview_sets.len(), 0);
+	}
+
+	#[test]
+	fn profile_icon_crop_encoder_outputs_square_webp() {
+		let source = image::RgbaImage::from_pixel(320, 180, image::Rgba([96, 180, 255, 255]));
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let webp = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.8,
+				offset_x: 0.25,
+				offset_y: -0.25,
+			},
+		)
+		.unwrap();
+		assert!(webp.starts_with(b"RIFF"));
+		assert_eq!(&webp[8..12], b"WEBP");
+		let decoded = image::load_from_memory(&webp).unwrap();
+		assert_eq!(decoded.width(), PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
+		assert_eq!(decoded.height(), PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
+	}
+
+	#[test]
+	fn profile_icon_crop_encoder_reaches_landscape_edges() {
+		let mut source = image::RgbaImage::new(320, 180);
+		for (x, _, pixel) in source.enumerate_pixels_mut() {
+			*pixel = if x < 160 {
+				image::Rgba([240, 32, 24, 255])
+			} else {
+				image::Rgba([24, 48, 240, 255])
+			};
+		}
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let left = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: -1.0,
+				offset_y: 0.0,
+			},
+		)
+		.unwrap();
+		let right = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 1.0,
+				offset_y: 0.0,
+			},
+		)
+		.unwrap();
+		let left = image::load_from_memory(&left).unwrap().to_rgba8();
+		let right = image::load_from_memory(&right).unwrap().to_rgba8();
+		let left_red: u64 = left.pixels().map(|pixel| pixel[0] as u64).sum();
+		let left_blue: u64 = left.pixels().map(|pixel| pixel[2] as u64).sum();
+		let right_red: u64 = right.pixels().map(|pixel| pixel[0] as u64).sum();
+		let right_blue: u64 = right.pixels().map(|pixel| pixel[2] as u64).sum();
+		assert!(left_red > left_blue, "left crop should favor the red side");
+		assert!(right_blue > right_red, "right crop should favor the blue side");
+	}
+
+	#[test]
+	fn profile_icon_crop_encoder_reaches_portrait_edges() {
+		let mut source = image::RgbaImage::new(180, 320);
+		for (_, y, pixel) in source.enumerate_pixels_mut() {
+			*pixel = if y < 160 {
+				image::Rgba([32, 220, 80, 255])
+			} else {
+				image::Rgba([220, 48, 210, 255])
+			};
+		}
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let top = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 0.0,
+				offset_y: -1.0,
+			},
+		)
+		.unwrap();
+		let bottom = encode_profile_icon_crop_webp(
+			&png,
+			ProfileIconCropRequest {
+				zoom: 1.0,
+				offset_x: 0.0,
+				offset_y: 1.0,
+			},
+		)
+		.unwrap();
+		let top = image::load_from_memory(&top).unwrap().to_rgba8();
+		let bottom = image::load_from_memory(&bottom).unwrap().to_rgba8();
+		let top_green: u64 = top.pixels().map(|pixel| pixel[1] as u64).sum();
+		let top_blue: u64 = top.pixels().map(|pixel| pixel[2] as u64).sum();
+		let bottom_green: u64 = bottom.pixels().map(|pixel| pixel[1] as u64).sum();
+		let bottom_blue: u64 = bottom.pixels().map(|pixel| pixel[2] as u64).sum();
+		assert!(top_green > top_blue, "top crop should favor the green side");
+		assert!(bottom_blue > bottom_green, "bottom crop should favor the magenta side");
+	}
+
+	#[test]
 	fn profile_icon_thumbnail_cache_encodes_resized_webp() {
 		let source = image::RgbaImage::from_pixel(512, 384, image::Rgba([255, 128, 96, 220]));
 		let mut png = Vec::new();
@@ -8635,6 +13815,18 @@ mod tests {
 		let decoded = image::load_from_memory(&webp).unwrap();
 		assert!(decoded.width() <= PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
 		assert!(decoded.height() <= PROFILE_ICON_THUMBNAIL_MAX_DIMENSION);
+	}
+
+	#[test]
+	fn shortcut_icon_encoder_outputs_ico() {
+		let source = image::RgbaImage::from_pixel(128, 128, image::Rgba([96, 180, 255, 255]));
+		let mut png = Vec::new();
+		image::DynamicImage::ImageRgba8(source)
+			.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+			.unwrap();
+		let ico = crate::encode_shortcut_ico(&png).unwrap();
+		assert_eq!(&ico[0..4], &[0, 0, 1, 0]);
+		assert!(ico.len() > png.len() / 2);
 	}
 
 	#[test]
@@ -8651,6 +13843,16 @@ mod tests {
 		assert!(thumbnail_protocol_file_name("/../secret.webp").is_none());
 		assert!(thumbnail_protocol_file_name("/nested%2Fsecret.webp").is_none());
 		assert!(thumbnail_protocol_file_name("/icon.png").is_none());
+	}
+
+	#[test]
+	fn parses_midi_note_on_for_binding_capture() {
+		assert_eq!(midi_note_on_event(&[0x90, 60, 127]), Some((1, 60)));
+		assert_eq!(midi_note_on_event(&[0x9F, 64, 1]), Some((16, 64)));
+		assert_eq!(midi_note_on_event(&[0x90, 60, 0]), None);
+		assert_eq!(midi_note_on_event(&[0x80, 60, 64]), None);
+		assert_eq!(midi_note_on_event(&[0xB0, 1, 127]), None);
+		assert_eq!(midi_note_on_event(&[0x90, 60]), None);
 	}
 
 	#[test]
@@ -8745,10 +13947,11 @@ mod tests {
 				);
 				return;
 			}
-			assert!(
-				started.elapsed() < Duration::from_secs(2),
-				"runtime status stream cache was not updated"
-			);
+			if started.elapsed() >= Duration::from_secs(10) {
+				stop.store(true, Ordering::Release);
+				let last_error = cache.lock().ok().and_then(|cache| cache.last_error.clone());
+				panic!("runtime status stream cache was not updated: {last_error:?}");
+			}
 			thread::sleep(Duration::from_millis(20));
 		}
 	}
@@ -8768,8 +13971,656 @@ mod tests {
 		assert_eq!(setting.block_compression_encoder, "gpu");
 		assert_eq!(setting.block_compression_cpu_threads, 4);
 		assert!(setting.processed_texture_cache);
+		assert_eq!(setting.audio_link_source, "none");
+		assert_eq!(setting.audio_link_input_device_id, None);
+		assert_eq!(setting.audio_link_input_device_name_hint, None);
 		assert!(setting.transparent);
 		assert!(!setting.input_passthrough);
+	}
+
+	#[test]
+	fn static_svelte_i18n_keys_exist_in_all_locales() {
+		let mut keys = BTreeSet::new();
+		collect_static_i18n_keys_from_source_dir(&repo_root().join("apps").join("un-avatar-supervisor").join("src"), &mut keys);
+		assert!(!keys.is_empty(), "expected to find static svelte i18n keys");
+
+		for locale in crate::i18n::UN_I18N_STORE.available_locales() {
+			let messages = crate::i18n::UN_I18N_STORE
+				.messages_for_locale(&locale)
+				.unwrap_or_else(|| panic!("locale {locale} should be loaded"));
+			let missing = keys
+				.iter()
+				.filter(|key| !messages.contains_key(key.as_str()))
+				.cloned()
+				.collect::<Vec<_>>();
+			assert!(missing.is_empty(), "missing static i18n keys in {locale}: {missing:?}");
+		}
+	}
+
+	#[test]
+	fn static_spout_only_i18n_uses_hide_wording() {
+		for locale in crate::i18n::UN_I18N_STORE.available_locales() {
+			let messages = crate::i18n::UN_I18N_STORE
+				.messages_for_locale(&locale)
+				.unwrap_or_else(|| panic!("locale {locale} should be loaded"));
+			for key in [
+				"profiles.editor.output_mode_spout_only",
+				"profiles.summary.output_spout_only",
+				"renderers.controls.spout_only",
+			] {
+				let message = messages.get(key).unwrap_or_else(|| panic!("{locale} should define {key}"));
+				assert!(
+					message.contains("HIDE"),
+					"{locale}:{key} should identify Spout2 Only as HIDE: {message}"
+				);
+				assert!(
+					!message.to_ascii_lowercase().contains("minimized") && !message.contains("最小化"),
+					"{locale}:{key} must use HIDE wording for the Spout2-only output mode: {message}"
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn supervisor_permission_allows_avatar_file_review_flow() {
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		for command in [
+			"pick_file_path",
+			"read_vrm_metadata",
+			"read_unavatar_metadata",
+			"read_unavatar_wardrobe_options",
+			"read_unavatar_animator_action_page",
+			"save_avatar_thumbnail_icon",
+			"save_profile_icon_from_data_url",
+			"update_avatar_setting_value",
+		] {
+			assert!(
+				permissions.contains(&format!("\"{command}\"")),
+				"supervisor permission must allow {command} for avatar file selection/review"
+			);
+		}
+	}
+
+	#[test]
+	fn supervisor_permission_allows_profile_operation_workflow() {
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		for command in [
+			"prewarm_renderer_scene_cache",
+			"create_renderer_desktop_shortcut",
+			"create_taskbar_launcher_shortcuts",
+			"set_taskbar_profile_pinned",
+			"clear_taskbar_profile_pins",
+			"launch_renderer",
+			"activate_renderer_window",
+			"capture_renderer_screenshot",
+			"activate_renderer_runtime_action",
+			"set_renderer_runtime_parameter",
+			"set_renderer_dynamics",
+		] {
+			assert!(
+				permissions.contains(&format!("\"{command}\"")),
+				"supervisor permission must allow {command} for profile operation workflow"
+			);
+		}
+	}
+
+	#[test]
+	fn supervisor_permission_allows_all_registered_invoke_commands() {
+		let lib_rs = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("src")
+				.join("lib.rs"),
+		)
+		.expect("lib.rs should be readable");
+		let permissions = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("permissions")
+				.join("supervisor-invoke.toml"),
+		)
+		.expect("supervisor invoke permission should be readable");
+		let handler_start = lib_rs
+			.find(".invoke_handler(tauri::generate_handler![")
+			.expect("invoke handler should be registered");
+		let handler_rest = &lib_rs[handler_start..];
+		let handler_end = handler_rest.find("])").expect("invoke handler list should be closed");
+		let registered = handler_rest[..handler_end]
+			.lines()
+			.skip(1)
+			.filter_map(|line| {
+				let command = line.trim().trim_end_matches(',').trim();
+				if command.is_empty() || command.starts_with("//") {
+					return None;
+				}
+				Some(command.rsplit("::").next().unwrap_or(command).to_string())
+			})
+			.collect::<BTreeSet<_>>();
+		assert!(!registered.is_empty(), "expected registered invoke commands");
+
+		let allowed = permissions
+			.lines()
+			.filter_map(|line| {
+				let line = line.trim();
+				if !line.starts_with('"') {
+					return None;
+				}
+				let end = line[1..].find('"')?;
+				Some(line[1..=end].to_string())
+			})
+			.collect::<BTreeSet<_>>();
+		let missing = registered.difference(&allowed).cloned().collect::<Vec<_>>();
+		assert!(
+			missing.is_empty(),
+			"supervisor-invoke permission must allow every registered invoke command: {missing:?}"
+		);
+	}
+
+	#[test]
+	fn dev_ipc_mock_covers_literal_frontend_invokes() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src");
+		let mut literal_invokes = BTreeSet::new();
+		collect_literal_frontend_invokes_from_source_dir(&supervisor_src, &mut literal_invokes);
+		assert!(!literal_invokes.is_empty(), "expected literal frontend invoke commands");
+
+		let dev_ipc_mock = fs::read_to_string(supervisor_src.join("dev-ipc-mock.ts")).expect("dev-ipc-mock.ts should be readable");
+		assert!(
+			dev_ipc_mock.contains("unsupported command"),
+			"dev IPC mock should keep an explicit unsupported-command failure path"
+		);
+		let mock_cases = collect_dev_ipc_mock_cases_from_text(&dev_ipc_mock);
+		let missing = literal_invokes.difference(&mock_cases).cloned().collect::<Vec<_>>();
+		assert!(
+			missing.is_empty(),
+			"dev IPC mock must cover every literal frontend invoke command: {missing:?}"
+		);
+	}
+
+	#[test]
+	fn static_renderer_output_buttons_keep_spout_window_ordering() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererOutputActionButtons.svelte"),
+		)
+		.expect("RendererOutputActionButtons.svelte should be readable");
+		let window_preview = source
+			.split("async function setWindowPreview")
+			.nth(1)
+			.and_then(|rest| rest.split("async function setSpoutPreview").next())
+			.expect("setWindowPreview function should exist");
+		let spout_only = source
+			.split("async function setSpoutOnly")
+			.nth(1)
+			.and_then(|rest| rest.split("</script>").next())
+			.expect("setSpoutOnly function should exist");
+
+		let window_restore = window_preview
+			.find(r#"onSetWindow({ minimized: false }, "window preview")"#)
+			.expect("Window Preview should restore preview window");
+		let spout_disable = window_preview
+			.find(r#"onSetSpoutOutput(false, null, "window preview")"#)
+			.expect("Window Preview should disable Spout2");
+		assert!(
+			window_restore < spout_disable,
+			"Window Preview must restore the preview before disabling Spout2"
+		);
+
+		let spout_enable = spout_only
+			.find(r#"onSetSpoutOutput(true, null, "spout2 only")"#)
+			.expect("Spout2 Only should enable Spout2");
+		let window_minimize = spout_only
+			.find(r#"onSetWindow({ minimized: true }, "spout2 only")"#)
+			.expect("Spout2 Only should hide the preview window");
+		assert!(
+			spout_enable < window_minimize,
+			"Spout2 Only must enable Spout2 before hiding the preview window"
+		);
+	}
+
+	#[test]
+	fn static_renderer_wardrobe_menu_resolves_base_active_state() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererWardrobeMenuControls.svelte"),
+		)
+		.expect("RendererWardrobeMenuControls.svelte should be readable");
+		assert!(
+			source.contains("function wardrobeSetActive") && source.contains("runtimeStatus?.base_wardrobe_set?.trim()"),
+			"Supervisor wardrobe menu should resolve the explicit base set id when deciding the active Base candidate"
+		);
+		assert!(
+			source.contains(r#"setId === "" && baseSet !== "" && activeSet === baseSet"#),
+			"Supervisor wardrobe menu Base candidate should be active when runtime active set resolves to the base set id"
+		);
+		assert!(
+			source.contains("class:active={wardrobeSetActive(candidate)}"),
+			"Supervisor wardrobe menu buttons should use the base-aware active-state helper"
+		);
+	}
+
+	#[test]
+	fn static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries() {
+		let filter_source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("rendererAnimator.ts"),
+		)
+		.expect("rendererAnimator.ts should be readable");
+		assert!(
+			filter_source.contains("candidate.wardrobe_set_ids?.length") && filter_source.contains("candidate.effect_count <= 0"),
+			"Supervisor UNAnimator visibility must exclude wardrobe candidates and metadata-only candidates with no runtime effect"
+		);
+		assert!(
+			filter_source.contains("Face_Tracking") && filter_source.contains("VRCFT") && filter_source.contains("candidate.menu_label"),
+			"Supervisor UNAnimator visibility must keep VRCFT / tracking metadata out of the user action surface"
+		);
+
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("RendererAnimatorActions.svelte"),
+		)
+		.expect("RendererAnimatorActions.svelte should be readable");
+		assert!(
+			source.contains("animatorCandidateVisible"),
+			"UNAnimator actions should use the normalized candidate visibility filter"
+		);
+		assert!(
+			source.contains("animatorFallbackActionVisible"),
+			"UNAnimator fallback should use the normalized non-wardrobe action filter"
+		);
+		assert!(
+			source.contains("candidateActive(candidate)")
+				&& source.contains("animatorInactiveParameterValue(candidate.parameter_value")
+				&& source.contains("onSetRuntimeParameter(rendererId, candidate.parameter_name, value"),
+			"UNAnimator candidate activation should toggle active parameter actions through the parameter control path"
+		);
+		assert!(
+			source.contains("action.current_condition_state === \"active\"")
+				&& source.contains("animatorInactiveParameterValue(action.parameter_value")
+				&& source.contains("onSetRuntimeParameter(rendererId, action.parameter_name, value"),
+			"UNAnimator fallback parameter actions should also toggle active actions through the parameter control path"
+		);
+		assert!(
+			!source.contains("MAX_RENDERED_ANIMATOR_ACTIONS")
+				&& !source.contains("visibleCandidates")
+				&& !source.contains("visibleFallbackActions")
+				&& !source.contains("hidden_action_count"),
+			"Renderer UNAnimator actions are a primary operation surface and must not hide filtered runtime actions behind an app-side fixed cap"
+		);
+	}
+
+	#[test]
+	fn static_wardrobe_transition_profile_updates_are_live_runtime_settings() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let field_rules = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("profileFieldRules.ts"),
+		)
+		.expect("profileFieldRules.ts should be readable");
+		let profile_output = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileOutputSection.svelte"),
+		)
+		.expect("ProfileOutputSection.svelte should be readable");
+		let backend = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("src")
+				.join("lib.rs"),
+		)
+		.expect("supervisor lib.rs should be readable");
+
+		assert!(
+			field_rules.contains(r#"field.startsWith("wardrobe.transition.")"#)
+				&& field_rules.contains(r#"field === "wardrobe.bindings""#)
+				&& field_rules.contains(r#"field.startsWith("animator.")"#)
+				&& field_rules.contains(r#"field.startsWith("output.spout2.")"#)
+				&& field_rules.contains("canApplyWithoutRestart"),
+			"wardrobe transition, wardrobe bindings, UNAnimator, and Spout2 output fields should be classified as live-applicable profile settings"
+		);
+		let launch_time_rules = field_rules
+			.split("export function isLaunchTimeRendererField")
+			.nth(1)
+			.and_then(|rest| rest.split("export function isRuntimeWindowField").next())
+			.expect("isLaunchTimeRendererField should be present");
+		assert!(
+			!launch_time_rules.contains(r#"field.startsWith("output.")"#),
+			"Spout2 output settings are runtime-applicable and must not be classified as generic launch-time output settings"
+		);
+		assert!(
+			app_svelte.contains("applyRuntimeProfileUpdates"),
+			"profile updates should route through the runtime apply path"
+		);
+		let output_nav_item = app_svelte
+			.split(r#"id: "output","#)
+			.nth(1)
+			.and_then(|rest| rest.split("},").next())
+			.expect("profile output nav item should exist");
+		assert!(
+			output_nav_item.contains(r#"scopeKey: "profiles.editor.runtime""#),
+			"profile section navigation should mark Output as runtime-applicable"
+		);
+		assert!(
+			profile_output.contains(r#"profiles.editor.runtime"#) && !profile_output.contains(r#"profiles.editor.launch_time"#),
+			"profile output settings should be presented as runtime-applicable after Spout2/window live apply support"
+		);
+		assert!(
+			backend.contains(r#""wardrobe.transition.""#)
+				&& backend.contains("apply_wardrobe_transition_to_matching_renderers")
+				&& backend.contains(r#""wardrobe.bindings""#)
+				&& backend.contains("apply_input_bindings_to_matching_renderers")
+				&& backend.contains(r#""animator.""#)
+				&& backend.contains("apply_animator_profile_to_matching_renderers")
+				&& backend.contains(r#""output.spout2.""#)
+				&& backend.contains("apply_spout_output_to_matching_renderers")
+				&& backend.contains("SetWardrobeTransition"),
+			"saved live profile edits must be sent to matching running renderers instead of requiring restart"
+		);
+	}
+
+	#[test]
+	fn static_unavatar_review_workflow_keeps_selected_wardrobe_and_icon_save_order() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let read_metadata = app_svelte
+			.split("async function readUnavatarMetadataForPath")
+			.nth(1)
+			.and_then(|rest| rest.split("function firstUnavatarPreviewDataUrl").next())
+			.expect("readUnavatarMetadataForPath function should exist");
+		assert!(
+			read_metadata.contains(r#"wardrobeSet: setting.wardrobe_set"#),
+			".unavatar metadata review should request previews for the selected wardrobe set"
+		);
+
+		let accept_unavatar = app_svelte
+			.split("async function acceptUnavatarMetadataAndUse")
+			.nth(1)
+			.and_then(|rest| rest.split("async function applySelectedAvatarThumbnail").next())
+			.expect("acceptUnavatarMetadataAndUse function should exist");
+		let save_avatar = accept_unavatar
+			.find("saveAvatarPath(modal.pendingPath")
+			.expect(".unavatar accept flow should save avatar path");
+		let save_icon = accept_unavatar
+			.find("saveUnavatarProfileIconCrop")
+			.expect(".unavatar accept flow should optionally save selected profile icon");
+		assert!(
+			save_avatar < save_icon,
+			".unavatar accept flow must save avatar_path before saving profile icon"
+		);
+		assert!(
+			accept_unavatar.contains(r#"unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl"#),
+			".unavatar accept flow should save a profile icon only when the preview crop is enabled"
+		);
+	}
+
+	#[test]
+	fn static_unanimator_profile_browser_does_not_invalidate_requests_reactively() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileAvatarSection.svelte"),
+		)
+		.expect("ProfileAvatarSection.svelte should be readable");
+		assert!(
+			source.contains("function setAnimatorPanelOpen(open: boolean)"),
+			"UNAnimator profile browser should invalidate pending loads from explicit panel open/close handling"
+		);
+		assert!(
+			!source.contains("$: if (!animatorPanelOpen)") && !source.contains("animatorRequestId +="),
+			"UNAnimator profile browser must not update animatorRequestId from a self-dependent reactive statement"
+		);
+	}
+
+	#[test]
+	fn static_unanimator_search_submit_does_not_reload_loaded_candidates() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileAvatarSection.svelte"),
+		)
+		.expect("ProfileAvatarSection.svelte should be readable");
+		let submit = source
+			.split("function submitAnimatorSearch()")
+			.nth(1)
+			.and_then(|rest| rest.split("function filterAnimatorCandidates").next())
+			.expect("submitAnimatorSearch function should exist");
+		assert!(
+			submit.contains("if (!animatorPage && !animatorBusy)") && submit.contains("void refreshAnimatorPage()"),
+			"UNAnimator Enter search should load only before candidates exist"
+		);
+		assert!(
+			source.contains("onsubmit={(event)") && source.contains("submitAnimatorSearch();"),
+			"UNAnimator search form submit should route through local-search-aware submit handler"
+		);
+		assert!(
+			source.contains(r#"type="button" class="field-button" disabled={busy || animatorBusy} onclick={() => refreshAnimatorPage()}"#),
+			"UNAnimator load button should remain the explicit candidate reload action"
+		);
+	}
+
+	#[test]
+	fn static_profile_section_nav_and_body_order_match() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let expected = [
+			"identity", "avatar", "quality", "lighting", "look", "motion", "physics", "camera", "window", "output",
+		];
+		let nav_positions = expected
+			.iter()
+			.map(|id| {
+				app_svelte
+					.find(&format!("id: \"{id}\""))
+					.unwrap_or_else(|| panic!("profile nav section {id} should exist"))
+			})
+			.collect::<Vec<_>>();
+		assert!(
+			nav_positions.windows(2).all(|pair| pair[0] < pair[1]),
+			"profile section nav order should match v2 profile workflow: {expected:?}"
+		);
+
+		let body_markers = [
+			"ProfileIdentitySection",
+			"ProfileAvatarSection",
+			"ProfileQualitySection",
+			"ProfileLightingSection",
+			"ProfileLookSection",
+			"ProfileMotionSection",
+			"ProfilePhysicsSection",
+			"ProfileCameraSection",
+			"ProfileWindowSection",
+			"ProfileOutputSection",
+		];
+		let body_positions = body_markers
+			.iter()
+			.map(|marker| {
+				app_svelte
+					.find(&format!("<{marker}"))
+					.unwrap_or_else(|| panic!("profile body section {marker} should exist"))
+			})
+			.collect::<Vec<_>>();
+		assert!(
+			body_positions.windows(2).all(|pair| pair[0] < pair[1]),
+			"profile section body order should match the profile nav order: {body_markers:?}"
+		);
+
+		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
+			.expect("styles.css should be readable");
+		let css_markers = [
+			(".profile-identity-section", "order: 0"),
+			(".profile-avatar-section", "order: 1"),
+			(".render-quality-section", "order: 2"),
+			(".lighting-section", "order: 3"),
+			(".rendering-presentation-section", "order: 4"),
+			(".profile-motion-section", "order: 5"),
+			(".profile-physics-section", "order: 6"),
+			(".profile-camera-section", "order: 7"),
+			(".profile-window-section", "order: 8"),
+			(".profile-output-section", "order: 9"),
+		];
+		for (selector, order) in css_markers {
+			let marker = format!("{selector} {{\n\t{order};");
+			assert!(
+				styles_css.contains(&marker),
+				"profile section CSS selector {selector} should contain {order}"
+			);
+		}
+	}
+
+	#[test]
+	fn static_profile_stage_uses_fixed_desktop_height() {
+		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
+			.expect("styles.css should be readable");
+		assert!(
+			styles_css
+				.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\tmin-height: 134px;\n\talign-items: center;"),
+			"profile stage should keep the same compact desktop rhythm as the renderer stage"
+		);
+		assert!(
+			styles_css.contains(".profile-stage-title-row {\n\tgrid-template-columns: minmax(220px, 1fr) auto;\n\tgap: 12px;"),
+			"profile stage title row should keep the renderer-style title plus actions layout"
+		);
+		assert!(
+			styles_css
+				.contains(".profile-stage-title-row .profile-stage-actions {\n\twidth: min(620px, 48vw);\n\tmax-width: min(620px, 48vw);"),
+			"profile stage actions should use a stable rail width so profile-specific labels do not shift header columns"
+		);
+		assert!(
+			styles_css.contains(
+				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(86px, 1.1fr) minmax(64px, 0.8fr) minmax(104px, 1.25fr) minmax(64px, 0.8fr) 32px 32px;"
+			),
+			"profile stage action buttons should use stable slots instead of content-width flex sizing"
+		);
+		assert!(
+			styles_css.contains(".profile-pending-action-slot {\n\tdisplay: none;")
+				&& styles_css.contains(".profile-pending-action-slot-visible {\n\tdisplay: inline-flex;"),
+			"hidden pending action slot should not consume flex gap and wrap the fixed profile action rail"
+		);
+		assert!(
+			!styles_css
+				.contains(".profile-stage-title-row .profile-stage-action-group {\n\tgrid-template-columns: minmax(320px, 1fr) auto;"),
+			"profile stage actions should not be forced into a full-width second row"
+		);
+		assert!(
+			styles_css.contains(".profile-summary-grid button {\n\theight: 46px;\n\tmin-height: 46px;"),
+			"profile summary tiles should keep a stable fixed row height"
+		);
+		assert!(
+			!styles_css.contains(".profile-cache-callout {\n\tdisplay: grid;\n\tgap: 4px;\n\tbox-sizing: border-box;\n\theight:"),
+			"profile cache callout must not use a fixed height that clips localized help text"
+		);
+		assert!(
+			!styles_css.contains("\tmax-height: 66px;\n\tmin-width: 0;\n\tmax-width: 100%;\n\toverflow: hidden;"),
+			"profile stage action area must not hide wrapped action rows"
+		);
+		assert!(
+			styles_css.contains("@media (max-width: 1180px)") && styles_css.contains("\t.profile-stage {\n\t\tmin-height: 172px;"),
+			"profile stage should return to responsive auto height on narrow layouts"
+		);
+	}
+
+	#[test]
+	fn static_unity_exporter_gui_uses_contiguous_workflow_numbers() {
+		let exporter_root = repo_root().join("unity").join("un-avatar-unity-exporter").join("Editor");
+		let main_window =
+			fs::read_to_string(exporter_root.join("UNAvatarExporterWindow.cs")).expect("UNAvatarExporterWindow.cs should be readable");
+		let wardrobe_window = fs::read_to_string(exporter_root.join("UNAvatarExporterWindow.Wardrobe.cs"))
+			.expect("UNAvatarExporterWindow.Wardrobe.cs should be readable");
+		assert!(
+			wardrobe_window.contains(r#"EditorGUILayout.LabelField("1. Base", EditorStyles.boldLabel);"#)
+				&& wardrobe_window.contains(r#"EditorGUILayout.LabelField("2. Wardrobe Sets", EditorStyles.boldLabel);"#)
+				&& main_window.contains(r#"EditorGUILayout.LabelField("3. Export", EditorStyles.boldLabel);"#),
+			"Unity Exporter GUI workflow should be numbered 1. Base -> 2. Wardrobe Sets -> 3. Export"
+		);
+		assert!(
+			!main_window.contains(r#"EditorGUILayout.LabelField("4. Export", EditorStyles.boldLabel);"#),
+			"Unity Exporter GUI should not keep the removed third workflow step gap"
+		);
+	}
+
+	#[test]
+	fn static_profile_camera_and_window_sections_keep_runtime_capture_actions() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src").join("lib");
+		let camera =
+			fs::read_to_string(supervisor_src.join("ProfileCameraSection.svelte")).expect("ProfileCameraSection.svelte should be readable");
+		assert!(
+			camera.contains("onCaptureRuntimeCamera"),
+			"profile camera section must expose capture from the currently running Renderer"
+		);
+		assert!(
+			camera.contains("disabled={busy || !runtimeCamera}"),
+			"profile camera runtime capture should be disabled when no running Renderer camera snapshot is available"
+		);
+		assert!(
+			camera.contains("profiles.editor.capture_runtime_camera"),
+			"profile camera capture button should use the localized runtime capture label"
+		);
+
+		let window =
+			fs::read_to_string(supervisor_src.join("ProfileWindowSection.svelte")).expect("ProfileWindowSection.svelte should be readable");
+		assert!(
+			window.contains("onCaptureRuntimeWindow"),
+			"profile window section must expose capture from the currently running Renderer"
+		);
+		assert!(
+			window.contains("disabled={busy || !runtimeWindowAvailable}"),
+			"profile window runtime capture should be disabled when no running Renderer window snapshot is available"
+		);
+		assert!(
+			window.contains("profiles.editor.capture_runtime_window"),
+			"profile window capture button should use the localized runtime capture label"
+		);
 	}
 
 	#[test]
@@ -8813,6 +14664,1171 @@ display_name = "New Avatar"
 	}
 
 	#[test]
+	fn avatar_setting_field_domain_routes_specific_prefixes_before_general_ones() {
+		assert_eq!(
+			avatar_setting_field_domain("effects.avatar.contact_shadow.enabled"),
+			Some(AvatarSettingFieldDomain::ContactShadow)
+		);
+		assert_eq!(
+			avatar_setting_field_domain("effects.avatar.outline.width"),
+			Some(AvatarSettingFieldDomain::AvatarEffect)
+		);
+		assert_eq!(
+			avatar_setting_field_domain("physics.dynamics.solver.simulation_hz"),
+			Some(AvatarSettingFieldDomain::Physics)
+		);
+		assert_eq!(avatar_setting_field_domain("spring_bones"), Some(AvatarSettingFieldDomain::Physics));
+		assert_eq!(
+			avatar_setting_field_domain("animator.actions"),
+			Some(AvatarSettingFieldDomain::Animator)
+		);
+		assert_eq!(avatar_setting_field_domain("unknown.setting"), None);
+	}
+
+	#[test]
+	fn animator_action_setting_writes_only_enabled_actions() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[animator]
+action_ids = ["animator:old"]
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"animator.actions",
+			serde_json::json!([
+				{ "id": " animator:0:0:hat_off:0 ", "mode": "toggle" },
+				{ "id": "animator:0:0:beam:0", "mode": "one-shot", "value": 0.45, "transition_curve": "ease-out", "transition_ms": 250 },
+				{ "id": "animator:0:0:hidden:0", "mode": "off" },
+				{ "id": "animator:0:0:hat_off:0", "mode": "toggle" }
+			]),
+		)
+		.unwrap();
+
+		let animator = manifest.get("animator").and_then(toml::Value::as_table).unwrap();
+		assert!(animator.get("action_ids").is_none());
+		let actions = animator.get("actions").and_then(toml::Value::as_array).unwrap();
+		assert_eq!(actions.len(), 2);
+		assert_eq!(
+			actions[0]
+				.as_table()
+				.and_then(|table| table.get("id"))
+				.and_then(toml::Value::as_str),
+			Some("animator:0:0:hat_off:0")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("mode"))
+				.and_then(toml::Value::as_str),
+			Some("one_shot")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("value"))
+				.and_then(toml::Value::as_float),
+			Some(0.45)
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("transition_curve"))
+				.and_then(toml::Value::as_str),
+			Some("ease_out")
+		);
+		assert_eq!(
+			actions[1]
+				.as_table()
+				.and_then(|table| table.get("transition_ms"))
+				.and_then(toml::Value::as_integer),
+			Some(250)
+		);
+	}
+
+	#[test]
+	fn vrm_expression_candidates_skip_tracking_driven_presets() {
+		assert!(vrm_expression_is_user_action_candidate("happy"));
+		assert!(vrm_expression_is_user_action_candidate("Angry"));
+		assert!(!vrm_expression_is_user_action_candidate("aa"));
+		assert!(!vrm_expression_is_user_action_candidate("blink"));
+		assert!(!vrm_expression_is_user_action_candidate("lookUp"));
+		assert!(!vrm_expression_is_user_action_candidate("jawOpen"));
+
+		let vrm = serde_json::json!({
+			"blendShapeMaster": {
+				"blendShapeGroups": [
+					{ "name": "Joy", "presetName": "joy", "binds": [{ "mesh": 0 }] },
+					{ "name": "Blink", "presetName": "blink", "binds": [{ "mesh": 0 }] },
+					{ "name": "Aa", "presetName": "aa", "binds": [{ "mesh": 0 }] }
+				]
+			}
+		});
+		let mut selected = BTreeMap::new();
+		selected.insert("expression:joy", "toggle");
+
+		let candidates = vrm0_expression_action_candidates(&vrm, &selected);
+
+		assert_eq!(candidates.len(), 1);
+		assert_eq!(candidates[0].id, "expression:joy");
+		assert_eq!(candidates[0].selected_mode, "toggle");
+	}
+
+	#[test]
+	fn vrm0_expression_candidates_keep_unknown_preset_groups_unique() {
+		let vrm = serde_json::json!({
+			"blendShapeMaster": {
+				"blendShapeGroups": [
+					{ "presetName": "unknown", "name": "Joy", "binds": [{}] },
+					{ "presetName": "unknown", "name": "Fun", "binds": [{}] },
+					{ "presetName": "unknown", "name": "Angry", "binds": [{}] }
+				]
+			}
+		});
+		let selected_modes = BTreeMap::new();
+		let candidates = vrm0_expression_action_candidates(&vrm, &selected_modes);
+		let ids = candidates.iter().map(|candidate| candidate.id.as_str()).collect::<BTreeSet<_>>();
+
+		assert_eq!(candidates.len(), 3);
+		assert_eq!(ids.len(), candidates.len());
+		assert!(ids.contains("expression:unknown_joy"));
+		assert!(ids.contains("expression:unknown_fun"));
+		assert!(ids.contains("expression:unknown_angry"));
+		assert_eq!(
+			candidates.iter().map(|candidate| candidate.label.as_str()).collect::<Vec<_>>(),
+			vec!["Expression / Joy", "Expression / Fun", "Expression / Angry"]
+		);
+	}
+
+	#[test]
+	fn wardrobe_setting_writes_root_set_and_empty_removes_it() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+wardrobe_set = "old"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("noble1")).unwrap();
+		assert_eq!(manifest.get("wardrobe_set").and_then(toml::Value::as_str), Some("noble1"));
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe_set", serde_json::json!("")).unwrap();
+		assert!(manifest.get("wardrobe_set").is_none());
+	}
+
+	#[test]
+	fn wardrobe_transition_settings_write_billboard_anchor_and_offset() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.transition.billboard_anchor",
+			serde_json::json!("spine"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.transition.billboard_y_offset_mm",
+			serde_json::json!(42.0),
+		)
+		.unwrap();
+
+		let transition = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("transition"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(transition.get("billboard_anchor").and_then(toml::Value::as_str), Some("spine"));
+		assert_eq!(transition.get("billboard_y_offset_mm").and_then(toml::Value::as_float), Some(42.0));
+	}
+
+	#[test]
+	fn wardrobe_shortcuts_write_profile_bindings_and_empty_removes_them() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.shortcuts",
+			serde_json::json!([
+				{ "set_id": "", "shortcut": "Ctrl+Alt+B" },
+				{ "set_id": "field_drape", "shortcut": "Ctrl+Alt+1" },
+				{ "set_id": "field_drape", "shortcut": "Ctrl+Alt+2" },
+				{ "set_id": "empty", "shortcut": "" }
+			]),
+		)
+		.unwrap();
+
+		let shortcuts = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("shortcuts"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(shortcuts.len(), 2);
+		assert_eq!(
+			shortcuts[0]
+				.as_table()
+				.and_then(|table| table.get("set_id"))
+				.and_then(toml::Value::as_str),
+			Some("")
+		);
+		assert_eq!(
+			shortcuts[0]
+				.as_table()
+				.and_then(|table| table.get("shortcut"))
+				.and_then(toml::Value::as_str),
+			Some("Ctrl+Alt+B")
+		);
+		assert_eq!(
+			shortcuts[1]
+				.as_table()
+				.and_then(|table| table.get("set_id"))
+				.and_then(toml::Value::as_str),
+			Some("field_drape")
+		);
+
+		let manifest_text = toml::to_string(&manifest).unwrap();
+		let parsed: AvatarManifestSummary = toml::from_str(&manifest_text).unwrap();
+		let settings = manifest_wardrobe_shortcut_settings(parsed.wardrobe.as_ref());
+		assert_eq!(settings.len(), 2);
+		assert_eq!(settings[0].set_id, "");
+		assert_eq!(settings[0].shortcut, "Ctrl+Alt+B");
+
+		apply_avatar_setting_value(&mut manifest, &setting, "wardrobe.shortcuts", serde_json::json!([])).unwrap();
+		assert!(manifest.get("wardrobe").is_none());
+	}
+
+	#[test]
+	fn wardrobe_bindings_write_keyboard_and_midi_note_entries() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"wardrobe.bindings",
+			serde_json::json!([
+				{ "set_id": "", "kind": "keyboard", "binding": "F12" },
+				{ "set_id": "field_drape", "kind": "midi_note", "device": "Launchkey", "channel": 1, "note": 60 },
+				{ "set_id": "broken", "kind": "midi_note", "channel": 17, "note": 60 }
+			]),
+		)
+		.unwrap();
+
+		let bindings = manifest
+			.get("wardrobe")
+			.and_then(toml::Value::as_table)
+			.and_then(|wardrobe| wardrobe.get("bindings"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(bindings.len(), 2);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("keyboard")
+		);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("binding"))
+				.and_then(toml::Value::as_str),
+			Some("F12")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("midi_note")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("channel"))
+				.and_then(toml::Value::as_integer),
+			Some(1)
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("note"))
+				.and_then(toml::Value::as_integer),
+			Some(60)
+		);
+	}
+
+	#[test]
+	fn animator_bindings_write_keyboard_and_midi_note_entries() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"animator.bindings",
+			serde_json::json!([
+				{ "action_id": "expression:angry", "kind": "keyboard", "binding": "F8" },
+				{ "action_id": "expression:joy", "kind": "midi_note", "device": "Launchkey", "channel": 1, "note": 61 },
+				{ "action_id": "broken", "kind": "midi_note", "channel": 17, "note": 60 }
+			]),
+		)
+		.unwrap();
+
+		let bindings = manifest
+			.get("animator")
+			.and_then(toml::Value::as_table)
+			.and_then(|animator| animator.get("bindings"))
+			.and_then(toml::Value::as_array)
+			.unwrap();
+		assert_eq!(bindings.len(), 2);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("action_id"))
+				.and_then(toml::Value::as_str),
+			Some("expression:angry")
+		);
+		assert_eq!(
+			bindings[0]
+				.as_table()
+				.and_then(|table| table.get("binding"))
+				.and_then(toml::Value::as_str),
+			Some("F8")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("kind"))
+				.and_then(toml::Value::as_str),
+			Some("midi_note")
+		);
+		assert_eq!(
+			bindings[1]
+				.as_table()
+				.and_then(|table| table.get("note"))
+				.and_then(toml::Value::as_integer),
+			Some(61)
+		);
+	}
+
+	#[test]
+	fn unphysics_enabled_setting_writes_v2_dynamics_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "dynamics_enabled", serde_json::json!(true)).unwrap();
+		assert_eq!(
+			manifest
+				.get("physics")
+				.and_then(toml::Value::as_table)
+				.and_then(|physics| physics.get("dynamics"))
+				.and_then(toml::Value::as_table)
+				.and_then(|dynamics| dynamics.get("enabled"))
+				.and_then(toml::Value::as_bool),
+			Some(true)
+		);
+		assert!(manifest.get("spring_bones").is_none());
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_moves_legacy_root_keys_without_overwriting_v2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy"
+aa = "fxaa"
+icon_path = "legacy.ico"
+transparent = true
+input_passthrough = true
+decorations = false
+vmc_address = "127.0.0.1:39539"
+vmc_port = 39540
+spring_bones = false
+
+[spout]
+enabled = true
+name = "LegacySpout"
+width = 1280
+height = 720
+
+[render_quality]
+aa = "smaa"
+
+[window]
+transparent = false
+
+[motion.vmc_udp]
+address = "127.0.0.1:39541"
+"#,
+			Path::new("legacy.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		let table = manifest.as_table().unwrap();
+		for key in [
+			"aa",
+			"icon_path",
+			"transparent",
+			"input_passthrough",
+			"decorations",
+			"vmc_address",
+			"vmc_port",
+			"spring_bones",
+			"spout",
+		] {
+			assert!(table.get(key).is_none(), "legacy root key should be removed: {key}");
+		}
+		let render_quality = table.get("render_quality").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(render_quality.get("aa").and_then(toml::Value::as_str), Some("smaa"));
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("icon_path").and_then(toml::Value::as_str), Some("legacy.ico"));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("decorations").and_then(toml::Value::as_bool), Some(false));
+		let vmc_udp = table
+			.get("motion")
+			.and_then(toml::Value::as_table)
+			.and_then(|motion| motion.get("vmc_udp"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(vmc_udp.get("address").and_then(toml::Value::as_str), Some("127.0.0.1:39541"));
+		assert_eq!(vmc_udp.get("port").and_then(toml::Value::as_integer), Some(39540));
+		let dynamics = table
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(dynamics.get("enabled").and_then(toml::Value::as_bool), Some(false));
+		let spout = table
+			.get("output")
+			.and_then(toml::Value::as_table)
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout.get("name").and_then(toml::Value::as_str), Some("LegacySpout"));
+		assert_eq!(spout.get("width").and_then(toml::Value::as_integer), Some(1280));
+		assert_eq!(spout.get("height").and_then(toml::Value::as_integer), Some(720));
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_does_not_overwrite_existing_v2_spout2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Spout"
+
+[spout]
+enabled = true
+name = "LegacySpout"
+width = 1280
+height = 720
+
+[output.spout2]
+enabled = false
+name = "V2Spout"
+width = 1920
+height = 1080
+"#,
+			Path::new("legacy-spout.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("spout").is_none(), "legacy spout table should be removed after migration");
+		let spout = table
+			.get("output")
+			.and_then(toml::Value::as_table)
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout.get("enabled").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(spout.get("name").and_then(toml::Value::as_str), Some("V2Spout"));
+		assert_eq!(spout.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout.get("height").and_then(toml::Value::as_integer), Some(1080));
+	}
+
+	#[test]
+	fn migrate_avatar_manifest_to_v2_moves_legacy_spring_bone_solver_without_overwriting_v2() {
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Solver"
+
+[physics.spring_bone]
+simulation_hz = 45.0
+substeps = 2
+
+[[physics.spring_bone.overrides]]
+category = "Hair"
+solver = "compat_univrm"
+
+[physics.dynamics.solver]
+simulation_hz = 90.0
+"#,
+			Path::new("legacy-solver.toml"),
+		)
+		.unwrap();
+
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
+		assert!(manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("spring_bone"))
+			.is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.and_then(|dynamics| dynamics.get("solver"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(90.0));
+		assert!(
+			solver.get("substeps").is_none(),
+			"existing v2 solver table should remain authoritative"
+		);
+	}
+
+	#[test]
+	fn spring_bone_solver_setting_migrates_legacy_table_to_v2_solver() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Legacy Solver"
+
+[profile]
+id = "test"
+
+[physics.spring_bone]
+simulation_hz = 45.0
+substeps = 2
+
+[physics.spring_bone.overrides.Hair]
+stiffness = 0.35
+"#,
+			Path::new("legacy-solver.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.simulation_hz",
+			serde_json::json!(90.0),
+		)
+		.unwrap();
+
+		assert!(manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("spring_bone"))
+			.is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(toml::Value::as_table)
+			.and_then(|physics| physics.get("dynamics"))
+			.and_then(toml::Value::as_table)
+			.and_then(|dynamics| dynamics.get("solver"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(90.0));
+		assert_eq!(solver.get("substeps").and_then(toml::Value::as_integer), Some(2));
+		assert!(solver
+			.get("overrides")
+			.and_then(toml::Value::as_table)
+			.and_then(|overrides| overrides.get("Hair"))
+			.is_some());
+	}
+
+	#[test]
+	fn save_renderer_spout_profile_writes_only_spout_settings() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-supervisor-spout-profile-{}-{}.toml",
+			std::process::id(),
+			line!()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+
+[window]
+minimized = false
+width = 640
+height = 360
+"#,
+		)
+		.unwrap();
+
+		write_spout_state_to_manifest(
+			&path,
+			&RendererSpoutProfileState {
+				spout_enabled: true,
+				spout_name: Some("Live".to_string()),
+				spout_width: Some(1920),
+				spout_height: Some(1080),
+			},
+		)
+		.unwrap();
+
+		let saved = fs::read_to_string(&path).unwrap();
+		let manifest: toml::Value = toml::from_str(&saved).unwrap();
+		let spout2 = manifest
+			.get("output")
+			.and_then(|output| output.get("spout2"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert_eq!(spout2.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout2.get("name").and_then(toml::Value::as_str), Some("Live"));
+		assert_eq!(spout2.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout2.get("height").and_then(toml::Value::as_integer), Some(1080));
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
+		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
+		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn spout2_only_profile_updates_write_expected_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.enabled", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.width", serde_json::json!(1920)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "output.spout2.height", serde_json::json!(1080)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.width", serde_json::json!(640)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.height", serde_json::json!(360)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.minimized", serde_json::json!(true)).unwrap();
+
+		let output = manifest.get("output").and_then(toml::Value::as_table).unwrap();
+		let spout2 = output.get("spout2").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(spout2.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(spout2.get("width").and_then(toml::Value::as_integer), Some(1920));
+		assert_eq!(spout2.get("height").and_then(toml::Value::as_integer), Some(1080));
+
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
+		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
+		assert_eq!(window.get("minimized").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
+	fn window_setting_edits_write_v2_window_values_and_remove_legacy_roots() {
+		let seed_setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let transparent_setting = AvatarSetting {
+			transparent: true,
+			..seed_setting
+		};
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+transparent = false
+input_passthrough = false
+decorations = true
+
+[profile]
+id = "test"
+
+[window]
+transparent = false
+input_passthrough = false
+decorations = true
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.transparent", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&transparent_setting,
+			"window.input_passthrough",
+			serde_json::json!(true),
+		)
+		.unwrap();
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.decorations", serde_json::json!(false)).unwrap();
+
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("transparent").is_none());
+		assert!(table.get("input_passthrough").is_none());
+		assert!(table.get("decorations").is_none());
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("decorations").and_then(toml::Value::as_bool), Some(false));
+
+		apply_avatar_setting_value(&mut manifest, &transparent_setting, "window.transparent", serde_json::json!(false)).unwrap();
+		let table = manifest.as_table().unwrap();
+		assert!(table.get("input_passthrough").is_none());
+		let window = table.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(false));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(false));
+	}
+
+	#[test]
+	fn window_setting_batch_can_enable_transparent_before_click_through() {
+		let seed_setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let setting = AvatarSetting {
+			transparent: false,
+			input_passthrough: false,
+			..seed_setting
+		};
+		assert!(!setting.transparent);
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[window]
+transparent = false
+input_passthrough = false
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "window.transparent", serde_json::json!(true)).unwrap();
+		apply_avatar_setting_value(&mut manifest, &setting, "window.input_passthrough", serde_json::json!(true)).unwrap();
+
+		let window = manifest.get("window").and_then(toml::Value::as_table).unwrap();
+		assert_eq!(window.get("transparent").and_then(toml::Value::as_bool), Some(true));
+		assert_eq!(window.get("input_passthrough").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
+	fn read_avatar_setting_ignores_legacy_spring_bones_for_unphysics_enabled() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unphysics-enabled-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
+
+[physics.dynamics]
+enabled = true
+"#,
+		)
+		.unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.dynamics_enabled);
+	}
+
+	#[test]
+	fn read_avatar_setting_requires_v2_unphysics_enabled_to_disable_dynamics() {
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-unphysics-ignores-legacy-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(
+			&path,
+			r#"title = "Test"
+spring_bones = false
+
+[profile]
+id = "test"
+"#,
+		)
+		.unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.dynamics_enabled);
+	}
+
+	#[test]
+	fn contact_parameter_emission_setting_round_trips_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		assert!(!setting.contact_parameter_emission);
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.contacts.parameter_emission",
+			serde_json::json!(true),
+		)
+		.unwrap();
+		assert_eq!(
+			manifest
+				.get("physics")
+				.and_then(toml::Value::as_table)
+				.and_then(|physics| physics.get("contacts"))
+				.and_then(toml::Value::as_table)
+				.and_then(|contacts| contacts.get("parameter_emission"))
+				.and_then(toml::Value::as_bool),
+			Some(true)
+		);
+
+		let path = std::env::temp_dir().join(format!(
+			"un-avatar-contact-emission-test-{}-{}.toml",
+			std::process::id(),
+			Instant::now().elapsed().as_nanos()
+		));
+		fs::write(&path, toml::to_string(&manifest).unwrap()).unwrap();
+		let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let _ = fs::remove_file(path);
+		assert!(parsed.contact_parameter_emission);
+	}
+
+	#[test]
+	fn audio_link_setting_updates_write_expected_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "audio_link.source", serde_json::json!("input_device")).unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"audio_link.input_device_id",
+			serde_json::json!("cpal:device-1"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"audio_link.input_device_name_hint",
+			serde_json::json!("Main Mix"),
+		)
+		.unwrap();
+
+		let audio_link = manifest
+			.get("audio_link")
+			.and_then(toml::Value::as_table)
+			.expect("audio_link table");
+		assert_eq!(audio_link.get("source").and_then(toml::Value::as_str), Some("input_device"));
+		assert_eq!(
+			audio_link.get("input_device_id").and_then(toml::Value::as_str),
+			Some("cpal:device-1")
+		);
+		assert_eq!(
+			audio_link.get("input_device_name_hint").and_then(toml::Value::as_str),
+			Some("Main Mix")
+		);
+
+		let invalid =
+			apply_avatar_setting_value(&mut manifest, &setting, "audio_link.source", serde_json::json!("system_mix")).unwrap_err();
+		assert!(invalid.contains("expected none or input_device"));
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_reads_sets_and_hides_base_duplicate() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		fs::write(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"baseSet": "base",
+							"sets": [
+								{"id": "base", "displayName": "Base"},
+								{"id": "original", "displayName": "Original"},
+								{"id": "noble13", "name": "Noble 13"}
+							]
+						}
+					}
+				}
+			}"#,
+		)
+		.unwrap();
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.base_label, "Base");
+		assert_eq!(options.error, None);
+		assert_eq!(options.sets.len(), 2);
+		assert_eq!(options.sets[0].id, "original");
+		assert_eq!(options.sets[0].name, "Original");
+		assert_eq!(options.sets[1].id, "noble13");
+		assert_eq!(options.sets[1].name, "Noble 13");
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	fn write_glb_with_json_and_bin_bytes(path: &Path, json: &str, bin_bytes: &[u8]) {
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let mut bin = bin_bytes.to_vec();
+		while !bin.len().is_multiple_of(4) {
+			bin.push(0);
+		}
+		let total_len = 12 + 8 + json_bytes.len() + 8 + bin.len();
+		let mut glb = Vec::with_capacity(total_len);
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
+		glb.extend_from_slice(&bin);
+		fs::write(path, glb).unwrap();
+	}
+
+	fn write_glb_with_declared_bin_len_and_prefix(path: &Path, json: &str, declared_bin_len: u64, bin_prefix: &[u8]) {
+		let mut json_bytes = json.as_bytes().to_vec();
+		while !json_bytes.len().is_multiple_of(4) {
+			json_bytes.push(b' ');
+		}
+		let total_len = 12u64 + 8 + json_bytes.len() as u64 + 8 + declared_bin_len;
+		let mut glb = Vec::with_capacity(12 + 8 + json_bytes.len() + 8 + bin_prefix.len());
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+		glb.extend_from_slice(&json_bytes);
+		glb.extend_from_slice(&(declared_bin_len as u32).to_le_bytes());
+		glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
+		glb.extend_from_slice(bin_prefix);
+		fs::write(path, glb).unwrap();
+	}
+
+	fn write_glb_with_declared_json_len(path: &Path, declared_json_len: u64) {
+		let total_len = 12u64 + 8 + declared_json_len;
+		let mut glb = Vec::with_capacity(20);
+		glb.extend_from_slice(&0x46546C67u32.to_le_bytes());
+		glb.extend_from_slice(&2u32.to_le_bytes());
+		glb.extend_from_slice(&(total_len as u32).to_le_bytes());
+		glb.extend_from_slice(&(declared_json_len as u32).to_le_bytes());
+		glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+		fs::write(path, glb).unwrap();
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_reads_glb_json_chunk_without_full_metadata_payload() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-glb-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		write_glb_with_declared_bin_len_and_prefix(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"baseSet": "",
+							"sets": [
+								{"id": "", "displayName": "Base"},
+								{"id": "field_drape", "displayName": "Field Drape"}
+							]
+						}
+					}
+				}
+			}"#,
+			crate::MAX_UNAVATAR_PREVIEW_IMAGE_BYTES * 4,
+			&[],
+		);
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.base_label, "Base");
+		assert_eq!(options.sets.len(), 1);
+		assert_eq!(options.sets[0].id, "field_drape");
+		assert_eq!(options.sets[0].name, "Field Drape");
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn read_unavatar_wardrobe_options_does_not_invent_base_set_fallback() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-wardrobe-options-no-base-fallback-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		fs::write(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"extensions": {
+					"UN_avatar": {
+						"wardrobe": {
+							"sets": [
+								{"id": "base", "displayName": "Base Set"},
+								{"id": "noble13", "displayName": "Noble 13"}
+							]
+						}
+					}
+				}
+			}"#,
+		)
+		.unwrap();
+
+		let options = read_unavatar_wardrobe_options(avatar_path.display().to_string(), None).unwrap();
+
+		assert!(options.available);
+		assert_eq!(options.sets.len(), 2);
+		assert_eq!(options.sets[0].id, "base");
+		assert_eq!(options.sets[0].name, "Base Set");
+		assert_eq!(options.sets[1].id, "noble13");
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn read_avatar_setting_normalizes_legacy_texture_compression_modes() {
+		for legacy_mode in ["auto", "advanced"] {
+			let path = std::env::temp_dir().join(format!(
+				"un-avatar-texture-compression-mode-test-{}-{}-{legacy_mode}.toml",
+				std::process::id(),
+				Instant::now().elapsed().as_nanos()
+			));
+			fs::write(
+				&path,
+				format!(
+					r#"title = "Test"
+
+[profile]
+id = "test"
+
+[render_quality]
+texture_compression = "{legacy_mode}"
+"#
+				),
+			)
+			.unwrap();
+			let parsed = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+			let _ = fs::remove_file(path);
+			assert_eq!(parsed.texture_compression, "balanced");
+		}
+	}
+
+	#[test]
+	fn render_quality_texture_compression_alias_edits_save_v2_name() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[render_quality]
+texture_compression = "source"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		for legacy_mode in ["auto", "advanced"] {
+			apply_avatar_setting_value(
+				&mut manifest,
+				&setting,
+				"render_quality.texture_compression",
+				serde_json::json!(legacy_mode),
+			)
+			.unwrap();
+			assert_eq!(
+				manifest
+					.get("render_quality")
+					.and_then(toml::Value::as_table)
+					.and_then(|quality| quality.get("texture_compression"))
+					.and_then(toml::Value::as_str),
+				Some("balanced")
+			);
+		}
+	}
+
+	#[test]
 	fn render_quality_setting_updates_write_expected_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -8833,6 +15849,7 @@ processed_texture_cache = true
 		)
 		.unwrap();
 
+		migrate_avatar_manifest_to_v2(&mut manifest).unwrap();
 		apply_avatar_setting_value(&mut manifest, &setting, "render_quality.aa", serde_json::json!("msaa")).unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
@@ -8845,7 +15862,7 @@ processed_texture_cache = true
 			&mut manifest,
 			&setting,
 			"render_quality.texture_compression",
-			serde_json::json!("auto"),
+			serde_json::json!("balanced"),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
@@ -8889,7 +15906,7 @@ processed_texture_cache = true
 			.get("render_quality")
 			.and_then(toml::Value::as_table)
 			.expect("render_quality table");
-		assert_eq!(manifest.get("aa").and_then(toml::Value::as_str), Some("msaa"));
+		assert!(manifest.get("aa").is_none());
 		assert_eq!(render_quality.get("aa").and_then(toml::Value::as_str), Some("msaa"));
 		assert_eq!(
 			render_quality.get("texture_resolution_limit").and_then(toml::Value::as_str),
@@ -8897,7 +15914,7 @@ processed_texture_cache = true
 		);
 		assert_eq!(
 			render_quality.get("texture_compression").and_then(toml::Value::as_str),
-			Some("auto")
+			Some("balanced")
 		);
 		assert_eq!(render_quality.get("mipmap_filter").and_then(toml::Value::as_str), Some("lanczos3"));
 		assert_eq!(render_quality.get("render_backend").and_then(toml::Value::as_str), Some("dx12"));
@@ -8916,6 +15933,44 @@ processed_texture_cache = true
 			Some(false)
 		);
 		assert_eq!(render_quality.get("skin_tone_matching").and_then(toml::Value::as_bool), Some(true));
+	}
+
+	#[test]
+	fn render_quality_advanced_texture_preferences_save_normalized_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"render_quality.texture_compression_advanced.emissive",
+			serde_json::json!(" High-Quality "),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"render_quality.texture_compression_advanced.normal",
+			serde_json::json!("GPU-NATIVE"),
+		)
+		.unwrap();
+
+		let advanced = manifest
+			.get("render_quality")
+			.and_then(toml::Value::as_table)
+			.and_then(|quality| quality.get("texture_compression_advanced"))
+			.and_then(toml::Value::as_table)
+			.expect("advanced texture compression table");
+		assert_eq!(advanced.get("emissive").and_then(toml::Value::as_str), Some("high_quality"));
+		assert_eq!(advanced.get("normal").and_then(toml::Value::as_str), Some("gpu_native"));
 	}
 
 	#[test]
@@ -8947,7 +16002,7 @@ id = "test"
 			serde_json::json!("lossless"),
 		)
 		.unwrap_err();
-		assert!(invalid_compression.contains("source, auto, advanced"));
+		assert!(invalid_compression.contains("source, balanced, memory, compat"));
 		let invalid_mipmap = apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
@@ -8971,6 +16026,86 @@ id = "test"
 	}
 
 	#[test]
+	fn prewarm_renderer_scene_cache_detail_reports_texture_and_pipeline_cache() {
+		let stderr = r#"
+un-avatar-renderer: gpu scene texture prepare summary: total=364.3ms images=231 resident=59 deferred=172 processed_cache=0/0/0 processed_cache_read_mb=0.0 compressed_cache=59/0/0
+un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\UN Avatar\pipeline-cache\v1\cache.upc bytes=6025281
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
+			Some("processed 0/0/0, compressed 59/0/0, pipeline cache stored")
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_ignores_previous_prewarm_record() {
+		let base: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[profile]
+display_name = "Main"
+"#,
+		)
+		.unwrap();
+		let warmed: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[profile]
+display_name = "Main"
+
+[profile.scene_cache]
+fingerprint = "old"
+prewarmed_at = "20260614T000000Z"
+"#,
+		)
+		.unwrap();
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&base),
+			crate::scene_cache_manifest_fingerprint(&warmed)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_changes_with_output_mode() {
+		let window_preview: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[output.spout2]
+enabled = false
+
+[window]
+minimized = false
+"#,
+		)
+		.unwrap();
+		let spout_only: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[output.spout2]
+enabled = true
+
+[window]
+minimized = true
+"#,
+		)
+		.unwrap();
+
+		assert_ne!(
+			crate::scene_cache_manifest_fingerprint(&window_preview),
+			crate::scene_cache_manifest_fingerprint(&spout_only)
+		);
+	}
+
+	#[test]
 	fn spring_bone_category_override_setting_updates_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -8986,31 +16121,33 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.mode",
+			"physics.dynamics.solver.overrides.ears.mode",
 			serde_json::json!("override_xpbd"),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.xpbd_compliance",
+			"physics.dynamics.solver.overrides.ears.xpbd_compliance",
 			serde_json::json!(0.015),
 		)
 		.unwrap();
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.constraint_iterations",
+			"physics.dynamics.solver.overrides.ears.constraint_iterations",
 			serde_json::json!(8),
 		)
 		.unwrap();
 
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
+		assert!(manifest.get("physics").and_then(|v| v.get("spring_bone")).is_none());
 		assert_eq!(overrides.len(), 1);
 		let item = overrides[0].as_table().expect("override item");
 		assert_eq!(item.get("category").and_then(toml::Value::as_str), Some("ears"));
@@ -9021,13 +16158,14 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.preset",
+			"physics.dynamics.solver.overrides.ears.preset",
 			serde_json::json!("snappy"),
 		)
 		.unwrap();
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
@@ -9039,17 +16177,68 @@ id = "test"
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
-			"physics.spring_bone.overrides.ears.mode",
+			"physics.dynamics.solver.overrides.ears.mode",
 			serde_json::json!("authored"),
 		)
 		.unwrap();
 		let overrides = manifest
 			.get("physics")
-			.and_then(|v| v.get("spring_bone"))
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
 			.and_then(|v| v.get("overrides"))
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
 		assert!(overrides.is_empty());
+	}
+
+	#[test]
+	fn spring_bone_solver_edits_migrate_legacy_table_to_v2_schema() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+
+[physics.spring_bone]
+simulation_hz = 120.0
+substeps = 3
+
+[[physics.spring_bone.overrides]]
+category = "hair"
+solver = "xpbd"
+damping_half_life_ms = 90.0
+xpbd_compliance = 0.02
+constraint_iterations = 6
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.simulation_hz",
+			serde_json::json!(144.0),
+		)
+		.unwrap();
+
+		assert!(manifest.get("physics").and_then(|v| v.get("spring_bone")).is_none());
+		let solver = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(toml::Value::as_table)
+			.expect("v2 dynamics solver");
+		assert_eq!(solver.get("simulation_hz").and_then(toml::Value::as_float), Some(144.0));
+		assert_eq!(solver.get("substeps").and_then(toml::Value::as_integer), Some(3));
+		let overrides = solver
+			.get("overrides")
+			.and_then(toml::Value::as_array)
+			.expect("legacy overrides migrated");
+		assert_eq!(overrides.len(), 1);
+		assert_eq!(overrides[0].get("category").and_then(toml::Value::as_str), Some("hair"));
+		assert_eq!(overrides[0].get("solver").and_then(toml::Value::as_str), Some("xpbd"));
 	}
 
 	#[test]
@@ -9115,6 +16304,66 @@ id = "test"
 	}
 
 	#[test]
+	fn avatar_outline_authored_legacy_value_migrates_to_off() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"effects.avatar.outline.policy",
+			serde_json::json!("authored"),
+		)
+		.unwrap();
+
+		let policy = manifest
+			.get("effects")
+			.and_then(toml::Value::as_table)
+			.and_then(|effects| effects.get("avatar"))
+			.and_then(toml::Value::as_table)
+			.and_then(|avatar| avatar.get("outline"))
+			.and_then(toml::Value::as_table)
+			.and_then(|outline| outline.get("policy"))
+			.and_then(toml::Value::as_str);
+		assert_eq!(policy, Some("off"));
+	}
+
+	#[test]
+	fn avatar_outline_legacy_mtoon_type_migrates_to_silhouette() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.outline.type", serde_json::json!("mtoon")).unwrap();
+
+		let outline_type = manifest
+			.get("effects")
+			.and_then(toml::Value::as_table)
+			.and_then(|effects| effects.get("avatar"))
+			.and_then(toml::Value::as_table)
+			.and_then(|avatar| avatar.get("outline"))
+			.and_then(toml::Value::as_table)
+			.and_then(|outline| outline.get("type"))
+			.and_then(toml::Value::as_str);
+		assert_eq!(outline_type, Some("silhouette"));
+	}
+
+	#[test]
 	fn environment_color_setting_updates_write_expected_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -9148,101 +16397,6 @@ id = "test"
 		assert!((color.get("intensity").and_then(toml::Value::as_float).unwrap_or_default() - 0.45).abs() < 1e-6);
 		assert!((color.get("temperature").and_then(toml::Value::as_float).unwrap_or_default() - 0.2).abs() < 1e-6);
 		assert!((color.get("tint").and_then(toml::Value::as_float).unwrap_or_default() + 0.15).abs() < 1e-6);
-	}
-
-	#[test]
-	fn avatar_matcap_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.matcap.scale", serde_json::json!(1.35)).unwrap();
-
-		let matcap = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("matcap"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.matcap table");
-		assert!((matcap.get("scale").and_then(toml::Value::as_float).unwrap_or_default() - 1.35).abs() < 1e-6);
-	}
-
-	#[test]
-	fn avatar_specular_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.enabled", serde_json::json!(true)).unwrap();
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.intensity", serde_json::json!(0.5)).unwrap();
-		apply_avatar_setting_value(&mut manifest, &setting, "effects.avatar.specular.power", serde_json::json!(32.0)).unwrap();
-
-		let specular = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("specular"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.specular table");
-		assert_eq!(specular.get("enabled").and_then(toml::Value::as_bool), Some(true));
-		assert!((specular.get("intensity").and_then(toml::Value::as_float).unwrap_or_default() - 0.5).abs() < 1e-6);
-		assert!((specular.get("power").and_then(toml::Value::as_float).unwrap_or_default() - 32.0).abs() < 1e-6);
-	}
-
-	#[test]
-	fn avatar_ambient_occlusion_setting_updates_write_expected_manifest_values() {
-		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
-		let mut manifest = parse_manifest_value(
-			r#"title = "Test"
-
-[profile]
-id = "test"
-"#,
-			Path::new("test.toml"),
-		)
-		.unwrap();
-
-		apply_avatar_setting_value(
-			&mut manifest,
-			&setting,
-			"effects.avatar.ambient_occlusion.strength",
-			serde_json::json!(1.4),
-		)
-		.unwrap();
-
-		let ambient_occlusion = manifest
-			.get("effects")
-			.and_then(toml::Value::as_table)
-			.and_then(|effects| effects.get("avatar"))
-			.and_then(toml::Value::as_table)
-			.and_then(|avatar| avatar.get("ambient_occlusion"))
-			.and_then(toml::Value::as_table)
-			.expect("effects.avatar.ambient_occlusion table");
-		assert!(
-			(ambient_occlusion
-				.get("strength")
-				.and_then(toml::Value::as_float)
-				.unwrap_or_default()
-				- 1.4)
-				.abs() < 1e-6
-		);
 	}
 
 	#[test]
@@ -9410,6 +16564,21 @@ id = "test"
 	}
 
 	#[test]
+	fn spout_runtime_note_allows_delayed_sender_initialization() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.spout_frames_attempted = 0;
+		telemetry.spout_sender_initialized = None;
+		telemetry.spout_sender_width = None;
+		telemetry.spout_sender_height = None;
+
+		assert_eq!(
+			spout_runtime_note(&telemetry),
+			None,
+			"Spout2 sender state may be unknown before the first runtime output frame because renderer-local startup presentation must not create or publish a sender"
+		);
+	}
+
+	#[test]
 	fn spout_runtime_note_reports_sender_size_mismatch() {
 		let mut telemetry = runtime_telemetry_fixture();
 		telemetry.spout_sender_width = Some(640);
@@ -9465,6 +16634,24 @@ id = "test"
 		assert_eq!(
 			texture_runtime_note(&telemetry).as_deref(),
 			Some("Texture compression used 2 image(s), kept 1 as RGBA")
+		);
+	}
+
+	#[test]
+	fn texture_runtime_note_reports_cubemap_fallback_first() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.texture_compression = Some("source".to_string());
+		telemetry.texture_summary = Some(TextureRuntimeSummary {
+			image_count: 3,
+			cubemap_count: 2,
+			cubemap_fallback_count: 1,
+			compression_fallback_count: 1,
+			..TextureRuntimeSummary::default()
+		});
+
+		assert_eq!(
+			texture_runtime_note(&telemetry).as_deref(),
+			Some("Cubemap upload used fallback for 1/2 cube texture(s); re-export or check sourceLayout metadata")
 		);
 	}
 
@@ -9525,6 +16712,112 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"set_environment_color","exposure":0.25,"contrast":1.2,"saturation":0.8,"look":"film","intensity":0.45,"temperature":0.2,"tint":-0.15}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_activate_action_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::ActivateAction {
+				action_id: None,
+				menu_path: Some("Wardrobe".to_string()),
+				wardrobe_set_id: Some("field_drape".to_string()),
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"activate_action","menu_path":"Wardrobe","wardrobe_set_id":"field_drape"}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_activate_action_command_by_action_id() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::ActivateAction {
+				action_id: Some("wardrobe:field_drape".to_string()),
+				menu_path: None,
+				wardrobe_set_id: None,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"activate_action","action_id":"wardrobe:field_drape"}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_set_parameter_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::SetParameter {
+				name: "Hat".to_string(),
+				value: 0.0,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"set_parameter","name":"Hat","value":0.0}"#
+		);
+	}
+
+	#[test]
+	fn renderer_control_sends_dynamics_enabled_command() {
+		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
+		let address = listener.local_addr().unwrap();
+		let server = thread::spawn(move || {
+			let (mut stream, _) = listener.accept().unwrap();
+			let mut command = String::new();
+			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
+			writeln!(stream, "ok").unwrap();
+			command
+		});
+
+		send_renderer_control(
+			address,
+			&RendererControlCommand::SetDynamicsEnabled {
+				source_id: "physbone:hair".to_string(),
+				enabled: true,
+			},
+		)
+		.unwrap();
+		assert_eq!(
+			server.join().unwrap().trim(),
+			r#"{"command":"set_dynamics_enabled","source_id":"physbone:hair","enabled":true}"#
 		);
 	}
 
@@ -9612,68 +16905,6 @@ id = "test"
 		assert_eq!(
 			server.join().unwrap().trim(),
 			r#"{"command":"set_contact_shadow","enabled":true,"strength":0.4,"radius":0.7,"softness":2.0,"height":0.02}"#
-		);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_matcap_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(address, &RendererControlCommand::SetAvatarMatcap { scale: Some(1.35) }).unwrap();
-		assert_eq!(server.join().unwrap().trim(), r#"{"command":"set_avatar_matcap","scale":1.35}"#);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_specular_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(
-			address,
-			&RendererControlCommand::SetAvatarSpecular {
-				enabled: Some(true),
-				intensity: Some(0.5),
-				power: Some(32.0),
-			},
-		)
-		.unwrap();
-		assert_eq!(
-			server.join().unwrap().trim(),
-			r#"{"command":"set_avatar_specular","enabled":true,"intensity":0.5,"power":32.0}"#
-		);
-	}
-
-	#[test]
-	fn renderer_control_sends_avatar_ambient_occlusion_command() {
-		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
-		let address = listener.local_addr().unwrap();
-		let server = thread::spawn(move || {
-			let (mut stream, _) = listener.accept().unwrap();
-			let mut command = String::new();
-			BufReader::new(stream.try_clone().unwrap()).read_line(&mut command).unwrap();
-			writeln!(stream, "ok").unwrap();
-			command
-		});
-
-		send_renderer_control(address, &RendererControlCommand::SetAvatarAmbientOcclusion { strength: Some(1.4) }).unwrap();
-		assert_eq!(
-			server.join().unwrap().trim(),
-			r#"{"command":"set_avatar_ambient_occlusion","strength":1.4}"#
 		);
 	}
 

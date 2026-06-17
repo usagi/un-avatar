@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,39 @@ pub enum PrimaryMotionSource {
 	#[default]
 	Vmc,
 	UnmotionZenoh,
+}
+
+/// AudioLink GPU texture source policy.
+///
+/// `None` keeps lilToon-compatible shader fallback waveforms only. `InputDevice`
+/// allows the renderer/supervisor audio service to capture an OS audio input
+/// device and generate a VRChat AudioLink-compatible texture, but the worker
+/// should still start lazily only when the active wardrobe actually uses
+/// AudioLink.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioLinkSource {
+	#[default]
+	None,
+	InputDevice,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct AudioLinkOptions {
+	pub source: AudioLinkSource,
+	pub input_device_id: Option<String>,
+	pub input_device_name_hint: Option<String>,
+}
+
+impl Default for AudioLinkOptions {
+	fn default() -> Self {
+		Self {
+			source: AudioLinkSource::None,
+			input_device_id: None,
+			input_device_name_hint: None,
+		}
+	}
 }
 
 /// UNMotion/Zenoh 受信の設定。`[motion.unmotion_zenoh]` 由来。
@@ -81,17 +114,21 @@ impl TextureResolutionLimit {
 	}
 }
 
-/// Texture compression policy. `Source` is the default because lossy compression can visibly degrade avatars.
+/// Texture upload / compression policy.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureCompressionMode {
-	/// Keep source-decoded RGBA fidelity and do not apply lossy texture compression.
-	#[default]
+	/// Prefer source/native upload fidelity and avoid lossy compression.
 	Source,
-	/// Let the renderer choose conservative compression by texture role and runtime GPU support.
-	Auto,
-	/// Enable compression and use the advanced per-role policy fields from the manifest.
-	Advanced,
+	/// Balanced default: conservative role-based compression/cache when safe.
+	#[default]
+	#[serde(alias = "auto", alias = "advanced")]
+	#[value(alias = "auto", alias = "advanced")]
+	Balanced,
+	/// Prefer smaller GPU/cache footprint even when that can reduce texture fidelity.
+	Memory,
+	/// Prefer broadly compatible upload formats and avoid GPU-specific compression.
+	Compat,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
@@ -129,7 +166,7 @@ pub enum BlockCompressionEncoder {
 	Gpu,
 }
 
-/// Per-role compression preference used when [`TextureCompressionMode::Advanced`] is selected.
+/// Per-role compression preference used as an advanced override for balanced/memory policies.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TextureCompressionPreference {
@@ -484,22 +521,49 @@ pub struct AvatarWindowOptions {
 	pub window_position: Option<[i32; 2]>,
 	/// 表示するモデル（glTF `.gltf` / `.glb` または VRM `.vrm` / VRM 入り `.glb`）。シーンがあればメッシュモード。
 	pub gltf_path: Option<PathBuf>,
+	/// この Renderer を起動した profile manifest。Supervisor / tray handoff 用。
+	pub manifest_path: Option<PathBuf>,
+	/// `.unavatar` 起動時に Base 適用後へ重ねる wardrobe set id。未指定なら Base のみ。
+	pub wardrobe_set: Option<String>,
+	/// Wardrobe transition billboard anchor bone. Supported values: head / neck / spine.
+	pub wardrobe_billboard_anchor: String,
+	/// Wardrobe transition billboard vertical offset from the anchor, in meters.
+	pub wardrobe_billboard_y_offset_m: f32,
+	/// Renderer-global wardrobe set input bindings. Active only while this renderer process is running.
+	pub wardrobe_bindings: Vec<WardrobeBindingOptions>,
+	/// Profile-selected UNAnimator action ids. Empty means all detected Animator actions stay OFF.
+	pub animator_action_ids: Vec<String>,
+	/// Profile-selected UNAnimator action modes keyed by action id.
+	pub animator_action_modes: BTreeMap<String, String>,
+	/// Optional per-action parameter value used when a profile wants ON to mean e.g. 0.45 instead of the exported value.
+	pub animator_action_values: BTreeMap<String, f32>,
+	/// Optional per-action numeric transition settings.
+	pub animator_action_transitions: BTreeMap<String, AnimatorActionTransitionOptions>,
+	/// Renderer-global UNAnimator input bindings. Active only while this renderer process is running.
+	pub animator_bindings: Vec<AnimatorActionBindingOptions>,
 	/// ウィンドウ・タスクバー用アイコン。未指定時はexe埋め込みアイコンを使う。
 	pub icon_path: Option<PathBuf>,
+	/// Windows taskbar grouping identity. Manifest profiles set this per profile so Windows does not
+	/// reuse one profile's cached taskbar icon for every renderer process.
+	pub app_user_model_id: Option<String>,
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
+	/// CLI benchmark: after startup completes, collect this many rendered frames, print timing summary, then exit.
+	pub bench_frames: Option<u32>,
 	/// VMC Marionette 待受 UDP アドレス。`Humanoid` とシーンがあるモデルで骨・式（名前一致時）を更新。
 	pub vmc_address: Option<SocketAddr>,
 	/// UNMotion/Zenoh 経由でのモーションフレーム受信設定 (Phase 2)。
 	pub unmotion_zenoh: UnmotionZenohOptions,
+	/// AudioLink texture generation source. `None` keeps shader fallback only.
+	pub audio_link: AudioLinkOptions,
 	/// 旧 manifest / CLI 互換の primary source。現在の姿勢適用は key 単位の後着優先。
 	pub primary_motion_source: PrimaryMotionSource,
 	/// Spout2 送出（Windows）。`--spout` で有効。
 	pub spout: SpoutWindowOptions,
 	/// Final post color adjustment for avatar presentation. Identity by default.
 	pub environment_color: EnvironmentColorOptions,
-	/// Scene lighting used by Lit/MToon mesh shaders.
+	/// Scene lighting used by UNToon mesh shader variants.
 	pub lighting: LightingOptions,
 	/// Lightweight final-pass bloom. Disabled by default.
 	pub bloom: BloomOptions,
@@ -507,11 +571,13 @@ pub struct AvatarWindowOptions {
 	pub ssao: SsaoOptions,
 	/// Lightweight avatar contact shadow drawn under the model origin.
 	pub contact_shadow: ContactShadowOptions,
+	/// Explicit opt-in for VRC Contact Receiver parameter emission.
+	pub contact_parameter_emission: bool,
 	/// Anti-aliasing mode. OFF keeps the direct path; FXAA uses a fullscreen post pass.
 	pub aa: AaMode,
 	/// Optional load-time texture clamp. Default OFF preserves source texture fidelity.
 	pub texture_resolution_limit: TextureResolutionLimit,
-	/// Optional lossy texture compression policy. Default Source preserves avatar texture fidelity.
+	/// Texture upload / compression policy. Default Balanced is conservative but cache-friendly.
 	pub texture_compression: TextureCompressionMode,
 	/// Mipmap generation filter. High-quality filters use pic-scale; box2x2 keeps the legacy path.
 	pub mipmap_filter: TextureMipmapFilter,
@@ -521,7 +587,7 @@ pub struct AvatarWindowOptions {
 	pub block_compression_encoder: BlockCompressionEncoder,
 	/// CPU BCn worker count. Clamped to the system logical CPU count at use sites.
 	pub block_compression_cpu_threads: usize,
-	/// Advanced texture compression preferences used only when texture_compression is Advanced.
+	/// Advanced texture compression preferences used by balanced/memory policies.
 	pub texture_compression_advanced: TextureCompressionAdvancedOptions,
 	/// Cache resized RGBA mip chains on disk so repeated launches skip CPU texture processing.
 	pub processed_texture_cache: bool,
@@ -533,12 +599,13 @@ pub struct AvatarWindowOptions {
 	pub runtime_control_address: Option<SocketAddr>,
 	/// Supervisor と renderer の runtime IPC に使う Zenoh base key。
 	pub runtime_bus_key: Option<String>,
-	/// VRM SpringBone を毎フレームシミュレーションする（既定 ON。揺れもの表現は VRM アバターの基本機能のため）。
-	/// 静止画として表示したいときだけ manifest `[spring_bones] enable = false` で OFF にする。
-	pub enable_spring_bones: bool,
-	/// SpringBone めり込み抑制用のボーンベースコライダー設定。
+	/// UNPhysics / UNDynamics を毎フレームシミュレーションする（既定 ON。揺れもの表現はアバターの基本機能のため）。
+	/// 静止画として表示したいときだけ manifest `[physics.dynamics] enabled = false` で OFF にする。
+	pub dynamics_enabled: bool,
+	/// UNDynamics めり込み抑制用のボーンベースコライダー設定。
 	pub bone_colliders: BoneColliderConfig,
-	/// SpringBone 物理 solver / time model / category override 設定。
+	/// UNDynamics solver backend / time model / category override 設定。
+	/// Type name is kept for the current skeleton crate API; runtime input is normalized UNDynamics.
 	pub spring_bone_physics: SpringBonePhysicsConfig,
 	/// 調査用ログ（`run_cli` の `--debug-*` と対応）。
 	pub debug: WindowDebugOptions,
@@ -561,7 +628,7 @@ pub struct AvatarWindowOptions {
 	/// manifest `[motion] apply_vmc_root_translation = true` / IPC で明示的に ON にする。
 	/// **rotation は本フラグに関わらず常に適用される**。
 	pub apply_vmc_root_translation: bool,
-	/// 診断用: 全 draw を不透明 LitLambert + baseColor×texture のみに固定（MToon シェーダ分岐・base_color.a を無視）。
+	/// 診断用: 全 draw を不透明 LitLambert + baseColor×texture のみに固定（UNToon variant・base_color.a を無視）。
 	pub simple_basecolor_only: bool,
 	/// ロード時にマテリアル・スキン情報を stderr へ出力。
 	pub debug_material_dump: bool,
@@ -569,13 +636,13 @@ pub struct AvatarWindowOptions {
 	pub show_axes: bool,
 	/// ボーンベースコライダーの debug 表示。デフォルトは Off。
 	pub show_bone_colliders: bool,
-	/// MToon outline 描画を完全に無効化する診断フラグ。
+	/// UNToon geometry outline 描画を完全に無効化する診断フラグ。
 	/// 一部 VRM モデルで `_OutlineColor` が肌色寄りに設定されていると、目周辺の outline が
 	/// 「太い肌色のリング」として目立つ場合がある（VSeeFace では薄く出るが、UN Avatar の
 	/// 単純 mix(1, lighting, mix_factor) 式では明るすぎる傾向）。この toggle で outline 描画を
-	/// バイパスして原因切り分けに使う。manifest `[debug] disable_mtoon_outlines = true` で有効化。
+	/// バイパスして原因切り分けに使う。manifest key は legacy 互換で `[debug] disable_mtoon_outlines = true`。
 	pub disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断フラグ。
+	/// UNToon rim lighting 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_rim_lighting = true`。
 	pub debug_disable_rim_lighting: bool,
 	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断フラグ。
@@ -587,13 +654,13 @@ pub struct AvatarWindowOptions {
 	/// emissive 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_emissive = true`。
 	pub debug_disable_emissive: bool,
-	/// MToon `shade_color × shade_tex` の代わりに base を使う診断フラグ。
+	/// UNToon `shade_color × shade_tex` の代わりに base を使う診断フラグ。
 	/// manifest `[debug] disable_shade_color = true`。
 	pub debug_disable_shade_color: bool,
 	/// normalTexture を使わず頂点法線のみで shading / rim を計算する診断フラグ。
 	/// manifest `[debug] disable_normal_map = true`。
 	pub debug_disable_normal_map: bool,
-	/// fs_mtoon を `base` のみで早期 return する診断フラグ（shading / rim / matcap / GI / emissive 全 skip）。
+	/// toon path を `base` のみで早期 return する診断フラグ（shading / rim / matcap / GI / emissive 全 skip）。
 	/// manifest `[debug] base_texture_only = true`。
 	pub debug_base_texture_only: bool,
 	/// カメラ操作ロック。true の間はマウスドラッグ / ホイールでカメラ操作不可。
@@ -606,6 +673,47 @@ pub struct AvatarWindowOptions {
 	pub initial_camera_state: Option<InitialCameraState>,
 	/// メッシュパス用の切り分けオプション（bind pose / 単色 / モーフゼロ / 虹彩 Opaque / スキン旧式など）。
 	pub mesh_diagnostics: SceneMeshLoadOpts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WardrobeBindingKind {
+	Keyboard,
+	MidiNote,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WardrobeBindingOptions {
+	pub set_id: String,
+	pub kind: WardrobeBindingKind,
+	pub binding: String,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnimatorActionBindingOptions {
+	pub action_id: String,
+	pub kind: WardrobeBindingKind,
+	pub binding: String,
+	pub device: Option<String>,
+	pub channel: Option<u8>,
+	pub note: Option<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AnimatorActionTransitionOptions {
+	pub curve: String,
+	pub duration_ms: u32,
+}
+
+impl Default for AnimatorActionTransitionOptions {
+	fn default() -> Self {
+		Self {
+			curve: "none".to_string(),
+			duration_ms: 0,
+		}
+	}
 }
 
 impl Default for AvatarWindowOptions {
@@ -627,10 +735,23 @@ impl Default for AvatarWindowOptions {
 				a: 1.0,
 			},
 			gltf_path: None,
+			manifest_path: None,
+			wardrobe_set: None,
+			wardrobe_billboard_anchor: "neck".to_string(),
+			wardrobe_billboard_y_offset_m: 0.0,
+			wardrobe_bindings: Vec::new(),
+			animator_action_ids: Vec::new(),
+			animator_action_modes: BTreeMap::new(),
+			animator_action_values: BTreeMap::new(),
+			animator_action_transitions: BTreeMap::new(),
+			animator_bindings: Vec::new(),
 			icon_path: None,
+			app_user_model_id: None,
 			show_fps_in_title: true,
+			bench_frames: None,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),
+			audio_link: AudioLinkOptions::default(),
 			primary_motion_source: PrimaryMotionSource::default(),
 			spout: SpoutWindowOptions::default(),
 			environment_color: EnvironmentColorOptions::default(),
@@ -638,9 +759,10 @@ impl Default for AvatarWindowOptions {
 			bloom: BloomOptions::default(),
 			ssao: SsaoOptions::default(),
 			contact_shadow: ContactShadowOptions::default(),
+			contact_parameter_emission: false,
 			aa: AaMode::Off,
 			texture_resolution_limit: TextureResolutionLimit::Off,
-			texture_compression: TextureCompressionMode::Source,
+			texture_compression: TextureCompressionMode::Balanced,
 			mipmap_filter: TextureMipmapFilter::default(),
 			render_backend: RenderBackend::Vulkan,
 			block_compression_encoder: BlockCompressionEncoder::Gpu,
@@ -651,7 +773,7 @@ impl Default for AvatarWindowOptions {
 			runtime_status_address: None,
 			runtime_control_address: None,
 			runtime_bus_key: None,
-			enable_spring_bones: true,
+			dynamics_enabled: true,
 			bone_colliders: BoneColliderConfig::default(),
 			spring_bone_physics: SpringBonePhysicsConfig::default(),
 			debug: WindowDebugOptions::default(),
@@ -677,5 +799,57 @@ impl Default for AvatarWindowOptions {
 			initial_camera_state: None,
 			mesh_diagnostics: SceneMeshLoadOpts::default(),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{ColorGradingLook, TextureCompressionMode};
+
+	#[test]
+	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""source""#).unwrap(),
+			TextureCompressionMode::Source
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""balanced""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""memory""#).unwrap(),
+			TextureCompressionMode::Memory
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""compat""#).unwrap(),
+			TextureCompressionMode::Compat
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""auto""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+		assert_eq!(
+			serde_json::from_str::<TextureCompressionMode>(r#""advanced""#).unwrap(),
+			TextureCompressionMode::Balanced
+		);
+	}
+
+	#[test]
+	fn color_grading_look_names_match_shader_ids() {
+		let cases = [
+			("neutral", ColorGradingLook::Neutral, 0.0),
+			("warm", ColorGradingLook::Warm, 1.0),
+			("cool", ColorGradingLook::Cool, 2.0),
+			("film", ColorGradingLook::Film, 3.0),
+			("soft", ColorGradingLook::Soft, 4.0),
+			("pop", ColorGradingLook::Pop, 5.0),
+		];
+		for (name, look, shader_id) in cases {
+			assert_eq!(name.parse::<ColorGradingLook>().unwrap(), look);
+			assert_eq!(look.as_str(), name);
+			assert_eq!(look.shader_id(), shader_id);
+		}
+		assert_eq!("cinematic".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Film);
+		assert_eq!("vivid".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Pop);
 	}
 }

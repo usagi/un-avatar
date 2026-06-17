@@ -1,0 +1,21 @@
+{
+  "name": "network.usagi.un-avatar.unity-exporter",
+  "displayName": "U.N. Avatar Unity Exporter",
+  "version": "2.0.0",
+  "unity": "2022.3",
+  "description": "Unity Editor exporter for U.N. Avatar .unavatar GLB-compatible packages.",
+  "author": {
+    "name": "USAGI.NETWORK",
+    "email": "contact@usagi.network",
+    "url": "https://github.com/usagi/un-avatar"
+  },
+  "license": "MIT",
+  "keywords": [
+    "avatar",
+    "gltf",
+    "glb",
+    "vrchat",
+    "modular-avatar",
+    "unavatar"
+  ]
+}

@@ -108,17 +108,17 @@ pub(crate) struct PostProcess {
 	outline_uniform: wgpu::Buffer,
 	post_uniform: wgpu::Buffer,
 	source_bind_group: wgpu::BindGroup,
-	avatar_outline_mask_pipeline: wgpu::RenderPipeline,
-	avatar_outline_smooth_pipeline: wgpu::RenderPipeline,
-	avatar_outline_pipeline: wgpu::RenderPipeline,
-	color_adjust_pipeline: wgpu::RenderPipeline,
-	fxaa_pipeline: wgpu::RenderPipeline,
-	bloom_extract_pipeline: wgpu::RenderPipeline,
-	bloom_blur_h_pipeline: wgpu::RenderPipeline,
-	bloom_blur_v_pipeline: wgpu::RenderPipeline,
-	smaa_edge_pipeline: wgpu::RenderPipeline,
-	smaa_blend_pipeline: wgpu::RenderPipeline,
-	smaa_neighborhood_pipeline: wgpu::RenderPipeline,
+	avatar_outline_mask_pipeline: Option<wgpu::RenderPipeline>,
+	avatar_outline_smooth_pipeline: Option<wgpu::RenderPipeline>,
+	avatar_outline_pipeline: Option<wgpu::RenderPipeline>,
+	color_adjust_pipeline: Option<wgpu::RenderPipeline>,
+	fxaa_pipeline: Option<wgpu::RenderPipeline>,
+	bloom_extract_pipeline: Option<wgpu::RenderPipeline>,
+	bloom_blur_h_pipeline: Option<wgpu::RenderPipeline>,
+	bloom_blur_v_pipeline: Option<wgpu::RenderPipeline>,
+	smaa_edge_pipeline: Option<wgpu::RenderPipeline>,
+	smaa_blend_pipeline: Option<wgpu::RenderPipeline>,
+	smaa_neighborhood_pipeline: Option<wgpu::RenderPipeline>,
 }
 
 struct SmaaTargets {
@@ -280,82 +280,6 @@ impl PostProcess {
 			&post_uniform,
 			"post-source",
 		);
-		let avatar_outline_mask_pipeline = create_post_pipeline(
-			device,
-			&outline_layout,
-			wgpu::TextureFormat::Rgba16Float,
-			SHADER_AVATAR_OUTLINE,
-			"avatar-outline-seed",
-			"fs_seed",
-		);
-		let avatar_outline_smooth_pipeline = create_post_pipeline(
-			device,
-			&outline_layout,
-			wgpu::TextureFormat::Rgba16Float,
-			SHADER_AVATAR_OUTLINE,
-			"avatar-outline-jump",
-			"fs_jump",
-		);
-		let avatar_outline_pipeline = create_post_pipeline_with_blend(
-			device,
-			&outline_layout,
-			format,
-			SHADER_AVATAR_OUTLINE,
-			"avatar-outline-post",
-			"fs_main",
-			Some(wgpu::BlendState::ALPHA_BLENDING),
-		);
-		let color_adjust_pipeline =
-			create_post_pipeline(device, &one_texture_layout, format, SHADER_COLOR_ADJUST, "color-adjust", "fs_main");
-		let fxaa_pipeline = create_post_pipeline(device, &one_texture_layout, format, SHADER_FXAA, "fxaa", "fs_main");
-		let bloom_extract_pipeline = create_post_pipeline(
-			device,
-			&one_texture_layout,
-			wgpu::TextureFormat::Rgba16Float,
-			SHADER_BLOOM,
-			"bloom-extract",
-			"fs_extract",
-		);
-		let bloom_blur_h_pipeline = create_post_pipeline(
-			device,
-			&one_texture_layout,
-			wgpu::TextureFormat::Rgba16Float,
-			SHADER_BLOOM,
-			"bloom-blur-h",
-			"fs_blur_h",
-		);
-		let bloom_blur_v_pipeline = create_post_pipeline(
-			device,
-			&one_texture_layout,
-			wgpu::TextureFormat::Rgba16Float,
-			SHADER_BLOOM,
-			"bloom-blur-v",
-			"fs_blur_v",
-		);
-		let smaa_edge_pipeline = create_post_pipeline(
-			device,
-			&two_texture_layout,
-			wgpu::TextureFormat::Rgba8Unorm,
-			SHADER_SMAA,
-			"smaa-edge",
-			"fs_edge",
-		);
-		let smaa_blend_pipeline = create_post_pipeline(
-			device,
-			&two_texture_layout,
-			wgpu::TextureFormat::Rgba8Unorm,
-			SHADER_SMAA,
-			"smaa-blend",
-			"fs_blend",
-		);
-		let smaa_neighborhood_pipeline = create_post_pipeline(
-			device,
-			&two_texture_layout,
-			format,
-			SHADER_SMAA,
-			"smaa-neighborhood",
-			"fs_neighborhood",
-		);
 		Self {
 			width,
 			height,
@@ -375,17 +299,17 @@ impl PostProcess {
 			outline_uniform,
 			post_uniform,
 			source_bind_group,
-			avatar_outline_mask_pipeline,
-			avatar_outline_smooth_pipeline,
-			avatar_outline_pipeline,
-			color_adjust_pipeline,
-			fxaa_pipeline,
-			bloom_extract_pipeline,
-			bloom_blur_h_pipeline,
-			bloom_blur_v_pipeline,
-			smaa_edge_pipeline,
-			smaa_blend_pipeline,
-			smaa_neighborhood_pipeline,
+			avatar_outline_mask_pipeline: None,
+			avatar_outline_smooth_pipeline: None,
+			avatar_outline_pipeline: None,
+			color_adjust_pipeline: None,
+			fxaa_pipeline: None,
+			bloom_extract_pipeline: None,
+			bloom_blur_h_pipeline: None,
+			bloom_blur_v_pipeline: None,
+			smaa_edge_pipeline: None,
+			smaa_blend_pipeline: None,
+			smaa_neighborhood_pipeline: None,
 		}
 	}
 
@@ -409,6 +333,15 @@ impl PostProcess {
 		self.smaa_targets = None;
 		self.bloom_targets = None;
 		self.outline_targets = None;
+		self.avatar_outline_mask_pipeline = None;
+		self.avatar_outline_smooth_pipeline = None;
+		self.avatar_outline_pipeline = None;
+		self.bloom_extract_pipeline = None;
+		self.bloom_blur_h_pipeline = None;
+		self.bloom_blur_v_pipeline = None;
+		self.smaa_edge_pipeline = None;
+		self.smaa_blend_pipeline = None;
+		self.smaa_neighborhood_pipeline = None;
 		self.source_bind_group = create_one_texture_bind_group(
 			device,
 			&self.one_texture_layout,
@@ -419,40 +352,146 @@ impl PostProcess {
 			&self.post_uniform,
 			"post-source",
 		);
-		self.fxaa_pipeline = create_post_pipeline(device, &self.one_texture_layout, format, SHADER_FXAA, "fxaa", "fs_main");
-		self.color_adjust_pipeline = create_post_pipeline(
-			device,
-			&self.one_texture_layout,
-			format,
-			SHADER_COLOR_ADJUST,
-			"color-adjust",
-			"fs_main",
-		);
-		self.avatar_outline_pipeline = create_post_pipeline_with_blend(
-			device,
-			&self.outline_layout,
-			format,
-			SHADER_AVATAR_OUTLINE,
-			"avatar-outline-post",
-			"fs_main",
-			Some(wgpu::BlendState::ALPHA_BLENDING),
-		);
-		self.smaa_neighborhood_pipeline = create_post_pipeline(
-			device,
-			&self.two_texture_layout,
-			format,
-			SHADER_SMAA,
-			"smaa-neighborhood",
-			"fs_neighborhood",
-		);
+		self.fxaa_pipeline = None;
+		self.color_adjust_pipeline = None;
 	}
 
 	pub(crate) fn source_view(&self) -> &wgpu::TextureView {
 		&self.source_view
 	}
 
+	pub(crate) fn source_texture(&self) -> &wgpu::Texture {
+		&self.source_texture
+	}
+
 	pub(crate) fn depth_view(&self) -> &wgpu::TextureView {
 		&self.depth_view
+	}
+
+	fn ensure_avatar_outline_pipelines(&mut self, device: &wgpu::Device) {
+		if self.avatar_outline_mask_pipeline.is_none() {
+			self.avatar_outline_mask_pipeline = Some(create_post_pipeline(
+				device,
+				&self.outline_layout,
+				wgpu::TextureFormat::Rgba16Float,
+				SHADER_AVATAR_OUTLINE,
+				"avatar-outline-seed",
+				"fs_seed",
+			));
+		}
+		if self.avatar_outline_smooth_pipeline.is_none() {
+			self.avatar_outline_smooth_pipeline = Some(create_post_pipeline(
+				device,
+				&self.outline_layout,
+				wgpu::TextureFormat::Rgba16Float,
+				SHADER_AVATAR_OUTLINE,
+				"avatar-outline-jump",
+				"fs_jump",
+			));
+		}
+		if self.avatar_outline_pipeline.is_none() {
+			self.avatar_outline_pipeline = Some(create_post_pipeline_with_blend(
+				device,
+				&self.outline_layout,
+				self.format,
+				SHADER_AVATAR_OUTLINE,
+				"avatar-outline-post",
+				"fs_main",
+				Some(wgpu::BlendState::ALPHA_BLENDING),
+			));
+		}
+	}
+
+	fn ensure_color_adjust_pipeline(&mut self, device: &wgpu::Device) {
+		if self.color_adjust_pipeline.is_none() {
+			self.color_adjust_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				self.format,
+				SHADER_COLOR_ADJUST,
+				"color-adjust",
+				"fs_main",
+			));
+		}
+	}
+
+	fn ensure_fxaa_pipeline(&mut self, device: &wgpu::Device) {
+		if self.fxaa_pipeline.is_none() {
+			self.fxaa_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				self.format,
+				SHADER_FXAA,
+				"fxaa",
+				"fs_main",
+			));
+		}
+	}
+
+	fn ensure_bloom_pipelines(&mut self, device: &wgpu::Device) {
+		if self.bloom_extract_pipeline.is_none() {
+			self.bloom_extract_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				wgpu::TextureFormat::Rgba16Float,
+				SHADER_BLOOM,
+				"bloom-extract",
+				"fs_extract",
+			));
+		}
+		if self.bloom_blur_h_pipeline.is_none() {
+			self.bloom_blur_h_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				wgpu::TextureFormat::Rgba16Float,
+				SHADER_BLOOM,
+				"bloom-blur-h",
+				"fs_blur_h",
+			));
+		}
+		if self.bloom_blur_v_pipeline.is_none() {
+			self.bloom_blur_v_pipeline = Some(create_post_pipeline(
+				device,
+				&self.one_texture_layout,
+				wgpu::TextureFormat::Rgba16Float,
+				SHADER_BLOOM,
+				"bloom-blur-v",
+				"fs_blur_v",
+			));
+		}
+	}
+
+	fn ensure_smaa_pipelines(&mut self, device: &wgpu::Device) {
+		if self.smaa_edge_pipeline.is_none() {
+			self.smaa_edge_pipeline = Some(create_post_pipeline(
+				device,
+				&self.two_texture_layout,
+				wgpu::TextureFormat::Rgba8Unorm,
+				SHADER_SMAA,
+				"smaa-edge",
+				"fs_edge",
+			));
+		}
+		if self.smaa_blend_pipeline.is_none() {
+			self.smaa_blend_pipeline = Some(create_post_pipeline(
+				device,
+				&self.two_texture_layout,
+				wgpu::TextureFormat::Rgba8Unorm,
+				SHADER_SMAA,
+				"smaa-blend",
+				"fs_blend",
+			));
+		}
+		if self.smaa_neighborhood_pipeline.is_none() {
+			self.smaa_neighborhood_pipeline = Some(create_post_pipeline(
+				device,
+				&self.two_texture_layout,
+				self.format,
+				SHADER_SMAA,
+				"smaa-neighborhood",
+				"fs_neighborhood",
+			));
+		}
 	}
 
 	fn ensure_smaa_targets(&mut self, device: &wgpu::Device, with_bloom: bool) {
@@ -617,6 +656,7 @@ impl PostProcess {
 		bloom: BloomOptions,
 		ssao: SsaoOptions,
 	) {
+		self.ensure_color_adjust_pipeline(device);
 		queue.write_buffer(&self.post_uniform, 0, bytemuck::bytes_of(&post_uniform(color, bloom, ssao)));
 		let high_quality_bloom = self.prepare_bloom(device, encoder, bloom);
 		let bind_group = if high_quality_bloom {
@@ -624,6 +664,7 @@ impl PostProcess {
 		} else {
 			&self.source_bind_group
 		};
+		let color_adjust_pipeline = self.color_adjust_pipeline.as_ref().expect("color adjust pipeline is initialized");
 		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 			label: Some("color-adjust"),
 			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -640,7 +681,7 @@ impl PostProcess {
 			occlusion_query_set: None,
 			multiview_mask: None,
 		});
-		pass.set_pipeline(&self.color_adjust_pipeline);
+		pass.set_pipeline(color_adjust_pipeline);
 		pass.set_bind_group(0, bind_group, &[]);
 		pass.draw(0..3, 0..1);
 	}
@@ -655,6 +696,7 @@ impl PostProcess {
 		bloom: BloomOptions,
 		ssao: SsaoOptions,
 	) {
+		self.ensure_fxaa_pipeline(device);
 		queue.write_buffer(&self.post_uniform, 0, bytemuck::bytes_of(&post_uniform(color, bloom, ssao)));
 		let high_quality_bloom = self.prepare_bloom(device, encoder, bloom);
 		let bind_group = if high_quality_bloom {
@@ -662,6 +704,7 @@ impl PostProcess {
 		} else {
 			&self.source_bind_group
 		};
+		let fxaa_pipeline = self.fxaa_pipeline.as_ref().expect("fxaa pipeline is initialized");
 		let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 			label: Some("fxaa"),
 			color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -678,7 +721,7 @@ impl PostProcess {
 			occlusion_query_set: None,
 			multiview_mask: None,
 		});
-		pass.set_pipeline(&self.fxaa_pipeline);
+		pass.set_pipeline(fxaa_pipeline);
 		pass.set_bind_group(0, bind_group, &[]);
 		pass.draw(0..3, 0..1);
 	}
@@ -693,7 +736,20 @@ impl PostProcess {
 		width_px: f32,
 	) {
 		self.ensure_outline_targets(device);
+		self.ensure_avatar_outline_pipelines(device);
 		let targets = self.outline_targets.as_ref().expect("outline targets are initialized");
+		let avatar_outline_mask_pipeline = self
+			.avatar_outline_mask_pipeline
+			.as_ref()
+			.expect("avatar outline mask pipeline is initialized");
+		let avatar_outline_smooth_pipeline = self
+			.avatar_outline_smooth_pipeline
+			.as_ref()
+			.expect("avatar outline smooth pipeline is initialized");
+		let avatar_outline_pipeline = self
+			.avatar_outline_pipeline
+			.as_ref()
+			.expect("avatar outline post pipeline is initialized");
 		let color = outline.color.unwrap_or([0.02, 0.01, 0.03]);
 		let roundness = outline.roundness.unwrap_or(0.5).clamp(0.0, 1.0);
 		let write_uniform = |jump_step: f32| {
@@ -708,7 +764,7 @@ impl PostProcess {
 			encoder,
 			"avatar-outline-seed",
 			&targets.mask_view,
-			&self.avatar_outline_mask_pipeline,
+			avatar_outline_mask_pipeline,
 			&targets.mask_bind_group,
 			wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
 		);
@@ -720,7 +776,7 @@ impl PostProcess {
 					encoder,
 					"avatar-outline-jump",
 					&targets.smooth_view,
-					&self.avatar_outline_smooth_pipeline,
+					avatar_outline_smooth_pipeline,
 					&targets.smooth_bind_group,
 					wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
 				);
@@ -729,7 +785,7 @@ impl PostProcess {
 					encoder,
 					"avatar-outline-jump",
 					&targets.mask_view,
-					&self.avatar_outline_smooth_pipeline,
+					avatar_outline_smooth_pipeline,
 					&targets.final_bind_group,
 					wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
 				);
@@ -741,7 +797,7 @@ impl PostProcess {
 			encoder,
 			"avatar-outline-post",
 			target_view,
-			&self.avatar_outline_pipeline,
+			avatar_outline_pipeline,
 			if source_is_mask {
 				&targets.smooth_bind_group
 			} else {
@@ -797,20 +853,27 @@ impl PostProcess {
 			self.ensure_bloom_targets(device);
 		}
 		self.ensure_smaa_targets(device, use_high_quality_bloom);
+		self.ensure_smaa_pipelines(device);
 		self.prepare_bloom(device, encoder, bloom);
 		let targets = self.smaa_targets.as_ref().expect("smaa targets are initialized");
+		let smaa_edge_pipeline = self.smaa_edge_pipeline.as_ref().expect("smaa edge pipeline is initialized");
+		let smaa_blend_pipeline = self.smaa_blend_pipeline.as_ref().expect("smaa blend pipeline is initialized");
+		let smaa_neighborhood_pipeline = self
+			.smaa_neighborhood_pipeline
+			.as_ref()
+			.expect("smaa neighborhood pipeline is initialized");
 		self.encode_one_texture_pass(
 			encoder,
 			"smaa-edge",
 			&targets.edge_view,
-			&self.smaa_edge_pipeline,
+			smaa_edge_pipeline,
 			&targets.source_bind_group,
 		);
 		self.encode_one_texture_pass(
 			encoder,
 			"smaa-blend",
 			&targets.blend_view,
-			&self.smaa_blend_pipeline,
+			smaa_blend_pipeline,
 			&targets.edge_bind_group,
 		);
 
@@ -830,7 +893,7 @@ impl PostProcess {
 			occlusion_query_set: None,
 			multiview_mask: None,
 		});
-		pass.set_pipeline(&self.smaa_neighborhood_pipeline);
+		pass.set_pipeline(smaa_neighborhood_pipeline);
 		pass.set_bind_group(
 			0,
 			if use_high_quality_bloom {
@@ -851,26 +914,30 @@ impl PostProcess {
 			return false;
 		}
 		self.ensure_bloom_targets(device);
+		self.ensure_bloom_pipelines(device);
 		let targets = self.bloom_targets.as_ref().expect("bloom targets are initialized");
+		let bloom_extract_pipeline = self.bloom_extract_pipeline.as_ref().expect("bloom extract pipeline is initialized");
+		let bloom_blur_h_pipeline = self.bloom_blur_h_pipeline.as_ref().expect("bloom blur h pipeline is initialized");
+		let bloom_blur_v_pipeline = self.bloom_blur_v_pipeline.as_ref().expect("bloom blur v pipeline is initialized");
 		self.encode_one_texture_pass(
 			encoder,
 			"bloom-extract",
 			&targets.a_view,
-			&self.bloom_extract_pipeline,
+			bloom_extract_pipeline,
 			&targets.extract_bind_group,
 		);
 		self.encode_one_texture_pass(
 			encoder,
 			"bloom-blur-h",
 			&targets.b_view,
-			&self.bloom_blur_h_pipeline,
+			bloom_blur_h_pipeline,
 			&targets.blur_a_bind_group,
 		);
 		self.encode_one_texture_pass(
 			encoder,
 			"bloom-blur-v",
 			&targets.a_view,
-			&self.bloom_blur_v_pipeline,
+			bloom_blur_v_pipeline,
 			&targets.blur_b_bind_group,
 		);
 		true
@@ -923,7 +990,7 @@ fn create_source_texture(
 		sample_count: 1,
 		dimension: wgpu::TextureDimension::D2,
 		format,
-		usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+		usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
 		view_formats: &[],
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

@@ -28,13 +28,18 @@
 //! - dt 可変だと Verlet 速度 `curr - prev` が前フレームの dt 分の変位を表すため発散していた
 //!   → `accumulator` で固定 dt サブステップ化 (`FIXED_DT = 1/60s`)。
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
-use un_avatar_core::{UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneGroup, UnaSpringBoneSettings};
+use un_avatar_core::{
+	una_dynamics_translation_writeback_candidate_count, UnaDynamicsGroup, UnaDynamicsLimit, UnaDynamicsWritebackMode, UnaRuntimeDynamics,
+	UnaSceneNode, UnaSceneSnapshot, UnaSpringBoneSettings,
+};
 
-use crate::bone_colliders::{push_out_of_colliders, BoneColliderPrimitive};
+use crate::bone_colliders::{
+	push_out_of_world_colliders, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive,
+};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,12 +50,28 @@ pub enum SpringBoneSolver {
 	Xpbd,
 }
 
+pub type DynamicsSolver = SpringBoneSolver;
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SpringBoneTimeMode {
 	FrameBased,
 	#[default]
 	TimeBased,
+}
+
+pub type DynamicsTimeMode = SpringBoneTimeMode;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DynamicsStepProfile {
+	pub fixed_steps: u32,
+	pub active_groups: u32,
+	pub active_joints: u32,
+	pub world_ms: f32,
+	pub collider_ms: f32,
+	pub solve_ms: f32,
+	pub solve_collision_ms: f32,
+	pub solve_propagate_ms: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -118,6 +139,8 @@ impl SpringBonePhysicsConfig {
 	}
 }
 
+pub type DynamicsPhysicsConfig = SpringBonePhysicsConfig;
+
 fn default_spring_bone_simulation_hz() -> f32 {
 	60.0
 }
@@ -144,6 +167,8 @@ impl Default for SpringBoneCategoryDefinition {
 	}
 }
 
+pub type DynamicsCategoryDefinition = SpringBoneCategoryDefinition;
+
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct SpringBoneCategoryOverride {
@@ -151,6 +176,8 @@ pub struct SpringBoneCategoryOverride {
 	#[serde(flatten)]
 	pub params: SpringBonePhysicsParams,
 }
+
+pub type DynamicsCategoryOverride = SpringBoneCategoryOverride;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
@@ -163,6 +190,8 @@ pub struct SpringBonePhysicsParams {
 	pub drag_scale: Option<f32>,
 	pub constraint_iterations: Option<u32>,
 }
+
+pub type DynamicsPhysicsParams = SpringBonePhysicsParams;
 
 impl SpringBonePhysicsParams {
 	fn normalized(mut self) -> Self {
@@ -261,6 +290,11 @@ fn default_spring_bone_categories() -> Vec<SpringBoneCategoryDefinition> {
 	]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TailTranslationWritebackTarget {
+	NextChainNode { node: usize },
+}
+
 /// 1 joint 分の rest pose snapshot と動的状態（curr/prev tail）。
 struct JointRuntime {
 	parent_node: usize,
@@ -275,6 +309,12 @@ struct JointRuntime {
 	bone_axis: Vec3,
 	/// rest pose での「子 → 子の子」までの距離 (m)。次の tail 拘束距離。
 	length: f32,
+	/// Collider radius used for this joint tail.
+	hit_radius: f32,
+	/// Whether this joint may later use translation writeback without moving a skinned deformation joint.
+	translation_writeback_allowed: bool,
+	/// The local translation target represented by this tail particle, if stretch writeback is safe.
+	translation_writeback_target: Option<TailTranslationWritebackTarget>,
 	/// 動的: 現在フレームの tail (world)。
 	curr_tail: Vec3,
 	/// 動的: 前フレームの tail (world)。`curr - prev` が Verlet 速度。
@@ -286,7 +326,6 @@ struct JointRuntime {
 /// 1 チェーン分のランタイム状態。
 struct GroupRuntime {
 	joints: Vec<JointRuntime>,
-	world_scratch: Vec<Mat4>,
 	params: ResolvedSpringBonePhysicsParams,
 }
 
@@ -302,11 +341,23 @@ impl GroupRuntime {
 pub struct SpringBoneSimulator {
 	runtimes: Vec<Option<GroupRuntime>>,
 	active_runtime_indices: Vec<usize>,
+	active_verlet_runtime_indices: Vec<usize>,
+	active_xpbd_runtime_indices: Vec<usize>,
+	world_scratch: Vec<Mat4>,
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
 	bone_colliders: Vec<BoneColliderPrimitive>,
+	bone_collider_source_ids: Vec<String>,
+	world_colliders: Vec<WorldBoneColliderPrimitive>,
+	group_world_colliders: Vec<WorldBoneColliderPrimitive>,
 	physics: SpringBonePhysicsConfig,
 }
+
+/// Source-neutral v2 dynamics simulator name.
+///
+/// The implementation still reuses the v1 SpringBone solver assets, but runtime input flows
+/// through `UnaRuntimeDynamics` / `UnaDynamicsGroup` rather than source-format SpringBone data.
+pub type DynamicsSimulator = SpringBoneSimulator;
 
 /// 1 フレームで処理する最大蓄積時間 (秒)。スパイラル・オブ・デス防止。
 const MAX_ACCUM: f32 = 0.05;
@@ -319,8 +370,14 @@ impl Default for SpringBoneSimulator {
 		Self {
 			runtimes: Vec::new(),
 			active_runtime_indices: Vec::new(),
+			active_verlet_runtime_indices: Vec::new(),
+			active_xpbd_runtime_indices: Vec::new(),
+			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
+			bone_collider_source_ids: Vec::new(),
+			world_colliders: Vec::new(),
+			group_world_colliders: Vec::new(),
 			physics: SpringBonePhysicsConfig::default().normalized(),
 		}
 	}
@@ -360,7 +417,7 @@ fn write_world_from_snapshot(scene: &UnaSceneSnapshot, world: &mut Vec<Mat4>) {
 	} else {
 		world.fill(Mat4::IDENTITY);
 	}
-	for &r in &scene.roots {
+	for &r in scene.resolved_roots().iter() {
 		if r < scene.nodes.len() {
 			propagate_world_subtree(&scene.nodes, world, r, Mat4::IDENTITY);
 		}
@@ -382,13 +439,13 @@ fn normalize_match_text(value: &str) -> String {
 	out
 }
 
-fn classify_group(scene: &UnaSceneSnapshot, group: &UnaSpringBoneGroup, categories: &[SpringBoneCategoryDefinition]) -> String {
-	let explicit = normalize_category_id(&group.category);
+fn classify_group(scene: &UnaSceneSnapshot, group: UnaDynamicsGroup<'_>, categories: &[SpringBoneCategoryDefinition]) -> String {
+	let explicit = normalize_category_id(group.category);
 	if !explicit.is_empty() {
 		return explicit;
 	}
-	let mut haystack = normalize_match_text(&group.comment);
-	for &node_index in &group.bone_node_indices {
+	let mut haystack = normalize_match_text(group.comment);
+	for &node_index in group.chain.bone_node_indices {
 		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
 			haystack.push(' ');
 			haystack.push_str(&normalize_match_text(name));
@@ -404,12 +461,12 @@ fn classify_group(scene: &UnaSceneSnapshot, group: &UnaSpringBoneGroup, categori
 	"other".to_string()
 }
 
-fn convert_univrm_60fps_params(group: &UnaSpringBoneGroup, solver: SpringBoneSolver) -> ConvertedSpringBonePhysicsParams {
+fn convert_univrm_60fps_params(group: UnaDynamicsGroup<'_>, solver: SpringBoneSolver) -> ConvertedSpringBonePhysicsParams {
 	ConvertedSpringBonePhysicsParams {
 		// 既存 Verlet 式は `stiffness * dt` を復元 pull として使う。
 		// v1 の frequency UI はここから始め、詳細調整時だけユーザー値で上書きする。
-		stiffness_hz: group.stiffness.max(0.0),
-		xpbd_compliance: convert_univrm_stiffness_to_xpbd_compliance(group.stiffness),
+		stiffness_hz: group.parameters.stiffness.max(0.0),
+		xpbd_compliance: convert_univrm_stiffness_to_xpbd_compliance(group.parameters.stiffness),
 		gravity_scale: 1.0,
 		drag_scale: 1.0,
 		constraint_iterations: if matches!(solver, SpringBoneSolver::Xpbd) { 4 } else { 1 },
@@ -427,7 +484,7 @@ fn convert_univrm_stiffness_to_xpbd_compliance(stiffness: f32) -> f32 {
 
 fn resolve_group_params(
 	category_id: &str,
-	group: &UnaSpringBoneGroup,
+	group: UnaDynamicsGroup<'_>,
 	override_params_by_category: &BTreeMap<String, SpringBonePhysicsParams>,
 ) -> ResolvedSpringBonePhysicsParams {
 	let params = override_params_by_category.get(category_id).copied().unwrap_or_default();
@@ -442,6 +499,26 @@ fn resolve_group_params(
 		drag_scale: params.drag_scale.unwrap_or(converted.drag_scale),
 		constraint_iterations: params.constraint_iterations.unwrap_or(converted.constraint_iterations).clamp(1, 32),
 	}
+}
+
+fn tail_translation_writeback_target(
+	scene: &UnaSceneSnapshot,
+	group: UnaDynamicsGroup<'_>,
+	chain: &[usize],
+	joint_index: usize,
+) -> Option<TailTranslationWritebackTarget> {
+	if group.writeback_mode != UnaDynamicsWritebackMode::RotationTranslation {
+		return None;
+	}
+	if joint_index + 2 < chain.len() {
+		let anchor = chain[joint_index + 1];
+		let target = chain[joint_index + 2];
+		if una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, &[anchor, target]) > 0 {
+			return Some(TailTranslationWritebackTarget::NextChainNode { node: target });
+		}
+		return None;
+	}
+	None
 }
 
 /// `root_idx` の local を起点に親世界行列を畳み込み、子孫の世界行列を `world` に書き込む。
@@ -478,13 +555,48 @@ impl SpringBoneSimulator {
 		bone_colliders: Vec<BoneColliderPrimitive>,
 		physics: SpringBonePhysicsConfig,
 	) -> Option<Self> {
+		Self::new_with_runtime_dynamics(scene, settings.runtime_dynamics(), bone_colliders, physics)
+	}
+
+	pub fn new_with_runtime_dynamics(
+		scene: &UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		bone_colliders: Vec<BoneColliderPrimitive>,
+		physics: SpringBonePhysicsConfig,
+	) -> Option<Self> {
+		let colliders = bone_colliders
+			.into_iter()
+			.map(|primitive| RuntimeBoneColliderPrimitive {
+				primitive,
+				source_id: String::new(),
+			})
+			.collect();
+		Self::new_with_runtime_dynamics_and_collider_sources(scene, dynamics, colliders, physics)
+	}
+
+	pub fn new_with_runtime_dynamics_and_collider_sources(
+		scene: &UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		bone_colliders: Vec<RuntimeBoneColliderPrimitive>,
+		physics: SpringBonePhysicsConfig,
+	) -> Option<Self> {
+		let groups = dynamics.dynamics_groups().collect::<Vec<_>>();
+		if groups.is_empty() {
+			return None;
+		}
 		let physics = physics.normalized();
 		let world0 = world_from_snapshot(scene);
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let mut runtimes: Vec<Option<GroupRuntime>> = Vec::new();
 		let mut active_runtime_indices = Vec::new();
-		for g in &settings.groups {
-			let chain = &g.bone_node_indices;
+		let mut active_verlet_runtime_indices = Vec::new();
+		let mut active_xpbd_runtime_indices = Vec::new();
+		for g in groups.iter().copied() {
+			if !g.effective_enabled {
+				runtimes.push(None);
+				continue;
+			}
+			let chain = g.chain.bone_node_indices;
 			if chain.len() < 2 {
 				runtimes.push(None);
 				continue;
@@ -544,6 +656,17 @@ impl SpringBoneSimulator {
 					trans.length().max(1e-4)
 				};
 				let curr = world0[child].transform_point3(Vec3::ZERO) + world0[child].transform_vector3(bone_axis) * length;
+				let hit_radius = g
+					.chain
+					.hit_radius_samples
+					.get(i)
+					.copied()
+					.filter(|value| value.is_finite())
+					.unwrap_or(g.parameters.hit_radius)
+					.max(0.0);
+				let translation_writeback_allowed =
+					una_dynamics_translation_writeback_candidate_count(scene, g.writeback_mode, &[parent, child]) > 0;
+				let translation_writeback_target = tail_translation_writeback_target(scene, g, chain, i);
 				joints.push(JointRuntime {
 					parent_node: parent,
 					child_node: child,
@@ -552,6 +675,9 @@ impl SpringBoneSimulator {
 					rest_local_scale: scale,
 					bone_axis,
 					length,
+					hit_radius,
+					translation_writeback_allowed,
+					translation_writeback_target,
 					curr_tail: curr,
 					prev_tail: curr,
 					rest_lambda: 0.0,
@@ -562,22 +688,33 @@ impl SpringBoneSimulator {
 			} else {
 				let category_id = classify_group(scene, g, &physics.categories);
 				let params = resolve_group_params(&category_id, g, &override_params_by_category);
-				active_runtime_indices.push(runtimes.len());
-				runtimes.push(Some(GroupRuntime {
-					joints,
-					world_scratch: Vec::new(),
-					params,
-				}));
+				let runtime_index = runtimes.len();
+				active_runtime_indices.push(runtime_index);
+				match params.solver {
+					SpringBoneSolver::Verlet => active_verlet_runtime_indices.push(runtime_index),
+					SpringBoneSolver::Xpbd => active_xpbd_runtime_indices.push(runtime_index),
+				}
+				runtimes.push(Some(GroupRuntime { joints, params }));
 			}
 		}
 		if runtimes.iter().all(|r| r.is_none()) {
 			None
 		} else {
+			let (bone_colliders, bone_collider_source_ids): (Vec<_>, Vec<_>) = bone_colliders
+				.into_iter()
+				.map(|collider| (collider.primitive, collider.source_id))
+				.unzip();
 			Some(Self {
 				runtimes,
 				active_runtime_indices,
+				active_verlet_runtime_indices,
+				active_xpbd_runtime_indices,
+				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
+				bone_collider_source_ids,
+				world_colliders: Vec::new(),
+				group_world_colliders: Vec::new(),
 				physics,
 			})
 		}
@@ -587,6 +724,34 @@ impl SpringBoneSimulator {
 	///
 	/// 実時間 `dt` を蓄積し、設定された fixed timestep 単位の固定サブステップで進める。
 	pub fn step(&mut self, scene: &mut UnaSceneSnapshot, settings: &UnaSpringBoneSettings, dt: f32) {
+		self.step_runtime_dynamics(scene, settings.runtime_dynamics(), dt);
+	}
+
+	pub fn step_runtime_dynamics(&mut self, scene: &mut UnaSceneSnapshot, dynamics: UnaRuntimeDynamics<'_>, dt: f32) {
+		self.step_runtime_dynamics_inner(scene, dynamics, dt, None);
+	}
+
+	pub fn step_runtime_dynamics_profiled(
+		&mut self,
+		scene: &mut UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		dt: f32,
+	) -> DynamicsStepProfile {
+		let mut profile = DynamicsStepProfile::default();
+		self.step_runtime_dynamics_inner(scene, dynamics, dt, Some(&mut profile));
+		profile
+	}
+
+	fn step_runtime_dynamics_inner(
+		&mut self,
+		scene: &mut UnaSceneSnapshot,
+		dynamics: UnaRuntimeDynamics<'_>,
+		dt: f32,
+		mut profile: Option<&mut DynamicsStepProfile>,
+	) {
+		if !dynamics.has_groups() {
+			return;
+		}
 		if !dt.is_finite() || dt <= 0.0 {
 			return;
 		}
@@ -596,16 +761,73 @@ impl SpringBoneSimulator {
 		self.accumulator = (self.accumulator + dt).min(MAX_ACCUM);
 		let mut steps = 0;
 		while self.accumulator >= fixed_dt && steps < MAX_STEPS_PER_FRAME {
-			for &runtime_index in &self.active_runtime_indices {
-				let (Some(g), Some(Some(rt))) = (settings.groups.get(runtime_index), self.runtimes.get_mut(runtime_index)) else {
+			let t_world = profile.is_some().then(Instant::now);
+			write_world_from_snapshot(scene, &mut self.world_scratch);
+			if let (Some(profile), Some(t_world)) = (profile.as_deref_mut(), t_world) {
+				profile.world_ms += t_world.elapsed().as_secs_f32() * 1000.0;
+			}
+			let t_collider = profile.is_some().then(Instant::now);
+			resolve_world_colliders(&self.world_scratch, &self.bone_colliders, &mut self.world_colliders);
+			if let (Some(profile), Some(t_collider)) = (profile.as_deref_mut(), t_collider) {
+				profile.collider_ms += t_collider.elapsed().as_secs_f32() * 1000.0;
+			}
+			let t_solve = profile.is_some().then(Instant::now);
+			for &runtime_index in &self.active_verlet_runtime_indices {
+				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
 					continue;
 				};
-				for _ in 0..substeps {
-					if matches!(rt.params.solver, SpringBoneSolver::Xpbd) {
-						rt.reset_xpbd_lambdas();
-					}
-					step_group(scene, g, rt, &self.bone_colliders, sub_dt);
+				if !g.effective_enabled {
+					continue;
 				}
+				let group_world_colliders = select_group_world_colliders(
+					&self.world_colliders,
+					&self.bone_collider_source_ids,
+					&g.source_id,
+					&mut self.group_world_colliders,
+				);
+				for _ in 0..substeps {
+					step_group_solver::<false>(
+						scene,
+						g,
+						rt,
+						&mut self.world_scratch,
+						group_world_colliders,
+						sub_dt,
+						profile.as_deref_mut(),
+					);
+				}
+			}
+			for &runtime_index in &self.active_xpbd_runtime_indices {
+				let (Some(g), Some(Some(rt))) = (dynamics.dynamics_group(runtime_index), self.runtimes.get_mut(runtime_index)) else {
+					continue;
+				};
+				if !g.effective_enabled {
+					continue;
+				}
+				let group_world_colliders = select_group_world_colliders(
+					&self.world_colliders,
+					&self.bone_collider_source_ids,
+					&g.source_id,
+					&mut self.group_world_colliders,
+				);
+				for _ in 0..substeps {
+					rt.reset_xpbd_lambdas();
+					step_group_solver::<true>(
+						scene,
+						g,
+						rt,
+						&mut self.world_scratch,
+						group_world_colliders,
+						sub_dt,
+						profile.as_deref_mut(),
+					);
+				}
+			}
+			if let (Some(profile), Some(t_solve)) = (profile.as_deref_mut(), t_solve) {
+				profile.solve_ms += t_solve.elapsed().as_secs_f32() * 1000.0;
+				profile.fixed_steps = profile.fixed_steps.saturating_add(1);
+				profile.active_groups = self.active_runtime_indices.len() as u32;
+				profile.active_joints = self.active_joint_count() as u32;
 			}
 			self.accumulator -= fixed_dt;
 			steps += 1;
@@ -618,6 +840,36 @@ impl SpringBoneSimulator {
 
 	pub fn bone_colliders(&self) -> &[BoneColliderPrimitive] {
 		&self.bone_colliders
+	}
+
+	pub fn active_group_count(&self) -> usize {
+		self.active_runtime_indices.len()
+	}
+
+	pub fn active_joint_count(&self) -> usize {
+		self.active_runtime_indices
+			.iter()
+			.filter_map(|&index| self.runtimes.get(index).and_then(Option::as_ref))
+			.map(|runtime| runtime.joints.len())
+			.sum()
+	}
+
+	pub fn translation_writeback_candidate_count(&self) -> usize {
+		self.runtimes
+			.iter()
+			.filter_map(Option::as_ref)
+			.flat_map(|runtime| runtime.joints.iter())
+			.filter(|joint| joint.translation_writeback_allowed)
+			.count()
+	}
+
+	pub fn translation_writeback_target_count(&self) -> usize {
+		self.runtimes
+			.iter()
+			.filter_map(Option::as_ref)
+			.flat_map(|runtime| runtime.joints.iter())
+			.filter(|joint| joint.translation_writeback_target.is_some())
+			.count()
 	}
 }
 
@@ -632,37 +884,50 @@ fn merge_category_override_params(overrides: &[SpringBoneCategoryOverride]) -> B
 	by_category
 }
 
-fn step_group(
+fn step_group_solver<const XPBD: bool>(
 	scene: &mut UnaSceneSnapshot,
-	group: &UnaSpringBoneGroup,
+	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
-	bone_colliders: &[BoneColliderPrimitive],
+	world_scratch: &mut [Mat4],
+	bone_colliders: &[WorldBoneColliderPrimitive],
 	dt: f32,
+	mut profile: Option<&mut DynamicsStepProfile>,
 ) {
 	let drag = match rt.params.solver {
 		SpringBoneSolver::Verlet | SpringBoneSolver::Xpbd => {
 			let drag = match rt.params.damping_half_life_ms {
 				Some(half_life_ms) if half_life_ms > 0.0 => 1.0 - (-std::f32::consts::LN_2 * dt / (half_life_ms / 1000.0)).exp(),
-				_ => group.drag_force,
+				_ => group.parameters.drag_force,
 			};
 			(drag * rt.params.drag_scale).clamp(0.0, 1.0)
 		}
 	};
-	let stiffness = rt.params.stiffness_hz.unwrap_or(group.stiffness).max(0.0);
-	let gravity = Vec3::new(group.gravity_dir[0], group.gravity_dir[1], group.gravity_dir[2]).normalize_or_zero()
-		* group.gravity_power
+	let stiffness = rt.params.stiffness_hz.unwrap_or(group.parameters.stiffness).max(0.0);
+	let gravity = Vec3::new(
+		group.parameters.gravity_dir[0],
+		group.parameters.gravity_dir[1],
+		group.parameters.gravity_dir[2],
+	)
+	.normalize_or_zero()
+		* group.parameters.gravity_power
 		* rt.params.gravity_scale;
-	let is_xpbd = matches!(rt.params.solver, SpringBoneSolver::Xpbd);
-	write_world_from_snapshot(scene, &mut rt.world_scratch);
+	let limit_max_angle_rad = group.limit.and_then(undynamics_cone_limit_angle_rad);
 
 	for joint in &mut rt.joints {
-		if joint.parent_node >= rt.world_scratch.len() || joint.child_node >= scene.nodes.len() {
+		if joint.parent_node >= world_scratch.len() || joint.child_node >= scene.nodes.len() {
 			continue;
 		}
-		let parent_world = rt.world_scratch[joint.parent_node];
+		let parent_world = world_scratch[joint.parent_node];
 		let (_, parent_rot_raw, parent_pos) = parent_world.to_scale_rotation_translation();
 		let parent_rot = parent_rot_raw.normalize();
-		let child_pos = parent_pos + parent_rot * joint.rest_local_translation;
+		let local_child = Mat4::from_cols_array(&scene.nodes[joint.child_node].transform);
+		let (_, _, current_local_translation) = local_child.to_scale_rotation_translation();
+		let child_local_translation = if group.writeback_mode == UnaDynamicsWritebackMode::RotationTranslation {
+			current_local_translation
+		} else {
+			joint.rest_local_translation
+		};
+		let child_pos = parent_pos + parent_rot * child_local_translation;
 
 		let target_rotation = (parent_rot * joint.rest_local_rotation).normalize();
 		let target_axis_world = (target_rotation * joint.bone_axis).normalize_or_zero();
@@ -676,42 +941,57 @@ fn step_group(
 			// `verlet` は authored 値から 60fps 相当へ変換した減衰を使う軽量 VRM 互換経路。
 			// 古い `compat_univrm` / `compat_euler` 設定文字列は `verlet` alias として受け付ける。
 			let inertia = (joint.curr_tail - joint.prev_tail) * (1.0 - drag);
-			let stiff_pull = if is_xpbd {
-				Vec3::ZERO
-			} else {
-				target_axis_world * (stiffness * dt)
-			};
+			let stiff_pull = if XPBD { Vec3::ZERO } else { target_axis_world * (stiffness * dt) };
 			let external = gravity * dt;
 			joint.curr_tail + inertia + stiff_pull + external
 		};
+		let max_tail_length = tail_max_length(joint.length, group.limit, joint.translation_writeback_target.is_some());
 
-		if is_xpbd {
+		if XPBD {
 			let target_tail = child_pos + target_axis_world * joint.length;
 			for _ in 0..rt.params.constraint_iterations {
 				next_tail = solve_xpbd_rest_constraint(next_tail, target_tail, rt.params.xpbd_compliance, dt, &mut joint.rest_lambda);
-				next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
+				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				let t_collision = profile.is_some().then(Instant::now);
 				next_tail = constrain_tail_colliders(
 					next_tail,
 					child_pos,
 					target_axis_world,
-					joint.length,
-					&rt.world_scratch,
+					constrained_length,
 					bone_colliders,
-					group.hit_radius,
+					joint.hit_radius,
 				);
+				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
+					profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
+				}
+				next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+				let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+				next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 			}
 		} else {
 			joint.rest_lambda = 0.0;
-			next_tail = constrain_tail_length(next_tail, child_pos, target_axis_world, joint.length);
+			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			let t_collision = profile.is_some().then(Instant::now);
 			next_tail = constrain_tail_colliders(
 				next_tail,
 				child_pos,
 				target_axis_world,
-				joint.length,
-				&rt.world_scratch,
+				constrained_length,
 				bone_colliders,
-				group.hit_radius,
+				joint.hit_radius,
 			);
+			if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
+				profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
+			}
+			next_tail = constrain_tail_length_range(next_tail, child_pos, target_axis_world, joint.length, max_tail_length);
+			let constrained_length = tail_distance_or(next_tail, child_pos, joint.length);
+			next_tail = constrain_tail_limit(next_tail, child_pos, target_axis_world, constrained_length, limit_max_angle_rad);
 		}
 
 		// 回転補正: rest pose の axis (target_axis_world) を実際の axis (next_tail - child_pos) に向ける。
@@ -726,12 +1006,26 @@ fn step_group(
 		let parent_rot_inv = parent_rot.conjugate();
 		let new_local_rotation = (parent_rot_inv * new_world_rotation).normalize();
 
-		// 子の local transform を rest_translation + new_local_rotation + rest_scale で書き戻す。
-		let new_local = Mat4::from_scale_rotation_translation(joint.rest_local_scale, new_local_rotation, joint.rest_local_translation);
+		// 子の local transform を現在の translation + new_local_rotation + rest_scale で書き戻す。
+		let new_local = Mat4::from_scale_rotation_translation(joint.rest_local_scale, new_local_rotation, child_local_translation);
 		scene.nodes[joint.child_node].transform = new_local.to_cols_array();
+		if let Some(TailTranslationWritebackTarget::NextChainNode { node }) = joint.translation_writeback_target {
+			if node < scene.nodes.len() {
+				let child_world = parent_world * new_local;
+				let target_local_translation = child_world.inverse().transform_point3(next_tail);
+				let target_local = Mat4::from_cols_array(&scene.nodes[node].transform);
+				let (target_scale, target_rotation, _) = target_local.to_scale_rotation_translation();
+				scene.nodes[node].transform =
+					Mat4::from_scale_rotation_translation(target_scale, target_rotation, target_local_translation).to_cols_array();
+			}
+		}
 
 		// 子以下の world 行列を更新（次の joint の親回転計算で使う）。
-		propagate_world_subtree(&scene.nodes, &mut rt.world_scratch, joint.child_node, parent_world);
+		let t_propagate = profile.is_some().then(Instant::now);
+		propagate_world_subtree(&scene.nodes, world_scratch, joint.child_node, parent_world);
+		if let (Some(profile), Some(t_propagate)) = (profile.as_deref_mut(), t_propagate) {
+			profile.solve_propagate_ms += t_propagate.elapsed().as_secs_f32() * 1000.0;
+		}
 
 		joint.prev_tail = joint.curr_tail;
 		joint.curr_tail = next_tail;
@@ -747,25 +1041,122 @@ fn constrain_tail_length(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, 
 	}
 }
 
+fn tail_max_length(rest_length: f32, limit: Option<&UnaDynamicsLimit>, translation_writeback_targeted: bool) -> f32 {
+	if !translation_writeback_targeted {
+		return rest_length;
+	}
+	let Some(max_stretch) = limit
+		.map(|limit| limit.max_stretch)
+		.filter(|value| value.is_finite() && *value > 0.0)
+	else {
+		return rest_length;
+	};
+	(rest_length * (1.0 + max_stretch)).max(rest_length)
+}
+
+fn tail_distance_or(next_tail: Vec3, child_pos: Vec3, fallback_length: f32) -> f32 {
+	let distance = (next_tail - child_pos).length();
+	if distance.is_finite() && distance > 1e-6 {
+		distance
+	} else {
+		fallback_length
+	}
+}
+
+fn constrain_tail_length_range(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, min_length: f32, max_length: f32) -> Vec3 {
+	if max_length <= min_length + 1e-6 {
+		return constrain_tail_length(next_tail, child_pos, fallback_axis, min_length);
+	}
+	let offset = next_tail - child_pos;
+	let dir = offset.normalize_or_zero();
+	if dir.length_squared() < 1e-12 {
+		return child_pos + fallback_axis * min_length;
+	}
+	let distance = offset.length().clamp(min_length, max_length);
+	child_pos + dir * distance
+}
+
+fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, length: f32, max_angle_rad: Option<f32>) -> Vec3 {
+	let Some(max_angle_rad) = max_angle_rad else {
+		return next_tail;
+	};
+	let rest_axis = fallback_axis.normalize_or_zero();
+	let dir = (next_tail - child_pos).normalize_or_zero();
+	if rest_axis.length_squared() < 1e-12 || dir.length_squared() < 1e-12 {
+		return child_pos + fallback_axis * length;
+	}
+	let dot = rest_axis.dot(dir).clamp(-1.0, 1.0);
+	let angle = dot.acos();
+	if angle <= max_angle_rad {
+		return child_pos + dir * length;
+	}
+	let tangent = (dir - rest_axis * dot).normalize_or_zero();
+	let tangent = if tangent.length_squared() >= 1e-12 {
+		tangent
+	} else {
+		rest_axis.any_orthonormal_vector()
+	};
+	let constrained_dir = rest_axis * max_angle_rad.cos() + tangent * max_angle_rad.sin();
+	child_pos + constrained_dir.normalize_or_zero() * length
+}
+
+fn undynamics_cone_limit_angle_rad(limit: &UnaDynamicsLimit) -> Option<f32> {
+	let limit_type = limit.limit_type.to_ascii_lowercase();
+	if !limit_type.is_empty() && !limit_type.contains("angle") && !limit_type.contains("hinge") && !limit_type.contains("polar") {
+		return None;
+	}
+	let max_angle = [limit.max_angle_x, limit.max_angle_z]
+		.into_iter()
+		.filter(|angle| angle.is_finite() && *angle > 0.0)
+		.fold(0.0_f32, f32::max);
+	if max_angle <= 0.0 {
+		None
+	} else {
+		Some(max_angle.clamp(0.0, 179.0).to_radians())
+	}
+}
+
 fn constrain_tail_colliders(
 	next_tail: Vec3,
 	child_pos: Vec3,
 	fallback_axis: Vec3,
 	length: f32,
-	world: &[Mat4],
-	bone_colliders: &[BoneColliderPrimitive],
+	bone_colliders: &[WorldBoneColliderPrimitive],
 	hit_radius: f32,
 ) -> Vec3 {
 	if bone_colliders.is_empty() {
 		return next_tail;
 	}
-	let pushed = push_out_of_colliders(next_tail, world, bone_colliders, hit_radius.max(0.0));
+	let pushed = push_out_of_world_colliders(next_tail, bone_colliders, hit_radius.max(0.0));
+	if (pushed - next_tail).length_squared() <= 1e-12 {
+		return next_tail;
+	}
 	let pushed_dir = (pushed - child_pos).normalize_or_zero();
 	if pushed_dir.length_squared() >= 1e-12 {
 		child_pos + pushed_dir * length
 	} else {
 		child_pos + fallback_axis * length
 	}
+}
+
+fn select_group_world_colliders<'a>(
+	world_colliders: &'a [WorldBoneColliderPrimitive],
+	source_ids: &[String],
+	group_source_id: &str,
+	scratch: &'a mut Vec<WorldBoneColliderPrimitive>,
+) -> &'a [WorldBoneColliderPrimitive] {
+	if source_ids.iter().all(String::is_empty) {
+		return world_colliders;
+	}
+	scratch.clear();
+	scratch.reserve(world_colliders.len());
+	for (index, collider) in world_colliders.iter().copied().enumerate() {
+		let source_id = source_ids.get(index).map(String::as_str).unwrap_or("");
+		if source_id.is_empty() || (!group_source_id.is_empty() && source_id == group_source_id) {
+			scratch.push(collider);
+		}
+	}
+	scratch.as_slice()
 }
 
 fn solve_xpbd_rest_constraint(curr_tail: Vec3, target_tail: Vec3, compliance: f32, dt: f32, lambda: &mut f32) -> Vec3 {
@@ -788,18 +1179,50 @@ fn solve_xpbd_rest_constraint(curr_tail: Vec3, target_tail: Vec3, compliance: f3
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::UnaSceneSnapshot;
+	use un_avatar_core::{UnaDynamicsWritebackMode, UnaSceneSnapshot, UnaSkin, UnaSpringBoneGroup};
 
 	fn node(rot_y_deg: f32, trans: Vec3, children: Vec<usize>) -> UnaSceneNode {
 		let r = Quat::from_rotation_y(rot_y_deg.to_radians());
 		let m = Mat4::from_scale_rotation_translation(Vec3::ONE, r, trans);
 		UnaSceneNode {
+			source_node_id: None,
+			resolved_node_id: None,
 			name: None,
+			visible: true,
 			transform: m.to_cols_array(),
 			children,
 			mesh: None,
 			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
 		}
+	}
+
+	#[test]
+	fn source_tagged_colliders_are_filtered_per_dynamics_group() {
+		let colliders = vec![
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::ZERO,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::X,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+			WorldBoneColliderPrimitive::Sphere {
+				center: Vec3::Y,
+				radius: 1.0,
+				inside_bounds: false,
+			},
+		];
+		let source_ids = vec![String::new(), "physbone:hair".to_string(), "physbone:skirt".to_string()];
+		let mut scratch = Vec::new();
+		let selected = select_group_world_colliders(&colliders, &source_ids, "physbone:hair", &mut scratch);
+		assert_eq!(selected.len(), 2);
+		assert_eq!(selected[0], colliders[0]);
+		assert_eq!(selected[1], colliders[1]);
 	}
 
 	/// 重力で末端 tail が水平方向に流れることを確認する基本テスト。
@@ -816,6 +1239,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.05,
@@ -824,8 +1250,14 @@ mod tests {
 				drag_force: 0.2,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let tip_before = world_from_snapshot(&scene)[2].transform_point3(Vec3::ZERO);
@@ -839,6 +1271,56 @@ mod tests {
 			tip_before.x,
 			tip_after.x
 		);
+	}
+
+	#[test]
+	fn dynamics_angle_limit_clamps_tail_direction() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 0.0,
+				gravity_power: 30.0,
+				gravity_dir: [1.0, 0.0, 0.0],
+				drag_force: 0.0,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: Some(UnaDynamicsLimit {
+					limit_type: "Angle".to_string(),
+					max_angle_x: 10.0,
+					max_angle_z: 0.0,
+					max_stretch: 0.0,
+				}),
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		for _ in 0..60 {
+			sim.step(&mut scene, &settings, 1.0 / 60.0);
+		}
+		let world = world_from_snapshot(&scene);
+		let joint = world[1].transform_point3(Vec3::ZERO);
+		let tip = world[2].transform_point3(Vec3::ZERO);
+		let axis = (tip - joint).normalize_or_zero();
+		let angle = Vec3::Y.angle_between(axis).to_degrees();
+		assert!(angle <= 10.5, "angle={angle} axis={axis:?}");
 	}
 
 	/// 親が静止していて重力 0 なら tail は時間が経っても発散しないことを確認する安定性テスト。
@@ -855,6 +1337,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -863,8 +1348,14 @@ mod tests {
 				drag_force: 0.4,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let tip_before = world_from_snapshot(&scene)[2].transform_point3(Vec3::ZERO);
@@ -882,6 +1373,237 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn simulator_uses_per_joint_hit_radius_samples() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.03,
+				hit_radius_samples: vec![0.015, 0.006],
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(runtime.joints.len(), 2);
+		assert!((runtime.joints[0].hit_radius - 0.015).abs() < 1e-6);
+		assert!((runtime.joints[1].hit_radius - 0.006).abs() < 1e-6);
+	}
+
+	#[test]
+	fn translation_writeback_candidates_exclude_skinned_joints() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			skins: vec![UnaSkin {
+				joint_nodes: vec![1],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_target_count(), 1);
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(
+			runtime.joints[0].translation_writeback_target,
+			Some(TailTranslationWritebackTarget::NextChainNode { node: 2 })
+		);
+		assert_eq!(runtime.joints[1].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn translation_writeback_targets_do_not_duplicate_terminal_tail() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				bone_node_indices: vec![0, 1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 2);
+		assert_eq!(sim.translation_writeback_target_count(), 1);
+		assert_eq!(
+			runtime.joints[0].translation_writeback_target,
+			Some(TailTranslationWritebackTarget::NextChainNode { node: 2 })
+		);
+		assert_eq!(runtime.joints[1].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn translation_writeback_targets_do_not_assign_imaginary_two_node_tail() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 1.0,
+				gravity_power: 0.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				bone_node_indices: vec![0, 1],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		let runtime = sim.runtimes[0].as_ref().expect("runtime");
+
+		assert_eq!(sim.translation_writeback_candidate_count(), 1);
+		assert_eq!(sim.translation_writeback_target_count(), 0);
+		assert_eq!(runtime.joints[0].translation_writeback_target, None);
+	}
+
+	#[test]
+	fn rotation_translation_writeback_stretches_next_chain_node_within_limit() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				enabled: true,
+				stiffness: 0.0,
+				gravity_power: 4.0,
+				gravity_dir: [1.0, 0.0, 0.0],
+				drag_force: 0.0,
+				writeback_mode: UnaDynamicsWritebackMode::RotationTranslation,
+				limit: Some(UnaDynamicsLimit {
+					max_stretch: 0.5,
+					..Default::default()
+				}),
+				bone_node_indices: vec![0, 1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
+		for _ in 0..120 {
+			sim.step(&mut scene, &settings, 1.0 / 60.0);
+		}
+
+		let (_, _, tip_local_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		let stretched_length = tip_local_translation.length();
+		assert!(
+			stretched_length > 1.01,
+			"next chain node local translation should stretch beyond rest length; got {stretched_length}"
+		);
+		assert!(
+			stretched_length <= 1.5 + 1e-4,
+			"next chain node local translation should respect max_stretch; got {stretched_length}"
+		);
+	}
+
+	#[test]
+	fn simulator_skips_disabled_groups() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: false,
+				source_id: String::new(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 1.0,
+				gravity_power: 1.0,
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1],
+			}],
+			colliders: Vec::new(),
+			..Default::default()
+		};
+
+		assert!(SpringBoneSimulator::new(&scene, &settings).is_none());
+	}
+
 	/// 親 (root) を急に大きく回転させても tail が爆発せず length 制約内に留まることを確認。
 	/// 旧実装ではこのケースで Verlet 速度が暴走していた。
 	#[test]
@@ -897,6 +1619,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 1.0,
@@ -905,8 +1630,14 @@ mod tests {
 				drag_force: 0.4,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		for step in 0..120 {
@@ -976,6 +1707,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: "ミミ spring".to_string(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -984,8 +1718,14 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let config = SpringBonePhysicsConfig {
 			overrides: vec![SpringBoneCategoryOverride {
@@ -1020,6 +1760,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1028,8 +1771,14 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
 		let rt = sim.runtimes[0].as_ref().expect("runtime");
@@ -1066,6 +1815,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.8,
@@ -1074,8 +1826,14 @@ mod tests {
 				drag_force: 0.2,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1, 2],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		let mut xpbd_scene = base_scene.clone();
 		let mut verlet_scene = base_scene;
@@ -1123,6 +1881,9 @@ mod tests {
 		};
 		let settings = UnaSpringBoneSettings {
 			groups: vec![UnaSpringBoneGroup {
+				source_kind: Default::default(),
+				enabled: true,
+				source_id: String::new(),
 				comment: String::new(),
 				category: String::new(),
 				stiffness: 0.1,
@@ -1131,8 +1892,14 @@ mod tests {
 				drag_force: 0.3,
 				center_node: None,
 				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
 				bone_node_indices: vec![0, 1],
 			}],
+			colliders: Vec::new(),
+			..Default::default()
 		};
 		// 2 ノードチェーン = 1 joint。tail を bone_axis に沿って初期化し動作することを確認。
 		let mut sim = SpringBoneSimulator::new(&scene, &settings).expect("sim");
