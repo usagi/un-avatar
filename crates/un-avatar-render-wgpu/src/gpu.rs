@@ -2302,9 +2302,22 @@ pub(crate) enum RenderedFrameRole {
 	WardrobeTransition { billboard: WardrobeChangingBillboardFrame },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Spout2FrameDelivery {
+	RuntimeOutput,
+	SuppressedRendererStartup,
+	Unavailable,
+}
+
 impl RenderedFrameRole {
-	fn allows_spout_output(&self, spout_available: bool) -> bool {
-		spout_available && !matches!(self, Self::RendererStartup { .. })
+	fn spout2_delivery(&self, spout_available: bool) -> Spout2FrameDelivery {
+		if !spout_available {
+			return Spout2FrameDelivery::Unavailable;
+		}
+		match self {
+			Self::RuntimeAvatar | Self::WardrobeTransition { .. } => Spout2FrameDelivery::RuntimeOutput,
+			Self::RendererStartup { .. } => Spout2FrameDelivery::SuppressedRendererStartup,
+		}
 	}
 
 	fn wardrobe_transition_billboard(&self) -> Option<&WardrobeChangingBillboardFrame> {
@@ -7163,7 +7176,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_role.allows_spout_output(self.spout.is_some())
+				frame_role.spout2_delivery(self.spout.is_some()) == Spout2FrameDelivery::RuntimeOutput
 			}
 			#[cfg(not(windows))]
 			{
@@ -8225,9 +8238,10 @@ mod tests {
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
 		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
 		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RenderedFrameRole, RuntimeMenuGraphNode,
-		StartupProgressOverlayFrame, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
-		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		Spout2FrameDelivery, StartupProgressOverlayFrame, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
@@ -9112,14 +9126,16 @@ mod tests {
 		let wardrobe = RenderedFrameRole::WardrobeTransition {
 			billboard: wardrobe_changing,
 		};
-		assert!(!runtime.allows_spout_output(false));
-		assert!(runtime.allows_spout_output(true));
-		assert!(
-			!startup.allows_spout_output(true),
+		assert_eq!(runtime.spout2_delivery(false), Spout2FrameDelivery::Unavailable);
+		assert_eq!(runtime.spout2_delivery(true), Spout2FrameDelivery::RuntimeOutput);
+		assert_eq!(
+			startup.spout2_delivery(true),
+			Spout2FrameDelivery::SuppressedRendererStartup,
 			"startup presentation is renderer-local and must not be sent to Spout2"
 		);
-		assert!(
-			wardrobe.allows_spout_output(true),
+		assert_eq!(
+			wardrobe.spout2_delivery(true),
+			Spout2FrameDelivery::RuntimeOutput,
 			"wardrobe changing billboard is an OBS-facing transition and must remain visible on Spout2"
 		);
 		assert!(wardrobe.is_wardrobe_transition_only());

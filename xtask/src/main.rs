@@ -3129,8 +3129,35 @@ fn verify_manual_release_checklist_candidate(
 		&& verify_release_doc_value(&raw, checklist, "VCC package SHA-256", vcc_hash, context, true);
 	if ok {
 		println!("release-audit: manual checklist Candidate Build ok");
+		let open_evidence = manual_release_checklist_open_evidence_items(&raw);
+		if open_evidence > 0 {
+			println!("release-audit: manual checklist has {open_evidence} open evidence item(s)");
+		}
 	}
 	ok
+}
+
+fn manual_release_checklist_open_evidence_items(raw: &str) -> usize {
+	let mut in_evidence = false;
+	let mut count = 0;
+	for line in raw.lines() {
+		let trimmed = line.trim();
+		if trimmed.starts_with("## ") {
+			in_evidence = false;
+			continue;
+		}
+		if trimmed == "Evidence:" {
+			in_evidence = true;
+			continue;
+		}
+		if !in_evidence || trimmed.is_empty() {
+			continue;
+		}
+		if trimmed.starts_with("- ") && trimmed.ends_with(':') {
+			count += 1;
+		}
+	}
+	count
 }
 
 fn verify_release_checksum_sidecar(zip_path: &Path) -> bool {
@@ -5101,5 +5128,40 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 		));
 
 		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn release_audit_counts_open_manual_evidence_items() {
+		let checklist = r#"
+## Candidate Build
+
+Evidence:
+
+- Automated line: filled
+- Empty field:
+- Another empty field:
+
+## Output Modes
+
+Evidence:
+
+- OBS / Spout receiver:
+- Runtime status / screenshot: captured locally
+"#;
+		assert_eq!(manual_release_checklist_open_evidence_items(checklist), 3);
+		assert_eq!(
+			manual_release_checklist_open_evidence_items(
+				r#"
+## Release Text
+
+- This normal checklist bullet:
+
+Evidence:
+
+- Screenshot / notes: done
+"#
+			),
+			0
+		);
 	}
 }
