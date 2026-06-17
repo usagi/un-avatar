@@ -2135,6 +2135,46 @@ height = 360
 	}
 
 	#[test]
+	fn unanimator_excludes_metadata_only_and_tracking_controls() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.menu_action_candidates = vec![
+			gpu::RuntimeMenuActionCandidateStatus {
+				action_id: "menu:tail".to_string(),
+				action_label: "Tail".to_string(),
+				menu_key: "tail".to_string(),
+				menu_path: vec!["Object".to_string(), "Tail".to_string()],
+				menu_label: Some("Tail".to_string()),
+				control_type: Some("Toggle".to_string()),
+				parameter_name: "Tail".to_string(),
+				parameter_value: 1.0,
+				match_kind: "metadata".to_string(),
+				available: true,
+				effect_count: 0,
+				..Default::default()
+			},
+			gpu::RuntimeMenuActionCandidateStatus {
+				action_id: "action:vrcft_eye".to_string(),
+				action_label: "Eye Tracking".to_string(),
+				menu_key: "vrcft/eye".to_string(),
+				menu_path: vec!["Face_Tracking".to_string(), "Eye Tracking".to_string()],
+				menu_label: Some("VRCFT Eye Tracking".to_string()),
+				control_type: Some("Toggle".to_string()),
+				parameter_name: "EyeTracking".to_string(),
+				parameter_value: 1.0,
+				match_kind: "metadata".to_string(),
+				available: true,
+				effect_count: 1,
+				..Default::default()
+			},
+		];
+
+		let (_menu, actions) = build_menu(&opts, &status);
+
+		assert!(!actions.contains_key("renderer:unanimator:0"));
+	}
+
+	#[test]
 	fn unanimator_falls_back_to_expression_menu_runtime_actions() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();

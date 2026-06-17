@@ -20,6 +20,7 @@ npm run check
 cargo xtask fmt
 cargo test -p xtask -- --nocapture
 cargo test -p un-avatar-render-wgpu renderer_tray -- --nocapture
+cargo test -p un-avatar-render-wgpu unanimator_excludes_metadata_only_and_tracking_controls
 cargo test -p un-avatar-render-wgpu rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive
 cargo test -p un-avatar-render-wgpu startup_progress_and_wardrobe_transition_are_distinct_frame_roles
 cargo test -p un-avatar-render-wgpu startup_progress_overlay_does_not_embed_wardrobe_transition_art
