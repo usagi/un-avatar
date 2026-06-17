@@ -9,7 +9,7 @@ UN Avatar v1 の Supervisor Console `Profiles` 画面を、製品向けの profi
 - VStreamer が初見でも「なんとなく良い感じ」に設定できる。
 - 上級ユーザーは個別パラメーターを直接調整できる。
 - 開発・診断用の項目は必要なときだけ表示し、通常の profile 編集を邪魔しない。
-- レンダラー splash / VRM metadata 画面と同じく、USAGI.NETWORK らしい cool / cute / technical な印象を持たせる。
+- レンダラー startup progress / VRM metadata 画面と同じく、USAGI.NETWORK らしい cool / cute / technical な印象を持たせる。
 - v1.1 以後に PBR / Realistic / Offline RT の rendering style を足しても UI の大改修を避ける。
 - 新バージョンで既存 profile のレンダリング結果を勝手に変えない。
 
