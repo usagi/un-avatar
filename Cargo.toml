@@ -22,7 +22,7 @@ default-members = ["apps/un-avatar-supervisor/src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "2.0.0-beta-2"
+version = "2.0.0"
 edition = "2021"
 authors = ["usagi / USAGI.NETWORK"]
 license = "MIT"

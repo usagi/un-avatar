@@ -1,19 +1,19 @@
 # UN Avatar v2 Manual Release Checklist
 
-This checklist is for the final v2 beta candidate pass after automated checks have already passed. Keep screenshots, renderer logs, diagnostics bundles, and short notes beside the release artifact being tested.
+This checklist is for the final v2.0 candidate pass after automated checks have already passed. Keep screenshots, renderer logs, diagnostics bundles, and short notes beside the release artifact being tested.
 
 ## Candidate Build
 
 - Date / operator: 2026-06-17 / Codex local release-prep
 - Git commit: `c537e76e`
   - Packaged source commit. Later checklist / release-note evidence commits may sit on top of this.
-- Version: `2.0.0-beta-2`
-- Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`
-- Portable zip SHA-256: `94e34059a8145825362f59ad30e52ec79cd7631648355913e385ff7ea307a7a5`
-- VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
-- VCC package SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
+- Version: `2.0.0`
+- Portable zip: `release-packages/un-avatar-2.0.0.zip`
+- Portable zip SHA-256: `648eafc34d16d8b8ca2733d52f64ab242b2fa62b79eaeba32283fdd1196a4417`
+- VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0.zip`
+- VCC package SHA-256: `f6c6e7e93814c4cc947cac66a3784d7feff6d888db9e55bf39978249624c71af`
 - `cargo xtask ci` result: passed
-- `cargo xtask release-audit --version <version>` result: passed for `2.0.0-beta-2`
+- `cargo xtask release-audit --version <version>` result: passed for `2.0.0`
 - `release-audit` confirms release notes hashes: yes
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`
@@ -31,8 +31,8 @@ Use a clean unpack directory outside the repository.
 
 Evidence:
 
-- Unpack path: `target/release-evidence/20260617-1730-clean-package-smoke/unpack/un-avatar-2.0.0-beta-2`
-- Screenshot / notes: required packaged files were present with no missing entries; see `target/release-evidence/20260617-1730-clean-package-smoke/clean-package-smoke.json` and `target/release-evidence/20260617-1730-clean-package-smoke/required-files.txt`. `cargo xtask release-audit --version 2.0.0-beta-2` passed after recording this evidence.
+- Unpack path: `target/release-evidence/20260617-1730-clean-package-smoke/unpack/un-avatar-2.0.0`
+- Screenshot / notes: required packaged files were present with no missing entries; see `target/release-evidence/20260617-1730-clean-package-smoke/clean-package-smoke.json` and `target/release-evidence/20260617-1730-clean-package-smoke/required-files.txt`. `cargo xtask release-audit --version 2.0.0` passed after recording this evidence.
 
 ## Supervisor Profile Workflow
 

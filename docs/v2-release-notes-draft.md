@@ -1,6 +1,6 @@
 # U.N. Avatar v2 Release Notes Draft
 
-This is the working release-note source for the first v2 beta. It records what can be said from current automated / windowless evidence and what still needs real GUI confirmation before publishing.
+This is the working release-note source for the v2.0 release. It records what can be said from current automated / windowless evidence and what still needs real GUI confirmation before publishing.
 
 ## Release Scope
 
@@ -19,9 +19,9 @@ These commands passed in the release-prep workspace for the recorded candidate p
 npm run check
 cargo xtask fmt
 cargo xtask release-guard
-cargo xtask unity-exporter-vcc --version 2.0.0-beta-2
-cargo xtask release-package --version 2.0.0-beta-2
-cargo xtask release-audit --version 2.0.0-beta-2
+cargo xtask unity-exporter-vcc --version 2.0.0
+cargo xtask release-package --version 2.0.0
+cargo xtask release-audit --version 2.0.0
 cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape
 cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1
 cargo xtask ci
@@ -30,11 +30,11 @@ git diff --check
 
 Generated artifact evidence from the latest successful local packaging run:
 
-- `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `94e34059a8145825362f59ad30e52ec79cd7631648355913e385ff7ea307a7a5`
-- sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
-- VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
-- VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
+- `release-packages/un-avatar-2.0.0.zip`
+- zip SHA-256: `648eafc34d16d8b8ca2733d52f64ab242b2fa62b79eaeba32283fdd1196a4417`
+- sidecar: `release-packages/un-avatar-2.0.0.zip.sha256.txt`
+- VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0.zip`
+- VCC zip SHA-256: `f6c6e7e93814c4cc947cac66a3784d7feff6d888db9e55bf39978249624c71af`
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
@@ -63,7 +63,7 @@ The recorded package includes post-candidate fixes for wardrobe transition rest-
 
 ## Publishing Notes
 
-- Use release tags and titles without a `v` prefix, for example `2.0.0-beta-2`.
+- Use release tags and titles without a `v` prefix, for example `2.0.0`.
 - Attach both the portable zip and the VCC package zip to the same GitHub Release.
 - Commit the generated `docs/vcc/index.json` so VCC can discover the Unity Exporter package.
 - Publish the portable zip checksum sidecar and include the SHA-256 values in the release text.
