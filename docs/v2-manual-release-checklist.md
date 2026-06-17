@@ -31,8 +31,8 @@ Use a clean unpack directory outside the repository.
 
 Evidence:
 
-- Unpack path:
-- Screenshot / notes:
+- Unpack path: `target/release-evidence/20260617-1730-clean-package-smoke/unpack/un-avatar-2.0.0-beta-2`
+- Screenshot / notes: required packaged files were present with no missing entries; see `target/release-evidence/20260617-1730-clean-package-smoke/clean-package-smoke.json` and `target/release-evidence/20260617-1730-clean-package-smoke/required-files.txt`. `cargo xtask release-audit --version 2.0.0-beta-2` passed after recording this evidence.
 
 ## Supervisor Profile Workflow
 
