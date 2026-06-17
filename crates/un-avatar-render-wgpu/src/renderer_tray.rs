@@ -410,7 +410,7 @@ impl TrayText {
 		match state.trim() {
 			"" => self.msg("scene_starting").into_owned(),
 			"avatar_scene" => self.msg("scene_avatar_scene").into_owned(),
-			"startup" | "loading" => self.msg("scene_loading").into_owned(),
+			"startup" | "loading" | "startup_progress" => self.msg("scene_loading").into_owned(),
 			other => other.replace('_', " "),
 		}
 	}

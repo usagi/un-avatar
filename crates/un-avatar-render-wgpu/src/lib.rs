@@ -91,7 +91,7 @@ fn log_slow_renderer_step(label: impl std::fmt::Display, elapsed: Duration) {
 	}
 }
 
-const SCENE_STATE_SPLASH: &str = "splash";
+const SCENE_STATE_STARTUP_PROGRESS: &str = "startup_progress";
 const SCENE_STATE_AVATAR_SCENE: &str = "avatar_scene";
 const SCENE_STATE_FAILED: &str = "failed";
 const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
@@ -1398,7 +1398,7 @@ impl StartupPhase {
 		}
 	}
 
-	fn splash_code(&self) -> f32 {
+	fn overlay_phase_code(&self) -> f32 {
 		match self {
 			Self::Model => 1.0,
 			Self::TextureCache => 2.0,
@@ -3200,7 +3200,7 @@ impl AvatarApp {
 		};
 		if let Ok(mut status) = status.lock() {
 			if let Some(progress) = &self.startup_progress {
-				status.scene_state = SCENE_STATE_SPLASH.to_string();
+				status.scene_state = SCENE_STATE_STARTUP_PROGRESS.to_string();
 				status.startup_phase = Some(progress.phase.as_str().to_string());
 				status.startup_progress = Some([progress.current, progress.total]);
 				status.startup_message = Some(progress.message.clone());
@@ -3619,7 +3619,7 @@ impl AvatarApp {
 			Some(gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
-				phase: progress.phase.splash_code(),
+				phase: progress.phase.overlay_phase_code(),
 				rect_center: SPLASH_FULL_RECT_CENTER,
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
@@ -4291,7 +4291,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				let state = if self.startup_failed.is_some() {
 					SCENE_STATE_FAILED
 				} else if self.startup_progress.is_some() || self.startup_pending_document {
-					SCENE_STATE_SPLASH
+					SCENE_STATE_STARTUP_PROGRESS
 				} else {
 					SCENE_STATE_AVATAR_SCENE
 				};
@@ -5828,7 +5828,7 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 			.iter()
 			.map(|capability| (*capability).to_string())
 			.collect(),
-		scene_state: SCENE_STATE_SPLASH.to_string(),
+		scene_state: SCENE_STATE_STARTUP_PROGRESS.to_string(),
 		uptime_secs: 0,
 		fps: None,
 		cpu_ms: None,
@@ -7286,7 +7286,7 @@ mod tests {
 		runtime_dynamics_warnings, start_runtime_status_server, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active,
 		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
 		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
-		SCENE_STATE_SPLASH, WINDOW_TITLE_STATUS_MAX_CHARS,
+		SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -7811,7 +7811,7 @@ mod tests {
 		assert_eq!(snapshot.get("protocol").and_then(|value| value.as_str()), Some("local-tcp-json-v2"));
 		assert_eq!(
 			snapshot.get("scene_state").and_then(|value| value.as_str()),
-			Some(SCENE_STATE_SPLASH)
+			Some(SCENE_STATE_STARTUP_PROGRESS)
 		);
 		assert_eq!(
 			snapshot.get("active_wardrobe_set").and_then(|value| value.as_str()),
