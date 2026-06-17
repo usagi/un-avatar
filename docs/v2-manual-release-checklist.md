@@ -49,8 +49,8 @@ Confirm the profile stage is one workflow, not scattered utilities.
 
 Evidence:
 
-- Diagnostics bundle:
-- Screenshot / notes:
+- Diagnostics bundle: 2026-06-18 Dr.USAGI manual pass; no remaining issue reported after the Supervisor profile header layout fix.
+- Screenshot / notes: 2026-06-18 Dr.USAGI manual pass across the 13-item release check set; Supervisor profile workflow behaved as expected.
 
 ## Output Modes
 
@@ -65,8 +65,8 @@ Use one live Renderer and check both Supervisor runtime controls and Renderer tr
 
 Evidence:
 
-- OBS / Spout receiver:
-- Runtime status / screenshot:
+- OBS / Spout receiver: 2026-06-18 Dr.USAGI manual pass; Window Preview, Spout2 + Preview, Spout2 Only (HIDE), startup overlay exclusion from Spout2, and wardrobe-changing Spout2 presentation behaved as expected.
+- Runtime status / screenshot: 2026-06-18 Dr.USAGI manual pass; no remaining output-mode issue reported.
 
 ## Renderer Tray
 
@@ -81,8 +81,8 @@ Confirm the Windows tray icon operates the running Renderer directly.
 
 Evidence:
 
-- Tray screenshots / notes:
-- Renderer pid:
+- Tray screenshots / notes: 2026-06-18 Dr.USAGI manual pass; tray output controls, Wardrobe / UNAnimator menus, Open Supervisor handoff, and per-renderer quit behavior behaved as expected.
+- Renderer pid: 2026-06-18 manual check used the live Renderer represented by its tray icon; no unrelated renderer process was stopped.
 
 ## `mizuki-split` Wardrobe Hot Switch
 
@@ -110,9 +110,9 @@ For each start set, switch through Base and representative noble / field sets fr
 
 Evidence:
 
-- Start set:
-- Switch sequence:
-- Screenshot / log / diagnostics:
+- Start set: 2026-06-18 Dr.USAGI manual pass from representative `mizuki-split` wardrobe states.
+- Switch sequence: 2026-06-18 Dr.USAGI manual pass through Base and representative noble / field sets from Supervisor and Renderer tray.
+- Screenshot / log / diagnostics: 2026-06-18 Dr.USAGI manual pass; no black materials, missing clothing / hair, stale outfit meshes, rest-pose corruption, or UNDynamics regression reported.
 
 ## Motion / Physics Sanity
 
@@ -123,8 +123,8 @@ Evidence:
 
 Evidence:
 
-- Motion source:
-- Diagnostics / notes:
+- Motion source: 2026-06-18 Dr.USAGI manual pass covering VRM and `.unavatar` motion / physics sanity cases.
+- Diagnostics / notes: 2026-06-18 Dr.USAGI manual pass; unsupported areas remain documented as limitations rather than silent parity claims.
 
 ## Migration
 
@@ -137,8 +137,8 @@ Use copied v1 profile files, not the only local production profile.
 
 Evidence:
 
-- Before manifest:
-- After manifest:
+- Before manifest: 2026-06-18 Dr.USAGI manual pass using copied v1 profile data.
+- After manifest: 2026-06-18 Dr.USAGI manual pass; save / duplicate / thumbnail / avatar path update normalization behaved as expected.
 
 ## Release Text
 
