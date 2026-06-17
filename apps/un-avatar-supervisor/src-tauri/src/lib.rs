@@ -14004,6 +14004,36 @@ mod tests {
 	}
 
 	#[test]
+	fn static_unanimator_search_submit_does_not_reload_loaded_candidates() {
+		let source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileAvatarSection.svelte"),
+		)
+		.expect("ProfileAvatarSection.svelte should be readable");
+		let submit = source
+			.split("function submitAnimatorSearch()")
+			.nth(1)
+			.and_then(|rest| rest.split("function filterAnimatorCandidates").next())
+			.expect("submitAnimatorSearch function should exist");
+		assert!(
+			submit.contains("if (!animatorPage && !animatorBusy)") && submit.contains("void refreshAnimatorPage()"),
+			"UNAnimator Enter search should load only before candidates exist"
+		);
+		assert!(
+			source.contains("onsubmit={(event)") && source.contains("submitAnimatorSearch();"),
+			"UNAnimator search form submit should route through local-search-aware submit handler"
+		);
+		assert!(
+			source.contains(r#"type="button" class="field-button" disabled={busy || animatorBusy} onclick={() => refreshAnimatorPage()}"#),
+			"UNAnimator load button should remain the explicit candidate reload action"
+		);
+	}
+
+	#[test]
 	fn static_profile_section_nav_and_body_order_match() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");

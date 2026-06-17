@@ -172,6 +172,13 @@
 		animatorOffset = 0;
 	}
 
+	function submitAnimatorSearch(): void {
+		animatorOffset = 0;
+		if (!animatorPage && !animatorBusy) {
+			void refreshAnimatorPage();
+		}
+	}
+
 	function filterAnimatorCandidates(candidates: UnavatarAnimatorActionCandidate[], query: string): UnavatarAnimatorActionCandidate[] {
 		const words = query
 			.trim()
@@ -823,7 +830,7 @@
 						class="animator-search-row"
 						onsubmit={(event) => {
 							event.preventDefault();
-							void refreshAnimatorPage();
+							submitAnimatorSearch();
 						}}
 					>
 						<label class="animator-search-field"
@@ -833,7 +840,7 @@
 								oninput={(event) => setAnimatorQuery((event.currentTarget as HTMLInputElement).value)}
 							/></label
 						>
-						<button type="submit" class="field-button" disabled={busy || animatorBusy}
+						<button type="button" class="field-button" disabled={busy || animatorBusy} onclick={() => refreshAnimatorPage()}
 							><RefreshCw size={15} />{$_("profiles.editor.unanimator_load_candidates")}</button
 						>
 					</form>
