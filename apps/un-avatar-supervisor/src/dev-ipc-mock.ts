@@ -602,10 +602,19 @@ export function installDevIpcMock(): void {
 			case "get_native_notification_status":
 				return { permission_state: "unsupported" };
 			case "set_last_selected_setting_id":
+			case "save_renderer_camera_to_profile":
+			case "restore_renderer_camera_from_profile":
+			case "save_renderer_spout_profile":
+			case "restore_renderer_output_from_profile":
+			case "save_renderer_window_to_profile":
+			case "restore_renderer_window_from_profile":
+			case "set_renderer_show_axes":
 			case "set_renderer_show_bone_colliders":
+			case "set_renderer_spout_output":
 			case "set_renderer_motion_receivers":
 			case "set_renderer_dynamics":
 			case "set_renderer_dynamics_enabled":
+			case "set_renderer_window":
 			case "reveal_profiles_dir":
 			case "stop_all_renderers":
 				return null;
