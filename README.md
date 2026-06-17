@@ -76,12 +76,9 @@ U.N. Motion なしでも、VMC/UDP を送信できる既存アプリや [UNMF/Z]
 ## ドキュメント
 
 - [v2 Getting Started](docs/v2-getting-started.md): 初回起動、VRC Exporter、Wardrobe の操作手順
-- [Documentation Index](docs/README.md): 公開文書、実装・設計メモ、歴史的メモの索引
-- [v2 Roadmap](docs/v2-roadmap.md): `.unavatar` / VRC Unity Exporter を中核にした v2 計画
 - [Unity Exporter](docs/unity-exporter-v0.1.md): Unity project から `.unavatar` を出力する Exporter の境界
-- [v2 UI / GUI Operation Plan](docs/v2-ui-gui-operation-plan.md): Renderer tray、Supervisor、Wardrobe、UNAnimator の操作方針
-- [Development Guidelines](docs/development-guidelines.md): 開発時の確認方針、xtask、release audit
 - [Third-party Licenses](docs/third-party-licenses.md): Spout2 などの third-party licenses
+- [Documentation Index](docs/README.md): 詳しい仕様、設計メモ、開発者向け情報の索引
 
 ## Acknowledgements
 
