@@ -2387,8 +2387,20 @@ height = 360
 			Some(RendererTrayAction::SetSpoutResolution { width: 1280, height: 720 })
 		));
 		assert!(matches!(
+			actions.get("renderer:output:save_spout_profile"),
+			Some(RendererTrayAction::SaveSpoutToProfile)
+		));
+		assert!(matches!(
 			actions.get("renderer:window:always_on_top"),
 			Some(RendererTrayAction::SetAlwaysOnTop(true))
+		));
+		assert!(matches!(
+			actions.get("renderer:window:save_profile"),
+			Some(RendererTrayAction::SaveWindowToProfile)
+		));
+		assert!(matches!(
+			actions.get("renderer:window:restore_profile"),
+			Some(RendererTrayAction::RestoreWindowFromProfile)
 		));
 		assert!(matches!(
 			actions.get("renderer:dynamics:toggle"),
@@ -2397,6 +2409,14 @@ height = 360
 		assert!(matches!(
 			actions.get("renderer:camera:reset"),
 			Some(RendererTrayAction::ResetCamera)
+		));
+		assert!(matches!(
+			actions.get("renderer:camera:save_profile"),
+			Some(RendererTrayAction::SaveCameraToProfile)
+		));
+		assert!(matches!(
+			actions.get("renderer:camera:restore_profile"),
+			Some(RendererTrayAction::RestoreCameraFromProfile)
 		));
 		assert!(matches!(
 			actions.get("renderer:supervisor:open"),
