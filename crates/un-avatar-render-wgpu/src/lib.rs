@@ -3615,8 +3615,8 @@ impl AvatarApp {
 		let preview_window_output_enabled = self.preview_window_output_enabled();
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
-		let startup_splash = if let Some(progress) = self.startup_progress.as_ref() {
-			Some(gpu::StartupSplashFrame {
+		let startup_progress_overlay = if let Some(progress) = self.startup_progress.as_ref() {
+			Some(gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
 				phase: progress.phase.splash_code(),
@@ -3624,7 +3624,7 @@ impl AvatarApp {
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
 		} else {
-			self.startup_failed.as_ref().map(|_| gpu::StartupSplashFrame {
+			self.startup_failed.as_ref().map(|_| gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: -1.0,
 				phase: 9.0,
@@ -3632,7 +3632,7 @@ impl AvatarApp {
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
 		};
-		let wardrobe_billboard = self.wardrobe_changing_billboard_frame(now);
+		let wardrobe_changing_billboard = self.wardrobe_changing_billboard_frame(now);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -3642,8 +3642,8 @@ impl AvatarApp {
 				win.as_ref(),
 				self.opts.clear_color,
 				wall_clamped,
-				startup_splash,
-				wardrobe_billboard,
+				startup_progress_overlay,
+				wardrobe_changing_billboard,
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();

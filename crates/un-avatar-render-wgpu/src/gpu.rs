@@ -2277,7 +2277,7 @@ struct DebugLineVertex {
 	color: [f32; 4],
 }
 
-pub(crate) struct StartupSplashFrame {
+pub(crate) struct StartupProgressOverlayFrame {
 	pub(crate) time_secs: f32,
 	pub(crate) progress: f32,
 	pub(crate) phase: f32,
@@ -2293,8 +2293,8 @@ pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
-fn frame_allows_spout_output(spout_available: bool, startup_splash_active: bool) -> bool {
-	spout_available && !startup_splash_active
+fn frame_allows_spout_output(spout_available: bool, startup_progress_overlay_active: bool) -> bool {
+	spout_available && !startup_progress_overlay_active
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -6998,38 +6998,29 @@ impl GpuState {
 		pass.draw(0..6, 0..1);
 	}
 
-	fn draw_startup_splash<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: &StartupSplashFrame, width: u32, height: u32) {
+	fn draw_startup_progress_overlay<'a>(
+		&'a self,
+		pass: &mut wgpu::RenderPass<'a>,
+		progress_overlay: &StartupProgressOverlayFrame,
+		width: u32,
+		height: u32,
+	) {
 		let aspect = width.max(1) as f32 / height.max(1) as f32;
 		self.queue.write_buffer(
 			&self.startup_splash_buffer,
 			0,
 			bytemuck::bytes_of(&StartupSplashGpu {
-				time: splash.time_secs,
-				progress: splash.progress,
+				time: progress_overlay.time_secs,
+				progress: progress_overlay.progress,
 				aspect,
-				phase: splash.phase,
-				rect_center: splash.rect_center,
-				rect_half_size: splash.rect_half_size,
+				phase: progress_overlay.phase,
+				rect_center: progress_overlay.rect_center,
+				rect_half_size: progress_overlay.rect_half_size,
 			}),
 		);
 		pass.set_pipeline(&self.startup_splash_pipeline);
 		pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
 		pass.draw(0..3, 0..1);
-	}
-
-	fn draw_frame_overlay<'a>(
-		&'a self,
-		pass: &mut wgpu::RenderPass<'a>,
-		startup_splash: Option<&StartupSplashFrame>,
-		wardrobe_billboard: Option<&WardrobeChangingBillboardFrame>,
-		width: u32,
-		height: u32,
-	) {
-		if let Some(billboard) = wardrobe_billboard {
-			self.draw_wardrobe_billboard(pass, billboard);
-		} else if let Some(splash) = startup_splash {
-			self.draw_startup_splash(pass, splash, width, height);
-		}
 	}
 
 	fn avatar_outline_width_px_for(&self, width: u32, height: u32) -> f32 {
@@ -7048,8 +7039,8 @@ impl GpuState {
 		window: &Window,
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
-		startup_splash: Option<StartupSplashFrame>,
-		wardrobe_billboard: Option<WardrobeChangingBillboardFrame>,
+		startup_progress_overlay: Option<StartupProgressOverlayFrame>,
+		wardrobe_changing_billboard: Option<WardrobeChangingBillboardFrame>,
 		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
 		let t_cpu0 = Instant::now();
@@ -7062,7 +7053,7 @@ impl GpuState {
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
-		let wardrobe_transition_only = wardrobe_billboard.is_some();
+		let wardrobe_transition_only = wardrobe_changing_billboard.is_some();
 		if let (Some(doc_arc), true) = (
 			&self.document,
 			!wardrobe_transition_only && self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
@@ -7143,7 +7134,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_allows_spout_output(self.spout.is_some(), startup_splash.is_some())
+				frame_allows_spout_output(self.spout.is_some(), startup_progress_overlay.is_some())
 			}
 			#[cfg(not(windows))]
 			{
@@ -7468,7 +7459,12 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			self.draw_frame_overlay(&mut pass, startup_splash.as_ref(), wardrobe_billboard.as_ref(), gw, gh);
+			if let Some(billboard) = wardrobe_changing_billboard.as_ref() {
+				self.draw_wardrobe_billboard(&mut pass, billboard);
+			}
+			if let Some(progress_overlay) = startup_progress_overlay.as_ref() {
+				self.draw_startup_progress_overlay(&mut pass, progress_overlay, gw, gh);
+			}
 		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("main"),
@@ -7521,7 +7517,12 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			self.draw_frame_overlay(&mut pass, startup_splash.as_ref(), wardrobe_billboard.as_ref(), gw, gh);
+			if let Some(billboard) = wardrobe_changing_billboard.as_ref() {
+				self.draw_wardrobe_billboard(&mut pass, billboard);
+			}
+			if let Some(progress_overlay) = startup_progress_overlay.as_ref() {
+				self.draw_startup_progress_overlay(&mut pass, progress_overlay, gw, gh);
+			}
 		}
 
 		if let (Some(ts), Some(idx)) = (self.gpu_timestamps.as_ref(), timestamp_write_idx) {
@@ -9060,7 +9061,7 @@ mod tests {
 	}
 
 	#[test]
-	fn startup_progress_frames_are_the_only_spout_suppressed_overlay() {
+	fn startup_progress_overlay_suppresses_spout_output() {
 		assert!(!frame_allows_spout_output(false, false));
 		assert!(frame_allows_spout_output(true, false));
 		assert!(!frame_allows_spout_output(true, true));
