@@ -22,8 +22,8 @@ const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 const RENDERER_TRAY_LOCALE_ENV: &str = "UN_AVATAR_LOCALE";
 const RENDERER_TRAY_FALLBACK_LOCALE: &str = "ja-JP";
-const UNANIMATOR_TRAY_MENU_ID: &str = "renderer:vrc_menu";
-const UNANIMATOR_TRAY_ACTION_ID_PREFIX: &str = "vrc_menu";
+const UNANIMATOR_TRAY_MENU_ID: &str = "renderer:unanimator";
+const UNANIMATOR_TRAY_ACTION_ID_PREFIX: &str = "unanimator";
 
 static RENDERER_TRAY_I18N: LazyLock<un_i18n::UnI18nStore> = LazyLock::new(|| {
 	let mut store = un_i18n::UnI18nStore::new();
@@ -2031,10 +2031,10 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "Smile" && (*value - 1.0).abs() < f32::EPSILON
 		));
-		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+		assert!(!actions.contains_key("renderer:unanimator:1"));
 	}
 
 	#[test]
@@ -2062,7 +2062,7 @@ mod tests {
 
 		let (_menu, actions) = build_menu(&opts, &status);
 
-		assert!(!actions.contains_key("renderer:vrc_menu:0"));
+		assert!(!actions.contains_key("renderer:unanimator:0"));
 	}
 
 	#[test]
@@ -2081,7 +2081,7 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:hat"
 		));
 	}
@@ -2111,7 +2111,7 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "expression:angry"
 		));
 		assert!(menu_key(&opts, &status).contains("expression:angry"));
@@ -2144,10 +2144,10 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::ActivateAction(action_id)) if action_id == "action:smile"
 		));
-		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+		assert!(!actions.contains_key("renderer:unanimator:1"));
 	}
 
 	#[test]
@@ -2168,14 +2168,14 @@ mod tests {
 
 		let (_menu, actions) = build_menu(&opts, &status);
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "HatOff" && (*value - 1.0).abs() < f32::EPSILON
 		));
 
 		status.runtime_actions[0].current_condition_state = Some("active".to_string());
 		let (_menu, actions) = build_menu(&opts, &status);
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "HatOff" && value.abs() < f32::EPSILON
 		));
 	}
@@ -2216,16 +2216,16 @@ mod tests {
 		let (_menu, actions) = build_menu(&opts, &status);
 
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && (*value - 1.0).abs() < f32::EPSILON
 		));
-		assert!(!actions.contains_key("renderer:vrc_menu:1"));
+		assert!(!actions.contains_key("renderer:unanimator:1"));
 		assert_eq!(menu_action_label(&status.menu_action_candidates[1]), "Object / Hat");
 
 		status.runtime_parameter_values.insert("Hat".to_string(), 0.0);
 		let (_menu, actions) = build_menu(&opts, &status);
 		assert!(matches!(
-			actions.get("renderer:vrc_menu:0"),
+			actions.get("renderer:unanimator:0"),
 			Some(RendererTrayAction::SetParameter { name, value }) if name == "Hat" && (*value - 1.0).abs() < f32::EPSILON
 		));
 	}
