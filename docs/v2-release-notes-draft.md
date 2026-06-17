@@ -27,7 +27,11 @@ cargo test -p un-avatar-render-wgpu wardrobe_transition_frame_skips_runtime_acti
 cargo test -p un-avatar-render-wgpu startup_progress_and_wardrobe_transition_are_distinct_frame_roles
 cargo test -p un-avatar-render-wgpu startup_progress_overlay_does_not_embed_wardrobe_transition_art
 cargo test -p un-avatar-render-wgpu manifest -- --nocapture
+cargo test -p un-avatar-render-wgpu standalone_runtime_bus_key -- --nocapture
+cargo test -p un-avatar-render-wgpu runtime_status_server_keeps_one_shot_compatibility -- --nocapture
 cargo test -p un-avatar-supervisor dev_ipc_mock_covers_literal_frontend_invokes
+cargo test -p un-avatar-supervisor open_profile_manifest_registers_standalone_renderer_without_child_process -- --nocapture
+cargo test -p un-avatar-supervisor startup_open_profile_manifest_arg_accepts_renderer_tray_argv_shape -- --nocapture
 cargo test -p un-avatar-supervisor static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries
 cargo test -p un-avatar-supervisor static_renderer_wardrobe_menu_resolves_base_active_state
 cargo xtask unity-exporter-vcc --version 2.0.0-beta-2
@@ -42,14 +46,14 @@ git diff --check
 Generated artifact evidence from the latest successful local packaging run:
 
 - `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `0ea863140d2c1346b693b1de522a414101cefae2cbc249c524bd986147fd6b5b`
+- zip SHA-256: `94e34059a8145825362f59ad30e52ec79cd7631648355913e385ff7ea307a7a5`
 - sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
 - VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, wardrobe transition billboard frames skipping runtime contact / action evaluation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, explicit Spout2 settings save wording and Supervisor Spout2 profile-save IPC naming, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup state establishment before the first redraw, startup presentation suppression from Spout2 output, delayed Spout2 sender creation until runtime output frames, distinct startup / wardrobe frame roles for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray and Supervisor UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only HIDE labeling, extended function-key binding regression coverage, Supervisor and Renderer tray UNAnimator fixed-cap removal, profile-enabled Animator runtime action import cap expansion, UNAnimator metadata / tracking-control filtering, Supervisor Wardrobe Base active-state resolution, legacy v1 root `spring_bones` manifest input restoration with v2 `[physics.dynamics]` precedence, and dev-mode Supervisor IPC coverage for all literal frontend invoke commands.
+The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, wardrobe transition billboard frames skipping runtime contact / action evaluation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, explicit Spout2 settings save wording and Supervisor Spout2 profile-save IPC naming, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup state establishment before the first redraw, startup presentation suppression from Spout2 output, delayed Spout2 sender creation until runtime output frames, distinct startup / wardrobe frame roles for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray and Supervisor UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only HIDE labeling, extended function-key binding regression coverage, Supervisor and Renderer tray UNAnimator fixed-cap removal, profile-enabled Animator runtime action import cap expansion, UNAnimator metadata / tracking-control filtering, Supervisor Wardrobe Base active-state resolution, legacy v1 root `spring_bones` manifest input restoration with v2 `[physics.dynamics]` precedence, Renderer tray handoff attaching standalone Renderers to Supervisor runtime management, and dev-mode Supervisor IPC coverage for all literal frontend invoke commands.
 
 ## Known Limitations
 
