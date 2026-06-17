@@ -2293,20 +2293,37 @@ pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FramePresentationPolicy {
-	/// Normal avatar frames and OBS-facing runtime transition frames.
-	RuntimeOutput,
-	/// Startup / load / failure presentation belongs only to the local Renderer window.
-	RendererLocalStartup,
+pub(crate) enum RenderedFrameRole {
+	/// Normal avatar frames. These are runtime output and may be sent to Spout2.
+	RuntimeAvatar,
+	/// Renderer-local startup / load / failure presentation. This is never sent to Spout2.
+	RendererStartup { overlay: Option<StartupProgressOverlayFrame> },
+	/// OBS-facing wardrobe transition frame. This is runtime output and may be sent to Spout2.
+	WardrobeTransition { billboard: WardrobeChangingBillboardFrame },
 }
 
-fn frame_allows_spout_output(spout_available: bool, presentation_policy: FramePresentationPolicy) -> bool {
-	spout_available && matches!(presentation_policy, FramePresentationPolicy::RuntimeOutput)
-}
+impl RenderedFrameRole {
+	fn allows_spout_output(&self, spout_available: bool) -> bool {
+		spout_available && !matches!(self, Self::RendererStartup { .. })
+	}
 
-fn frame_is_wardrobe_transition_only(wardrobe_changing: Option<&WardrobeChangingBillboardFrame>) -> bool {
-	wardrobe_changing.is_some()
+	fn wardrobe_transition_billboard(&self) -> Option<&WardrobeChangingBillboardFrame> {
+		match self {
+			Self::WardrobeTransition { billboard } => Some(billboard),
+			Self::RuntimeAvatar | Self::RendererStartup { .. } => None,
+		}
+	}
+
+	fn startup_overlay(&self) -> Option<&StartupProgressOverlayFrame> {
+		match self {
+			Self::RendererStartup { overlay } => overlay.as_ref(),
+			Self::RuntimeAvatar | Self::WardrobeTransition { .. } => None,
+		}
+	}
+
+	fn is_wardrobe_transition_only(&self) -> bool {
+		matches!(self, Self::WardrobeTransition { .. })
+	}
 }
 
 pub(crate) struct DocumentAttachOptions {
@@ -7052,9 +7069,7 @@ impl GpuState {
 		window: &Window,
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
-		renderer_local_startup: Option<StartupProgressOverlayFrame>,
-		presentation_policy: FramePresentationPolicy,
-		wardrobe_changing: Option<WardrobeChangingBillboardFrame>,
+		frame_role: RenderedFrameRole,
 		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
 		let t_cpu0 = Instant::now();
@@ -7067,7 +7082,7 @@ impl GpuState {
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
-		let wardrobe_transition_only = frame_is_wardrobe_transition_only(wardrobe_changing.as_ref());
+		let wardrobe_transition_only = frame_role.is_wardrobe_transition_only();
 		if let (Some(doc_arc), true) = (
 			&self.document,
 			!wardrobe_transition_only && self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
@@ -7148,7 +7163,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_allows_spout_output(self.spout.is_some(), presentation_policy)
+				frame_role.allows_spout_output(self.spout.is_some())
 			}
 			#[cfg(not(windows))]
 			{
@@ -7473,10 +7488,10 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(billboard) = wardrobe_changing.as_ref() {
+			if let Some(billboard) = frame_role.wardrobe_transition_billboard() {
 				self.draw_wardrobe_billboard(&mut pass, billboard);
 			}
-			if let Some(progress_overlay) = renderer_local_startup.as_ref() {
+			if let Some(progress_overlay) = frame_role.startup_overlay() {
 				self.draw_startup_progress_overlay(&mut pass, progress_overlay, gw, gh);
 			}
 		} else {
@@ -7531,10 +7546,10 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(billboard) = wardrobe_changing.as_ref() {
+			if let Some(billboard) = frame_role.wardrobe_transition_billboard() {
 				self.draw_wardrobe_billboard(&mut pass, billboard);
 			}
-			if let Some(progress_overlay) = renderer_local_startup.as_ref() {
+			if let Some(progress_overlay) = frame_role.startup_overlay() {
 				self.draw_startup_progress_overlay(&mut pass, progress_overlay, gw, gh);
 			}
 		}
@@ -8205,15 +8220,14 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		effective_window_backend, frame_allows_spout_output, frame_is_wardrobe_transition_only, menu_action_candidates_from_runtime,
-		menu_graph_node_path, mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, modular_avatar_menu_components,
-		restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
-		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
-		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		FramePresentationPolicy, RuntimeMenuGraphNode, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		effective_window_backend, menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
+		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
+		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
+		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RenderedFrameRole, RuntimeMenuGraphNode,
+		StartupProgressOverlayFrame, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
@@ -9076,7 +9090,7 @@ mod tests {
 	}
 
 	#[test]
-	fn startup_progress_and_wardrobe_transition_have_separate_spout_policy() {
+	fn startup_progress_and_wardrobe_transition_are_distinct_frame_roles() {
 		let wardrobe_changing = WardrobeChangingBillboardFrame {
 			time_secs: 0.0,
 			billboard_center: [0.0, 1.0, 0.0],
@@ -9084,18 +9098,36 @@ mod tests {
 			billboard_view_proj: [[0.0; 4]; 4],
 			billboard_camera_pos: [0.0, 0.0, 2.0],
 		};
-		assert!(!frame_allows_spout_output(false, FramePresentationPolicy::RuntimeOutput));
-		assert!(frame_allows_spout_output(true, FramePresentationPolicy::RuntimeOutput));
+		let startup_overlay = StartupProgressOverlayFrame {
+			time_secs: 0.0,
+			progress: 0.5,
+			phase: 1.0,
+			rect_center: [0.5, 0.5],
+			rect_half_size: [0.25, 0.1],
+		};
+		let runtime = RenderedFrameRole::RuntimeAvatar;
+		let startup = RenderedFrameRole::RendererStartup {
+			overlay: Some(startup_overlay),
+		};
+		let wardrobe = RenderedFrameRole::WardrobeTransition {
+			billboard: wardrobe_changing,
+		};
+		assert!(!runtime.allows_spout_output(false));
+		assert!(runtime.allows_spout_output(true));
 		assert!(
-			!frame_allows_spout_output(true, FramePresentationPolicy::RendererLocalStartup),
+			!startup.allows_spout_output(true),
 			"startup presentation is renderer-local and must not be sent to Spout2"
 		);
 		assert!(
-			frame_allows_spout_output(true, FramePresentationPolicy::RuntimeOutput),
+			wardrobe.allows_spout_output(true),
 			"wardrobe changing billboard is an OBS-facing transition and must remain visible on Spout2"
 		);
-		assert!(frame_is_wardrobe_transition_only(Some(&wardrobe_changing)));
-		assert!(!frame_is_wardrobe_transition_only(None));
+		assert!(wardrobe.is_wardrobe_transition_only());
+		assert!(!startup.is_wardrobe_transition_only());
+		assert!(startup.startup_overlay().is_some());
+		assert!(startup.wardrobe_transition_billboard().is_none());
+		assert!(wardrobe.startup_overlay().is_none());
+		assert!(wardrobe.wardrobe_transition_billboard().is_some());
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {

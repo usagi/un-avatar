@@ -3636,14 +3636,9 @@ impl AvatarApp {
 		self.advance_animator_transitions(now);
 		self.update_wardrobe_transition_before_frame(now);
 		let preview_window_output_enabled = self.preview_window_output_enabled();
-		let presentation_policy = if self.startup_progress.is_some() || self.startup_pending_document || self.startup_failed.is_some() {
-			gpu::FramePresentationPolicy::RendererLocalStartup
-		} else {
-			gpu::FramePresentationPolicy::RuntimeOutput
-		};
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
-		let renderer_local_startup = if let Some(progress) = self.startup_progress.as_ref() {
+		let renderer_startup_overlay = if let Some(progress) = self.startup_progress.as_ref() {
 			Some(gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
@@ -3660,7 +3655,15 @@ impl AvatarApp {
 				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		};
-		let wardrobe_changing_billboard = self.wardrobe_changing_billboard_frame(now);
+		let frame_role = if self.startup_progress.is_some() || self.startup_pending_document || self.startup_failed.is_some() {
+			gpu::RenderedFrameRole::RendererStartup {
+				overlay: renderer_startup_overlay,
+			}
+		} else if let Some(billboard) = self.wardrobe_changing_billboard_frame(now) {
+			gpu::RenderedFrameRole::WardrobeTransition { billboard }
+		} else {
+			gpu::RenderedFrameRole::RuntimeAvatar
+		};
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -3670,9 +3673,7 @@ impl AvatarApp {
 				win.as_ref(),
 				self.opts.clear_color,
 				wall_clamped,
-				renderer_local_startup,
-				presentation_policy,
-				wardrobe_changing_billboard,
+				frame_role,
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();
