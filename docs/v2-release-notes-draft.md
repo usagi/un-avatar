@@ -32,7 +32,7 @@ git diff --check
 Generated artifact evidence from the latest successful local packaging run:
 
 - `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `c1916e17316d6e0f465a5230d6f7146f7b4d924988b7d0a2cd0803f35b6d2cde`
+- zip SHA-256: `8e87e0f17f2e77a9eda2fa27930a01f692e9275fc0e9cd9422523007126ca6af`
 - sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
 - VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
