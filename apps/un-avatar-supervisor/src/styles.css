@@ -521,10 +521,8 @@ small,
 
 .profile-stage {
 	grid-template-columns: auto minmax(0, 1fr);
-	height: 214px;
-	min-height: 214px;
+	min-height: 222px;
 	align-items: start;
-	overflow: hidden;
 }
 
 .renderer-stage:not(.renderer-stage-ready) {
@@ -634,7 +632,6 @@ small,
 .profile-stage-main {
 	align-content: start;
 	gap: 8px;
-	height: 100%;
 	min-height: 0;
 }
 
@@ -669,8 +666,6 @@ small,
 .profile-stage-title-row {
 	grid-template-columns: minmax(0, 1fr);
 	gap: 8px;
-	min-height: 138px;
-	overflow: hidden;
 }
 
 .profile-stage-title-row .profile-stage-actions {
@@ -738,7 +733,6 @@ small,
 	display: grid;
 	gap: 4px;
 	box-sizing: border-box;
-	height: 62px;
 	min-width: 0;
 	padding: 8px 10px;
 	border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -832,11 +826,8 @@ small,
 	align-items: center;
 	justify-content: flex-end;
 	gap: 6px;
-	min-height: 66px;
-	max-height: 66px;
 	min-width: 0;
 	max-width: 100%;
-	overflow: hidden;
 }
 
 .profile-stage-actions button,
@@ -2484,9 +2475,7 @@ td small {
 	}
 
 	.profile-stage {
-		height: auto;
 		min-height: 172px;
-		overflow: visible;
 	}
 
 	.profile-stage-art {
@@ -2514,19 +2503,8 @@ td small {
 		max-width: 100%;
 	}
 
-	.profile-stage-title-row {
-		min-height: 0;
-		overflow: visible;
-	}
-
 	.profile-cache-callout {
-		height: auto;
 		min-height: 62px;
-	}
-
-	.profile-stage-action-buttons {
-		max-height: none;
-		overflow: visible;
 	}
 
 	.profile-stage-action-group {

@@ -14523,21 +14523,23 @@ display_name = "Mizuki"
 		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
 			.expect("styles.css should be readable");
 		assert!(
-			styles_css.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\theight: 214px;\n\tmin-height: 214px;"),
-			"profile stage should keep a fixed desktop height so VRM and .unavatar profile headers do not visually jump"
+			styles_css.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\tmin-height: 222px;"),
+			"profile stage should keep a stable desktop minimum height so VRM and .unavatar profile headers do not visually jump"
 		);
 		assert!(
 			styles_css.contains(".profile-summary-grid button {\n\theight: 46px;\n\tmin-height: 46px;"),
 			"profile summary tiles should keep a stable fixed row height"
 		);
 		assert!(
-			styles_css.contains(".profile-stage-action-buttons {\n\tdisplay: inline-flex;")
-				&& styles_css.contains("\tmin-height: 66px;\n\tmax-height: 66px;"),
-			"profile stage action area should reserve a stable two-row height on desktop"
+			!styles_css.contains(".profile-cache-callout {\n\tdisplay: grid;\n\tgap: 4px;\n\tbox-sizing: border-box;\n\theight:"),
+			"profile cache callout must not use a fixed height that clips localized help text"
 		);
 		assert!(
-			styles_css.contains("@media (max-width: 1180px)")
-				&& styles_css.contains("\t.profile-stage {\n\t\theight: auto;\n\t\tmin-height: 172px;"),
+			!styles_css.contains("\tmax-height: 66px;\n\tmin-width: 0;\n\tmax-width: 100%;\n\toverflow: hidden;"),
+			"profile stage action area must not hide wrapped action rows"
+		);
+		assert!(
+			styles_css.contains("@media (max-width: 1180px)") && styles_css.contains("\t.profile-stage {\n\t\tmin-height: 172px;"),
 			"profile stage should return to responsive auto height on narrow layouts"
 		);
 	}
