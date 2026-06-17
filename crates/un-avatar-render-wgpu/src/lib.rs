@@ -204,6 +204,10 @@ fn wardrobe_transition_frame_role(wardrobe_billboard: Option<gpu::WardrobeChangi
 	})
 }
 
+fn should_evaluate_runtime_actions_for_frame(frame_role: &gpu::RenderedFrameRole) -> bool {
+	!matches!(frame_role, gpu::RenderedFrameRole::WardrobeTransition(_))
+}
+
 #[derive(Clone, Copy, Debug)]
 struct CameraStatePatch {
 	target: Option<[f32; 3]>,
@@ -3684,6 +3688,7 @@ impl AvatarApp {
 		)
 		.or_else(|| wardrobe_transition_frame_role(self.wardrobe_changing_billboard_frame(now)))
 		.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		let evaluate_runtime_actions = should_evaluate_runtime_actions_for_frame(&frame_role);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -3700,25 +3705,29 @@ impl AvatarApp {
 				return false;
 			};
 			let (parameter_updates, runtime_parameter_activations) = {
-				let t_contact0 = Instant::now();
-				let parameter_updates = match gpu.apply_contact_parameter_emissions() {
-					Ok(parameter_updates) => parameter_updates,
-					Err(err) => {
-						eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
-						BTreeMap::new()
-					}
-				};
-				timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
-				let t_action0 = Instant::now();
-				let activations = match gpu.evaluate_runtime_parameter_actions() {
-					Ok(activations) => activations,
-					Err(err) => {
-						eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
-						Vec::new()
-					}
-				};
-				timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
-				(parameter_updates, activations)
+				if evaluate_runtime_actions {
+					let t_contact0 = Instant::now();
+					let parameter_updates = match gpu.apply_contact_parameter_emissions() {
+						Ok(parameter_updates) => parameter_updates,
+						Err(err) => {
+							eprintln!("un-avatar-renderer: contact parameter emission failed: {err}");
+							BTreeMap::new()
+						}
+					};
+					timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
+					let t_action0 = Instant::now();
+					let activations = match gpu.evaluate_runtime_parameter_actions() {
+						Ok(activations) => activations,
+						Err(err) => {
+							eprintln!("un-avatar-renderer: runtime parameter action evaluation failed: {err}");
+							Vec::new()
+						}
+					};
+					timings.runtime_action_eval_ms = t_action0.elapsed().as_secs_f32() * 1000.0;
+					(parameter_updates, activations)
+				} else {
+					(BTreeMap::new(), Vec::new())
+				}
 			};
 			(
 				timings,
@@ -7453,6 +7462,24 @@ mod tests {
 			.or_else(|| wardrobe_transition_frame_role(None))
 			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(matches!(runtime, gpu::RenderedFrameRole::RuntimeAvatar));
+	}
+
+	#[test]
+	fn wardrobe_transition_frame_skips_runtime_action_evaluation() {
+		let startup = gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
+			progress_overlay: Some(test_startup_overlay()),
+		});
+		let wardrobe = gpu::RenderedFrameRole::WardrobeTransition(gpu::WardrobeTransitionPresentation {
+			changing_billboard: test_wardrobe_billboard(),
+		});
+		assert!(super::should_evaluate_runtime_actions_for_frame(
+			&gpu::RenderedFrameRole::RuntimeAvatar
+		));
+		assert!(super::should_evaluate_runtime_actions_for_frame(&startup));
+		assert!(
+			!super::should_evaluate_runtime_actions_for_frame(&wardrobe),
+			"wardrobe transition billboard frames should not contend with document/action evaluation while the apply worker is active"
+		);
 	}
 
 	#[test]
