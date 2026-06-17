@@ -2972,6 +2972,12 @@ dd {
 	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
 }
 
+.animator-action-grid {
+	max-height: min(44vh, 520px);
+	overflow: auto;
+	padding-right: 4px;
+}
+
 .wardrobe-menu-grid button,
 .animator-action-grid button {
 	min-width: 0;

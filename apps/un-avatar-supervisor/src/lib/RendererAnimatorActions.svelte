@@ -10,8 +10,6 @@
 	} from "./rendererAnimator";
 	import type { RendererRuntimeActionStatus, RendererRuntimeMenuActionCandidateStatus } from "./rendererTypes";
 
-	const MAX_RENDERED_ANIMATOR_ACTIONS = 96;
-
 	export let rendererId: number | null = null;
 	export let rendererPid: number | null = null;
 	export let busy = false;
@@ -30,10 +28,7 @@
 	$: fallbackActions = dedupeFallbackActions(
 		runtimeActions.filter(animatorFallbackActionVisible).filter((action) => !candidateActionIds.has(action.action_id))
 	);
-	$: visibleCandidates = candidates.slice(0, MAX_RENDERED_ANIMATOR_ACTIONS);
-	$: visibleFallbackActions = fallbackActions.slice(0, Math.max(0, MAX_RENDERED_ANIMATOR_ACTIONS - visibleCandidates.length));
 	$: actionCount = candidates.length + fallbackActions.length;
-	$: renderedActionCount = visibleCandidates.length + visibleFallbackActions.length;
 
 	function candidateActive(candidate: RendererRuntimeMenuActionCandidateStatus): boolean {
 		if (candidate.match_kind !== "metadata") return activeActionIds.has(candidate.action_id);
@@ -178,7 +173,7 @@
 	{#if actionCount}
 		<div class="runtime-button-row animator-action-grid">
 			{#if candidates.length}
-				{#each visibleCandidates as candidate}
+				{#each candidates as candidate}
 					<button
 						type="button"
 						class:active={candidateActive(candidate)}
@@ -193,7 +188,7 @@
 				{/each}
 			{/if}
 			{#if fallbackActions.length}
-				{#each visibleFallbackActions as action}
+				{#each fallbackActions as action}
 					<button
 						type="button"
 						class:active={action.current_condition_state === "active"}
@@ -206,13 +201,6 @@
 						<small>{fallbackActionStateLabel(action)}</small>
 					</button>
 				{/each}
-			{/if}
-			{#if renderedActionCount < actionCount}
-				<div class="runtime-button-note">
-					{$_("renderers.animator.hidden_action_count", {
-						values: { shown: renderedActionCount, total: actionCount, hidden: actionCount - renderedActionCount },
-					})}
-				</div>
 			{/if}
 		</div>
 	{:else}

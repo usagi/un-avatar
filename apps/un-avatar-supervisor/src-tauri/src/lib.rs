@@ -13984,6 +13984,13 @@ mod tests {
 				&& source.contains("onSetRuntimeParameter(rendererId, action.parameter_name, value"),
 			"UNAnimator fallback parameter actions should also toggle active actions through the parameter control path"
 		);
+		assert!(
+			!source.contains("MAX_RENDERED_ANIMATOR_ACTIONS")
+				&& !source.contains("visibleCandidates")
+				&& !source.contains("visibleFallbackActions")
+				&& !source.contains("hidden_action_count"),
+			"Renderer UNAnimator actions are a primary operation surface and must not hide filtered runtime actions behind an app-side fixed cap"
+		);
 	}
 
 	#[test]
