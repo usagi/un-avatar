@@ -3130,19 +3130,25 @@ fn verify_manual_release_checklist_candidate(
 	if ok {
 		println!("release-audit: manual checklist Candidate Build ok");
 		let open_evidence = manual_release_checklist_open_evidence_items(&raw);
-		if open_evidence > 0 {
-			println!("release-audit: manual checklist has {open_evidence} open evidence item(s)");
+		if !open_evidence.is_empty() {
+			println!(
+				"release-audit: manual checklist has {} open evidence item(s): {}",
+				open_evidence.len(),
+				open_evidence.join("; ")
+			);
 		}
 	}
 	ok
 }
 
-fn manual_release_checklist_open_evidence_items(raw: &str) -> usize {
+fn manual_release_checklist_open_evidence_items(raw: &str) -> Vec<String> {
+	let mut section = String::new();
 	let mut in_evidence = false;
-	let mut count = 0;
+	let mut items = Vec::new();
 	for line in raw.lines() {
 		let trimmed = line.trim();
 		if trimmed.starts_with("## ") {
+			section = trimmed.trim_start_matches("## ").trim().to_string();
 			in_evidence = false;
 			continue;
 		}
@@ -3154,10 +3160,15 @@ fn manual_release_checklist_open_evidence_items(raw: &str) -> usize {
 			continue;
 		}
 		if trimmed.starts_with("- ") && trimmed.ends_with(':') {
-			count += 1;
+			let item = trimmed.trim_start_matches("- ").trim_end_matches(':').trim();
+			if section.is_empty() {
+				items.push(item.to_string());
+			} else {
+				items.push(format!("{section} / {item}"));
+			}
 		}
 	}
-	count
+	items
 }
 
 fn verify_release_checksum_sidecar(zip_path: &Path) -> bool {
@@ -5148,7 +5159,14 @@ Evidence:
 - OBS / Spout receiver:
 - Runtime status / screenshot: captured locally
 "#;
-		assert_eq!(manual_release_checklist_open_evidence_items(checklist), 3);
+		assert_eq!(
+			manual_release_checklist_open_evidence_items(checklist),
+			vec![
+				"Candidate Build / Empty field".to_string(),
+				"Candidate Build / Another empty field".to_string(),
+				"Output Modes / OBS / Spout receiver".to_string(),
+			]
+		);
 		assert_eq!(
 			manual_release_checklist_open_evidence_items(
 				r#"
@@ -5161,7 +5179,7 @@ Evidence:
 - Screenshot / notes: done
 "#
 			),
-			0
+			Vec::<String>::new()
 		);
 	}
 }
