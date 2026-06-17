@@ -101,7 +101,7 @@ const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
-const WARDROBE_TRANSITION_SPLASH_HOLD_MS: u32 = 700;
+const WARDROBE_TRANSITION_BILLBOARD_HOLD_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
 const SPLASH_FULL_RECT_CENTER: [f32; 2] = [0.0, 0.0];
 const SPLASH_FULL_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
@@ -233,9 +233,9 @@ struct ActiveAnimatorTransition {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WardrobeTransitionPhase {
 	Exit,
-	SplashPrimed,
+	BillboardPrimed,
 	Applying,
-	SplashHold,
+	BillboardHold,
 	Enter,
 }
 
@@ -2274,7 +2274,7 @@ impl AvatarApp {
 				if now.saturating_duration_since(transition.phase_started_at)
 					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_EXIT_MS)) =>
 			{
-				transition.phase = WardrobeTransitionPhase::SplashPrimed;
+				transition.phase = WardrobeTransitionPhase::BillboardPrimed;
 				transition.phase_started_at = now;
 				self.request_redraw();
 			}
@@ -2285,9 +2285,9 @@ impl AvatarApp {
 				self.wardrobe_transition = None;
 				self.request_redraw();
 			}
-			WardrobeTransitionPhase::SplashHold
+			WardrobeTransitionPhase::BillboardHold
 				if now.saturating_duration_since(transition.phase_started_at)
-					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_SPLASH_HOLD_MS)) =>
+					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_BILLBOARD_HOLD_MS)) =>
 			{
 				transition.phase = WardrobeTransitionPhase::Enter;
 				transition.phase_started_at = now;
@@ -2301,23 +2301,23 @@ impl AvatarApp {
 					},
 				);
 			}
-			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying => {
+			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying => {
 				self.request_redraw();
 			}
 			_ => {}
 		}
 	}
 
-	fn wardrobe_splash_frame(&self, now: Instant) -> Option<gpu::WardrobeSplashFrame> {
+	fn wardrobe_changing_billboard_frame(&self, now: Instant) -> Option<gpu::WardrobeChangingBillboardFrame> {
 		let transition = self.wardrobe_transition.as_ref()?;
 		let billboard = transition
 			.saved_camera
 			.wardrobe_billboard_camera(self.output_aspect_wh(), transition.billboard_center);
 		matches!(
 			transition.phase,
-			WardrobeTransitionPhase::SplashPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::SplashHold
+			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::BillboardHold
 		)
-		.then_some(gpu::WardrobeSplashFrame {
+		.then_some(gpu::WardrobeChangingBillboardFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
 			billboard_center: billboard.center,
 			billboard_size: billboard.size,
@@ -2328,7 +2328,7 @@ impl AvatarApp {
 
 	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
 		let transition = self.wardrobe_transition.as_ref()?;
-		matches!(transition.phase, WardrobeTransitionPhase::SplashPrimed).then(|| transition.set_id.clone())
+		matches!(transition.phase, WardrobeTransitionPhase::BillboardPrimed).then(|| transition.set_id.clone())
 	}
 
 	fn start_wardrobe_apply_worker_after_render(&mut self, set_id: String) {
@@ -2444,7 +2444,7 @@ impl AvatarApp {
 		}
 		if saved_camera.is_some() {
 			if let Some(transition) = self.wardrobe_transition.as_mut() {
-				transition.phase = WardrobeTransitionPhase::SplashHold;
+				transition.phase = WardrobeTransitionPhase::BillboardHold;
 				transition.phase_started_at = Instant::now();
 			}
 		} else {
@@ -3632,7 +3632,7 @@ impl AvatarApp {
 				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
 			})
 		};
-		let wardrobe_splash = self.wardrobe_splash_frame(now);
+		let wardrobe_billboard = self.wardrobe_changing_billboard_frame(now);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
@@ -3643,7 +3643,7 @@ impl AvatarApp {
 				self.opts.clear_color,
 				wall_clamped,
 				startup_splash,
-				wardrobe_splash,
+				wardrobe_billboard,
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();

@@ -2285,7 +2285,7 @@ pub(crate) struct StartupSplashFrame {
 	pub(crate) rect_half_size: [f32; 2],
 }
 
-pub(crate) struct WardrobeSplashFrame {
+pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) time_secs: f32,
 	pub(crate) billboard_center: [f32; 3],
 	pub(crate) billboard_size: f32,
@@ -2293,7 +2293,7 @@ pub(crate) struct WardrobeSplashFrame {
 	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
-fn frame_spout_output_enabled(spout_available: bool, startup_splash_active: bool) -> bool {
+fn frame_allows_spout_output(spout_available: bool, startup_splash_active: bool) -> bool {
 	spout_available && !startup_splash_active
 }
 
@@ -6971,31 +6971,65 @@ impl GpuState {
 		)
 	}
 
-	fn write_wardrobe_billboard_uniform(&self, splash: &WardrobeSplashFrame) {
-		let center = Vec3::from_array(splash.billboard_center);
+	fn write_wardrobe_billboard_uniform(&self, billboard: &WardrobeChangingBillboardFrame) {
+		let center = Vec3::from_array(billboard.billboard_center);
 		self.queue.write_buffer(
 			&self.wardrobe_billboard_buffer,
 			0,
 			bytemuck::bytes_of(&WardrobeBillboardGpu {
-				view_proj: splash.billboard_view_proj,
+				view_proj: billboard.billboard_view_proj,
 				camera_pos: [
-					splash.billboard_camera_pos[0],
-					splash.billboard_camera_pos[1],
-					splash.billboard_camera_pos[2],
+					billboard.billboard_camera_pos[0],
+					billboard.billboard_camera_pos[1],
+					billboard.billboard_camera_pos[2],
 					1.0,
 				],
-				center_size: [center.x, center.y, center.z, splash.billboard_size.max(0.01)],
-				time_params: [splash.time_secs, 0.0, 0.0, 0.0],
+				center_size: [center.x, center.y, center.z, billboard.billboard_size.max(0.01)],
+				time_params: [billboard.time_secs, 0.0, 0.0, 0.0],
 			}),
 		);
 	}
 
-	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: &WardrobeSplashFrame) {
-		self.write_wardrobe_billboard_uniform(splash);
+	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, billboard: &WardrobeChangingBillboardFrame) {
+		self.write_wardrobe_billboard_uniform(billboard);
 		pass.set_pipeline(&self.wardrobe_billboard_pipeline);
 		pass.set_bind_group(0, &self.bind_group, &[]);
 		pass.set_bind_group(1, &self.wardrobe_billboard_bind_group, &[]);
 		pass.draw(0..6, 0..1);
+	}
+
+	fn draw_startup_splash<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, splash: &StartupSplashFrame, width: u32, height: u32) {
+		let aspect = width.max(1) as f32 / height.max(1) as f32;
+		self.queue.write_buffer(
+			&self.startup_splash_buffer,
+			0,
+			bytemuck::bytes_of(&StartupSplashGpu {
+				time: splash.time_secs,
+				progress: splash.progress,
+				aspect,
+				phase: splash.phase,
+				rect_center: splash.rect_center,
+				rect_half_size: splash.rect_half_size,
+			}),
+		);
+		pass.set_pipeline(&self.startup_splash_pipeline);
+		pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+		pass.draw(0..3, 0..1);
+	}
+
+	fn draw_frame_overlay<'a>(
+		&'a self,
+		pass: &mut wgpu::RenderPass<'a>,
+		startup_splash: Option<&StartupSplashFrame>,
+		wardrobe_billboard: Option<&WardrobeChangingBillboardFrame>,
+		width: u32,
+		height: u32,
+	) {
+		if let Some(billboard) = wardrobe_billboard {
+			self.draw_wardrobe_billboard(pass, billboard);
+		} else if let Some(splash) = startup_splash {
+			self.draw_startup_splash(pass, splash, width, height);
+		}
 	}
 
 	fn avatar_outline_width_px_for(&self, width: u32, height: u32) -> f32 {
@@ -7015,7 +7049,7 @@ impl GpuState {
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
 		startup_splash: Option<StartupSplashFrame>,
-		wardrobe_splash: Option<WardrobeSplashFrame>,
+		wardrobe_billboard: Option<WardrobeChangingBillboardFrame>,
 		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
 		let t_cpu0 = Instant::now();
@@ -7028,7 +7062,7 @@ impl GpuState {
 		}
 		self.animation_time_secs += wall_since_last.as_secs_f32();
 		self.debug_frame_seq = self.debug_frame_seq.wrapping_add(1);
-		let wardrobe_transition_only = wardrobe_splash.is_some();
+		let wardrobe_transition_only = wardrobe_billboard.is_some();
 		if let (Some(doc_arc), true) = (
 			&self.document,
 			!wardrobe_transition_only && self.debug_scene && self.debug_log.is_enabled() && self.debug_frame_seq.is_multiple_of(180),
@@ -7109,16 +7143,13 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_spout_output_enabled(self.spout.is_some(), startup_splash.is_some())
+				frame_allows_spout_output(self.spout.is_some(), startup_splash.is_some())
 			}
 			#[cfg(not(windows))]
 			{
 				false
 			}
 		};
-		// Wardrobe GPU scene preparation is done on the worker now. A blocking Spout flush here would
-		// throttle the transition billboard exactly while it should keep animating.
-		let flush_spout_splash_before_blocking_apply = false;
 		if !window_output_enabled && !use_spout {
 			return None;
 		}
@@ -7437,26 +7468,7 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(splash) = wardrobe_splash.as_ref() {
-				self.draw_wardrobe_billboard(&mut pass, splash);
-			} else if let Some(splash) = startup_splash.as_ref() {
-				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-				self.queue.write_buffer(
-					&self.startup_splash_buffer,
-					0,
-					bytemuck::bytes_of(&StartupSplashGpu {
-						time: splash.time_secs,
-						progress: splash.progress,
-						aspect,
-						phase: splash.phase,
-						rect_center: splash.rect_center,
-						rect_half_size: splash.rect_half_size,
-					}),
-				);
-				pass.set_pipeline(&self.startup_splash_pipeline);
-				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-				pass.draw(0..3, 0..1);
-			}
+			self.draw_frame_overlay(&mut pass, startup_splash.as_ref(), wardrobe_billboard.as_ref(), gw, gh);
 		} else {
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("main"),
@@ -7509,26 +7521,7 @@ impl GpuState {
 					pass.draw(0..self.bone_collider_vertex_count, 0..1);
 				}
 			}
-			if let Some(splash) = wardrobe_splash.as_ref() {
-				self.draw_wardrobe_billboard(&mut pass, splash);
-			} else if let Some(splash) = startup_splash.as_ref() {
-				let aspect = gw.max(1) as f32 / gh.max(1) as f32;
-				self.queue.write_buffer(
-					&self.startup_splash_buffer,
-					0,
-					bytemuck::bytes_of(&StartupSplashGpu {
-						time: splash.time_secs,
-						progress: splash.progress,
-						aspect,
-						phase: splash.phase,
-						rect_center: splash.rect_center,
-						rect_half_size: splash.rect_half_size,
-					}),
-				);
-				pass.set_pipeline(&self.startup_splash_pipeline);
-				pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
-				pass.draw(0..3, 0..1);
-			}
+			self.draw_frame_overlay(&mut pass, startup_splash.as_ref(), wardrobe_billboard.as_ref(), gw, gh);
 		}
 
 		if let (Some(ts), Some(idx)) = (self.gpu_timestamps.as_ref(), timestamp_write_idx) {
@@ -7639,51 +7632,14 @@ impl GpuState {
 			let sp = self.spout.as_mut().expect("spout is initialized while active");
 			// 1) 前フレーム以降に map が完了したスロットがあれば Spout2 に送る（非ブロッキング）。
 			let _ = sp.send_mapped_rgba(&self.device);
-			if flush_spout_splash_before_blocking_apply {
-				self.device
-					.poll(wgpu::PollType::Wait {
-						submission_index: None,
-						timeout: Some(Duration::from_millis(250)),
-					})
-					.ok();
-				let _ = sp.send_mapped_rgba(&self.device);
-			}
 			// 2) 今フレームの swizzle + readback を encode。リングが空いていれば map を要求する。
 			let mut enc2 = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
 				label: Some("spout-staging"),
 			});
-			let mut staged_slot = sp.copy_to_staging(&mut enc2);
-			if flush_spout_splash_before_blocking_apply && staged_slot.is_none() {
-				self.device
-					.poll(wgpu::PollType::Wait {
-						submission_index: None,
-						timeout: Some(Duration::from_millis(250)),
-					})
-					.ok();
-				let _ = sp.send_mapped_rgba(&self.device);
-				staged_slot = sp.copy_to_staging(&mut enc2);
-			}
+			let staged_slot = sp.copy_to_staging(&mut enc2);
 			self.queue.submit(std::iter::once(enc2.finish()));
 			if let Some(idx) = staged_slot {
 				sp.after_submit_request_map(idx);
-				if flush_spout_splash_before_blocking_apply {
-					self.device
-						.poll(wgpu::PollType::Wait {
-							submission_index: None,
-							timeout: Some(Duration::from_millis(250)),
-						})
-						.ok();
-					let sent = sp.send_mapped_rgba(&self.device);
-					if !sent {
-						self.device
-							.poll(wgpu::PollType::Wait {
-								submission_index: None,
-								timeout: Some(Duration::from_millis(250)),
-							})
-							.ok();
-						let _ = sp.send_mapped_rgba(&self.device);
-					}
-				}
 			}
 			// 3) swap chain が取れている時だけプレビュー用にコピー。最小化 / occluded 中でも Spout 送信は続ける。
 			if let Some(swap_view) = swap_view.as_ref() {
@@ -8234,7 +8190,7 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		effective_window_backend, frame_spout_output_enabled, menu_action_candidates_from_runtime, menu_graph_node_path,
+		effective_window_backend, frame_allows_spout_output, menu_action_candidates_from_runtime, menu_graph_node_path,
 		mesh_shader_resource_plan_for_adapter, mesh_shader_variant_tier_for_limits, modular_avatar_menu_components,
 		restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
 		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
@@ -9104,10 +9060,10 @@ mod tests {
 	}
 
 	#[test]
-	fn frame_spout_output_is_disabled_only_for_startup_splash() {
-		assert!(!frame_spout_output_enabled(false, false));
-		assert!(frame_spout_output_enabled(true, false));
-		assert!(!frame_spout_output_enabled(true, true));
+	fn startup_progress_frames_are_the_only_spout_suppressed_overlay() {
+		assert!(!frame_allows_spout_output(false, false));
+		assert!(frame_allows_spout_output(true, false));
+		assert!(!frame_allows_spout_output(true, true));
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
