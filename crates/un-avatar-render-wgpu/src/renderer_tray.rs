@@ -2038,6 +2038,36 @@ height = 360
 	}
 
 	#[test]
+	fn unanimator_menu_exposes_all_candidates_without_fixed_cap() {
+		let opts = AvatarWindowOptions::default();
+		let mut status = snapshot();
+		status.menu_action_candidates = (0..120)
+			.map(|index| gpu::RuntimeMenuActionCandidateStatus {
+				action_id: format!("action:expression_{index}"),
+				action_label: format!("Expression {index}"),
+				menu_key: format!("expression/{index}"),
+				menu_path: vec!["Expression".to_string(), format!("Expression {index}")],
+				control_type: Some("Toggle".to_string()),
+				parameter_name: format!("Expression{index}"),
+				parameter_value: 1.0,
+				match_kind: "metadata".to_string(),
+				available: true,
+				effect_count: 1,
+				..Default::default()
+			})
+			.collect();
+
+		let (_menu, actions) = build_menu(&opts, &status);
+		let unanimator_actions = actions.keys().filter(|key| key.starts_with("renderer:unanimator:")).count();
+
+		assert_eq!(unanimator_actions, 120);
+		assert!(matches!(
+			actions.get("renderer:unanimator:119"),
+			Some(RendererTrayAction::SetParameter { name, value }) if name == "Expression119" && (*value - 1.0).abs() < f32::EPSILON
+		));
+	}
+
+	#[test]
 	fn unanimator_excludes_wardrobe_set_candidates() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
