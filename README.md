@@ -18,6 +18,8 @@ v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC / Unity 
 
 VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.unavatar` を作ります。`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。Exporter の導入、`1. Base -> 2. Wardrobe Sets -> 3. Export` の操作、Wardrobe の作り方は [v2 Getting Started](docs/v2-getting-started.md) を参照してください。
 
+最初は Supervisor でプロファイルを作成・調整します。設定が固まったら、ショートカットやピン留めから特定プロファイルの Renderer を直接起動できます。Renderer 単独起動中の Wardrobe、出力、ウィンドウ、カメラなどの操作は、Windows タスクトレイの Renderer アイコンを右クリックして行います。
+
 ## できること
 
 - VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (Vulkan / DX12) で描画。

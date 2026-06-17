@@ -148,6 +148,14 @@ Renderer 起動後、U.N. Motion から UNMF/Z を送ると表情、姿勢、手
 
 U.N. Motion なしでも、VMC/UDP を送信できる既存アプリを使えます。用途に合わせて Supervisor のプロファイルで入力方式を設定してください。
 
+## 日常運用
+
+Supervisor は、プロファイルの作成、設定、確認、ショートカット作成を行う管理画面です。Renderer は、配信時にアバターを表示して Window Preview や Spout2 へ出力する単体プロセスです。
+
+設定が固まったプロファイルは、Supervisor を毎回開かずにショートカットやピン留めから直接 Renderer として起動できます。配信前の確認や設定変更が必要なときは、Supervisor に戻ってプロファイルを編集します。
+
+Renderer 単独起動中の操作は、Windows タスクトレイの Renderer アイコンを右クリックして行います。Tray メニューから Wardrobe、出力モード、ウィンドウ、カメラ、Supervisor を開く、Renderer の終了などを操作できます。
+
 ## OBS / Spout2 出力
 
 Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` または `Spout2 Only (HIDE)` にします。OBS 側では Spout2 Capture source を追加して、U.N. Avatar の Spout2 sender を選びます。背景を透過したい場合は、Spout2 Capture の `Composite mode` を `Premultiplied Alpha` にします。
