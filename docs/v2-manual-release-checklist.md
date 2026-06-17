@@ -4,11 +4,11 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 
 ## Candidate Build
 
-- Date / operator: 2026-06-15 / Codex local release-prep
-- Git commit: `7cad36ef0dcc`
+- Date / operator: 2026-06-17 / Codex local release-prep
+- Git commit: `811d6d330c55`
 - Version: `2.0.0-beta-2`
 - Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`
-- Portable zip SHA-256: `4d35cfca0fa4121f343b778f862370ce2d8337165ec4515ed9713040a0a7f655`
+- Portable zip SHA-256: `a5276ada68e2dd0708a4f59ae718ff4b8c5ac3b0bf7d5bb9d80f996810b46965`
 - VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC package SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 - `cargo xtask ci` result: passed
@@ -17,7 +17,7 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`
 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`
 
-Post-candidate source fixes have landed after this recorded package. Before publishing, rebuild the candidate package and refresh this section, release notes hashes, and release audit evidence from the new commit.
+This recorded package includes the post-candidate source fixes through the commit above. Refresh this section again if any new source fix lands before publishing.
 
 ## Clean Package Smoke
 
