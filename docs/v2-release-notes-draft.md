@@ -32,14 +32,14 @@ git diff --check
 Generated artifact evidence from the latest successful local packaging run:
 
 - `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `3759e2e66b7065855d447202c44af1edfc7dc5f93c6af23f80042ef73c7beddf`
+- zip SHA-256: `4adf65a8a8611bb931a2c1a45bb3b6c1fa58f689a8102c71a2fa3a005a7026fc`
 - sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
 - VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, startup progress vs wardrobe-changing billboard separation for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray UNAnimator naming cleanup, and Supervisor UNAnimator list truncation disclosure.
+The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, startup progress vs wardrobe-changing billboard separation for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray UNAnimator naming cleanup, extended function-key binding regression coverage, and Supervisor UNAnimator list truncation disclosure.
 
 ## Known Limitations
 
