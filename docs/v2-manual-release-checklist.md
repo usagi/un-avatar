@@ -57,9 +57,9 @@ Use one live Renderer and check both Supervisor runtime controls and Renderer tr
 
 - Window Preview: preview visible, Spout2 disabled, local preview restored if it had been minimized.
 - Spout2 + Preview: Spout2 enabled, preview visible, Spout2 resolution unchanged unless an explicit resolution button is pressed.
-- Spout2 Only: Spout2 enabled, preview minimized / hidden for local desktop use, rendering continues in OBS / Spout receiver.
+- Spout2 Only (minimized): Spout2 enabled, preview minimized / hidden for local desktop use, rendering continues in OBS / Spout receiver.
 - Startup progress overlay: local preview may show startup progress, but Spout2 receiver must not receive startup progress overlay frames before the avatar is ready.
-- Returning from Spout2 Only to Window Preview restores preview before disabling Spout2, so the user is not left with Spout2 off and preview still minimized.
+- Returning from Spout2 Only (minimized) to Window Preview restores preview before disabling Spout2, so the user is not left with Spout2 off and preview still minimized.
 - 720p / 1080p buttons change Spout2 output resolution only; they do not implicitly restore or minimize preview.
 
 Evidence:
@@ -72,7 +72,7 @@ Evidence:
 Confirm the Windows tray icon operates the running Renderer directly.
 
 - Tray header identifies the profile / avatar and process.
-- Window Preview, Spout2 + Preview, and Spout2 Only map to the same behavior as Supervisor runtime buttons.
+- Window Preview, Spout2 + Preview, and Spout2 Only (minimized) map to the same behavior as Supervisor runtime buttons.
 - Wardrobe menu lists all normalized wardrobe candidates needed for the test model, with no fixed app-side cap.
 - UNAnimator lists non-wardrobe menu action candidates, uses resolved menu path labels where available, falls back to expression-menu runtime actions when normalized candidates are absent, and toggles active parameter actions back to `0`.
 - Open Supervisor focuses or starts Supervisor and selects the relevant profile when possible.

@@ -55,7 +55,7 @@ The recorded package includes post-candidate fixes for wardrobe transition rest-
 ## Manual Release Checks Still Required
 
 - Real GUI `mizuki-split` wardrobe hot switch from `noble1` and `field_drape` to Base / noble sets, including no black materials, no missing hair / clothing, and UNDynamics still moving after switching.
-- Spout2 Only, Spout2 + Preview, Window Preview, minimized preview, preview restore order, OBS / Spout receiver behavior, and startup progress overlay not being published to Spout2 while wardrobe-changing billboard still is.
+- Spout2 Only (minimized), Spout2 + Preview, Window Preview, minimized preview, preview restore order, OBS / Spout receiver behavior, and startup progress overlay not being published to Spout2 while wardrobe-changing billboard still is.
 - Renderer tray operation from the actual Windows tray UI: output modes, Wardrobe, UNAnimator action toggles, Open Supervisor, and Quit this Renderer.
 - Supervisor `.unavatar` review flow with bounded metadata and real preview imagery.
 - Supervisor profile icon / cache warmup / shortcut / launcher workflow as one user-facing profile preparation path.
