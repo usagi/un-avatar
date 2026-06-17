@@ -5,10 +5,10 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 ## Candidate Build
 
 - Date / operator: 2026-06-17 / Codex local release-prep
-- Git commit: `4ff9e72f70bc`
+- Git commit: `90b2d8d57046`
 - Version: `2.0.0-beta-2`
 - Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`
-- Portable zip SHA-256: `01c97cb8814e7af221e4ebff5816cba1baa01cd8744b7f64269219a8881bccba`
+- Portable zip SHA-256: `845002001cb2fbcb965c41775b158456885a4bf85901e415dd79650da1f5199e`
 - VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC package SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 - `cargo xtask ci` result: passed

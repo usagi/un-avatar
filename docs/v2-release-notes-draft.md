@@ -32,14 +32,14 @@ git diff --check
 Generated artifact evidence from the latest successful local packaging run:
 
 - `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `01c97cb8814e7af221e4ebff5816cba1baa01cd8744b7f64269219a8881bccba`
+- zip SHA-256: `845002001cb2fbcb965c41775b158456885a4bf85901e415dd79650da1f5199e`
 - sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
 - VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, live wardrobe transition and Spout2 profile setting updates for running renderers, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup presentation suppression from Spout2 output, typed startup / wardrobe presentation policy separation for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only minimized labeling, extended function-key binding regression coverage, and Supervisor UNAnimator list truncation disclosure.
+The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup presentation suppression from Spout2 output, typed startup / wardrobe presentation policy separation for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only minimized labeling, extended function-key binding regression coverage, and Supervisor UNAnimator list truncation disclosure.
 
 ## Known Limitations
 
