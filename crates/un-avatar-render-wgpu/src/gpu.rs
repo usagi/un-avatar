@@ -3957,6 +3957,8 @@ pub(crate) struct GpuState {
 	spout: Option<crate::spout::SpoutCapture>,
 	#[cfg(windows)]
 	spout_launch: Option<crate::spout::SpoutLaunchConfig>,
+	#[cfg(windows)]
+	spout_unavailable_logged: bool,
 	debug_log: DebugLog,
 	debug_scene: bool,
 	debug_morph: bool,
@@ -4251,15 +4253,7 @@ impl GpuState {
 			None
 		};
 		#[cfg(windows)]
-		let spout = spout_launch
-			.as_ref()
-			.and_then(|lc| crate::spout::SpoutCapture::try_new(&device, format, width, height, lc.clone()));
-		#[cfg(windows)]
-		if spout_opts.enabled && spout.is_none() {
-			eprintln!(
-				"un-avatar-renderer: Spout2 実バックエンドがこのビルドで利用できません。標準配布は `cargo xtask package` で Spout2 込みビルドを作成します。開発手動ビルドでは `--features spout-sdk` と SPOUT2_SDK_DIR / SPOUT2_LIB_DIR / 起動前 Spout.dll PATH が必要です。"
-			);
-		}
+		let spout = None;
 		#[cfg(not(windows))]
 		if spout_opts.enabled {
 			eprintln!("un-avatar-renderer: Spout は現状 Windows のみ対応です");
@@ -4341,6 +4335,8 @@ impl GpuState {
 			spout,
 			#[cfg(windows)]
 			spout_launch,
+			#[cfg(windows)]
+			spout_unavailable_logged: false,
 			debug_log,
 			debug_scene,
 			debug_morph,
@@ -5550,6 +5546,7 @@ impl GpuState {
 			if !enabled {
 				self.spout = None;
 				self.spout_launch = None;
+				self.spout_unavailable_logged = false;
 				let (gw, gh) = self.render_pixel_dims();
 				self.write_globals(gw, gh);
 				return false;
@@ -5571,6 +5568,10 @@ impl GpuState {
 				self.config.height,
 				launch.clone(),
 			);
+			self.spout_unavailable_logged = self.spout.is_none();
+			if self.spout_unavailable_logged {
+				log_spout_unavailable();
+			}
 			self.spout_launch = Some(launch);
 			let (gw, gh) = self.render_pixel_dims();
 			self.write_globals(gw, gh);
@@ -5581,6 +5582,22 @@ impl GpuState {
 			let _ = (enabled, spout_opts);
 			false
 		}
+	}
+
+	#[cfg(windows)]
+	fn ensure_runtime_spout_output(&mut self) -> bool {
+		if self.spout.is_some() {
+			return true;
+		}
+		let Some(launch) = self.spout_launch.clone() else {
+			return false;
+		};
+		self.spout = crate::spout::SpoutCapture::try_new(&self.device, self.config.format, self.config.width, self.config.height, launch);
+		if self.spout.is_none() && !self.spout_unavailable_logged {
+			self.spout_unavailable_logged = true;
+			log_spout_unavailable();
+		}
+		self.spout.is_some()
 	}
 
 	#[cfg(windows)]
@@ -7184,7 +7201,10 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_role.spout2_delivery(self.spout.is_some()) == Spout2FrameDelivery::RuntimeOutput
+				match frame_role.spout2_delivery(self.spout_launch.is_some()) {
+					Spout2FrameDelivery::RuntimeOutput => self.ensure_runtime_spout_output(),
+					Spout2FrameDelivery::SuppressedRendererStartup | Spout2FrameDelivery::Unavailable => false,
+				}
 			}
 			#[cfg(not(windows))]
 			{
@@ -7758,6 +7778,13 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Textur
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	(texture, view)
+}
+
+#[cfg(windows)]
+fn log_spout_unavailable() {
+	eprintln!(
+		"un-avatar-renderer: Spout2 実バックエンドがこのビルドで利用できません。標準配布は `cargo xtask package` で Spout2 込みビルドを作成します。開発手動ビルドでは `--features spout-sdk` と SPOUT2_SDK_DIR / SPOUT2_LIB_DIR / 起動前 Spout.dll PATH が必要です。"
+	);
 }
 
 fn create_screen_grab_texture(
@@ -9152,6 +9179,44 @@ mod tests {
 		assert!(startup.wardrobe_transition_billboard().is_none());
 		assert!(wardrobe.startup_overlay().is_none());
 		assert!(wardrobe.wardrobe_transition_billboard().is_some());
+	}
+
+	#[test]
+	fn spout_sender_initialization_is_deferred_until_runtime_output() {
+		let source = include_str!("gpu.rs");
+		let new_body = source
+			.split("impl GpuState {")
+			.nth(1)
+			.and_then(|rest| rest.split("pub fn new_shell(").nth(1))
+			.and_then(|rest| rest.split("\n\tpub fn expression_presets").next())
+			.expect("GpuState::new_shell body exists");
+		let new_windows_spout_block = new_body
+			.split("#[cfg(windows)]\n\t\tlet spout_launch")
+			.nth(1)
+			.and_then(|rest| rest.split("#[cfg(not(windows))]").next())
+			.expect("GpuState::new Windows Spout2 block exists");
+		assert!(
+			new_windows_spout_block.contains("let spout = None;"),
+			"GpuState::new_shell must retain Spout2 configuration without creating a sender during renderer-local startup presentation"
+		);
+		assert!(
+			!new_windows_spout_block.contains("SpoutCapture::try_new"),
+			"Spout2 sender creation belongs to runtime output frames, not startup initialization"
+		);
+
+		let render_frame = source
+			.split("pub fn render_frame(")
+			.nth(1)
+			.and_then(|rest| rest.split("let t_surface0 = Instant::now();").next())
+			.expect("render_frame Spout2 policy block exists");
+		assert!(
+			render_frame.contains("Spout2FrameDelivery::RuntimeOutput => self.ensure_runtime_spout_output()"),
+			"runtime avatar and wardrobe transition frames may initialize Spout2 output"
+		);
+		assert!(
+			render_frame.contains("Spout2FrameDelivery::SuppressedRendererStartup | Spout2FrameDelivery::Unavailable => false"),
+			"renderer-local startup frames must neither initialize nor send Spout2 output"
+		);
 	}
 
 	fn test_scene_node(children: Vec<usize>) -> un_avatar_core::UnaSceneNode {
