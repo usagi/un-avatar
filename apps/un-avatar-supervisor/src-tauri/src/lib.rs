@@ -13991,8 +13991,11 @@ mod tests {
 		.expect("supervisor lib.rs should be readable");
 
 		assert!(
-			field_rules.contains(r#"field.startsWith("wardrobe.transition.")"#) && field_rules.contains("canApplyWithoutRestart"),
-			"wardrobe transition fields should be classified as live-applicable profile settings"
+			field_rules.contains(r#"field.startsWith("wardrobe.transition.")"#)
+				&& field_rules.contains(r#"field === "wardrobe.bindings""#)
+				&& field_rules.contains(r#"field.startsWith("animator.")"#)
+				&& field_rules.contains("canApplyWithoutRestart"),
+			"wardrobe transition, wardrobe bindings, and UNAnimator fields should be classified as live-applicable profile settings"
 		);
 		assert!(
 			app_svelte.contains("applyRuntimeProfileUpdates"),
@@ -14001,8 +14004,12 @@ mod tests {
 		assert!(
 			backend.contains(r#""wardrobe.transition.""#)
 				&& backend.contains("apply_wardrobe_transition_to_matching_renderers")
+				&& backend.contains(r#""wardrobe.bindings""#)
+				&& backend.contains("apply_input_bindings_to_matching_renderers")
+				&& backend.contains(r#""animator.""#)
+				&& backend.contains("apply_animator_profile_to_matching_renderers")
 				&& backend.contains("SetWardrobeTransition"),
-			"saved wardrobe transition profile edits must be sent to matching running renderers"
+			"saved live profile edits must be sent to matching running renderers instead of requiring restart"
 		);
 	}
 
