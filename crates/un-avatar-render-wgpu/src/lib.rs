@@ -2345,7 +2345,7 @@ impl AvatarApp {
 		let transition = self.wardrobe_transition.as_ref()?;
 		let billboard = transition
 			.saved_camera
-			.wardrobe_billboard_camera(self.output_aspect_wh(), transition.billboard_center);
+			.wardrobe_billboard_camera(self.wardrobe_transition_aspect_wh(), transition.billboard_center);
 		matches!(
 			transition.phase,
 			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::BillboardHold
@@ -3465,7 +3465,7 @@ impl AvatarApp {
 		gpu::scene_mesh_load_opts_for_window_options(&self.opts)
 	}
 
-	fn startup_texture_target_size(&self) -> (u32, u32) {
+	fn document_texture_target_size(&self) -> (u32, u32) {
 		if self.opts.spout.enabled {
 			(
 				self.opts.spout.width.unwrap_or(self.opts.window_width).max(1),
@@ -3479,13 +3479,13 @@ impl AvatarApp {
 		}
 	}
 
-	fn output_aspect_wh(&self) -> f32 {
-		let (width, height) = self.startup_texture_target_size();
+	fn wardrobe_transition_aspect_wh(&self) -> f32 {
+		let (width, height) = self.document_texture_target_size();
 		width.max(1) as f32 / height.max(1) as f32
 	}
 
 	fn document_attach_options(&self) -> DocumentAttachOptions {
-		let (target_width, target_height) = self.startup_texture_target_size();
+		let (target_width, target_height) = self.document_texture_target_size();
 		let texture_max_dimension = self.opts.texture_resolution_limit.max_dimension(target_width, target_height);
 		let bc_supported = cfg!(windows)
 			&& !matches!(
@@ -3965,11 +3965,11 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 		self.last_wall = Instant::now();
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
-		win.request_redraw();
 		self.update_runtime_window_geometry();
 		#[cfg(windows)]
 		self.ensure_renderer_tray();
 		self.start_async_model_load(self.event_proxy.clone());
+		win.request_redraw();
 	}
 
 	fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
@@ -7453,6 +7453,21 @@ mod tests {
 			.or_else(|| wardrobe_transition_frame_role(None))
 			.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
 		assert!(matches!(runtime, gpu::RenderedFrameRole::RuntimeAvatar));
+	}
+
+	#[test]
+	fn resumed_marks_startup_before_first_redraw() {
+		let source = include_str!("lib.rs");
+		let anchor = "fn resumed(&mut self, event_loop: &ActiveEventLoop)";
+		let resumed = source.split(anchor).nth(1).expect("resumed method exists");
+		let startup = resumed
+			.find("self.start_async_model_load(self.event_proxy.clone());")
+			.expect("resumed starts async model load");
+		let redraw = resumed.find("win.request_redraw();").expect("resumed requests first redraw");
+		assert!(
+			startup < redraw,
+			"startup state must be established before the first redraw so Spout2 never receives a pre-startup runtime frame"
+		);
 	}
 
 	#[test]
