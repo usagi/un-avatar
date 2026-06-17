@@ -73,8 +73,9 @@ Tips:
 
 ## できること
 
-- Supervisor Console で複数のプロファイルと Renderer を統合的に管理。
 - Renderer でプロファイルごとの設定に基づいたアバターを描画。
+- Supervisor Console で複数のプロファイルと Renderer を統合的に管理。
+- グローバルなキー/マウス/MIDI割り当てでお着替え/アニメーションの実行。
 - VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (backend: Vulkan / DX12) で描画、出力。
 - VRC / Unity avatar を U.N. Avatar Exporter で `.unavatar` に変換し、Unity なしの Renderer runtime で利用。
 - UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、UNPhysics / UNDynamics を反映。
