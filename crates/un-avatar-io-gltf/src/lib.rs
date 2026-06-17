@@ -38,7 +38,7 @@ use un_avatar_types::HumanoidProfile;
 /// glTF スキン 1 本あたりの joint 上限（レンダラのボーンパレット上限と揃える）。
 const MAX_SKIN_JOINTS: usize = 512;
 const UN_AVATAR_EXTENSION_NAME: &str = "UN_avatar";
-const MAX_UNANIMATOR_ACTIONS: usize = 96;
+const MAX_UNANIMATOR_ACTIONS: usize = 1024;
 const MAX_UNANIMATOR_EFFECTS_PER_ACTION: usize = 16;
 const GLB_MAGIC: u32 = 0x46546C67;
 const GLB_VERSION_2: u32 = 2;
@@ -13701,6 +13701,61 @@ mod tests {
 
 		assert!(unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).is_none());
 		assert!(unavatar_runtime_action_set(&unavatar, None, &["animator:0:0:hat_off:0".to_string()], &BTreeMap::new()).is_some());
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_do_not_truncate_profile_enabled_actions_at_legacy_ui_count() {
+		let mut states = Vec::new();
+		let mut transitions = Vec::new();
+		let mut enabled_ids = Vec::new();
+		for index in 0..120 {
+			let state_name = format!("Action {index:03}");
+			let state_id = stable_identifier(&state_name);
+			enabled_ids.push(format!("animator:0:0:{state_id}:0"));
+			states.push(serde_json::json!({
+				"name": state_name,
+				"path": state_name,
+				"motion": {
+					"motionType": "AnimationClip",
+					"name": format!("Clip {index:03}"),
+					"curveBindings": [{
+						"path": "Root/Target",
+						"propertyName": "m_IsActive",
+						"type": "UnityEngine.GameObject",
+						"constantValue": 1
+					}]
+				}
+			}));
+			transitions.push(serde_json::json!({
+				"destinationState": state_name,
+				"conditions": [{
+					"parameter": format!("Action{index:03}"),
+					"mode": "If",
+					"threshold": 0
+				}]
+			}));
+		}
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"animator": {
+					"controllers": [{
+						"name": "FX",
+						"layers": [{
+							"name": "Actions",
+							"states": states,
+							"anyStateTransitions": transitions
+						}]
+					}]
+				}
+			}),
+		};
+
+		let actions = unavatar_runtime_action_set(&unavatar, None, &enabled_ids, &BTreeMap::new()).expect("runtime actions");
+
+		assert_eq!(actions.actions.len(), 120);
+		assert_eq!(actions.actions[0].id, "animator:0:0:action_000:0");
+		assert_eq!(actions.actions[119].id, "animator:0:0:action_119:0");
 	}
 
 	#[test]
