@@ -150,7 +150,7 @@ U.N. Motion なしでも、VMC/UDP を送信できる既存アプリを使えま
 
 ## OBS / Spout2 出力
 
-Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` または `Spout2 Only (HIDE)` にします。OBS 側では Spout2 Capture source を追加して、U.N. Avatar の Spout2 sender を選びます。
+Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` または `Spout2 Only (HIDE)` にします。OBS 側では Spout2 Capture source を追加して、U.N. Avatar の Spout2 sender を選びます。背景を透過したい場合は、Spout2 Capture の `Composite mode` を `Premultiplied Alpha` にします。
 
 ![OBS の Spout2 Capture 例。1 は配信画面へ入った U.N. Avatar 出力、2 は Spout2 Capture source、3 は source 一覧。](assets/v2-getting-started/obs-spout2-capture.png)
 
