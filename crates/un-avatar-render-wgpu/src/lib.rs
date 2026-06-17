@@ -189,11 +189,13 @@ fn rendered_frame_role_for_state(
 	wardrobe_billboard: Option<gpu::WardrobeChangingBillboardFrame>,
 ) -> gpu::RenderedFrameRole {
 	if renderer_startup_overlay.is_some() || startup_pending_document || startup_failed {
-		gpu::RenderedFrameRole::RendererStartup {
-			overlay: renderer_startup_overlay,
-		}
+		gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation {
+			progress_overlay: renderer_startup_overlay,
+		})
 	} else if let Some(billboard) = wardrobe_billboard {
-		gpu::RenderedFrameRole::WardrobeTransition { billboard }
+		gpu::RenderedFrameRole::WardrobeTransition(gpu::WardrobeTransitionPresentation {
+			changing_billboard: billboard,
+		})
 	} else {
 		gpu::RenderedFrameRole::RuntimeAvatar
 	}
@@ -7407,24 +7409,33 @@ mod tests {
 	fn rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive() {
 		let pending = rendered_frame_role_for_state(None, true, false, Some(test_wardrobe_billboard()));
 		assert!(
-			matches!(pending, gpu::RenderedFrameRole::RendererStartup { overlay: None }),
+			matches!(
+				pending,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: None })
+			),
 			"startup-pending frames must remain renderer-local even if a wardrobe billboard is queued"
 		);
 
 		let loading = rendered_frame_role_for_state(Some(test_startup_overlay()), false, false, Some(test_wardrobe_billboard()));
 		assert!(
-			matches!(loading, gpu::RenderedFrameRole::RendererStartup { overlay: Some(_) }),
+			matches!(
+				loading,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: Some(_) })
+			),
 			"startup overlay must not be co-rendered with wardrobe billboard output"
 		);
 
 		let failed = rendered_frame_role_for_state(None, false, true, Some(test_wardrobe_billboard()));
 		assert!(
-			matches!(failed, gpu::RenderedFrameRole::RendererStartup { overlay: None }),
+			matches!(
+				failed,
+				gpu::RenderedFrameRole::RendererStartup(gpu::RendererStartupPresentation { progress_overlay: None })
+			),
 			"startup failure presentation is renderer-local and must not fall through to wardrobe output"
 		);
 
 		let wardrobe = rendered_frame_role_for_state(None, false, false, Some(test_wardrobe_billboard()));
-		assert!(matches!(wardrobe, gpu::RenderedFrameRole::WardrobeTransition { .. }));
+		assert!(matches!(wardrobe, gpu::RenderedFrameRole::WardrobeTransition(_)));
 
 		let runtime = rendered_frame_role_for_state(None, false, false, None);
 		assert!(matches!(runtime, gpu::RenderedFrameRole::RuntimeAvatar));

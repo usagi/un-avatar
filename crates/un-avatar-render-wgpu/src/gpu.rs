@@ -2293,13 +2293,21 @@ pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
+pub(crate) struct RendererStartupPresentation {
+	pub(crate) progress_overlay: Option<StartupProgressOverlayFrame>,
+}
+
+pub(crate) struct WardrobeTransitionPresentation {
+	pub(crate) changing_billboard: WardrobeChangingBillboardFrame,
+}
+
 pub(crate) enum RenderedFrameRole {
 	/// Normal avatar frames. These are runtime output and may be sent to Spout2.
 	RuntimeAvatar,
 	/// Renderer-local startup / load / failure presentation. This is never sent to Spout2.
-	RendererStartup { overlay: Option<StartupProgressOverlayFrame> },
+	RendererStartup(RendererStartupPresentation),
 	/// OBS-facing wardrobe transition frame. This is runtime output and may be sent to Spout2.
-	WardrobeTransition { billboard: WardrobeChangingBillboardFrame },
+	WardrobeTransition(WardrobeTransitionPresentation),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2315,27 +2323,27 @@ impl RenderedFrameRole {
 			return Spout2FrameDelivery::Unavailable;
 		}
 		match self {
-			Self::RuntimeAvatar | Self::WardrobeTransition { .. } => Spout2FrameDelivery::RuntimeOutput,
-			Self::RendererStartup { .. } => Spout2FrameDelivery::SuppressedRendererStartup,
+			Self::RuntimeAvatar | Self::WardrobeTransition(_) => Spout2FrameDelivery::RuntimeOutput,
+			Self::RendererStartup(_) => Spout2FrameDelivery::SuppressedRendererStartup,
 		}
 	}
 
 	fn wardrobe_transition_billboard(&self) -> Option<&WardrobeChangingBillboardFrame> {
 		match self {
-			Self::WardrobeTransition { billboard } => Some(billboard),
-			Self::RuntimeAvatar | Self::RendererStartup { .. } => None,
+			Self::WardrobeTransition(presentation) => Some(&presentation.changing_billboard),
+			Self::RuntimeAvatar | Self::RendererStartup(_) => None,
 		}
 	}
 
 	fn startup_overlay(&self) -> Option<&StartupProgressOverlayFrame> {
 		match self {
-			Self::RendererStartup { overlay } => overlay.as_ref(),
-			Self::RuntimeAvatar | Self::WardrobeTransition { .. } => None,
+			Self::RendererStartup(presentation) => presentation.progress_overlay.as_ref(),
+			Self::RuntimeAvatar | Self::WardrobeTransition(_) => None,
 		}
 	}
 
 	fn is_wardrobe_transition_only(&self) -> bool {
-		matches!(self, Self::WardrobeTransition { .. })
+		matches!(self, Self::WardrobeTransition(_))
 	}
 }
 
@@ -8237,11 +8245,11 @@ mod tests {
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
 		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RenderedFrameRole, RuntimeMenuGraphNode,
-		Spout2FrameDelivery, StartupProgressOverlayFrame, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RenderedFrameRole,
+		RendererStartupPresentation, RuntimeMenuGraphNode, Spout2FrameDelivery, StartupProgressOverlayFrame, WardrobeAssetUploadPlan,
+		WardrobeChangingBillboardFrame, WardrobeTransitionPresentation, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
@@ -9120,12 +9128,12 @@ mod tests {
 			rect_half_size: [0.25, 0.1],
 		};
 		let runtime = RenderedFrameRole::RuntimeAvatar;
-		let startup = RenderedFrameRole::RendererStartup {
-			overlay: Some(startup_overlay),
-		};
-		let wardrobe = RenderedFrameRole::WardrobeTransition {
-			billboard: wardrobe_changing,
-		};
+		let startup = RenderedFrameRole::RendererStartup(RendererStartupPresentation {
+			progress_overlay: Some(startup_overlay),
+		});
+		let wardrobe = RenderedFrameRole::WardrobeTransition(WardrobeTransitionPresentation {
+			changing_billboard: wardrobe_changing,
+		});
 		assert_eq!(runtime.spout2_delivery(false), Spout2FrameDelivery::Unavailable);
 		assert_eq!(runtime.spout2_delivery(true), Spout2FrameDelivery::RuntimeOutput);
 		assert_eq!(
