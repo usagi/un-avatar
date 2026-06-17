@@ -176,7 +176,7 @@
 		{
 			id: "output",
 			labelKey: "profiles.editor.output",
-			scopeKey: "profiles.editor.launch_time",
+			scopeKey: "profiles.editor.runtime",
 		},
 	];
 

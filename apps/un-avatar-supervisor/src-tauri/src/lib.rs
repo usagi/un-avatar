@@ -14038,6 +14038,15 @@ mod tests {
 			app_svelte.contains("applyRuntimeProfileUpdates"),
 			"profile updates should route through the runtime apply path"
 		);
+		let output_nav_item = app_svelte
+			.split(r#"id: "output","#)
+			.nth(1)
+			.and_then(|rest| rest.split("},").next())
+			.expect("profile output nav item should exist");
+		assert!(
+			output_nav_item.contains(r#"scopeKey: "profiles.editor.runtime""#),
+			"profile section navigation should mark Output as runtime-applicable"
+		);
 		assert!(
 			profile_output.contains(r#"profiles.editor.runtime"#) && !profile_output.contains(r#"profiles.editor.launch_time"#),
 			"profile output settings should be presented as runtime-applicable after Spout2/window live apply support"
