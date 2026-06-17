@@ -103,8 +103,8 @@ const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
 const WARDROBE_TRANSITION_BILLBOARD_HOLD_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
-const SPLASH_FULL_RECT_CENTER: [f32; 2] = [0.0, 0.0];
-const SPLASH_FULL_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
+const STARTUP_PROGRESS_OVERLAY_RECT_CENTER: [f32; 2] = [0.0, 0.0];
+const STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -3620,16 +3620,16 @@ impl AvatarApp {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: progress.normalized_progress(),
 				phase: progress.phase.overlay_phase_code(),
-				rect_center: SPLASH_FULL_RECT_CENTER,
-				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
+				rect_center: STARTUP_PROGRESS_OVERLAY_RECT_CENTER,
+				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		} else {
 			self.startup_failed.as_ref().map(|_| gpu::StartupProgressOverlayFrame {
 				time_secs: self.started_at.elapsed().as_secs_f32(),
 				progress: -1.0,
 				phase: 9.0,
-				rect_center: SPLASH_FULL_RECT_CENTER,
-				rect_half_size: SPLASH_FULL_RECT_HALF_SIZE,
+				rect_center: STARTUP_PROGRESS_OVERLAY_RECT_CENTER,
+				rect_half_size: STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE,
 			})
 		};
 		let wardrobe_changing_billboard = self.wardrobe_changing_billboard_frame(now);
@@ -3642,8 +3642,10 @@ impl AvatarApp {
 				win.as_ref(),
 				self.opts.clear_color,
 				wall_clamped,
-				startup_progress_overlay,
-				wardrobe_changing_billboard,
+				gpu::FrameOverlayState {
+					startup_progress: startup_progress_overlay,
+					wardrobe_changing: wardrobe_changing_billboard,
+				},
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();
