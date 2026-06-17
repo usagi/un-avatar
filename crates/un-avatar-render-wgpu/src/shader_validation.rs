@@ -14,7 +14,10 @@ mod tests {
 		validate_wgsl("sky.wgsl", include_str!("../shaders/sky.wgsl"));
 		validate_wgsl("axes.wgsl", include_str!("../shaders/axes.wgsl"));
 		validate_wgsl("bone_colliders.wgsl", include_str!("../shaders/bone_colliders.wgsl"));
-		validate_wgsl("startup_splash.wgsl", include_str!("../shaders/startup_splash.wgsl"));
+		validate_wgsl(
+			"startup_progress_overlay.wgsl",
+			include_str!("../shaders/startup_progress_overlay.wgsl"),
+		);
 		validate_wgsl("wardrobe_billboard.wgsl", include_str!("../shaders/wardrobe_billboard.wgsl"));
 		validate_wgsl("contact_shadow.wgsl", include_str!("../shaders/contact_shadow.wgsl"));
 		validate_wgsl("avatar_outline.wgsl", include_str!("../shaders/avatar_outline.wgsl"));
@@ -24,6 +27,24 @@ mod tests {
 		validate_wgsl("smaa.wgsl", include_str!("../shaders/smaa.wgsl"));
 		validate_wgsl("blit.wgsl", include_str!("../shaders/blit.wgsl"));
 		validate_wgsl("compute_fur_cards.wgsl", include_str!("../shaders/compute_fur_cards.wgsl"));
+	}
+
+	#[test]
+	fn startup_progress_overlay_does_not_embed_wardrobe_transition_art() {
+		let startup = include_str!("../shaders/startup_progress_overlay.wgsl");
+		let wardrobe = include_str!("../shaders/wardrobe_billboard.wgsl");
+		for forbidden in ["wardrobe", "hanger", "garment", "changing"] {
+			assert!(
+				!startup.contains(forbidden),
+				"startup progress overlay must not carry wardrobe transition art token `{forbidden}`"
+			);
+		}
+		for expected in ["hanger", "garment"] {
+			assert!(
+				wardrobe.contains(expected),
+				"wardrobe transition shader should own wardrobe art token `{expected}`"
+			);
+		}
 	}
 
 	#[test]

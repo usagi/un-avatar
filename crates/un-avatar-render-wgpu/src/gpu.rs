@@ -48,7 +48,7 @@ use crate::{
 const SHADER_SKY: &str = include_str!("../shaders/sky.wgsl");
 const SHADER_AXES: &str = include_str!("../shaders/axes.wgsl");
 const SHADER_BONE_COLLIDERS: &str = include_str!("../shaders/bone_colliders.wgsl");
-const SHADER_STARTUP_SPLASH: &str = include_str!("../shaders/startup_splash.wgsl");
+const SHADER_STARTUP_PROGRESS_OVERLAY: &str = include_str!("../shaders/startup_progress_overlay.wgsl");
 const SHADER_WARDROBE_BILLBOARD: &str = include_str!("../shaders/wardrobe_billboard.wgsl");
 const SHADER_CONTACT_SHADOW: &str = include_str!("../shaders/contact_shadow.wgsl");
 
@@ -2246,7 +2246,7 @@ const _: () = assert!(std::mem::size_of::<GlobalsGpu>() == 256);
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-struct StartupSplashGpu {
+struct StartupProgressOverlayGpu {
 	time: f32,
 	progress: f32,
 	aspect: f32,
@@ -3854,9 +3854,9 @@ pub(crate) struct GpuState {
 	bone_collider_vertex_capacity: usize,
 	bone_collider_vertex_count: u32,
 	bone_collider_vertices: Vec<DebugLineVertex>,
-	startup_splash_pipeline: wgpu::RenderPipeline,
-	startup_splash_buffer: wgpu::Buffer,
-	startup_splash_bind_group: wgpu::BindGroup,
+	startup_progress_overlay_pipeline: wgpu::RenderPipeline,
+	startup_progress_overlay_buffer: wgpu::Buffer,
+	startup_progress_overlay_bind_group: wgpu::BindGroup,
 	wardrobe_billboard_pipeline: wgpu::RenderPipeline,
 	wardrobe_billboard_buffer: wgpu::Buffer,
 	wardrobe_billboard_bind_group: wgpu::BindGroup,
@@ -4113,32 +4113,33 @@ impl GpuState {
 		let aa_sample_count = aa_sample_count(aa);
 		let pipeline = create_sky_pipeline(&device, &bind_group_layout, format, aa_sample_count);
 		let bone_collider_pipeline = None;
-		let startup_splash_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("startup_splash"),
+		let startup_progress_overlay_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("startup_progress_overlay"),
 			entries: &[wgpu::BindGroupLayoutEntry {
 				binding: 0,
 				visibility: wgpu::ShaderStages::FRAGMENT,
 				ty: wgpu::BindingType::Buffer {
 					ty: wgpu::BufferBindingType::Uniform,
 					has_dynamic_offset: false,
-					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<StartupSplashGpu>() as u64),
+					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<StartupProgressOverlayGpu>() as u64),
 				},
 				count: None,
 			}],
 		});
-		let startup_splash_pipeline = create_startup_splash_pipeline(&device, &startup_splash_bind_group_layout, format, aa_sample_count);
-		let startup_splash_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("startup_splash"),
-			size: std::mem::size_of::<StartupSplashGpu>() as u64,
+		let startup_progress_overlay_pipeline =
+			create_startup_progress_overlay_pipeline(&device, &startup_progress_overlay_bind_group_layout, format, aa_sample_count);
+		let startup_progress_overlay_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("startup_progress_overlay"),
+			size: std::mem::size_of::<StartupProgressOverlayGpu>() as u64,
 			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 			mapped_at_creation: false,
 		});
-		let startup_splash_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("startup_splash"),
-			layout: &startup_splash_bind_group_layout,
+		let startup_progress_overlay_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("startup_progress_overlay"),
+			layout: &startup_progress_overlay_bind_group_layout,
 			entries: &[wgpu::BindGroupEntry {
 				binding: 0,
-				resource: startup_splash_buffer.as_entire_binding(),
+				resource: startup_progress_overlay_buffer.as_entire_binding(),
 			}],
 		});
 		let wardrobe_billboard_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4236,9 +4237,9 @@ impl GpuState {
 			bone_collider_vertex_capacity: 0,
 			bone_collider_vertex_count: 0,
 			bone_collider_vertices: Vec::new(),
-			startup_splash_pipeline,
-			startup_splash_buffer,
-			startup_splash_bind_group,
+			startup_progress_overlay_pipeline,
+			startup_progress_overlay_buffer,
+			startup_progress_overlay_bind_group,
 			wardrobe_billboard_pipeline,
 			wardrobe_billboard_buffer,
 			wardrobe_billboard_bind_group,
@@ -7007,9 +7008,9 @@ impl GpuState {
 	) {
 		let aspect = width.max(1) as f32 / height.max(1) as f32;
 		self.queue.write_buffer(
-			&self.startup_splash_buffer,
+			&self.startup_progress_overlay_buffer,
 			0,
-			bytemuck::bytes_of(&StartupSplashGpu {
+			bytemuck::bytes_of(&StartupProgressOverlayGpu {
 				time: progress_overlay.time_secs,
 				progress: progress_overlay.progress,
 				aspect,
@@ -7018,8 +7019,8 @@ impl GpuState {
 				rect_half_size: progress_overlay.rect_half_size,
 			}),
 		);
-		pass.set_pipeline(&self.startup_splash_pipeline);
-		pass.set_bind_group(0, &self.startup_splash_bind_group, &[]);
+		pass.set_pipeline(&self.startup_progress_overlay_pipeline);
+		pass.set_bind_group(0, &self.startup_progress_overlay_bind_group, &[]);
 		pass.draw(0..3, 0..1);
 	}
 
@@ -8075,25 +8076,25 @@ fn create_contact_shadow_pipeline(
 	})
 }
 
-fn create_startup_splash_pipeline(
+fn create_startup_progress_overlay_pipeline(
 	device: &wgpu::Device,
 	bind_group_layout: &wgpu::BindGroupLayout,
 	surface_format: wgpu::TextureFormat,
 	sample_count: u32,
 ) -> wgpu::RenderPipeline {
 	let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-		label: Some("startup_splash"),
-		source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_STARTUP_SPLASH)),
+		label: Some("startup_progress_overlay"),
+		source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER_STARTUP_PROGRESS_OVERLAY)),
 	});
 
 	let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-		label: Some("startup_splash"),
+		label: Some("startup_progress_overlay"),
 		bind_group_layouts: &[Some(bind_group_layout)],
 		immediate_size: 0,
 	});
 
 	device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-		label: Some("startup_splash"),
+		label: Some("startup_progress_overlay"),
 		layout: Some(&layout),
 		cache: None,
 		vertex: wgpu::VertexState {
