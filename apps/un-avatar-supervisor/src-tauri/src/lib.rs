@@ -14348,6 +14348,40 @@ mod tests {
 	}
 
 	#[test]
+	fn static_profile_camera_and_window_sections_keep_runtime_capture_actions() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src").join("lib");
+		let camera =
+			fs::read_to_string(supervisor_src.join("ProfileCameraSection.svelte")).expect("ProfileCameraSection.svelte should be readable");
+		assert!(
+			camera.contains("onCaptureRuntimeCamera"),
+			"profile camera section must expose capture from the currently running Renderer"
+		);
+		assert!(
+			camera.contains("disabled={busy || !runtimeCamera}"),
+			"profile camera runtime capture should be disabled when no running Renderer camera snapshot is available"
+		);
+		assert!(
+			camera.contains("profiles.editor.capture_runtime_camera"),
+			"profile camera capture button should use the localized runtime capture label"
+		);
+
+		let window =
+			fs::read_to_string(supervisor_src.join("ProfileWindowSection.svelte")).expect("ProfileWindowSection.svelte should be readable");
+		assert!(
+			window.contains("onCaptureRuntimeWindow"),
+			"profile window section must expose capture from the currently running Renderer"
+		);
+		assert!(
+			window.contains("disabled={busy || !runtimeWindowAvailable}"),
+			"profile window runtime capture should be disabled when no running Renderer window snapshot is available"
+		);
+		assert!(
+			window.contains("profiles.editor.capture_runtime_window"),
+			"profile window capture button should use the localized runtime capture label"
+		);
+	}
+
+	#[test]
 	fn renderer_window_icon_falls_back_to_renderer_artwork() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		assert_eq!(
