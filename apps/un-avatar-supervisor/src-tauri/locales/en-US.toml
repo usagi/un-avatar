@@ -1178,6 +1178,7 @@ clamp_off = "Clamp OFF"
 [renderers.animator]
 actions = "Animator actions"
 action_count = "%{count} actions"
+hidden_action_count = "Showing %{shown} / %{total}; %{hidden} more are available from the Renderer tray or profile UNAnimator search."
 actions_empty = "No Animator actions available."
 expressions = "Expressions"
 expressions_empty = "No expression presets available."

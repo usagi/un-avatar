@@ -209,7 +209,9 @@
 			{/if}
 			{#if renderedActionCount < actionCount}
 				<div class="runtime-button-note">
-					{$_("renderers.animator.action_count", { values: { count: actionCount - renderedActionCount } })}
+					{$_("renderers.animator.hidden_action_count", {
+						values: { shown: renderedActionCount, total: actionCount, hidden: actionCount - renderedActionCount },
+					})}
 				</div>
 			{/if}
 		</div>
