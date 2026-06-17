@@ -32,14 +32,14 @@ git diff --check
 Generated artifact evidence from the latest successful local packaging run:
 
 - `release-packages/un-avatar-2.0.0-beta-2.zip`
-- zip SHA-256: `3349dd0da08e48c3ef22a9157d6a36e08eb5d9726b5e6586138eee95e5c632ab`
+- zip SHA-256: `b2f814af290cb6ea058bbe7fef50c49bcb9ba41ca5055d548b2a8203c7b5bf5a`
 - sidecar: `release-packages/un-avatar-2.0.0-beta-2.zip.sha256.txt`
 - VCC package: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC zip SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, explicit Spout2 settings save wording and Supervisor Spout2 profile-save IPC naming, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup presentation suppression from Spout2 output, distinct startup / wardrobe frame roles for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray and Supervisor UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only minimized labeling, extended function-key binding regression coverage, Supervisor UNAnimator fixed-cap removal, and profile-enabled Animator runtime action import cap expansion.
+The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, live wardrobe transition and Spout2 profile setting updates for running renderers, Spout2 profile save separation from window state, explicit Spout2 settings save wording and Supervisor Spout2 profile-save IPC naming, profile output runtime applicability labeling in the editor and navigation, launch-time field classification cleanup, startup presentation suppression from Spout2 output, distinct startup / wardrobe frame roles for Spout2 output, startup progress shader separation from wardrobe transition art, startup scene-state naming cleanup, Renderer tray and Supervisor UNAnimator naming cleanup, Renderer and Supervisor Spout2 Only minimized labeling, extended function-key binding regression coverage, Supervisor and Renderer tray UNAnimator fixed-cap removal, profile-enabled Animator runtime action import cap expansion, and dev-mode Supervisor IPC coverage for all literal frontend invoke commands.
 
 ## Known Limitations
 
