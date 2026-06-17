@@ -39,7 +39,7 @@ Generated artifact evidence from the latest successful local packaging run:
 
 The release tooling verifies required portable zip entries, Spout2 payload entries unless explicitly skipped, packaged renderer startup smoke, VCC package entries, checksum sidecar consistency, VCC listing name / version / URL suffix / `zipSHA256`, the hashes recorded in this release-notes draft, and the Candidate Build artifact paths / hashes recorded in the manual release checklist.
 
-The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, startup progress vs wardrobe-changing billboard separation for Spout2 output, and Supervisor UNAnimator profile-setting copy polish.
+The recorded package includes post-candidate fixes for wardrobe transition rest-pose preparation, startup progress vs wardrobe-changing billboard separation for Spout2 output, Renderer tray UNAnimator naming cleanup, and Supervisor UNAnimator list truncation disclosure.
 
 ## Known Limitations
 
