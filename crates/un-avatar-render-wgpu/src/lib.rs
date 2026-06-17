@@ -2069,8 +2069,8 @@ impl AvatarApp {
 			| RendererTrayAction::SetSpoutPreview
 			| RendererTrayAction::SetSpoutOnly
 			| RendererTrayAction::SetSpoutResolution { .. } => {}
-			RendererTrayAction::SaveOutputToProfile => {
-				if let Err(error) = self.save_tray_output_to_profile() {
+			RendererTrayAction::SaveSpoutToProfile => {
+				if let Err(error) = self.save_tray_spout_to_profile() {
 					eprintln!("un-avatar-renderer: {error}");
 				}
 			}
@@ -2727,11 +2727,11 @@ impl AvatarApp {
 	}
 
 	#[cfg(windows)]
-	fn save_tray_output_to_profile(&self) -> Result<(), String> {
+	fn save_tray_spout_to_profile(&self) -> Result<(), String> {
 		let manifest_path = self.tray_manifest_path()?;
 		let snapshot = self.tray_runtime_snapshot()?;
-		let state = renderer_tray::output_profile_state_from_snapshot(&snapshot);
-		renderer_tray::save_output_state_to_profile(manifest_path, &state)
+		let state = renderer_tray::spout_profile_state_from_snapshot(&snapshot);
+		renderer_tray::save_spout_state_to_profile(manifest_path, &state)
 	}
 
 	#[cfg(windows)]

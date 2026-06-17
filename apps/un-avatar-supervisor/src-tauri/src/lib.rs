@@ -7023,7 +7023,7 @@ fn save_renderer_output_to_profile(
 		(output, manifest_path)
 	};
 	let manifest_path = manifest_path.ok_or_else(|| format!("renderer {id} has no manifest path"))?;
-	write_output_state_to_manifest(Path::new(&manifest_path), &output)?;
+	write_spout_state_to_manifest(Path::new(&manifest_path), &output)?;
 	refresh_tray_menu(&app)?;
 	get_renderer_runtime_status(id, state)
 }
@@ -7135,7 +7135,7 @@ fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) 
 	})
 }
 
-fn write_output_state_to_manifest(manifest_path: &Path, output: &RendererSpoutProfileState) -> Result<(), String> {
+fn write_spout_state_to_manifest(manifest_path: &Path, output: &RendererSpoutProfileState) -> Result<(), String> {
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let output_table = table
@@ -12006,7 +12006,7 @@ mod tests {
 		screenshot_profile_filename_stem, send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream,
 		spout_runtime_note, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
 		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
-		vrm_expression_is_user_action_candidate, write_output_state_to_manifest, AvatarManifestSummary, AvatarSetting,
+		vrm_expression_is_user_action_candidate, write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting,
 		AvatarSettingFieldDomain, LauncherTaskProfile, ProfileIconCropRequest, ProfileStorage, RendererControlCommand,
 		RendererRuntimeTelemetry, RendererSpoutProfileState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
@@ -14900,9 +14900,9 @@ stiffness = 0.35
 	}
 
 	#[test]
-	fn save_renderer_output_profile_writes_only_spout_settings() {
+	fn save_renderer_spout_profile_writes_only_spout_settings() {
 		let path = std::env::temp_dir().join(format!(
-			"un-avatar-supervisor-output-profile-{}-{}.toml",
+			"un-avatar-supervisor-spout-profile-{}-{}.toml",
 			std::process::id(),
 			line!()
 		));
@@ -14918,7 +14918,7 @@ height = 360
 		)
 		.unwrap();
 
-		write_output_state_to_manifest(
+		write_spout_state_to_manifest(
 			&path,
 			&RendererSpoutProfileState {
 				spout_enabled: true,

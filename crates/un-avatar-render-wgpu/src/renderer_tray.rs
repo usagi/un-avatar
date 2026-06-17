@@ -39,7 +39,7 @@ spout_only = "Spout2 のみ (最小化)"
 spout_resolution = "Spout2 解像度 %{width} x %{height}"
 spout_output_size = "Spout2 出力: %{width} x %{height}"
 spout_output_default = "Spout2 出力: レンダラー既定"
-save_output_profile = "Spout2 設定をプロファイルへ保存"
+save_spout_profile = "Spout2 設定をプロファイルへ保存"
 save_window_profile = "位置とサイズをプロファイルへ保存"
 restore_window_profile = "位置とサイズをプロファイルから復元"
 save_camera_profile = "プロファイルへ保存"
@@ -75,7 +75,7 @@ spout_only = "Spout2 Only (minimized)"
 spout_resolution = "Spout2 %{width} x %{height}"
 spout_output_size = "Spout2 output: %{width} x %{height}"
 spout_output_default = "Spout2 output: renderer default"
-save_output_profile = "Save Spout2 Settings to Profile"
+save_spout_profile = "Save Spout2 Settings to Profile"
 save_window_profile = "Save Position and Size to Profile"
 restore_window_profile = "Restore Position and Size from Profile"
 save_camera_profile = "Save to Profile"
@@ -109,7 +109,7 @@ pub(crate) enum RendererTrayAction {
 	SetSpoutPreview,
 	SetSpoutOnly,
 	SetSpoutResolution { width: u32, height: u32 },
-	SaveOutputToProfile,
+	SaveSpoutToProfile,
 	SaveWindowToProfile,
 	RestoreWindowFromProfile,
 	SaveCameraToProfile,
@@ -327,8 +327,8 @@ impl TrayText {
 		self.msg("spout_output_default")
 	}
 
-	fn save_output_profile(&self) -> Cow<'static, str> {
-		self.msg("save_output_profile")
+	fn save_spout_profile(&self) -> Cow<'static, str> {
+		self.msg("save_spout_profile")
 	}
 
 	fn save_window_profile(&self) -> Cow<'static, str> {
@@ -618,10 +618,10 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	append_menu_item(
 		&output,
 		&mut actions,
-		"output:save_profile",
-		text.save_output_profile(),
+		"output:save_spout_profile",
+		text.save_spout_profile(),
 		profile_enabled,
-		RendererTrayAction::SaveOutputToProfile,
+		RendererTrayAction::SaveSpoutToProfile,
 	);
 	append_submenu(&menu, &output);
 
@@ -1212,7 +1212,7 @@ fn spout_resolution_label(snapshot: &RendererRuntimeSnapshot, text: &TrayText) -
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TrayOutputProfileState {
+pub(crate) struct TraySpoutProfileState {
 	pub(crate) spout_enabled: bool,
 	pub(crate) spout_name: Option<String>,
 	pub(crate) spout_width: Option<u32>,
@@ -1233,8 +1233,8 @@ pub(crate) struct TrayCameraProfileState {
 	pub(crate) diagonal_fov_deg: Option<f32>,
 }
 
-pub(crate) fn output_profile_state_from_snapshot(snapshot: &RendererRuntimeSnapshot) -> TrayOutputProfileState {
-	TrayOutputProfileState {
+pub(crate) fn spout_profile_state_from_snapshot(snapshot: &RendererRuntimeSnapshot) -> TraySpoutProfileState {
+	TraySpoutProfileState {
 		spout_enabled: snapshot.spout_enabled,
 		spout_name: snapshot.spout_name.clone(),
 		spout_width: snapshot.spout_width.or(snapshot.spout_sender_width),
@@ -1252,7 +1252,7 @@ pub(crate) fn window_profile_state_from_snapshot(snapshot: &RendererRuntimeSnaps
 	})
 }
 
-pub(crate) fn save_output_state_to_profile(manifest_path: &Path, state: &TrayOutputProfileState) -> Result<(), String> {
+pub(crate) fn save_spout_state_to_profile(manifest_path: &Path, state: &TraySpoutProfileState) -> Result<(), String> {
 	let mut manifest = read_profile_manifest(manifest_path)?;
 	{
 		let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
@@ -1686,9 +1686,9 @@ mod tests {
 	}
 
 	#[test]
-	fn save_output_profile_writes_only_spout_settings() {
+	fn save_spout_profile_writes_only_spout_settings() {
 		let path = std::env::temp_dir().join(format!(
-			"un-avatar-renderer-tray-output-profile-{}-{}.toml",
+			"un-avatar-renderer-tray-spout-profile-{}-{}.toml",
 			std::process::id(),
 			line!()
 		));
@@ -1704,9 +1704,9 @@ height = 360
 		)
 		.unwrap();
 
-		let result = save_output_state_to_profile(
+		let result = save_spout_state_to_profile(
 			&path,
-			&TrayOutputProfileState {
+			&TraySpoutProfileState {
 				spout_enabled: true,
 				spout_name: Some("Live".to_string()),
 				spout_width: Some(1920),
