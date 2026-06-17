@@ -14025,6 +14025,15 @@ mod tests {
 				&& field_rules.contains("canApplyWithoutRestart"),
 			"wardrobe transition, wardrobe bindings, UNAnimator, and Spout2 output fields should be classified as live-applicable profile settings"
 		);
+		let launch_time_rules = field_rules
+			.split("export function isLaunchTimeRendererField")
+			.nth(1)
+			.and_then(|rest| rest.split("export function isRuntimeWindowField").next())
+			.expect("isLaunchTimeRendererField should be present");
+		assert!(
+			!launch_time_rules.contains(r#"field.startsWith("output.")"#),
+			"Spout2 output settings are runtime-applicable and must not be classified as generic launch-time output settings"
+		);
 		assert!(
 			app_svelte.contains("applyRuntimeProfileUpdates"),
 			"profile updates should route through the runtime apply path"

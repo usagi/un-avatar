@@ -16,8 +16,7 @@ export function isLaunchTimeRendererField(field: string): boolean {
 		field.startsWith("environment.") ||
 		field.startsWith("expression.") ||
 		field.startsWith("motion.") ||
-		field.startsWith("physics.contacts.") ||
-		field.startsWith("output.")
+		field.startsWith("physics.contacts.")
 	);
 }
 
