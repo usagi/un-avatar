@@ -22,6 +22,8 @@ const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
 const RENDERER_TRAY_LOCALE_ENV: &str = "UN_AVATAR_LOCALE";
 const RENDERER_TRAY_FALLBACK_LOCALE: &str = "ja-JP";
+const UNANIMATOR_TRAY_MENU_ID: &str = "renderer:vrc_menu";
+const UNANIMATOR_TRAY_ACTION_ID_PREFIX: &str = "vrc_menu";
 
 static RENDERER_TRAY_I18N: LazyLock<un_i18n::UnI18nStore> = LazyLock::new(|| {
 	let mut store = un_i18n::UnI18nStore::new();
@@ -357,7 +359,7 @@ impl TrayText {
 		self.msg("base_wardrobe")
 	}
 
-	fn vrc_menu(&self) -> Cow<'static, str> {
+	fn unanimator(&self) -> Cow<'static, str> {
 		self.msg("vrc_menu")
 	}
 
@@ -624,7 +626,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	append_submenu(&menu, &output);
 
 	append_wardrobe_menu(&menu, &mut actions, opts, snapshot, &text);
-	append_vrc_menu_actions(&menu, &mut actions, opts, snapshot, &text);
+	append_unanimator_actions(&menu, &mut actions, opts, snapshot, &text);
 
 	if snapshot.dynamics_group_count > 0 {
 		let dynamics = Submenu::with_id("renderer:dynamics", text.unphysics(), true);
@@ -720,7 +722,7 @@ fn build_menu(opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot) ->
 	(menu, actions)
 }
 
-fn append_vrc_menu_actions(
+fn append_unanimator_actions(
 	menu: &Menu,
 	actions: &mut HashMap<String, RendererTrayAction>,
 	opts: &AvatarWindowOptions,
@@ -747,7 +749,7 @@ fn append_vrc_menu_actions(
 	if entries.is_empty() && fallback_entries.is_empty() {
 		return;
 	}
-	let vrc_menu = Submenu::with_id("renderer:vrc_menu", text.vrc_menu(), true);
+	let unanimator_menu = Submenu::with_id(UNANIMATOR_TRAY_MENU_ID, text.unanimator(), true);
 	if entries.is_empty() {
 		for (index, action) in fallback_entries.into_iter().enumerate() {
 			let active = fallback_action_active(snapshot, action);
@@ -768,9 +770,9 @@ fn append_vrc_menu_actions(
 				RendererTrayAction::ActivateAction(action.action_id.clone())
 			};
 			append_menu_item(
-				&vrc_menu,
+				&unanimator_menu,
 				actions,
-				format!("vrc_menu:{index}"),
+				format!("{UNANIMATOR_TRAY_ACTION_ID_PREFIX}:{index}"),
 				check_label(animator_label_with_shortcut(truncate_label(&label, 56), opts, &action_id), active),
 				true,
 				action,
@@ -782,9 +784,9 @@ fn append_vrc_menu_actions(
 			let raw = menu_candidate_last_label(candidate);
 			let polarity = animator_toggle_polarity(&raw);
 			append_menu_item(
-				&vrc_menu,
+				&unanimator_menu,
 				actions,
-				format!("vrc_menu:{index}"),
+				format!("{UNANIMATOR_TRAY_ACTION_ID_PREFIX}:{index}"),
 				check_label(
 					animator_label_with_shortcut(truncate_label(&menu_action_label(candidate), 56), opts, &candidate.action_id),
 					active,
@@ -801,7 +803,7 @@ fn append_vrc_menu_actions(
 			);
 		}
 	}
-	append_submenu(menu, &vrc_menu);
+	append_submenu(menu, &unanimator_menu);
 }
 
 fn animator_menu_candidate_visible(candidate: &gpu::RuntimeMenuActionCandidateStatus) -> bool {
@@ -1783,7 +1785,7 @@ mod tests {
 	}
 
 	#[test]
-	fn menu_key_tracks_vrc_menu_action_labels() {
+	fn menu_key_tracks_unanimator_action_labels() {
 		let mut before = snapshot();
 		before.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
 			action_id: "action:smile".to_string(),
@@ -1803,7 +1805,7 @@ mod tests {
 	}
 
 	#[test]
-	fn menu_key_tracks_vrc_menu_parameter_dispatch_values() {
+	fn menu_key_tracks_unanimator_parameter_dispatch_values() {
 		let mut before = snapshot();
 		before.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
 			action_id: "action:smile".to_string(),
@@ -1853,7 +1855,7 @@ mod tests {
 	}
 
 	#[test]
-	fn menu_key_ignores_wardrobe_runtime_actions_in_vrc_menu_fallback() {
+	fn menu_key_ignores_wardrobe_runtime_actions_in_unanimator_fallback() {
 		let mut before = snapshot();
 		before.runtime_actions = vec![gpu::RuntimeActionStatus {
 			action_id: "wardrobe:field_drape".to_string(),
@@ -1997,7 +1999,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_excludes_wardrobe_set_candidates() {
+	fn unanimator_excludes_wardrobe_set_candidates() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.menu_action_candidates = vec![
@@ -2036,7 +2038,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_excludes_unavailable_menu_candidates_without_fallback() {
+	fn unanimator_excludes_unavailable_menu_candidates_without_fallback() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.menu_action_candidates = vec![gpu::RuntimeMenuActionCandidateStatus {
@@ -2064,7 +2066,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_falls_back_to_expression_menu_runtime_actions() {
+	fn unanimator_falls_back_to_expression_menu_runtime_actions() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.runtime_actions = vec![gpu::RuntimeActionStatus {
@@ -2085,7 +2087,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_profile_animator_action_shows_binding_and_active_check() {
+	fn unanimator_profile_animator_action_shows_binding_and_active_check() {
 		let mut opts = AvatarWindowOptions::default();
 		opts.animator_bindings = vec![crate::AnimatorActionBindingOptions {
 			action_id: "expression:angry".to_string(),
@@ -2116,7 +2118,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_fallback_excludes_wardrobe_set_actions() {
+	fn unanimator_fallback_excludes_wardrobe_set_actions() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.runtime_actions = vec![
@@ -2149,7 +2151,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_parameter_action_toggles_runtime_parameter() {
+	fn unanimator_parameter_action_toggles_runtime_parameter() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.runtime_actions = vec![gpu::RuntimeActionStatus {
@@ -2179,7 +2181,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_metadata_on_off_pair_is_single_toggle_action() {
+	fn unanimator_metadata_on_off_pair_is_single_toggle_action() {
 		let opts = AvatarWindowOptions::default();
 		let mut status = snapshot();
 		status.menu_action_candidates = vec![
@@ -2229,7 +2231,7 @@ mod tests {
 	}
 
 	#[test]
-	fn vrc_menu_label_prefers_resolved_menu_path() {
+	fn unanimator_label_prefers_resolved_menu_path() {
 		let candidate = gpu::RuntimeMenuActionCandidateStatus {
 			action_id: "action:smile".to_string(),
 			action_label: "Smile Action".to_string(),
@@ -2353,7 +2355,7 @@ mod tests {
 		assert_eq!(text.output(), "出力: Spout2");
 		assert_eq!(text.camera(), "カメラ");
 		assert_eq!(text.wardrobe(), "ワードローブ");
-		assert_eq!(text.vrc_menu(), "UNAnimator");
+		assert_eq!(text.unanimator(), "UNAnimator");
 		assert_eq!(text.quit_renderer(), "この Renderer を終了");
 	}
 
