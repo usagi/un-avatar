@@ -20,6 +20,10 @@ npm run check
 cargo xtask fmt
 cargo test -p xtask -- --nocapture
 cargo test -p un-avatar-render-wgpu renderer_tray -- --nocapture
+cargo test -p un-avatar-render-wgpu rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive
+cargo test -p un-avatar-render-wgpu startup_progress_and_wardrobe_transition_are_distinct_frame_roles
+cargo test -p un-avatar-render-wgpu startup_progress_overlay_does_not_embed_wardrobe_transition_art
+cargo test -p un-avatar-supervisor dev_ipc_mock_covers_literal_frontend_invokes
 cargo xtask unity-exporter-vcc --version 2.0.0-beta-2
 cargo xtask release-package --version 2.0.0-beta-2
 cargo xtask release-audit --version 2.0.0-beta-2
