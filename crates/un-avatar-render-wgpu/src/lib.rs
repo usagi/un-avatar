@@ -9093,11 +9093,18 @@ mod tests {
 	#[cfg(windows)]
 	#[test]
 	fn parses_wardrobe_windows_hotkey() {
+		use windows::Win32::UI::Input::KeyboardAndMouse::{VK_F21, VK_F22, VK_F23, VK_F24};
 		let (mods, key) = parse_windows_hotkey("Ctrl+Alt+1").unwrap();
 		assert_ne!(mods.0, 0);
 		assert_eq!(key, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_1.0));
-		let (_, f24) = parse_windows_hotkey("F24").unwrap();
-		assert_eq!(f24, u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F24.0));
+		for (binding, expected) in [("F21", VK_F21.0), ("F22", VK_F22.0), ("F23", VK_F23.0), ("F24", VK_F24.0)] {
+			let (_, key) = parse_windows_hotkey(binding).unwrap();
+			assert_eq!(
+				key,
+				u32::from(expected),
+				"{binding} should map to its extended function virtual key"
+			);
+		}
 		assert!(parse_windows_hotkey("Ctrl+Alt").is_err());
 		assert!(parse_windows_hotkey("Ctrl+Alt+1+2").is_err());
 	}
@@ -9120,6 +9127,41 @@ mod tests {
 		assert_eq!(
 			registrations[0].virtual_key,
 			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F21.0)
+		);
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn animator_hotkey_registration_accepts_extended_function_keys() {
+		let registrations = global_hotkey_registrations(
+			&[],
+			&[
+				crate::options::AnimatorActionBindingOptions {
+					action_id: "expression:angry".to_string(),
+					kind: WardrobeBindingKind::Keyboard,
+					binding: "F23".to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				},
+				crate::options::AnimatorActionBindingOptions {
+					action_id: "expression:joy".to_string(),
+					kind: WardrobeBindingKind::Keyboard,
+					binding: "F24".to_string(),
+					device: None,
+					channel: None,
+					note: None,
+				},
+			],
+		);
+		assert_eq!(registrations.len(), 2);
+		assert_eq!(
+			registrations[0].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F23.0)
+		);
+		assert_eq!(
+			registrations[1].virtual_key,
+			u32::from(windows::Win32::UI::Input::KeyboardAndMouse::VK_F24.0)
 		);
 	}
 
