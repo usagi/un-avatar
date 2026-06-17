@@ -50,12 +50,18 @@ VRC / Unity アバターは、先に Unity Editor で `.unavatar` を作りま�
 
 ### 2. `.unavatar` を出力する
 
-1. Unity Editor で `Tools > U.N. Avatar > Exporter .unavatar` を開きます。
+1. Unity Editor で `Tools > U.N. Avatar > Export .unavatar` を開きます。
 2. `Avatar Root` に Hierarchy からアバターのルート GameObject を指定します。
 3. `Output` に `.unavatar` を出力するパスを設定します。
 4. 操作パネルの `1. Base -> 2. Wardrobe Sets -> 3. Export` の順に操作します。
 
 ![Unity Editor の U.N. Avatar Exporter 画面。1 は Tools メニュー、2 は Avatar Root と Output、3 は Base / Wardrobe Sets / Export の操作パネル。](assets/v2-getting-started/exporter-workflow.png)
+
+図の番号:
+
+- 1: `Tools > U.N. Avatar > Export .unavatar` から Exporter を開きます。
+- 2: `Avatar Root` と `Output` を指定します。
+- 3: `Base`、`Wardrobe Sets`、`Export` の順に操作します。
 
 Wardrobe を使わない場合は、Export Mode を `Current to Base Only` にして `3. Export` へ進みます。
 
@@ -71,6 +77,13 @@ Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` �
 6. `起動` ボタンで Renderer を起動します。
 
 ![Supervisor の .unavatar 確認画面。1 はプロファイルアイコンに使う切り抜き範囲、2 はズームと位置調整、3 は Wardrobe set 選択、4 は確認して読み込むボタン。](assets/v2-getting-started/supervisor-unavatar-confirm.png)
+
+図の番号:
+
+- 1: プロファイルアイコンに使う切り抜き範囲です。
+- 2: ズームと位置を調整します。
+- 3: プレビューする Wardrobe set を選びます。
+- 4: 権利確認を読んだうえで `.unavatar` を読み込みます。
 
 ## Wardrobe を使う
 
@@ -96,6 +109,12 @@ Wardrobe を使うと、Renderer を起動したまま衣装や小物の状態�
 
 ![Exporter の Wardrobe 操作。1 は Base 保存、2 は Wardrobe Sets の保存と管理、3 は .unavatar export。](assets/v2-getting-started/exporter-wardrobe-sets.png)
 
+図の番号:
+
+- 1: 現在の Unity scene 状態を `Base` として保存します。
+- 2: 衣装や小物の状態を `Wardrobe Sets` として保存・更新します。
+- 3: 保存した Base / Sets を含む `.unavatar` を出力します。
+
 保存済み set は、必要に応じて `Update`、`Duplicate`、`Remove` できます。Set は複数作れます。
 
 Base / Sets の名称ボタン部分をクリックすると、Unity scene のアバター状態を保存済み状態へ切り替えられます。
@@ -117,6 +136,12 @@ Renderer 起動後は、Windows tray の Renderer メニューから Wardrobe �
 
 ![Renderer tray の Wardrobe メニュー。1 は Wardrobe メニュー、2 は切り替え候補、3 は現在の衣装をプロファイルへ保存。](assets/v2-getting-started/tray-wardrobe-menu.png)
 
+図の番号:
+
+- 1: Renderer tray から `ワードローブ` メニューを開きます。
+- 2: 配信中に切り替える Wardrobe set を選びます。
+- 3: 現在の衣装を次回起動時の既定値としてプロファイルへ保存します。
+
 ## モーション入力
 
 Renderer 起動後、U.N. Motion から UNMF/Z を送ると表情、姿勢、手足などを動かせます。
@@ -128,6 +153,12 @@ U.N. Motion なしでも、VMC/UDP を送信できる既存アプリを使えま
 Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` または `Spout2 Only (HIDE)` にします。OBS 側では Spout2 Capture source を追加して、U.N. Avatar の Spout2 sender を選びます。
 
 ![OBS の Spout2 Capture 例。1 は配信画面へ入った U.N. Avatar 出力、2 は Spout2 Capture source、3 は source 一覧。](assets/v2-getting-started/obs-spout2-capture.png)
+
+図の番号:
+
+- 1: OBS preview に入った U.N. Avatar の Spout2 出力です。
+- 2: `Spout2 Capture` source を選択しています。
+- 3: source 一覧で Spout2 Capture を管理します。
 
 <video src="assets/v2-getting-started/wardrobe-switch-demo.webm" controls muted playsinline width="960"></video>
 
@@ -145,3 +176,12 @@ Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` �
 `.unavatar` には、avatar mesh、texture、material metadata、lilToon parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。
 
 第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。U.N. Avatar は、ユーザー自身が正規に利用できるアセットをローカル環境で配信等に利用することを主目的とします。
+
+## 図・動画で使用した素材
+
+この文書の図と動画には、U.N. Avatar の操作例として次の素材を使用しています。各素材の権利はそれぞれの権利者に帰属します。
+
+- アバターモデル: [オリジナル3Dモデル「瑞希」メニューギミック搭載](https://booth.pm/ja/items/5132797) / IKUSIA
+- 衣装: [Noble Trace - Classic](https://booth.pm/ja/items/6786314) / VELLIE
+- 衣装: [Field Drape](https://booth.pm/ja/items/8362173) / CYCR (Cyber Critter)
+- ゲーム画面: [魔王城ものがたり](https://store.steampowered.com/app/4212210/Demon_Castle_Story/?l=japanese) / (C) KAIROSOFT CO.,LTD. All Rights Reserved.
