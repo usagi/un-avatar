@@ -16288,6 +16288,21 @@ id = "test"
 	}
 
 	#[test]
+	fn spout_runtime_note_allows_delayed_sender_initialization() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.spout_frames_attempted = 0;
+		telemetry.spout_sender_initialized = None;
+		telemetry.spout_sender_width = None;
+		telemetry.spout_sender_height = None;
+
+		assert_eq!(
+			spout_runtime_note(&telemetry),
+			None,
+			"Spout2 sender state may be unknown before the first runtime output frame because renderer-local startup presentation must not create or publish a sender"
+		);
+	}
+
+	#[test]
 	fn spout_runtime_note_reports_sender_size_mismatch() {
 		let mut telemetry = runtime_telemetry_fixture();
 		telemetry.spout_sender_width = Some(640);
