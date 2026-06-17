@@ -6,7 +6,7 @@ v1 公開時点で残す文書の索引。
 
 | 文書 | 内容 |
 | --- | --- |
-| [`../README.md`](../README.md) | ユーザー向け概要、使い方、開発者向けコマンド |
+| [`../README.md`](../README.md) | ユーザー向け概要、初回手順、VRC / `.unavatar` / Wardrobe の入口 |
 | [`roadmap.md`](roadmap.md) | 現在の実装状況、v1 の範囲、今後の候補 |
 | [`v2-roadmap.md`](v2-roadmap.md) | `.unavatar` / VRC Unity Exporter を中核にした v2 計画 |
 | [`runtime-mvp.md`](runtime-mvp.md) | VRM / VMC / MToon / wgpu / Spout2 runtime の境界 |

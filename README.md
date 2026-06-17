@@ -6,7 +6,7 @@
 
 U.N. Avatar は VRM(0/1) と VRC 向け Unity アバターを、配信向けに軽快に表示する「仮想アバターレンダラー」です。姿勢や表情の入力を U.N. Motion からの UNMF/Z や VMC 対応で受け、透過ウィンドウ、スクリーンショット保存、Spout2 出力などを行えます。
 
-v2 では従来の .vrm モデルと MToon / SpringBone 対応に加えて、VRC 向けモデルと lilToon / PhysBone 、 Modular Avatar ベースの U.N. Avatar 独自のお着替え機能 Wardrobe を扱えます。VRC モデルは Unity Editor に追加する U.N. Avatar Exporter パッケージで `.unavatar` 形式にエクスポートして使います。
+v2 では従来の `.vrm` モデルと MToon / SpringBone 対応に加えて、VRC 向けモデル、lilToon / PhysBone、Modular Avatar ベースの U.N. Avatar 独自のお着替え機能 Wardrobe を扱えます。VRC モデルは Unity Editor に追加する U.N. Avatar Exporter パッケージで `.unavatar` 形式にエクスポートして使います。
 
 ## はじめて使う場合の簡単な手順
 
@@ -15,14 +15,25 @@ v2 では従来の .vrm モデルと MToon / SpringBone 対応に加えて、VRC
 3. アバターファイルとして `.vrm` または `.unavatar` を開きます。
 4. 各種設定を行い、「起動」ボタンで Renderer を起動します。
 
-### VRCモデルを使う場合の U.N. Avatar Exporter の導入方法と簡単な操作手順
+### VRC モデルを使う場合の U.N. Avatar Exporter の導入方法と簡単な操作手順
+
+U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。VRC 向け avatar は、Unity Editor 上の U.N. Avatar Exporter で `.unavatar` に変換してから使います。
+
+```text
+Unity project with VRC avatar
+  -> U.N. Avatar Exporter
+  -> .unavatar
+  -> U.N. Avatar Supervisor / Renderer
+  -> Window / Spout2
+  -> OBS or streaming software
+```
 
 - VRChat Creator Companion (VCC) のパッケージマネージャーから U.N. Avatar Exporter を探してインストール。
 
 他の方法として次の方法でも可能です:
 
-- 別法1: Unity Editor の Window > Package Manager で「Add package from git URL」を選び、`https://github.com/usagi/un-avatar-exporter.git` を入力してインストール。
-- 別法2: Unity Editor の Window > Package Manager で「Add package from disk」を選び、U.N. Avatar 配布パッケージの `unity/un-avatar-unity-exporter` フォルダーの `un-avatar-exporter/package.json` を指定してインストール。
+- 別法1: Unity Editor の Window > Package Manager で「Add package from git URL」を選び、`https://github.com/usagi/un-avatar.git?path=/unity/un-avatar-unity-exporter` を入力してインストール。
+- 別法2: Unity Editor の Window > Package Manager で「Add package from disk」を選び、U.N. Avatar 配布パッケージの `unity/un-avatar-unity-exporter/package.json` を指定してインストール。
 
 #### 操作手順
 
@@ -50,6 +61,8 @@ Base / Sets はお着替えの状態を作り保存します。それぞれの�
 Tips:
 
 - Base / Sets の名称ボタン部分をクリックすると、アバターの衣装状態が保存された状態に切り替えられ何かと便利です。
+
+`.unavatar` には、avatar mesh、texture、material metadata、lilToon-compatible parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、wardrobe set などが含まれます。第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。
 
 ## 想定ユーザー
 
@@ -81,31 +94,6 @@ Tips:
 - VRC モデルも使いやすい: Unity Exporter が VRC avatar、lilToon material、PhysBone、Expression Menu / Animator、wardrobe set を `.unavatar` にまとめ、Renderer はそれを Unity なしで扱えます。
 - 見た目を整えやすい: AA、texture policy、背景色、肌色合わせ、Bloom、SSAO、Contact shadow、シルエットアウトライン、Lighting などをプロファイルごとに設定できます。MatCap、Specular、Rim、material outline などはモデル authored value を UNToon material として尊重します。
 - 安定性と軽快さ: Rust と wgpu で堅牢さと一般性を両立したネイティブコードの Renderer プロセス本体は軽量で効率よく安定して動作し、Tauri/WebView で作られた Supervisor GUI プロセスは扱いやすく高度な表現でプロファイルや Renderer の管理を便利に行えます。
-
-## 一般的な使い方
-
-1. Supervisor Console (un-avatar-supervisor.exe) を起動します。
-2. Profiles でプロファイルを作成します。
-3. VRM を使う場合は `.vrm`、VRC / Unity avatar を使う場合は Exporter で作成した `.unavatar` をアバターファイルに設定します。
-4. モーション入力、出力、ウィンドウ、カメラなどを設定します。
-5. Profiles または Renderers から Renderer を起動します。
-6. U.N. Motion などから UNMF/Z または VMC/UDP でモーションを送ります。
-7. 必要に応じて透過ウィンドウ、Spout2、背景色、ライティング、ルック、wardrobe set、スクリーンショットを調整します。
-
-## VRC / Unity アバターを使う場合
-
-U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。VRC 向け avatar は、Unity Editor 上の U.N. Avatar Exporter で `.unavatar` に変換してから使います。
-
-```text
-Unity project with VRC avatar
-  -> U.N. Avatar Exporter
-  -> .unavatar
-  -> U.N. Avatar Supervisor / Renderer
-  -> Window / Spout2
-  -> OBS or streaming software
-```
-
-`.unavatar` には、avatar mesh、texture、material metadata、lilToon-compatible parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、wardrobe set などが含まれます。第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。
 
 ## Wardrobe / Runtime Actions
 
@@ -144,39 +132,7 @@ Spout2 は BSD 2-Clause License の第三者コンポーネントです。配布
 ## 開発者向け
 
 この repository には Supervisor GUI、Renderer runtime、VRM / glTF / `.unavatar` I/O、Unity Exporter、motion adapter、release tooling が含まれています。
-
-よく使うコマンド:
-
-```sh
-cargo xtask ci
-cargo xtask build
-cargo xtask run
-cargo xtask run --release
-cargo xtask release-package --version <version>
-cargo xtask release-audit --version <version>
-cargo xtask package-render-smoke
-cargo xtask package-render-smoke --manifest <path> --wardrobe-set <set-id>
-cargo xtask unity-exporter-vcc --version <version>
-```
-
-Renderer だけを smoke test する場合:
-
-```sh
-cargo xtask render-smoke
-```
-
-`package-render-smoke --manifest <path> --wardrobe-set <set-id>` は packaged Renderer で実 avatar manifest と代表 wardrobe set の起動検証を windowless に実行します。
-`release-audit --version <version>` は既存の portable zip、checksum sidecar、VCC package zip、`docs/vcc/index.json`、`docs/v2-release-notes-draft.md`、`docs/v2-manual-release-checklist.md` の hash / 必須 entry / VCC listing name・version・URL 整合を再ビルドなしで検査します。
-
-Supervisor の UI を編集する場合:
-
-```sh
-cd apps/un-avatar-supervisor
-npm install
-npm run dev
-```
-
-注意: workspace の default member は Supervisor 側です。開発中に Renderer 変更も含めて起動確認する場合は、`cargo run` / `cargo build` ではなく `cargo xtask build` または `cargo xtask run` を使ってください。
+開発時のコマンド、release guard、package / audit、Unity Exporter package の作成手順は [Development Guidelines](docs/development-guidelines.md) を参照してください。
 
 ## ドキュメント
 
