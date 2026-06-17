@@ -57,11 +57,11 @@ VRC / Unity アバターは、先に Unity Editor で `.unavatar` を作りま�
 
 ![Unity Editor の U.N. Avatar Exporter 画面。1 は Tools メニュー、2 は Avatar Root と Output、3 は Base / Wardrobe Sets / Export の操作パネル。](assets/v2-getting-started/exporter-workflow.png)
 
-図の番号:
-
-- 1: `Tools > U.N. Avatar > Export .unavatar` から Exporter を開きます。
-- 2: `Avatar Root` と `Output` を指定します。
-- 3: `Base`、`Wardrobe Sets`、`Export` の順に操作します。
+> 図1:
+>
+> - 1: `Tools > U.N. Avatar > Export .unavatar` から Exporter を開きます。
+> - 2: `Avatar Root` と `Output` を指定します。
+> - 3: `Base`、`Wardrobe Sets`、`Export` の順に操作します。
 
 Wardrobe を使わない場合は、Export Mode を `Current to Base Only` にして `3. Export` へ進みます。
 
@@ -78,12 +78,12 @@ Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` �
 
 ![Supervisor の .unavatar 確認画面。1 はプロファイルアイコンに使う切り抜き範囲、2 はズームと位置調整、3 は Wardrobe set 選択、4 は確認して読み込むボタン。](assets/v2-getting-started/supervisor-unavatar-confirm.png)
 
-図の番号:
-
-- 1: プロファイルアイコンに使う切り抜き範囲です。
-- 2: ズームと位置を調整します。
-- 3: プレビューする Wardrobe set を選びます。
-- 4: 権利確認を読んだうえで `.unavatar` を読み込みます。
+> 図2:
+>
+> - 1: プロファイルアイコンに使う切り抜き範囲です。
+> - 2: ズームと位置を調整します。
+> - 3: プレビューする Wardrobe set を選びます。
+> - 4: 権利確認を読んだうえで `.unavatar` を読み込みます。
 
 ## Wardrobe を使う
 
@@ -109,11 +109,11 @@ Wardrobe を使うと、Renderer を起動したまま衣装や小物の状態�
 
 ![Exporter の Wardrobe 操作。1 は Base 保存、2 は Wardrobe Sets の保存と管理、3 は .unavatar export。](assets/v2-getting-started/exporter-wardrobe-sets.png)
 
-図の番号:
-
-- 1: 現在の Unity scene 状態を `Base` として保存します。
-- 2: 衣装や小物の状態を `Wardrobe Sets` として保存・更新します。
-- 3: 保存した Base / Sets を含む `.unavatar` を出力します。
+> 図3:
+>
+> - 1: 現在の Unity scene 状態を `Base` として保存します。
+> - 2: 衣装や小物の状態を `Wardrobe Sets` として保存・更新します。
+> - 3: 保存した Base / Sets を含む `.unavatar` を出力します。
 
 保存済み set は、必要に応じて `Update`、`Duplicate`、`Remove` できます。Set は複数作れます。
 
@@ -136,11 +136,11 @@ Renderer 起動後は、Windows tray の Renderer メニューから Wardrobe �
 
 ![Renderer tray の Wardrobe メニュー。1 は Wardrobe メニュー、2 は切り替え候補、3 は現在の衣装をプロファイルへ保存。](assets/v2-getting-started/tray-wardrobe-menu.png)
 
-図の番号:
-
-- 1: Renderer tray から `ワードローブ` メニューを開きます。
-- 2: 配信中に切り替える Wardrobe set を選びます。
-- 3: 現在の衣装を次回起動時の既定値としてプロファイルへ保存します。
+> 図4:
+>
+> - 1: Renderer tray から `ワードローブ` メニューを開きます。
+> - 2: 配信中に切り替える Wardrobe set を選びます。
+> - 3: 現在の衣装を次回起動時の既定値としてプロファイルへ保存します。
 
 ## モーション入力
 
@@ -154,11 +154,11 @@ Spout2 を使う場合は、Renderer の出力モードを `Spout2 + Preview` �
 
 ![OBS の Spout2 Capture 例。1 は配信画面へ入った U.N. Avatar 出力、2 は Spout2 Capture source、3 は source 一覧。](assets/v2-getting-started/obs-spout2-capture.png)
 
-図の番号:
-
-- 1: OBS preview に入った U.N. Avatar の Spout2 出力です。
-- 2: `Spout2 Capture` source を選択しています。
-- 3: source 一覧で Spout2 Capture を管理します。
+> 図5:
+>
+> - 1: OBS preview に入った U.N. Avatar の Spout2 出力です。
+> - 2: `Spout2 Capture` source を選択しています。
+> - 3: source 一覧で Spout2 Capture を管理します。
 
 <video src="assets/v2-getting-started/wardrobe-switch-demo.webm" controls muted playsinline width="960"></video>
 
