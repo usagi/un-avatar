@@ -35,7 +35,7 @@ output = "出力: Spout2"
 camera = "カメラ"
 window_preview = "ウィンドウプレビュー"
 spout_preview = "Spout2 + プレビュー"
-spout_only = "Spout2 のみ (最小化)"
+spout_only = "Spout2 のみ (HIDE)"
 spout_resolution = "Spout2 解像度 %{width} x %{height}"
 spout_output_size = "Spout2 出力: %{width} x %{height}"
 spout_output_default = "Spout2 出力: レンダラー既定"
@@ -71,7 +71,7 @@ output = "Output: Spout2"
 camera = "Camera"
 window_preview = "Window Preview"
 spout_preview = "Spout2 + Preview"
-spout_only = "Spout2 Only (minimized)"
+spout_only = "Spout2 Only (HIDE)"
 spout_resolution = "Spout2 %{width} x %{height}"
 spout_output_size = "Spout2 output: %{width} x %{height}"
 spout_output_default = "Spout2 output: renderer default"
@@ -2441,7 +2441,13 @@ height = 360
 		assert_eq!(tray_output_mode_label(&status, &text), "Spout2 + Preview");
 
 		status.minimized = true;
-		assert_eq!(tray_output_mode_label(&status, &text), "Spout2 Only (minimized)");
+		assert_eq!(tray_output_mode_label(&status, &text), "Spout2 Only (HIDE)");
+	}
+
+	#[test]
+	fn spout_only_tray_wording_uses_hide_not_minimized() {
+		assert_eq!(TrayText::en().spout_only(), "Spout2 Only (HIDE)");
+		assert_eq!(TrayText::ja().spout_only(), "Spout2 のみ (HIDE)");
 	}
 
 	#[test]

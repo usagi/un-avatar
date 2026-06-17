@@ -13851,6 +13851,30 @@ mod tests {
 	}
 
 	#[test]
+	fn static_spout_only_i18n_uses_hide_wording() {
+		for locale in crate::i18n::UN_I18N_STORE.available_locales() {
+			let messages = crate::i18n::UN_I18N_STORE
+				.messages_for_locale(&locale)
+				.unwrap_or_else(|| panic!("locale {locale} should be loaded"));
+			for key in [
+				"profiles.editor.output_mode_spout_only",
+				"profiles.summary.output_spout_only",
+				"renderers.controls.spout_only",
+			] {
+				let message = messages.get(key).unwrap_or_else(|| panic!("{locale} should define {key}"));
+				assert!(
+					message.contains("HIDE"),
+					"{locale}:{key} should identify Spout2 Only as HIDE: {message}"
+				);
+				assert!(
+					!message.to_ascii_lowercase().contains("minimized") && !message.contains("最小化"),
+					"{locale}:{key} must use HIDE wording for the Spout2-only output mode: {message}"
+				);
+			}
+		}
+	}
+
+	#[test]
 	fn supervisor_permission_allows_avatar_file_review_flow() {
 		let permissions = fs::read_to_string(
 			repo_root()
@@ -14023,10 +14047,10 @@ mod tests {
 			.expect("Spout2 Only should enable Spout2");
 		let window_minimize = spout_only
 			.find(r#"onSetWindow({ minimized: true }, "spout2 only")"#)
-			.expect("Spout2 Only should minimize the preview window");
+			.expect("Spout2 Only should hide the preview window");
 		assert!(
 			spout_enable < window_minimize,
-			"Spout2 Only must enable Spout2 before minimizing the preview window"
+			"Spout2 Only must enable Spout2 before hiding the preview window"
 		);
 	}
 

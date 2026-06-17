@@ -33,7 +33,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 
 - One tray icon per Renderer.
 - Header identifies avatar / profile and pid.
-- Output operations are local to that Renderer: Window Preview, Spout2 + Preview, Spout2 Only (minimized), and explicit Spout2 resolution presets.
+- Output operations are local to that Renderer: Window Preview, Spout2 + Preview, Spout2 Only (HIDE), and explicit Spout2 resolution presets.
 - Window operations are local preview operations: focus, hide, always-on-top, and input passthrough where supported.
 - UNPhysics, wardrobe, UNAnimator actions, camera reset, Open Supervisor, and Quit this Renderer use existing normalized runtime commands.
 - Open Supervisor carries the Renderer profile manifest when available. A cold Supervisor start should select that profile; an already-running Supervisor should receive an event and switch the Profiles view to the same profile without launching another Renderer.
@@ -47,7 +47,7 @@ The Renderer tray icon is the stable runtime operation surface for each Renderer
 
 Renderer tray commands must map to the same control path as Supervisor runtime buttons. If a command cannot be represented by the current `RendererControlEvent`, add the control event first instead of adding a tray-only side path.
 
-Output mode controls must be semantic operations, not a bare Spout2 toggle. `Window Preview`, `Spout2 + Preview`, and `Spout2 Only (minimized)` each update the necessary Spout2 and window-minimized state together so users cannot accidentally hide the preview by disabling Spout2 while the window remains minimized.
+Output mode controls must be semantic operations, not a bare Spout2 toggle. `Window Preview`, `Spout2 + Preview`, and `Spout2 Only (HIDE)` each update the necessary Spout2 and preview visibility state together so users cannot accidentally hide the preview by disabling Spout2 while the window remains hidden.
 
 ### Launcher / Shortcuts
 
@@ -86,7 +86,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 ## v2 UI Rules
 
 - Output resolution and preview window size are separate controls. No button may silently resize the preview when the user asked for an output mode.
-- `Spout2 Only (minimized)` means Spout2 enabled and local preview minimized. It does not change Spout2 resolution.
+- `Spout2 Only (HIDE)` means Spout2 enabled and the local preview hidden with the renderer HIDE path. It does not change Spout2 resolution.
 - UNPhysics / UNDynamics are the user-facing physics names. SpringBone / PhysBone are source-format or diagnostics terms.
 - UNPhysics solver labels should trust the user while staying readable: `Standard (Verlet/PBD)` for the default Verlet integration plus PBD-style constraint projection path, and `Extended (XPBD)` for compliance / iteration based tuning. Do not describe source-authored model values as an authored solver choice.
 - Physics group adjustments are template-backed overrides over model-load resolved groups. v2 may ship the built-in Hair / Ears / Tail / Cloth / Accessory / Other templates, but the target UI model is an arbitrary override list with editable partial-match keywords and parameters. Template add actions such as standard base, animal ears/tail, cloth, and body/skin can seed that list without making model-specific hacks.
