@@ -100,11 +100,12 @@ const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
-const WARDROBE_TRANSITION_EXIT_MS: u32 = 1250;
-const WARDROBE_TRANSITION_BILLBOARD_HOLD_MS: u32 = 700;
-const WARDROBE_TRANSITION_ENTER_MS: u32 = 1250;
+const WARDROBE_TRANSITION_EXIT_MS: u32 = 700;
+const WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS: u32 = 700;
+const WARDROBE_TRANSITION_ENTER_MS: u32 = 700;
 const STARTUP_PROGRESS_OVERLAY_RECT_CENTER: [f32; 2] = [0.0, 0.0];
 const STARTUP_PROGRESS_OVERLAY_RECT_HALF_SIZE: [f32; 2] = [1.0, 1.0];
+const RESOLVER_CACHE_KEY_STATUS_ENV: &str = "UN_AVATAR_RESOLVER_CACHE_KEY_STATUS";
 const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"shutdown",
 	"reset_camera",
@@ -204,6 +205,12 @@ fn wardrobe_transition_frame_role(wardrobe_billboard: Option<gpu::WardrobeChangi
 	})
 }
 
+fn wardrobe_billboard_min_visible_elapsed(started_at: Option<Instant>, now: Instant) -> bool {
+	started_at.is_none_or(|started_at| {
+		now.saturating_duration_since(started_at) >= Duration::from_millis(u64::from(WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS))
+	})
+}
+
 fn should_evaluate_runtime_actions_for_frame(frame_role: &gpu::RenderedFrameRole) -> bool {
 	!matches!(frame_role, gpu::RenderedFrameRole::WardrobeTransition(_))
 }
@@ -272,6 +279,7 @@ struct WardrobeTransitionState {
 	billboard_center: [f32; 3],
 	phase: WardrobeTransitionPhase,
 	phase_started_at: Instant,
+	billboard_started_at: Option<Instant>,
 	started_at: Instant,
 }
 
@@ -2288,6 +2296,7 @@ impl AvatarApp {
 			billboard_center,
 			phase: WardrobeTransitionPhase::Exit,
 			phase_started_at: now,
+			billboard_started_at: None,
 			started_at: now,
 		});
 		self.enqueue_camera_transition(
@@ -2313,6 +2322,7 @@ impl AvatarApp {
 			{
 				transition.phase = WardrobeTransitionPhase::BillboardPrimed;
 				transition.phase_started_at = now;
+				transition.billboard_started_at = Some(now);
 				self.request_redraw();
 			}
 			WardrobeTransitionPhase::Enter
@@ -2322,10 +2332,7 @@ impl AvatarApp {
 				self.wardrobe_transition = None;
 				self.request_redraw();
 			}
-			WardrobeTransitionPhase::BillboardHold
-				if now.saturating_duration_since(transition.phase_started_at)
-					>= Duration::from_millis(u64::from(WARDROBE_TRANSITION_BILLBOARD_HOLD_MS)) =>
-			{
+			WardrobeTransitionPhase::BillboardHold if wardrobe_billboard_min_visible_elapsed(transition.billboard_started_at, now) => {
 				transition.phase = WardrobeTransitionPhase::Enter;
 				transition.phase_started_at = now;
 				let saved_camera = transition.saved_camera;
@@ -3191,6 +3198,12 @@ impl AvatarApp {
 		let Some(status) = self.runtime_status.clone() else {
 			return;
 		};
+		if std::env::var_os(RESOLVER_CACHE_KEY_STATUS_ENV).is_none() {
+			if let Ok(mut status) = status.lock() {
+				status.resolver_cache_key = None;
+			}
+			return;
+		}
 		let Some(document) = self.gpu.as_ref().and_then(GpuState::document_arc) else {
 			return;
 		};
@@ -7505,6 +7518,17 @@ mod tests {
 			!super::should_evaluate_runtime_actions_for_frame(&wardrobe),
 			"wardrobe transition billboard frames should not contend with document/action evaluation while the apply worker is active"
 		);
+	}
+
+	#[test]
+	fn wardrobe_billboard_min_visibility_adds_no_wait_after_long_apply() {
+		let started_at = Instant::now();
+		let before_minimum = started_at + Duration::from_millis(u64::from(super::WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS - 1));
+		let after_minimum = started_at + Duration::from_millis(u64::from(super::WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS));
+
+		assert!(!super::wardrobe_billboard_min_visible_elapsed(Some(started_at), before_minimum));
+		assert!(super::wardrobe_billboard_min_visible_elapsed(Some(started_at), after_minimum));
+		assert!(super::wardrobe_billboard_min_visible_elapsed(None, started_at));
 	}
 
 	#[test]
