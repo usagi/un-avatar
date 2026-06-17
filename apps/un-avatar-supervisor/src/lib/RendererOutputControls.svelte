@@ -25,10 +25,10 @@
 	<RendererOutputActionButtons {renderer} {runtimeStatus} disabled={busy || !rendererRunning} {onSetSpoutOutput} {onSetWindow} />
 	<div class="runtime-button-row">
 		<button disabled={busy || !rendererRunning} onclick={onSaveOutput} title={$_("renderers.details.save_output_title")}
-			>{$_("renderers.details.save_to_profile")}</button
+			>{$_("renderers.details.save_spout_to_profile")}</button
 		>
 		<button disabled={busy || !rendererRunning} onclick={onRestoreOutput} title={$_("renderers.details.restore_output_title")}
-			>{$_("renderers.details.restore_from_profile")}</button
+			>{$_("renderers.details.restore_output_from_profile")}</button
 		>
 	</div>
 </section>
