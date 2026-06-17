@@ -2135,6 +2135,16 @@ fn stage_exe(repo: &Path, bin_name: &str, dst_dir: &Path, dst_name: &str) -> boo
 	copy_file_to(&src, &dst_dir.join(exe_name(dst_name)))
 }
 
+const RELEASE_PACKAGE_DOCS: &[&str] = &[
+	"docs/v2-getting-started.md",
+	"docs/README.md",
+	"docs/v2-roadmap.md",
+	"docs/unity-exporter-v0.1.md",
+	"docs/v2-ui-gui-operation-plan.md",
+	"docs/development-guidelines.md",
+	"docs/third-party-licenses.md",
+];
+
 fn stage_package_docs(repo: &Path) -> bool {
 	let package = spout2_package_dir(repo);
 	let mut ok = true;
@@ -2148,6 +2158,15 @@ fn stage_package_docs(repo: &Path) -> bool {
 	if third_party.is_file() {
 		ok &= copy_file_to(&third_party, &package.join("THIRD_PARTY_NOTICES.md"));
 		ok &= copy_file_to(&third_party, &package.join("LICENSES").join("third-party-licenses.md"));
+	}
+	for relative in RELEASE_PACKAGE_DOCS {
+		let source = repo.join(Path::new(relative));
+		if source.is_file() {
+			ok &= copy_file_to(&source, &package.join(Path::new(relative)));
+		} else {
+			eprintln!("release-package: missing linked README doc {}", source.display());
+			ok = false;
+		}
 	}
 	ok
 }
@@ -2359,12 +2378,15 @@ fn required_release_zip_entries(package_name: &str, require_spout2: bool) -> Vec
 		format!("{root}/README.md"),
 		format!("{root}/THIRD_PARTY_NOTICES.md"),
 		format!("{root}/LICENSES/third-party-licenses.md"),
+	];
+	entries.extend(RELEASE_PACKAGE_DOCS.iter().map(|relative| format!("{root}/{relative}")));
+	entries.extend([
 		format!("{root}/{}", exe_name("un-avatar-renderer")),
 		format!("{root}/{}", exe_name("un-avatar-supervisor")),
 		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/package.json"),
 		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/Editor/UNAvatarExporterWindow.cs"),
 		format!("{root}/unity/{UNITY_EXPORTER_PACKAGE}/Editor/Plugins/x86_64/unavatar_fpng.dll"),
-	];
+	]);
 	if require_spout2 {
 		entries.extend([
 			format!("{root}/Spout.dll"),
@@ -2463,7 +2485,14 @@ fn verify_release_zip_source_docs(zip_path: &Path, package_name: &str, repo: &Pa
 			format!("{root}/LICENSES/third-party-licenses.md"),
 			repo.join("docs").join("third-party-licenses.md"),
 		),
-	];
+	]
+	.into_iter()
+	.chain(
+		RELEASE_PACKAGE_DOCS
+			.iter()
+			.map(|relative| (format!("{root}/{relative}"), repo.join(Path::new(relative)))),
+	)
+	.collect::<Vec<_>>();
 	let ok = checks
 		.iter()
 		.all(|(entry, source)| verify_release_zip_entry_matches_file(zip_path, entry, source));
@@ -4930,7 +4959,11 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 		fs::create_dir_all(repo.join("docs")).expect("repo docs dir");
 		fs::write(repo.join("README.md"), b"fresh readme").expect("repo readme");
 		fs::write(repo.join("LICENSE"), b"fresh license").expect("repo license");
-		fs::write(repo.join("docs").join("third-party-licenses.md"), b"fresh notices").expect("repo notices");
+		for relative in RELEASE_PACKAGE_DOCS {
+			let path = repo.join(Path::new(relative));
+			fs::create_dir_all(path.parent().expect("repo doc parent")).expect("repo doc parent");
+			fs::write(&path, format!("fresh {relative}")).expect("repo linked doc");
+		}
 		for entry in required_release_zip_entries(package_name, false) {
 			if entry.ends_with('/') {
 				fs::create_dir_all(staging_root.join(entry)).expect("create dir entry");
@@ -4942,8 +4975,15 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 		}
 		fs::write(package.join("README.md"), b"fresh readme").expect("package readme");
 		fs::write(package.join("LICENSE"), b"fresh license").expect("package license");
-		fs::write(package.join("THIRD_PARTY_NOTICES.md"), b"fresh notices").expect("package notices");
-		fs::write(package.join("LICENSES").join("third-party-licenses.md"), b"fresh notices").expect("package license notices");
+		let notices = fs::read(repo.join("docs").join("third-party-licenses.md")).expect("repo notices");
+		fs::write(package.join("THIRD_PARTY_NOTICES.md"), &notices).expect("package notices");
+		fs::write(package.join("LICENSES").join("third-party-licenses.md"), &notices).expect("package license notices");
+		for relative in RELEASE_PACKAGE_DOCS {
+			let source = fs::read(repo.join(Path::new(relative))).expect("repo linked doc bytes");
+			let target = package.join(Path::new(relative));
+			fs::create_dir_all(target.parent().expect("package doc parent")).expect("package doc parent");
+			fs::write(target, source).expect("package linked doc");
+		}
 		let zip_path = dir.join("package.zip");
 		assert!(create_release_zip(&staging_root, package_name, &zip_path));
 		assert!(verify_release_zip_source_docs(&zip_path, package_name, &repo));
