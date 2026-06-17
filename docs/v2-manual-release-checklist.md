@@ -5,7 +5,7 @@ This checklist is for the final v2.0 candidate pass after automated checks have 
 ## Candidate Build
 
 - Date / operator: 2026-06-17 / Codex local release-prep
-- Git commit: `c537e76e`
+- Git commit: `640f607f`
   - Packaged source commit. Later checklist / release-note evidence commits may sit on top of this.
 - Version: `2.0.0`
 - Portable zip: `release-packages/un-avatar-2.0.0.zip`
