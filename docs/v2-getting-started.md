@@ -13,12 +13,12 @@ README は概要、ここでは実際の操作を少し詳しく説明します�
 6. `起動` ボタンで Renderer を起動します。
 7. U.N. Motion や VMC 対応アプリから UNMF/Z または VMC/UDP でモーションを送ります。
 
-## VRC モデルを使う場合
+## VRC / Unity アバターを使う場合
 
-VRC 向け Unity アバターは、そのまま Renderer に読み込ませるのではなく、Unity Editor 上の U.N. Avatar Exporter で `.unavatar` にエクスポートして使います。
+VRC 向け Unity アバターは、そのまま Renderer に読み込ませるのではなく、Unity Editor 上の U.N. Avatar Exporter で `.unavatar` にエクスポートして使います。以降、この文書では VRC 向け Unity アバターを `VRC / Unity アバター` と呼びます。
 
 ```text
-Unity project with VRC avatar
+Unity project with VRC / Unity avatar
   -> U.N. Avatar Exporter
   -> .unavatar
   -> U.N. Avatar Supervisor / Renderer
@@ -41,6 +41,8 @@ U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要と
 
 ## `.unavatar` を出力する
 
+`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。
+
 1. Unity Editor で `Tools > U.N. Avatar > Exporter .unavatar` を開きます。
 2. `Avatar Root` に Hierarchy からアバターのルート GameObject を指定します。
 3. `Output` に `.unavatar` を出力するパスを設定します。
@@ -51,7 +53,7 @@ Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` �
 
 ## Wardrobe の考え方
 
-Wardrobe は、衣装・小物・見た目の状態を `.unavatar` に保存し、Renderer 起動後に切り替えるための機能です。
+Wardrobe は、衣装・小物・見た目プリセットの状態を `.unavatar` に保存し、Renderer 起動後に切り替えるための機能です。
 
 `Base` / `Sets` は、Unity の Hierarchy で GameObject の active state や blendshape などを調整した状態を保存します。Renderer では保存された状態を衣装セットとして切り替えられます。
 
@@ -92,6 +94,6 @@ Modular Avatar 非対応の衣装でも、GameObject active state を使って�
 
 ## `.unavatar` の扱い
 
-`.unavatar` には、avatar mesh、texture、material metadata、lilToon-compatible parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。
+`.unavatar` には、avatar mesh、texture、material metadata、lilToon parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。
 
 第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。U.N. Avatar は、ユーザー自身が正規に利用できるアセットをローカル環境で配信等に利用することを主目的とします。

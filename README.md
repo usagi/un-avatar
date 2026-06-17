@@ -4,9 +4,9 @@
 
 # U.N. Avatar
 
-U.N. Avatar は VRM(0/1) と VRC 向け Unity アバターを、配信向けに軽快に表示する仮想アバターレンダラーです。U.N. Motion や VMC 対応アプリから姿勢・表情・手指を受け取り、透過ウィンドウ、Spout2、スクリーンショットなどで出力できます。
+U.N. Avatar は VRM(0/1) と VRC / Unity アバターを、配信向けに軽快に表示する仮想アバターレンダラーです。U.N. Motion や VMC 対応アプリから姿勢・表情・手指を受け取り、透過ウィンドウ、Spout2、スクリーンショットなどで出力できます。
 
-v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC 向けモデル、lilToon / PhysBone、Modular Avatar ベースの Wardrobe を扱えます。VRC モデルは Unity Editor に追加する U.N. Avatar Exporter で `.unavatar` にエクスポートしてから使います。
+v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC / Unity アバター、lilToon / PhysBone、Modular Avatar ベースの Wardrobe を扱えます。VRC / Unity アバターは Unity Editor に追加する U.N. Avatar Exporter で `.unavatar` にエクスポートしてから使います。
 
 ## はじめて使う場合
 
@@ -16,27 +16,27 @@ v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC 向け�
 4. 必要な設定を行い、`起動` ボタンで Renderer を起動します。
 5. U.N. Motion や VMC 対応アプリから UNMF/Z または VMC/UDP でモーションを送ります。
 
-VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.unavatar` を作ります。Exporter の導入、`1. Base -> 2. Wardrobe Sets -> 3. Export` の操作、Wardrobe の作り方は [v2 Getting Started](docs/v2-getting-started.md) を参照してください。
+VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.unavatar` を作ります。`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。Exporter の導入、`1. Base -> 2. Wardrobe Sets -> 3. Export` の操作、Wardrobe の作り方は [v2 Getting Started](docs/v2-getting-started.md) を参照してください。
 
 ## できること
 
 - VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (Vulkan / DX12) で描画。
 - Supervisor Console で複数のプロファイルと Renderer を管理。
-- VRC / Unity avatar を `.unavatar` に変換し、Unity なしの Renderer runtime で利用。
+- VRC / Unity アバターを `.unavatar` に変換し、Unity なしの Renderer runtime で利用。
 - UNMF/Z と VMC/UDP のモーション入力を受け取り、姿勢、表情、手指、UNPhysics / UNDynamics を反映。
 - VRM SpringBone と VRC PhysBone を U.N. Avatar の dynamics として扱う。
-- VRM MToon と VRC lilToon を UNToon / lilToon-compatible material として扱う。
-- Modular Avatar 由来の衣装・小物切り替えを Wardrobe として扱う。Modular Avatar 非対応の衣装も、GameObject active state を使って Wardrobe set にできます。
+- VRM MToon と VRC lilToon を UNToon material として扱う。
+- Modular Avatar 由来の衣装・小物・見た目プリセットの切り替えを Wardrobe として扱う。Modular Avatar 非対応の衣装も、GameObject active state を使って Wardrobe set にできます。
 - VRC Expression Menu / Animator 由来の操作を UNAnimator runtime action として扱う。
 - グローバルなキー / マウス / MIDI 割り当てで Wardrobe / UNAnimator action を実行。
 - 透過ウィンドウ、クリック透過、最前面表示、背景色、Spout2 Sender、スクリーンショット保存に対応。
 
 ## VRC / Unity アバターの流れ
 
-U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。Unity project 上の VRC avatar を Exporter で `.unavatar` に変換し、Renderer がそれを読み込みます。
+U.N. Avatar Renderer は Unity Editor や VRChat client を実行時に必要としません。Unity project 上の VRC / Unity アバターを Exporter で `.unavatar` に変換し、Renderer がそれを読み込みます。
 
 ```text
-Unity project with VRC avatar
+Unity project with VRC / Unity avatar
   -> U.N. Avatar Exporter
   -> .unavatar
   -> U.N. Avatar Supervisor / Renderer
@@ -44,13 +44,13 @@ Unity project with VRC avatar
   -> OBS or streaming software
 ```
 
-`.unavatar` には avatar mesh、texture、material metadata、lilToon-compatible parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。
+`.unavatar` には avatar mesh、texture、material metadata、lilToon parameters、PhysBone 由来 dynamics、Expression Menu / Animator 由来 action、Wardrobe set などが含まれます。第三者への共有や配布は、必ず元アバター、衣装、テクスチャ等の利用規約に従ってください。
 
 ## Wardrobe / Runtime Actions
 
 Wardrobe set が含まれる `.unavatar` は、Renderer 起動後に Renderer tray や Supervisor から衣装・小物・見た目プリセットを切り替えられます。VRC Expression Menu / Animator 由来の操作は、配信用に使う runtime action として UNAnimator にまとめて扱います。
 
-v2 は VRChat client や VRC SDK の完全な runtime 互換実装ではありません。VRC avatar を U.N. Avatar の独立 Renderer で配信利用しやすくするため、material、dynamics、Wardrobe、action を `.unavatar` と runtime status へ正規化して扱います。
+v2 は VRChat client や VRC SDK の完全な runtime 互換実装ではありません。VRC / Unity アバターを U.N. Avatar の独立 Renderer で配信利用しやすくするため、material、dynamics、Wardrobe、action を `.unavatar` と runtime status へ正規化して扱います。
 
 ## U.N. Motion と組み合わせる例
 
