@@ -3641,10 +3641,8 @@ impl AvatarApp {
 				win.as_ref(),
 				self.opts.clear_color,
 				wall_clamped,
-				gpu::FrameOverlayState {
-					startup_progress: startup_progress_overlay,
-					wardrobe_changing: wardrobe_changing_billboard,
-				},
+				startup_progress_overlay,
+				wardrobe_changing_billboard,
 				preview_window_output_enabled,
 			) else {
 				win.request_redraw();
