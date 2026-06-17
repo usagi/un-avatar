@@ -14523,8 +14523,18 @@ display_name = "Mizuki"
 		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
 			.expect("styles.css should be readable");
 		assert!(
-			styles_css.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\tmin-height: 222px;"),
-			"profile stage should keep a stable desktop minimum height so VRM and .unavatar profile headers do not visually jump"
+			styles_css
+				.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\tmin-height: 134px;\n\talign-items: center;"),
+			"profile stage should keep the same compact desktop rhythm as the renderer stage"
+		);
+		assert!(
+			styles_css.contains(".profile-stage-title-row {\n\tgrid-template-columns: minmax(220px, 1fr) auto;\n\tgap: 12px;"),
+			"profile stage title row should keep the renderer-style title plus actions layout"
+		);
+		assert!(
+			!styles_css
+				.contains(".profile-stage-title-row .profile-stage-action-group {\n\tgrid-template-columns: minmax(320px, 1fr) auto;"),
+			"profile stage actions should not be forced into a full-width second row"
 		);
 		assert!(
 			styles_css.contains(".profile-summary-grid button {\n\theight: 46px;\n\tmin-height: 46px;"),

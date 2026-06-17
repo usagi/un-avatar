@@ -521,8 +521,8 @@ small,
 
 .profile-stage {
 	grid-template-columns: auto minmax(0, 1fr);
-	min-height: 222px;
-	align-items: start;
+	min-height: 134px;
+	align-items: center;
 }
 
 .renderer-stage:not(.renderer-stage-ready) {
@@ -664,35 +664,8 @@ small,
 }
 
 .profile-stage-title-row {
-	grid-template-columns: minmax(0, 1fr);
-	gap: 8px;
-}
-
-.profile-stage-title-row .profile-stage-actions {
-	justify-content: stretch;
-	width: 100%;
-	max-width: 100%;
-}
-
-.profile-stage-actions {
-	display: flex;
-	flex: 0 0 auto;
-	flex-wrap: wrap;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 8px;
-	min-width: 0;
-	max-width: min(620px, 48vw);
-}
-
-.profile-stage-title-row .profile-stage-action-group {
-	grid-template-columns: minmax(320px, 1fr) auto;
-	justify-content: stretch;
-	width: 100%;
-	padding-top: 8px;
-	padding-left: 0;
-	border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-	border-left: 0;
+	grid-template-columns: minmax(220px, 1fr) auto;
+	gap: 12px;
 }
 
 .profile-stage-action-group {
@@ -708,20 +681,15 @@ small,
 	border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
 
-.profile-stage-title-row .profile-cache-callout {
-	text-align: left;
-}
-
-.profile-stage-title-row .profile-stage-action-heading {
-	justify-content: flex-start;
-}
-
-.profile-stage-title-row .profile-stage-action-buttons {
-	justify-content: flex-start;
-}
-
-.profile-stage-title-row .profile-stage-action-buttons button {
+.profile-stage-actions {
+	display: flex;
 	flex: 0 0 auto;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	min-width: 0;
+	max-width: min(620px, 48vw);
 }
 
 .profile-pending-action-slot + .profile-stage-action-group {
