@@ -13915,33 +13915,35 @@ mod tests {
 	}
 
 	#[test]
-	fn static_renderer_vrc_menu_controls_keep_wardrobe_and_parameter_boundaries() {
+	fn static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries() {
 		let source = fs::read_to_string(
 			repo_root()
 				.join("apps")
 				.join("un-avatar-supervisor")
 				.join("src")
 				.join("lib")
-				.join("RendererVrcMenuControls.svelte"),
+				.join("RendererAnimatorActions.svelte"),
 		)
-		.expect("RendererVrcMenuControls.svelte should be readable");
+		.expect("RendererAnimatorActions.svelte should be readable");
 		assert!(
-			source.contains("!candidate.wardrobe_set_ids?.length"),
-			"VRC Menu controls should exclude wardrobe menu candidates from non-wardrobe action controls"
+			source.contains("animatorCandidateVisible"),
+			"UNAnimator actions should use the normalized candidate visibility filter"
 		);
 		assert!(
-			source.contains(r#".filter("#) && source.contains("!action.wardrobe_set_id") && source.contains("expression_menu_path"),
-			"VRC Menu fallback should only use non-wardrobe expression-menu runtime actions"
+			source.contains("animatorFallbackActionVisible"),
+			"UNAnimator fallback should use the normalized non-wardrobe action filter"
 		);
 		assert!(
-			source.contains("candidateActive(candidate) ? 0 : candidate.parameter_value")
-				&& source.contains("onSetRuntimeParameter(renderer.id, candidate.parameter_name, value"),
-			"VRC Menu candidate activation should toggle active parameter actions back to 0 through the parameter control path"
+			source.contains("candidateActive(candidate)")
+				&& source.contains("animatorInactiveParameterValue(candidate.parameter_value")
+				&& source.contains("onSetRuntimeParameter(rendererId, candidate.parameter_name, value"),
+			"UNAnimator candidate activation should toggle active parameter actions through the parameter control path"
 		);
 		assert!(
-			source.contains("action.current_condition_state === \"active\" ? 0 : action.parameter_value")
-				&& source.contains("onSetRuntimeParameter(renderer.id, action.parameter_name, value"),
-			"VRC Menu fallback parameter actions should also toggle active actions back to 0 through the parameter control path"
+			source.contains("action.current_condition_state === \"active\"")
+				&& source.contains("animatorInactiveParameterValue(action.parameter_value")
+				&& source.contains("onSetRuntimeParameter(rendererId, action.parameter_name, value"),
+			"UNAnimator fallback parameter actions should also toggle active actions through the parameter control path"
 		);
 	}
 

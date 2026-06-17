@@ -176,7 +176,7 @@
 		<span>{$_("renderers.animator.action_count", { values: { count: actionCount } })}</span>
 	</div>
 	{#if actionCount}
-		<div class="runtime-button-row vrc-menu-grid">
+		<div class="runtime-button-row animator-action-grid">
 			{#if candidates.length}
 				{#each visibleCandidates as candidate}
 					<button

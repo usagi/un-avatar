@@ -2044,7 +2044,7 @@ td small {
 	order: 2;
 }
 
-.renderer-control-vrc-menu {
+.renderer-control-animator {
 	order: 2;
 }
 
@@ -2967,19 +2967,19 @@ dd {
 }
 
 .wardrobe-menu-grid,
-.vrc-menu-grid {
+.animator-action-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
 }
 
 .wardrobe-menu-grid button,
-.vrc-menu-grid button {
+.animator-action-grid button {
 	min-width: 0;
 	justify-content: start;
 }
 
 .wardrobe-menu-grid button span,
-.vrc-menu-grid button span {
+.animator-action-grid button span {
 	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
