@@ -14532,6 +14532,22 @@ display_name = "Mizuki"
 			"profile stage title row should keep the renderer-style title plus actions layout"
 		);
 		assert!(
+			styles_css
+				.contains(".profile-stage-title-row .profile-stage-actions {\n\twidth: min(620px, 48vw);\n\tmax-width: min(620px, 48vw);"),
+			"profile stage actions should use a stable rail width so profile-specific labels do not shift header columns"
+		);
+		assert!(
+			styles_css.contains(
+				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(86px, 1.1fr) minmax(64px, 0.8fr) minmax(104px, 1.25fr) minmax(64px, 0.8fr) 32px 32px;"
+			),
+			"profile stage action buttons should use stable slots instead of content-width flex sizing"
+		);
+		assert!(
+			styles_css.contains(".profile-pending-action-slot {\n\tdisplay: none;")
+				&& styles_css.contains(".profile-pending-action-slot-visible {\n\tdisplay: inline-flex;"),
+			"hidden pending action slot should not consume flex gap and wrap the fixed profile action rail"
+		);
+		assert!(
 			!styles_css
 				.contains(".profile-stage-title-row .profile-stage-action-group {\n\tgrid-template-columns: minmax(320px, 1fr) auto;"),
 			"profile stage actions should not be forced into a full-width second row"

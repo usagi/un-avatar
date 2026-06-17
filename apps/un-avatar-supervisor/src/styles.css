@@ -692,6 +692,16 @@ small,
 	max-width: min(620px, 48vw);
 }
 
+.profile-stage-title-row .profile-stage-actions {
+	width: min(620px, 48vw);
+	max-width: min(620px, 48vw);
+}
+
+.profile-stage-title-row .profile-stage-action-group {
+	width: 100%;
+	grid-template-columns: 150px minmax(0, 1fr);
+}
+
 .profile-pending-action-slot + .profile-stage-action-group {
 	padding-left: 0;
 	border-left: 0;
@@ -857,8 +867,20 @@ small,
 	background: color-mix(in srgb, var(--accent-cool) 22%, var(--surface));
 }
 
+.profile-stage-title-row .profile-stage-action-buttons {
+	display: grid;
+	grid-template-columns: minmax(86px, 1.1fr) minmax(64px, 0.8fr) minmax(104px, 1.25fr) minmax(64px, 0.8fr) 32px 32px;
+	justify-content: stretch;
+}
+
+.profile-stage-title-row .profile-stage-action-buttons > button {
+	width: 100%;
+	max-width: none;
+	min-width: 0;
+}
+
 .profile-pending-action-slot {
-	display: inline-flex;
+	display: none;
 	align-items: center;
 	justify-content: flex-end;
 	width: 0;
@@ -871,6 +893,7 @@ small,
 }
 
 .profile-pending-action-slot-visible {
+	display: inline-flex;
 	width: auto;
 	min-width: clamp(0px, 20vw, 260px);
 	margin-right: 8px;
