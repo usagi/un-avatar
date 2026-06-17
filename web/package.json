@@ -1,0 +1,27 @@
+{
+  "name": "un-avatar-web",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.json",
+    "format": "prettier --config ../.prettierrc.json --ignore-path ../.prettierignore --write .",
+    "format:check": "prettier --config ../.prettierrc.json --ignore-path ../.prettierignore --check .",
+    "preview": "vite preview --host 127.0.0.1 --port 4174"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.1",
+    "prettier": "3.8.4",
+    "prettier-plugin-svelte": "3.5.2",
+    "svelte": "^5.55.5",
+    "svelte-check": "^4.4.8",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.11"
+  },
+  "overrides": {
+    "esbuild": ">=0.25.0"
+  }
+}
