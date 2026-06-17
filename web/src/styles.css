@@ -579,6 +579,13 @@ h2 {
   white-space: nowrap;
 }
 
+.install-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
 footer {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
   padding: 24px 0;

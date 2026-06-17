@@ -41,7 +41,15 @@ VRC / Unity アバターは、先に Unity Editor で `.unavatar` を作りま�
 
 推奨手順:
 
-- VRChat Creator Companion (VCC) のパッケージマネージャーから U.N. Avatar Exporter を探してインストールします。
+- [Add to VCC](vcc://vpm/addRepo?url=https%3A%2F%2Fusagi.github.io%2Fun-avatar%2Fvcc%2Findex.json) を開いて repository を追加します。
+
+リンクで開けない場合は、VRChat Creator Companion (VCC) の `Settings > Packages > Add Repository` に次の URL を追加します。
+
+```text
+https://usagi.github.io/un-avatar/vcc/index.json
+```
+
+- 追加後、対象 project の Package Manager で `U.N. Avatar Unity Exporter` を探してインストールします。
 
 他の方法:
 

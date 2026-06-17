@@ -5,6 +5,8 @@
   const pillars = products.filter((product) => product.group === 'pillar');
   const tools = products.filter((product) => product.group === 'tool');
   const fallbackRelease = '2.0.0';
+  const vccRepoUrl = 'https://usagi.github.io/un-avatar/vcc/index.json';
+  const vccAddRepoUrl = `vcc://vpm/addRepo?url=${encodeURIComponent(vccRepoUrl)}`;
   let latestRelease = fallbackRelease;
   let releaseUrl = 'https://github.com/usagi/un-avatar/releases/latest';
 
@@ -227,9 +229,13 @@
     <div>
       <p class="eyebrow">Unity Exporter</p>
       <h2>VCC Package Manager</h2>
-      <p>VRChat Creator Companion に repository URL を追加すると、Unity Exporter を導入できます。</p>
+      <p>VRChat Creator Companion に repository を追加すると、Unity Exporter を導入できます。</p>
+      <div class="install-actions">
+        <a class="button primary" href={vccAddRepoUrl}>Add to VCC</a>
+        <a class="button" href={vccRepoUrl}>Repository JSON</a>
+      </div>
     </div>
-    <code>https://usagi.github.io/un-avatar/vcc/index.json</code>
+    <code>{vccRepoUrl}</code>
   </section>
 
 </main>

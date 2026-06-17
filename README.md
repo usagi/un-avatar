@@ -20,6 +20,17 @@ VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.u
 
 最初は Supervisor でプロファイルを作成・調整します。設定が固まったら、ショートカットやピン留めから特定プロファイルの Renderer を直接起動できます。Renderer 単独起動中の Wardrobe、出力、ウィンドウ、カメラなどの操作は、Windows タスクトレイの Renderer アイコンを右クリックして行います。
 
+## U.N. Avatar Exporter を VCC に追加する
+
+VCC の custom repository として追加すると、Unity project の Package Manager から `U.N. Avatar Unity Exporter` を導入できます。
+
+- [公式 Web の Add to VCC](https://usagi.github.io/un-avatar/) を使う
+- または VCC の `Settings > Packages > Add Repository` に次の URL を追加する
+
+```text
+https://usagi.github.io/un-avatar/vcc/index.json
+```
+
 ## できること
 
 - VRM / glTF / `.unavatar` ベースのアバターを wgpu renderer (Vulkan / DX12) で描画。
