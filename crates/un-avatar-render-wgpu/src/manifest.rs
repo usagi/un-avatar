@@ -40,6 +40,8 @@ pub(crate) struct RendererManifest {
 	pub environment: Option<EnvironmentManifest>,
 	/// 旧 manifest 互換。新規 profile は `[output.spout2]` を使う。
 	pub spout: Option<SpoutManifest>,
+	/// 旧 v1 profile 互換。新規 profile は `[physics.dynamics] enabled = ...` を使う。
+	pub spring_bones: Option<bool>,
 	pub output: Option<OutputManifest>,
 	pub ipc: Option<IpcManifest>,
 	pub debug: Option<DebugManifest>,
@@ -611,6 +613,9 @@ impl RendererManifest {
 		}
 		if let Some(audio_link) = self.audio_link {
 			audio_link.apply_to(opts);
+		}
+		if let Some(spring_bones) = self.spring_bones {
+			opts.dynamics_enabled = spring_bones;
 		}
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
@@ -1816,7 +1821,7 @@ enabled = true
 	}
 
 	#[test]
-	fn toml_manifest_requires_v2_unphysics_enabled_to_disable_dynamics() {
+	fn toml_manifest_reads_legacy_spring_bones_for_unphysics_enabled() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
 spring_bones = false
@@ -1826,7 +1831,47 @@ spring_bones = false
 
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert!(opts.dynamics_enabled);
+		assert!(!opts.dynamics_enabled);
+	}
+
+	#[test]
+	fn toml_manifest_reads_legacy_root_migration_keys() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+aa = "smaa"
+icon_path = "assets/brand/un-avatar-artwork-renderer.png"
+transparent = true
+input_passthrough = true
+decorations = false
+vmc_address = "127.0.0.1:39539"
+spring_bones = false
+
+[spout]
+enabled = true
+name = "Legacy Spout"
+width = 1280
+height = 720
+"#,
+		)
+		.unwrap();
+
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert_eq!(opts.aa, AaMode::Smaa);
+		assert_eq!(
+			opts.icon_path.as_deref(),
+			Some(std::path::Path::new("assets/brand/un-avatar-artwork-renderer.png"))
+		);
+		assert!(opts.transparent);
+		assert!(opts.input_passthrough);
+		assert!(!opts.decorations);
+		assert_eq!(opts.vmc_address, Some("127.0.0.1:39539".parse().unwrap()));
+		assert!(opts.spout.enabled);
+		assert_eq!(opts.spout.name, "Legacy Spout");
+		assert_eq!(opts.spout.width, Some(1280));
+		assert_eq!(opts.spout.height, Some(720));
+		assert!(!opts.dynamics_enabled);
 	}
 
 	#[test]
