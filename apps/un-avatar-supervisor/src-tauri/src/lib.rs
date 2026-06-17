@@ -1258,6 +1258,10 @@ enum RendererControlCommand {
 		wardrobe_bindings: Vec<WardrobeBindingSetting>,
 		animator_bindings: Vec<AnimatorBindingSetting>,
 	},
+	SetWardrobeTransition {
+		billboard_anchor: String,
+		billboard_y_offset_mm: f32,
+	},
 	SetAvatarOutline {
 		policy: Option<String>,
 		#[serde(skip_serializing_if = "Option::is_none")]
@@ -5560,6 +5564,11 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply input bindings to running renderers",
 			apply_input_bindings_to_matching_renderers,
 		),
+		(
+			"wardrobe.transition.",
+			"apply wardrobe transition settings to running renderers",
+			apply_wardrobe_transition_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -8621,6 +8630,17 @@ fn apply_input_bindings_to_matching_renderers(setting: &AvatarSetting, state: &M
 		&RendererControlCommand::SetInputBindings {
 			wardrobe_bindings: setting.wardrobe_bindings.clone(),
 			animator_bindings: setting.animator_bindings.clone(),
+		},
+	)
+}
+
+fn apply_wardrobe_transition_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor: setting.wardrobe_billboard_anchor.clone(),
+			billboard_y_offset_mm: setting.wardrobe_billboard_y_offset_mm,
 		},
 	)
 }
@@ -13944,6 +13964,45 @@ mod tests {
 				&& source.contains("animatorInactiveParameterValue(action.parameter_value")
 				&& source.contains("onSetRuntimeParameter(rendererId, action.parameter_name, value"),
 			"UNAnimator fallback parameter actions should also toggle active actions through the parameter control path"
+		);
+	}
+
+	#[test]
+	fn static_wardrobe_transition_profile_updates_are_live_runtime_settings() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let field_rules = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("profileFieldRules.ts"),
+		)
+		.expect("profileFieldRules.ts should be readable");
+		let backend = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src-tauri")
+				.join("src")
+				.join("lib.rs"),
+		)
+		.expect("supervisor lib.rs should be readable");
+
+		assert!(
+			field_rules.contains(r#"field.startsWith("wardrobe.transition.")"#) && field_rules.contains("canApplyWithoutRestart"),
+			"wardrobe transition fields should be classified as live-applicable profile settings"
+		);
+		assert!(
+			app_svelte.contains("applyRuntimeProfileUpdates"),
+			"profile updates should route through the runtime apply path"
+		);
+		assert!(
+			backend.contains(r#""wardrobe.transition.""#)
+				&& backend.contains("apply_wardrobe_transition_to_matching_renderers")
+				&& backend.contains("SetWardrobeTransition"),
+			"saved wardrobe transition profile edits must be sent to matching running renderers"
 		);
 	}
 

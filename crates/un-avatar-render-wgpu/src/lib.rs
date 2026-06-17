@@ -381,6 +381,11 @@ enum RendererControlEvent {
 		animator_bindings: Vec<AnimatorProfileBindingControl>,
 		result: CommandResultSlot,
 	},
+	SetWardrobeTransition {
+		billboard_anchor: String,
+		billboard_y_offset_mm: f32,
+		result: CommandResultSlot,
+	},
 	SceneState {
 		result: SceneStateResultSlot,
 	},
@@ -590,6 +595,12 @@ enum RendererControlCommand {
 		wardrobe_bindings: Vec<WardrobeProfileBindingControl>,
 		#[serde(default)]
 		animator_bindings: Vec<AnimatorProfileBindingControl>,
+	},
+	SetWardrobeTransition {
+		#[serde(default, alias = "billboardAnchor")]
+		billboard_anchor: String,
+		#[serde(default, alias = "billboardYOffsetMm")]
+		billboard_y_offset_mm: f32,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -810,6 +821,7 @@ impl RendererControlCommand {
 			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
 			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
+			Self::SetWardrobeTransition { .. } => unreachable!("SetWardrobeTransition は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -2525,6 +2537,18 @@ impl AvatarApp {
 			self.last_renderer_tray_refresh_at = None;
 			self.refresh_renderer_tray();
 		}
+		Ok(())
+	}
+
+	fn apply_wardrobe_transition_runtime(&mut self, billboard_anchor: String, billboard_y_offset_mm: f32) -> Result<(), String> {
+		let anchor = match billboard_anchor.trim().to_ascii_lowercase().as_str() {
+			"head" => "head",
+			"neck" => "neck",
+			"spine" => "spine",
+			_ => "neck",
+		};
+		self.opts.wardrobe_billboard_anchor = anchor.to_string();
+		self.opts.wardrobe_billboard_y_offset_m = (billboard_y_offset_mm / 1000.0).clamp(-1.0, 1.0);
 		Ok(())
 	}
 
@@ -4282,6 +4306,16 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				result,
 			} => {
 				let outcome = self.apply_input_bindings_runtime(wardrobe_bindings, animator_bindings);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::SetWardrobeTransition {
+				billboard_anchor,
+				billboard_y_offset_mm,
+				result,
+			} => {
+				let outcome = self.apply_wardrobe_transition_runtime(billboard_anchor, billboard_y_offset_mm);
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome);
 				}
@@ -6243,6 +6277,10 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			wardrobe_bindings,
 			animator_bindings,
 		}) => dispatch_set_input_bindings_command(proxy, wardrobe_bindings, animator_bindings),
+		Ok(RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor,
+			billboard_y_offset_mm,
+		}) => dispatch_set_wardrobe_transition_command(proxy, billboard_anchor, billboard_y_offset_mm),
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -6317,6 +6355,23 @@ fn dispatch_set_input_bindings_command(
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_input_bindings")
+}
+
+fn dispatch_set_wardrobe_transition_command(
+	proxy: &EventLoopProxy<RendererControlEvent>,
+	billboard_anchor: String,
+	billboard_y_offset_mm: f32,
+) -> String {
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetWardrobeTransition {
+		billboard_anchor,
+		billboard_y_offset_mm,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_wardrobe_transition")
 }
 
 fn dispatch_set_wardrobe_command(proxy: &EventLoopProxy<RendererControlEvent>, set_id: String) -> String {
@@ -8582,6 +8637,23 @@ mod tests {
 		assert_eq!(wardrobe_bindings[1].set_id, "field_drape");
 		assert_eq!(animator_bindings.len(), 1);
 		assert_eq!(animator_bindings[0].binding.as_deref(), Some("F23"));
+	}
+
+	#[test]
+	fn parses_json_set_wardrobe_transition_control_command() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"set_wardrobe_transition","billboard_anchor":"spine","billboard_y_offset_mm":42.0}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetWardrobeTransition {
+			billboard_anchor,
+			billboard_y_offset_mm,
+		} = command
+		else {
+			panic!("expected set_wardrobe_transition command");
+		};
+		assert_eq!(billboard_anchor, "spine");
+		assert_eq!(billboard_y_offset_mm, 42.0);
 	}
 
 	#[test]

@@ -28,6 +28,7 @@ export function isRuntimeWindowField(field: string): boolean {
 export function canApplyWithoutRestart(field: string): boolean {
 	return (
 		field === "icon_path" ||
+		field.startsWith("wardrobe.transition.") ||
 		field.startsWith("motion.") ||
 		field === DYNAMICS_ENABLED_FIELD ||
 		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
