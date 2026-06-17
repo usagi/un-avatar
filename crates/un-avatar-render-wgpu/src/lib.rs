@@ -3636,6 +3636,7 @@ impl AvatarApp {
 		self.advance_animator_transitions(now);
 		self.update_wardrobe_transition_before_frame(now);
 		let preview_window_output_enabled = self.preview_window_output_enabled();
+		let startup_presentation_active = self.startup_progress.is_some() || self.startup_pending_document || self.startup_failed.is_some();
 
 		let wall_clamped = wall.min(Duration::from_millis(500));
 		let startup_progress_overlay = if let Some(progress) = self.startup_progress.as_ref() {
@@ -3666,6 +3667,7 @@ impl AvatarApp {
 				self.opts.clear_color,
 				wall_clamped,
 				startup_progress_overlay,
+				startup_presentation_active,
 				wardrobe_changing_billboard,
 				preview_window_output_enabled,
 			) else {

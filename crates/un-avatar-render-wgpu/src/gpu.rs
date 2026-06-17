@@ -2293,8 +2293,8 @@ pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) billboard_camera_pos: [f32; 3],
 }
 
-fn frame_allows_spout_output(spout_available: bool, startup_progress: Option<&StartupProgressOverlayFrame>) -> bool {
-	spout_available && startup_progress.is_none()
+fn frame_allows_spout_output(spout_available: bool, startup_presentation_active: bool) -> bool {
+	spout_available && !startup_presentation_active
 }
 
 fn frame_is_wardrobe_transition_only(wardrobe_changing: Option<&WardrobeChangingBillboardFrame>) -> bool {
@@ -7045,6 +7045,7 @@ impl GpuState {
 		clear_color: wgpu::Color,
 		wall_since_last: Duration,
 		startup_progress: Option<StartupProgressOverlayFrame>,
+		startup_presentation_active: bool,
 		wardrobe_changing: Option<WardrobeChangingBillboardFrame>,
 		window_output_enabled: bool,
 	) -> Option<FrameTimings> {
@@ -7139,7 +7140,7 @@ impl GpuState {
 		let use_spout = {
 			#[cfg(windows)]
 			{
-				frame_allows_spout_output(self.spout.is_some(), startup_progress.as_ref())
+				frame_allows_spout_output(self.spout.is_some(), startup_presentation_active)
 			}
 			#[cfg(not(windows))]
 			{
@@ -8201,10 +8202,9 @@ mod tests {
 		restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter, runtime_action_ids_for_parameter,
 		runtime_action_ids_for_parameter_values, runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses,
 		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		RuntimeMenuGraphNode, StartupProgressOverlayFrame, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		RuntimeMenuGraphNode, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
+		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
@@ -9068,13 +9068,6 @@ mod tests {
 
 	#[test]
 	fn startup_progress_and_wardrobe_transition_have_separate_spout_policy() {
-		let startup_progress = StartupProgressOverlayFrame {
-			time_secs: 0.0,
-			progress: 0.5,
-			phase: 1.0,
-			rect_center: [0.0, 0.0],
-			rect_half_size: [1.0, 1.0],
-		};
 		let wardrobe_changing = WardrobeChangingBillboardFrame {
 			time_secs: 0.0,
 			billboard_center: [0.0, 1.0, 0.0],
@@ -9082,11 +9075,14 @@ mod tests {
 			billboard_view_proj: [[0.0; 4]; 4],
 			billboard_camera_pos: [0.0, 0.0, 2.0],
 		};
-		assert!(!frame_allows_spout_output(false, None));
-		assert!(frame_allows_spout_output(true, None));
-		assert!(!frame_allows_spout_output(true, Some(&startup_progress)));
+		assert!(!frame_allows_spout_output(false, false));
+		assert!(frame_allows_spout_output(true, false));
 		assert!(
-			frame_allows_spout_output(true, None),
+			!frame_allows_spout_output(true, true),
+			"startup presentation is renderer-local and must not be sent to Spout2"
+		);
+		assert!(
+			frame_allows_spout_output(true, false),
 			"wardrobe changing billboard is an OBS-facing transition and must remain visible on Spout2"
 		);
 		assert!(frame_is_wardrobe_transition_only(Some(&wardrobe_changing)));
