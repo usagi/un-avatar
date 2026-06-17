@@ -14032,6 +14032,24 @@ mod tests {
 
 	#[test]
 	fn static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries() {
+		let filter_source = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("rendererAnimator.ts"),
+		)
+		.expect("rendererAnimator.ts should be readable");
+		assert!(
+			filter_source.contains("candidate.wardrobe_set_ids?.length") && filter_source.contains("candidate.effect_count <= 0"),
+			"Supervisor UNAnimator visibility must exclude wardrobe candidates and metadata-only candidates with no runtime effect"
+		);
+		assert!(
+			filter_source.contains("Face_Tracking") && filter_source.contains("VRCFT") && filter_source.contains("candidate.menu_label"),
+			"Supervisor UNAnimator visibility must keep VRCFT / tracking metadata out of the user action surface"
+		);
+
 		let source = fs::read_to_string(
 			repo_root()
 				.join("apps")
