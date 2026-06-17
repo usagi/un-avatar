@@ -71,6 +71,142 @@ fn run_tool(repo: &Path, program: &str, args: &[&str]) -> process::ExitStatus {
 		.unwrap_or_else(|e| panic!("{program} を実行できない: {e}"))
 }
 
+fn run_release_guard(repo: &Path) -> bool {
+	let commands: &[(&str, &[&str])] = &[
+		("xtask unit tests", &["test", "-p", "xtask", "--", "--nocapture"]),
+		(
+			"renderer tray surface",
+			&["test", "-p", "un-avatar-render-wgpu", "--lib", "renderer_tray", "--", "--nocapture"],
+		),
+		(
+			"renderer startup / wardrobe transition roles",
+			&["test", "-p", "un-avatar-render-wgpu", "--lib", "startup_progress"],
+		),
+		(
+			"renderer wardrobe transition action isolation",
+			&[
+				"test",
+				"-p",
+				"un-avatar-render-wgpu",
+				"--lib",
+				"wardrobe_transition_frame_skips_runtime_action_evaluation",
+			],
+		),
+		(
+			"renderer frame role exclusivity",
+			&[
+				"test",
+				"-p",
+				"un-avatar-render-wgpu",
+				"--lib",
+				"rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive",
+			],
+		),
+		(
+			"renderer UNAnimator filtering",
+			&[
+				"test",
+				"-p",
+				"un-avatar-render-wgpu",
+				"--lib",
+				"unanimator_excludes_metadata_only_and_tracking_controls",
+			],
+		),
+		(
+			"renderer manifest parsing",
+			&["test", "-p", "un-avatar-render-wgpu", "--lib", "manifest", "--", "--nocapture"],
+		),
+		(
+			"standalone runtime bus key",
+			&[
+				"test",
+				"-p",
+				"un-avatar-render-wgpu",
+				"--lib",
+				"standalone_runtime_bus_key",
+				"--",
+				"--nocapture",
+			],
+		),
+		(
+			"runtime status compatibility",
+			&[
+				"test",
+				"-p",
+				"un-avatar-render-wgpu",
+				"--lib",
+				"runtime_status_server_keeps_one_shot_compatibility",
+				"--",
+				"--nocapture",
+			],
+		),
+		(
+			"supervisor dev IPC literals",
+			&[
+				"test",
+				"-p",
+				"un-avatar-supervisor",
+				"--lib",
+				"dev_ipc_mock_covers_literal_frontend_invokes",
+			],
+		),
+		(
+			"supervisor standalone renderer handoff",
+			&[
+				"test",
+				"-p",
+				"un-avatar-supervisor",
+				"--lib",
+				"open_profile_manifest_registers_standalone_renderer_without_child_process",
+				"--",
+				"--nocapture",
+			],
+		),
+		(
+			"supervisor renderer tray argv shape",
+			&[
+				"test",
+				"-p",
+				"un-avatar-supervisor",
+				"--lib",
+				"startup_open_profile_manifest_arg_accepts_renderer_tray_argv_shape",
+				"--",
+				"--nocapture",
+			],
+		),
+		(
+			"supervisor renderer action boundaries",
+			&[
+				"test",
+				"-p",
+				"un-avatar-supervisor",
+				"--lib",
+				"static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries",
+			],
+		),
+		(
+			"supervisor wardrobe menu active state",
+			&[
+				"test",
+				"-p",
+				"un-avatar-supervisor",
+				"--lib",
+				"static_renderer_wardrobe_menu_resolves_base_active_state",
+			],
+		),
+	];
+
+	for (label, args) in commands {
+		eprintln!("release-guard: {label}");
+		if !run_cargo(repo, args).success() {
+			eprintln!("release-guard: failed at {label}");
+			return false;
+		}
+	}
+	eprintln!("release-guard: ok");
+	true
+}
+
 fn run_renderer(repo: &Path, mut args: impl Iterator<Item = String>) -> bool {
 	let mut profile: Option<String> = None;
 	let mut manifest: Option<PathBuf> = None;
@@ -4456,6 +4592,7 @@ commands:\n\
   fmt          cargo fmt --all\n\
   check        cargo check --workspace\n\
   test         cargo test --workspace\n\
+  release-guard v2 release-prep の unit/static regression guard を実行（GUI/package rebuildなし）\n\
   smoke        CLI formats list / sample plugin / convert を確認\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
   package-render-smoke target/package/un-avatar の renderer で render-smoke と同じ検証を実行（--manifest / --wardrobe-set対応）\n\
@@ -4490,6 +4627,7 @@ fn main() {
 		"fmt" => run_cargo(repo, &["fmt", "--all"]).success(),
 		"check" => run_cargo(repo, &["check", "--workspace"]).success(),
 		"test" => run_cargo(repo, &["test", "--workspace"]).success(),
+		"release-guard" => run_release_guard(repo),
 		"smoke" => run_smoke(repo),
 		"render-smoke" => run_render_smoke(repo),
 		"package-render-smoke" => run_package_render_smoke(repo, args),

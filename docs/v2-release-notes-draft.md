@@ -18,22 +18,7 @@ These commands passed in the release-prep workspace for the recorded candidate p
 ```sh
 npm run check
 cargo xtask fmt
-cargo test -p xtask -- --nocapture
-cargo test -p un-avatar-render-wgpu renderer_tray -- --nocapture
-cargo test -p un-avatar-render-wgpu unanimator_excludes_metadata_only_and_tracking_controls
-cargo test -p un-avatar-render-wgpu resumed_marks_startup_before_first_redraw
-cargo test -p un-avatar-render-wgpu rendered_frame_role_keeps_startup_and_wardrobe_mutually_exclusive
-cargo test -p un-avatar-render-wgpu wardrobe_transition_frame_skips_runtime_action_evaluation
-cargo test -p un-avatar-render-wgpu startup_progress_and_wardrobe_transition_are_distinct_frame_roles
-cargo test -p un-avatar-render-wgpu startup_progress_overlay_does_not_embed_wardrobe_transition_art
-cargo test -p un-avatar-render-wgpu manifest -- --nocapture
-cargo test -p un-avatar-render-wgpu standalone_runtime_bus_key -- --nocapture
-cargo test -p un-avatar-render-wgpu runtime_status_server_keeps_one_shot_compatibility -- --nocapture
-cargo test -p un-avatar-supervisor dev_ipc_mock_covers_literal_frontend_invokes
-cargo test -p un-avatar-supervisor open_profile_manifest_registers_standalone_renderer_without_child_process -- --nocapture
-cargo test -p un-avatar-supervisor startup_open_profile_manifest_arg_accepts_renderer_tray_argv_shape -- --nocapture
-cargo test -p un-avatar-supervisor static_renderer_animator_actions_keep_wardrobe_and_parameter_boundaries
-cargo test -p un-avatar-supervisor static_renderer_wardrobe_menu_resolves_base_active_state
+cargo xtask release-guard
 cargo xtask unity-exporter-vcc --version 2.0.0-beta-2
 cargo xtask release-package --version 2.0.0-beta-2
 cargo xtask release-audit --version 2.0.0-beta-2

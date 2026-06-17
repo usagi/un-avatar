@@ -32,6 +32,14 @@ cargo xtask test
 cargo xtask render-smoke
 ```
 
+v2 release-prep 中の小さな修正では、まず次の guard で直近の壊れやすい経路だけを確認する。
+
+```sh
+cargo xtask release-guard
+```
+
+`release-guard` は Renderer tray / startup splash / wardrobe transition / runtime status / standalone handoff / Supervisor static source checks などの unit/static regression guard をまとめて実行する。GUI、package rebuild、Spout2 実機確認、manual release evidence は含めないため、candidate 確定前は通常の `ci`、`release-package`、`release-audit`、`package-render-smoke`、手動 checklist を別途通す。
+
 ## Supervisor / Renderer の起動確認
 
 開発中に Supervisor と Renderer の両方を更新して起動する場合は、`cargo run` / `cargo build` ではなく xtask を使う。
