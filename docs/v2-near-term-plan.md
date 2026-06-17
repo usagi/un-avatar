@@ -54,7 +54,7 @@ Supervisor / Renderer tray / launcher の v2 UI・GUI 運用設計は [`v2-ui-gu
 
 ## Performance Work Queue
 
-mizuki-split class の `.unavatar` でも起動体験は実用域に近づいたが、v2 初回リリースまで継続して loading / upload / shader / splash / runtime CPU を削る。速度最適化は必ずプロファイルかコード上の明確な不要 work を根拠にし、品質劣化やモデル固有 hack で代替しない。
+mizuki-split class の `.unavatar` でも起動体験は実用域に近づいたが、v2 初回リリースまで継続して loading / upload / shader / startup progress overlay / runtime CPU を削る。速度最適化は必ずプロファイルかコード上の明確な不要 work を根拠にし、品質劣化やモデル固有 hack で代替しない。
 
 優先順:
 
