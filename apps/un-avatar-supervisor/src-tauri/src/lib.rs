@@ -14519,6 +14519,30 @@ display_name = "Mizuki"
 	}
 
 	#[test]
+	fn static_profile_stage_uses_fixed_desktop_height() {
+		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
+			.expect("styles.css should be readable");
+		assert!(
+			styles_css.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\theight: 214px;\n\tmin-height: 214px;"),
+			"profile stage should keep a fixed desktop height so VRM and .unavatar profile headers do not visually jump"
+		);
+		assert!(
+			styles_css.contains(".profile-summary-grid button {\n\theight: 46px;\n\tmin-height: 46px;"),
+			"profile summary tiles should keep a stable fixed row height"
+		);
+		assert!(
+			styles_css.contains(".profile-stage-action-buttons {\n\tdisplay: inline-flex;")
+				&& styles_css.contains("\tmin-height: 66px;\n\tmax-height: 66px;"),
+			"profile stage action area should reserve a stable two-row height on desktop"
+		);
+		assert!(
+			styles_css.contains("@media (max-width: 1180px)")
+				&& styles_css.contains("\t.profile-stage {\n\t\theight: auto;\n\t\tmin-height: 172px;"),
+			"profile stage should return to responsive auto height on narrow layouts"
+		);
+	}
+
+	#[test]
 	fn static_profile_camera_and_window_sections_keep_runtime_capture_actions() {
 		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src").join("lib");
 		let camera =
