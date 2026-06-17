@@ -8,7 +8,7 @@ This checklist is for the final v2 beta candidate pass after automated checks ha
 - Git commit: `ff709e483899`
 - Version: `2.0.0-beta-2`
 - Portable zip: `release-packages/un-avatar-2.0.0-beta-2.zip`
-- Portable zip SHA-256: `26dbe7bc8a53cefc0d90a6fac70dc40805194c768b09666e9ab0c4201b50e07d`
+- Portable zip SHA-256: `c1916e17316d6e0f465a5230d6f7146f7b4d924988b7d0a2cd0803f35b6d2cde`
 - VCC package zip: `target/unity/vcc/network.usagi.un-avatar.unity-exporter-2.0.0-beta-2.zip`
 - VCC package SHA-256: `7a6a8578387cf5e7536f3746bb9f1446837171eb26fe20518b960c4305f81ce1`
 - `cargo xtask ci` result: passed
