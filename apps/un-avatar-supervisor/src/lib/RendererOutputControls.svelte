@@ -10,7 +10,7 @@
 	export let runtimeStatus: RuntimeOutputStatusData | null;
 	export let busy = false;
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onSaveOutput: RendererPaneActions["onSaveOutput"];
+	export let onSaveSpoutProfile: RendererPaneActions["onSaveSpoutProfile"];
 	export let onRestoreOutput: RendererPaneActions["onRestoreOutput"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 
@@ -24,7 +24,7 @@
 	</div>
 	<RendererOutputActionButtons {renderer} {runtimeStatus} disabled={busy || !rendererRunning} {onSetSpoutOutput} {onSetWindow} />
 	<div class="runtime-button-row">
-		<button disabled={busy || !rendererRunning} onclick={onSaveOutput} title={$_("renderers.details.save_output_title")}
+		<button disabled={busy || !rendererRunning} onclick={onSaveSpoutProfile} title={$_("renderers.details.save_spout_profile_title")}
 			>{$_("renderers.details.save_spout_to_profile")}</button
 		>
 		<button disabled={busy || !rendererRunning} onclick={onRestoreOutput} title={$_("renderers.details.restore_output_title")}

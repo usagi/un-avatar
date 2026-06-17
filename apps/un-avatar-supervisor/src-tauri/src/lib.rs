@@ -2578,7 +2578,7 @@ pub fn run() {
 			set_renderer_camera_state,
 			save_renderer_camera_to_profile,
 			restore_renderer_camera_from_profile,
-			save_renderer_output_to_profile,
+			save_renderer_spout_profile,
 			restore_renderer_output_from_profile,
 			save_renderer_window_to_profile,
 			restore_renderer_window_from_profile,
@@ -6996,7 +6996,7 @@ fn set_renderer_spout_output(
 }
 
 #[tauri::command]
-fn save_renderer_output_to_profile(
+fn save_renderer_spout_profile(
 	id: u32,
 	state: State<'_, Mutex<SupervisorState>>,
 	app: tauri::AppHandle,

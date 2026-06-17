@@ -2637,13 +2637,13 @@
 		}
 	}
 
-	async function saveRendererOutputToProfile(renderer: RendererInstance | null): Promise<void> {
+	async function saveRendererSpoutProfile(renderer: RendererInstance | null): Promise<void> {
 		if (!renderer) return;
 		if (!hasTauriRuntime()) return;
 		busy = true;
 		try {
-			await invoke("save_renderer_output_to_profile", { id: renderer.id });
-			message = $_("renderers.messages.output_saved_to_profile", { values: { name: renderer.name } });
+			await invoke("save_renderer_spout_profile", { id: renderer.id });
+			message = $_("renderers.messages.spout_profile_saved", { values: { name: renderer.name } });
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -3150,9 +3150,9 @@
 							if (!selectedRenderer) return;
 							return setRendererSpoutOutput(selectedRenderer, enabled, size, label);
 						}}
-						onSaveOutput={() => {
+						onSaveSpoutProfile={() => {
 							if (!selectedRenderer) return;
-							return saveRendererOutputToProfile(selectedRenderer);
+							return saveRendererSpoutProfile(selectedRenderer);
 						}}
 						onRestoreOutput={() => {
 							if (!selectedRenderer) return;

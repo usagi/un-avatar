@@ -26,7 +26,7 @@
 	export let expressionOverrides: ExpressionOverrides = {};
 	export let expressionFilter = "";
 	export let onSetSpoutOutput: RendererPaneActions["onSetSpoutOutput"];
-	export let onSaveOutput: RendererPaneActions["onSaveOutput"];
+	export let onSaveSpoutProfile: RendererPaneActions["onSaveSpoutProfile"];
 	export let onRestoreOutput: RendererPaneActions["onRestoreOutput"];
 	export let onSetWindow: RendererPaneActions["onSetWindow"];
 	export let onSaveWindow: RendererPaneActions["onSaveWindow"];
@@ -70,7 +70,7 @@
 			{expressionOverrides}
 			bind:expressionFilter
 			{onSetSpoutOutput}
-			{onSaveOutput}
+			{onSaveSpoutProfile}
 			{onRestoreOutput}
 			{onSetWindow}
 			{onSaveWindow}
