@@ -13998,6 +13998,15 @@ mod tests {
 				.join("profileFieldRules.ts"),
 		)
 		.expect("profileFieldRules.ts should be readable");
+		let profile_output = fs::read_to_string(
+			repo_root()
+				.join("apps")
+				.join("un-avatar-supervisor")
+				.join("src")
+				.join("lib")
+				.join("ProfileOutputSection.svelte"),
+		)
+		.expect("ProfileOutputSection.svelte should be readable");
 		let backend = fs::read_to_string(
 			repo_root()
 				.join("apps")
@@ -14019,6 +14028,10 @@ mod tests {
 		assert!(
 			app_svelte.contains("applyRuntimeProfileUpdates"),
 			"profile updates should route through the runtime apply path"
+		);
+		assert!(
+			profile_output.contains(r#"profiles.editor.runtime"#) && !profile_output.contains(r#"profiles.editor.launch_time"#),
+			"profile output settings should be presented as runtime-applicable after Spout2/window live apply support"
 		);
 		assert!(
 			backend.contains(r#""wardrobe.transition.""#)

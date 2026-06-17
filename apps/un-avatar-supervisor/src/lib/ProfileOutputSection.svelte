@@ -26,7 +26,7 @@
 >
 	<div class="section-title-row">
 		<h3>{$_("profiles.editor.output")}</h3>
-		<span class="setting-scope">{$_("profiles.editor.launch_time")}</span>
+		<span class="setting-scope">{$_("profiles.editor.runtime")}</span>
 	</div>
 
 	<div class="subgroup output-mode-fields">
@@ -65,6 +65,7 @@
 		<div class="subgroup-heading">
 			<span>{$_("profiles.editor.preview_window")}</span>
 			<small>{$_("profiles.editor.preview_window_summary")}</small>
+			<span class="setting-scope">{$_("profiles.editor.runtime")}</span>
 		</div>
 		<div class="recommendation-row preview-window-row">
 			<button
