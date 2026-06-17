@@ -1970,7 +1970,6 @@ impl AvatarApp {
 			.and_then(load_window_icon)
 			.or_else(load_default_window_icon)
 		{
-			window.set_window_icon(None);
 			window.set_window_icon(Some(icon));
 		}
 	}
@@ -8532,6 +8531,16 @@ mod tests {
 		));
 		assert!(!wardrobe_set_request_matches_active(Some("field_drape"), Some("base"), ""));
 		assert!(!wardrobe_set_request_matches_active(None, None, ""));
+	}
+
+	#[test]
+	fn configured_window_icon_reapply_does_not_clear_to_default_icon() {
+		let source = include_str!("lib.rs");
+		let forbidden = ["set_window_icon", "(None)"].concat();
+		assert!(
+			!source.contains(&forbidden),
+			"runtime icon refresh must not briefly clear to the Windows default taskbar icon"
+		);
 	}
 
 	#[test]
