@@ -570,7 +570,7 @@ fn create_spout_depth(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::
 		mip_level_count: 1,
 		sample_count: 1,
 		dimension: wgpu::TextureDimension::D2,
-		format: wgpu::TextureFormat::Depth24Plus,
+		format: wgpu::TextureFormat::Depth24PlusStencil8,
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 		view_formats: &[],
 	});

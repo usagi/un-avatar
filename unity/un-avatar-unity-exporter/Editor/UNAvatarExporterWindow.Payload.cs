@@ -768,17 +768,8 @@ namespace UNAvatar.UnityExporter
                     {
                         continue;
                     }
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilRef", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilReadMask", 255.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilWriteMask", 255.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilComp", 8.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilPass", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilFail", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilZFail", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_ColorMask", 15.0f, "color_mask");
                     AddUnsupportedMaterialFloat(reports, material, "_OffsetFactor", 0.0f, "depth_offset");
                     AddUnsupportedMaterialFloat(reports, material, "_OffsetUnits", 0.0f, "depth_offset");
-                    AddUnsupportedMaterialFloat(reports, material, "_OutlineColorMask", 15.0f, "outline_color_mask");
                     AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetFactor", 0.0f, "outline_depth_offset");
                     AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetUnits", 0.0f, "outline_depth_offset");
                 }

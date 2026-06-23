@@ -166,6 +166,7 @@ struct MeshPipelineRenderState {
 	color_write_mask: wgpu::ColorWrites,
 	depth_write: bool,
 	depth_compare: wgpu::CompareFunction,
+	stencil: MaterialStencilState,
 	cull_mode: Option<wgpu::Face>,
 	alpha_coverage: MeshPipelineAlphaCoverage,
 	sample_count: u32,
@@ -178,6 +179,7 @@ impl MeshPipelineRenderState {
 			color_write_mask: wgpu::ColorWrites::ALL,
 			depth_write,
 			depth_compare: wgpu::CompareFunction::LessEqual,
+			stencil: MaterialStencilState::default(),
 			cull_mode: None,
 			alpha_coverage: MeshPipelineAlphaCoverage::Off,
 			sample_count,
@@ -190,6 +192,7 @@ impl MeshPipelineRenderState {
 			color_write_mask: wgpu::ColorWrites::ALL,
 			depth_write: false,
 			depth_compare: wgpu::CompareFunction::Less,
+			stencil: MaterialStencilState::default(),
 			cull_mode: Some(wgpu::Face::Front),
 			alpha_coverage: MeshPipelineAlphaCoverage::Off,
 			sample_count,
@@ -198,6 +201,18 @@ impl MeshPipelineRenderState {
 
 	fn with_alpha_coverage(mut self, alpha_coverage: MeshPipelineAlphaCoverage) -> Self {
 		self.alpha_coverage = alpha_coverage;
+		self
+	}
+
+	fn with_material_render_state(mut self, key: DrawPipelineKey) -> Self {
+		self.stencil = key.stencil;
+		self.color_write_mask = color_writes_from_unity_mask(key.color_mask);
+		self
+	}
+
+	fn with_material_render_state_key(mut self, key: MaterialRenderStateKey) -> Self {
+		self.stencil = key.stencil;
+		self.color_write_mask = color_writes_from_unity_mask(key.color_mask);
 		self
 	}
 }
@@ -1325,6 +1340,144 @@ impl DrawPipelineKind {
 	}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct DrawPipelineKey {
+	kind: DrawPipelineKind,
+	stencil: MaterialStencilState,
+	color_mask: u8,
+}
+
+impl DrawPipelineKey {
+	fn new(kind: DrawPipelineKind, draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self {
+			kind,
+			stencil: draw.stencil_state,
+			color_mask: if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.color_mask
+			},
+		}
+	}
+
+	fn from_parts(kind: DrawPipelineKind, stencil: MaterialStencilState, color_mask: u8) -> Self {
+		Self {
+			kind,
+			stencil,
+			color_mask: color_mask & 0x0f,
+		}
+	}
+
+	fn label(self) -> &'static str {
+		self.kind.label()
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialRenderStateKey {
+	stencil: MaterialStencilState,
+	color_mask: u8,
+}
+
+impl MaterialRenderStateKey {
+	fn new(stencil: MaterialStencilState, color_mask: u8) -> Self {
+		Self {
+			stencil,
+			color_mask: color_mask & 0x0f,
+		}
+	}
+
+	fn from_draw_outline(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self::new(
+			draw.outline_stencil_state,
+			if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.outline_color_mask
+			},
+		)
+	}
+
+	fn from_draw_fur(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self::new(
+			draw.fur_stencil_state,
+			if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.fur_color_mask
+			},
+		)
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialStencilState {
+	reference: u8,
+	read_mask: u8,
+	write_mask: u8,
+	compare: u8,
+	pass_op: u8,
+	fail_op: u8,
+	depth_fail_op: u8,
+}
+
+impl Default for MaterialStencilState {
+	fn default() -> Self {
+		Self {
+			reference: 0,
+			read_mask: 255,
+			write_mask: 255,
+			compare: 8,
+			pass_op: 0,
+			fail_op: 0,
+			depth_fail_op: 0,
+		}
+	}
+}
+
+impl MaterialStencilState {
+	fn to_wgpu(self) -> wgpu::StencilState {
+		let face = wgpu::StencilFaceState {
+			compare: unity_compare_function(self.compare),
+			fail_op: unity_stencil_operation(self.fail_op),
+			depth_fail_op: unity_stencil_operation(self.depth_fail_op),
+			pass_op: unity_stencil_operation(self.pass_op),
+		};
+		wgpu::StencilState {
+			front: face,
+			back: face,
+			read_mask: self.read_mask as u32,
+			write_mask: self.write_mask as u32,
+		}
+	}
+}
+
+fn unity_compare_function(value: u8) -> wgpu::CompareFunction {
+	match value {
+		1 => wgpu::CompareFunction::Never,
+		2 => wgpu::CompareFunction::Less,
+		3 => wgpu::CompareFunction::Equal,
+		4 => wgpu::CompareFunction::LessEqual,
+		5 => wgpu::CompareFunction::Greater,
+		6 => wgpu::CompareFunction::NotEqual,
+		7 => wgpu::CompareFunction::GreaterEqual,
+		_ => wgpu::CompareFunction::Always,
+	}
+}
+
+fn unity_stencil_operation(value: u8) -> wgpu::StencilOperation {
+	match value {
+		1 => wgpu::StencilOperation::Zero,
+		2 => wgpu::StencilOperation::Replace,
+		3 => wgpu::StencilOperation::IncrementClamp,
+		4 => wgpu::StencilOperation::DecrementClamp,
+		5 => wgpu::StencilOperation::Invert,
+		6 => wgpu::StencilOperation::IncrementWrap,
+		7 => wgpu::StencilOperation::DecrementWrap,
+		_ => wgpu::StencilOperation::Keep,
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct UntoonShaderFeatures {
 	profile_extensions: bool,
@@ -1489,18 +1642,18 @@ pub(crate) struct MeshPipelinePrewarmSummary {
 
 #[derive(Clone, Debug)]
 struct DrawBatch {
-	pipeline: DrawPipelineKind,
+	pipeline: DrawPipelineKey,
 	draw_indices: Vec<usize>,
 }
 
-fn draw_batch(pipeline: DrawPipelineKind, capacity: usize) -> DrawBatch {
+fn draw_batch(pipeline: DrawPipelineKey, capacity: usize) -> DrawBatch {
 	DrawBatch {
 		pipeline,
 		draw_indices: Vec::with_capacity(capacity),
 	}
 }
 
-fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelineKind, draw_index: usize, batch_capacity: usize) {
+fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelineKey, draw_index: usize, batch_capacity: usize) {
 	if let Some(last) = batches.last_mut() {
 		if last.pipeline == pipeline {
 			last.draw_indices.push(draw_index);
@@ -1543,6 +1696,81 @@ fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<
 				.and_then(|params| params.get(name))
 				.and_then(json_number_f32)
 		})
+}
+
+fn material_source_u8_param(material: &UnaMaterialPbr, name: &str, default_value: u8) -> u8 {
+	material_source_float_param(material, name)
+		.map(|value| value.round().clamp(0.0, 255.0) as u8)
+		.unwrap_or(default_value)
+}
+
+fn prefixed_material_name(prefix: &str, suffix: &str) -> String {
+	if prefix.is_empty() {
+		format!("_{suffix}")
+	} else {
+		format!("_{prefix}{suffix}")
+	}
+}
+
+fn material_source_u8_param_prefixed(material: &UnaMaterialPbr, prefix: &str, suffix: &str, default_value: u8) -> u8 {
+	material_source_u8_param(material, &prefixed_material_name(prefix, suffix), default_value)
+}
+
+fn material_stencil_state_prefixed(material: &UnaMaterialPbr, prefix: &str) -> MaterialStencilState {
+	MaterialStencilState {
+		reference: material_source_u8_param_prefixed(material, prefix, "StencilRef", 0),
+		read_mask: material_source_u8_param_prefixed(material, prefix, "StencilReadMask", 255),
+		write_mask: material_source_u8_param_prefixed(material, prefix, "StencilWriteMask", 255),
+		compare: material_source_u8_param_prefixed(material, prefix, "StencilComp", 8),
+		pass_op: material_source_u8_param_prefixed(material, prefix, "StencilPass", 0),
+		fail_op: material_source_u8_param_prefixed(material, prefix, "StencilFail", 0),
+		depth_fail_op: material_source_u8_param_prefixed(material, prefix, "StencilZFail", 0),
+	}
+}
+
+fn material_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_stencil_state_prefixed(material, "")
+}
+
+fn material_outline_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_stencil_state_prefixed(material, "Outline")
+}
+
+fn material_fur_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_stencil_state_prefixed(material, "Fur")
+}
+
+fn material_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_source_u8_param(material, "_ColorMask", 15) & 0x0f
+}
+
+fn material_color_mask_prefixed(material: &UnaMaterialPbr, prefix: &str) -> u8 {
+	material_source_u8_param_prefixed(material, prefix, "ColorMask", 15) & 0x0f
+}
+
+fn material_outline_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_color_mask_prefixed(material, "Outline")
+}
+
+fn material_fur_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_color_mask_prefixed(material, "Fur")
+}
+
+fn color_writes_from_unity_mask(mask: u8) -> wgpu::ColorWrites {
+	let mut writes = wgpu::ColorWrites::empty();
+	if mask & 0x1 != 0 {
+		writes |= wgpu::ColorWrites::ALPHA;
+	}
+	if mask & 0x2 != 0 {
+		writes |= wgpu::ColorWrites::BLUE;
+	}
+	if mask & 0x4 != 0 {
+		writes |= wgpu::ColorWrites::GREEN;
+	}
+	if mask & 0x8 != 0 {
+		writes |= wgpu::ColorWrites::RED;
+	}
+	writes
 }
 
 fn material_source_shader_name(material: &UnaMaterialPbr) -> Option<&str> {
@@ -1895,6 +2123,12 @@ struct MeshDraw {
 	alpha_mode: UnaAlphaMode,
 	material_slot_index: Option<usize>,
 	material: UnaMaterialPbr,
+	stencil_state: MaterialStencilState,
+	color_mask: u8,
+	outline_stencil_state: MaterialStencilState,
+	outline_color_mask: u8,
+	fur_stencil_state: MaterialStencilState,
+	fur_color_mask: u8,
 	texture_indices: Vec<usize>,
 	cube_texture_indices: Vec<usize>,
 	mesh_index: usize,
@@ -2459,16 +2693,7 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 		runtime_requirements: SceneMeshRuntimeRequirements::default(),
 	};
 	let batch_capacity = (draws.len() / 10).max(1);
-	let mut opaque_batches = vec![
-		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-	];
+	let mut opaque_draws = Vec::with_capacity(draws.len());
 	let mut blended_draws = Vec::with_capacity(draws.len());
 	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
@@ -2499,37 +2724,45 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 			state.fur_draw_indices.push(draw_index);
 		}
 
-		let shading_index = match shading {
-			UnaShadingModel::LitLambert => 0,
-			UnaShadingModel::Unlit => 1,
-			UnaShadingModel::MToonLike => 2,
-			UnaShadingModel::LilToonLike => 3,
-		};
 		match draw.alpha_mode {
 			UnaAlphaMode::Opaque | UnaAlphaMode::Mask
 				if draw_uses_screen_refraction_grab(draw)
 					|| draw_uses_late_non_blend_queue(draw.alpha_mode, draw_render_queue_number(draw)) =>
 			{
-				blended_draws.push((opaque_pipeline_for_shading(shading), draw_index));
+				blended_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
 			}
-			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
+			UnaAlphaMode::Opaque => {
+				opaque_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
+			}
+			UnaAlphaMode::Mask => {
+				opaque_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
+			}
 			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw, shading) => {
-				blended_draws.push((transparent_backpass_pipeline_for_draw(draw), draw_index));
+				blended_draws.push((
+					DrawPipelineKey::new(transparent_backpass_pipeline_for_draw(draw), draw, opts),
+					draw_index,
+				));
 				if draw_uses_liltoon_gem_prepass(draw) {
-					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+					blended_draws.push((DrawPipelineKey::new(DrawPipelineKind::LilToonGemPre, draw, opts), draw_index));
 				}
-				blended_draws.push((blend_pipeline_for_draw(draw, shading, true), draw_index));
+				blended_draws.push((
+					DrawPipelineKey::new(blend_pipeline_for_draw(draw, shading, true), draw, opts),
+					draw_index,
+				));
 			}
 			UnaAlphaMode::Blend => {
 				if draw_uses_liltoon_gem_prepass(draw) {
-					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+					blended_draws.push((DrawPipelineKey::new(DrawPipelineKind::LilToonGemPre, draw, opts), draw_index));
 				}
 				blended_draws.push((
-					blend_pipeline_for_draw(
+					DrawPipelineKey::new(
+						blend_pipeline_for_draw(
+							draw,
+							shading,
+							transparent_forward_zwrite_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading),
+						),
 						draw,
-						shading,
-						transparent_forward_zwrite_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading),
+						opts,
 					),
 					draw_index,
 				));
@@ -2538,18 +2771,21 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 	}
 	blended_draws.sort_by_key(|&(pipeline, draw_index)| {
 		let (render_queue, draw_index) = draw_render_order_key(draws, draw_index);
-		(render_queue, draw_index, blended_pipeline_pass_order(pipeline))
+		(render_queue, draw_index, blended_pipeline_pass_order(pipeline.kind))
 	});
 	for (pipeline, draw_index) in blended_draws {
 		append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
 	}
 
+	let mut opaque_batches = Vec::with_capacity(opaque_draws.len());
+	opaque_draws.sort_by_key(|&(_, draw_index)| draw_render_order_key(draws, draw_index));
+	for (pipeline, draw_index) in opaque_draws {
+		append_ordered_draw_batch(&mut opaque_batches, pipeline, draw_index, batch_capacity);
+	}
+
 	group_draw_indices_by_skin_palette(draws, &mut state.outline_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut state.fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut state.transparent_backpass_draw_indices);
-	for batch in &mut opaque_batches {
-		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
-	}
 
 	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
 	state.opaque_batches = opaque_batches;
@@ -2564,8 +2800,8 @@ fn draw_untoon_shader_features(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Unt
 }
 
 fn include_draw_features_for_pipeline(
-	pipeline_features: &mut BTreeMap<DrawPipelineKind, UntoonShaderFeatures>,
-	pipeline: DrawPipelineKind,
+	pipeline_features: &mut BTreeMap<DrawPipelineKey, UntoonShaderFeatures>,
+	pipeline: DrawPipelineKey,
 	draw: &MeshDraw,
 	opts: &SceneMeshLoadOpts,
 ) {
@@ -2579,7 +2815,7 @@ fn draw_pipeline_shader_features(
 	draws: &[MeshDraw],
 	draw_state: &SceneMeshDrawState,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeMap<DrawPipelineKind, UntoonShaderFeatures> {
+) -> BTreeMap<DrawPipelineKey, UntoonShaderFeatures> {
 	let mut pipeline_features = BTreeMap::new();
 	for batch in draw_state.opaque_batches.iter().chain(draw_state.blended_batches.iter()) {
 		for &draw_index in &batch.draw_indices {
@@ -2598,11 +2834,15 @@ fn draw_pipeline_shader_features(
 			.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 		include_draw_features_for_pipeline(
 			&mut pipeline_features,
-			if zwrite {
-				DrawPipelineKind::TransparentToonBackpass
-			} else {
-				DrawPipelineKind::TransparentToonBackpassNoZWrite
-			},
+			DrawPipelineKey::new(
+				if zwrite {
+					DrawPipelineKind::TransparentToonBackpass
+				} else {
+					DrawPipelineKind::TransparentToonBackpassNoZWrite
+				},
+				draw,
+				opts,
+			),
 			draw,
 			opts,
 		);
@@ -2838,12 +3078,12 @@ impl SceneCubeTextureSlot {
 }
 
 pub(crate) struct SceneMeshes {
-	pipelines: BTreeMap<DrawPipelineKind, wgpu::RenderPipeline>,
-	pipeline_outline_toon: Option<wgpu::RenderPipeline>,
+	pipelines: BTreeMap<DrawPipelineKey, wgpu::RenderPipeline>,
+	pipelines_outline_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
 	compute_fur_cards_bind_group_layout: wgpu::BindGroupLayout,
 	compute_fur_cards_compute_pipeline: Option<ComputeFurCardsComputePipeline>,
-	pipeline_compute_fur_cards_pre_toon: Option<wgpu::RenderPipeline>,
-	pipeline_compute_fur_cards_toon: Option<wgpu::RenderPipeline>,
+	pipelines_compute_fur_cards_pre_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
+	pipelines_compute_fur_cards_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_layout: wgpu::BindGroupLayout,
@@ -7755,10 +7995,10 @@ impl SceneMeshes {
 				..Default::default()
 			},
 			depth_stencil: Some(wgpu::DepthStencilState {
-				format: wgpu::TextureFormat::Depth24Plus,
+				format: wgpu::TextureFormat::Depth24PlusStencil8,
 				depth_write_enabled: Some(render_state.depth_write),
 				depth_compare: Some(render_state.depth_compare),
-				stencil: wgpu::StencilState::default(),
+				stencil: render_state.stencil.to_wgpu(),
 				bias: wgpu::DepthBiasState::default(),
 			}),
 			multisample: wgpu::MultisampleState {
@@ -7777,7 +8017,7 @@ impl SceneMeshes {
 		format: wgpu::TextureFormat,
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
 		pipeline_cache: Option<&wgpu::PipelineCache>,
-		kind: DrawPipelineKind,
+		key: DrawPipelineKey,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -7806,7 +8046,7 @@ impl SceneMeshes {
 				operation: wgpu::BlendOperation::Add,
 			},
 		});
-		let (label, vertex_entry, fragment_entry, render_state) = match kind {
+		let (label, vertex_entry, fragment_entry, render_state) = match key.kind {
 			DrawPipelineKind::OpaqueLit => (
 				"mesh_opaque_lit",
 				"vs_main",
@@ -7890,7 +8130,7 @@ impl SceneMeshes {
 			label,
 			vertex_entry,
 			fragment_entry,
-			render_state,
+			render_state.with_material_render_state(key),
 		)
 	}
 
@@ -8101,6 +8341,7 @@ impl SceneMeshes {
 			summary.shader_modules += 1;
 			for kind in pipeline_kinds {
 				progress(kind.label());
+				let key = DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15);
 				let _pipeline = Self::create_draw_pipeline(
 					device,
 					&pipeline_layout,
@@ -8108,7 +8349,7 @@ impl SceneMeshes {
 					format,
 					&vb_layout,
 					pipeline_cache,
-					kind,
+					key,
 					sample_count,
 				);
 				summary.render_pipelines += 1;
@@ -9745,6 +9986,12 @@ impl SceneMeshes {
 					alpha_mode: mat.alpha_mode,
 					material_slot_index,
 					material: mat.clone(),
+					stencil_state: material_stencil_state(mat),
+					color_mask: material_color_mask(mat),
+					outline_stencil_state: material_outline_stencil_state(mat),
+					outline_color_mask: material_outline_color_mask(mat),
+					fur_stencil_state: material_fur_stencil_state(mat),
+					fur_color_mask: material_fur_color_mask(mat),
 					texture_indices: material_texture_indices(mat),
 					cube_texture_indices: material_cube_texture_indices(mat),
 					mesh_index: mesh_i,
@@ -9793,30 +10040,58 @@ impl SceneMeshes {
 
 		let draw_state = build_draw_order(&draws, &opts);
 		let pipeline_draw_state = build_potential_draw_order(&draws, &opts);
-		let mut required_pipeline_kinds = BTreeSet::new();
+		let mut required_pipeline_keys = BTreeSet::new();
 		for batch in pipeline_draw_state
 			.opaque_batches
 			.iter()
 			.chain(pipeline_draw_state.blended_batches.iter())
 		{
-			required_pipeline_kinds.insert(batch.pipeline);
+			required_pipeline_keys.insert(batch.pipeline);
 		}
 		for &draw_index in &pipeline_draw_state.transparent_backpass_draw_indices {
-			let zwrite = draws
-				.get(draw_index)
-				.and_then(|draw| draw.material.liltoon_like_runtime())
-				.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-			required_pipeline_kinds.insert(if zwrite {
-				DrawPipelineKind::TransparentToonBackpass
-			} else {
-				DrawPipelineKind::TransparentToonBackpassNoZWrite
-			});
+			if let Some(draw) = draws.get(draw_index) {
+				let zwrite = draw
+					.material
+					.liltoon_like_runtime()
+					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				required_pipeline_keys.insert(DrawPipelineKey::new(
+					if zwrite {
+						DrawPipelineKind::TransparentToonBackpass
+					} else {
+						DrawPipelineKind::TransparentToonBackpassNoZWrite
+					},
+					draw,
+					&opts,
+				));
+			}
 		}
 		let needs_outline_pipeline = !pipeline_draw_state.outline_draw_indices.is_empty()
 			&& !opts.force_simple_basecolor
 			&& !opts.debug_bind_pose
 			&& !opts.debug_primitive_colors;
 		let needs_fur_pipelines = !pipeline_draw_state.fur_draw_indices.is_empty();
+		let outline_pipeline_keys: BTreeSet<_> = if needs_outline_pipeline {
+			pipeline_draw_state
+				.outline_draw_indices
+				.iter()
+				.filter_map(|&draw_index| {
+					draws
+						.get(draw_index)
+						.map(|draw| MaterialRenderStateKey::from_draw_outline(draw, &opts))
+				})
+				.collect()
+		} else {
+			BTreeSet::new()
+		};
+		let fur_pipeline_keys: BTreeSet<_> = if needs_fur_pipelines {
+			pipeline_draw_state
+				.fur_draw_indices
+				.iter()
+				.filter_map(|&draw_index| draws.get(draw_index).map(|draw| MaterialRenderStateKey::from_draw_fur(draw, &opts)))
+				.collect()
+		} else {
+			BTreeSet::new()
+		};
 		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &pipeline_draw_state, &opts);
 		let mut outline_shader_features = UntoonShaderFeatures::default();
 		for &draw_index in &pipeline_draw_state.outline_draw_indices {
@@ -9826,10 +10101,11 @@ impl SceneMeshes {
 		}
 		let mut fur_shader_features = pipeline_draw_state.runtime_requirements.toon_shader_features;
 		fur_shader_features.fur = needs_fur_pipelines;
-		let pipeline_count = required_pipeline_kinds
+		let pipeline_count = required_pipeline_keys
 			.len()
-			.saturating_add(usize::from(needs_outline_pipeline))
-			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
+			.saturating_add(outline_pipeline_keys.len())
+			.saturating_add(usize::from(needs_fur_pipelines))
+			.saturating_add(fur_pipeline_keys.len().saturating_mul(2));
 		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(4);
 		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let shader_module_start = Instant::now();
@@ -9837,11 +10113,11 @@ impl SceneMeshes {
 			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, outline_shader_features, "mesh_outline_shader"));
 		let fur_shader_module = needs_fur_pipelines
 			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader"));
-		let mut pipeline_shader_features_by_kind = BTreeMap::new();
+		let mut pipeline_shader_features_by_key = BTreeMap::new();
 		let mut draw_shader_modules = BTreeMap::new();
-		for kind in &required_pipeline_kinds {
-			let shader_features = pipeline_shader_features.get(kind).copied().unwrap_or_default();
-			pipeline_shader_features_by_kind.insert(*kind, shader_features);
+		for key in &required_pipeline_keys {
+			let shader_features = pipeline_shader_features.get(key).copied().unwrap_or_default();
+			pipeline_shader_features_by_key.insert(*key, shader_features);
 			draw_shader_modules.entry(shader_features).or_insert_with(|| {
 				create_mesh_shader_module_for_features(device, shader_variant_tier, shader_features, "mesh_draw_shader")
 			});
@@ -9858,36 +10134,42 @@ impl SceneMeshes {
 		let pipeline_start = Instant::now();
 		let render_pipeline_start = Instant::now();
 		let (
-			pipeline_outline_toon,
+			pipelines_outline_toon,
 			compute_fur_cards_compute_pipeline,
-			pipeline_compute_fur_cards_pre_toon,
-			pipeline_compute_fur_cards_toon,
+			pipelines_compute_fur_cards_pre_toon,
+			pipelines_compute_fur_cards_toon,
 			pipelines,
 		) = std::thread::scope(|scope| {
-			let pipeline_outline_toon_handle = needs_outline_pipeline.then(|| {
+			let mut pipeline_outline_toon_handles = Vec::new();
+			if needs_outline_pipeline {
 				let label = "mesh_outline_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let outline_pipeline_layout = outline_pipeline_layout.clone();
-				let vb_layout = vb_layout.clone();
-				let shader = outline_shader_module.as_ref().expect("outline shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&outline_pipeline_layout,
-						&shader,
-						format,
-						&vb_layout,
-						pipeline_cache,
-						label,
-						"vs_outline",
-						"fs_outline",
-						MeshPipelineRenderState::outline(sample_count),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
+				for key in outline_pipeline_keys {
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let outline_pipeline_layout = outline_pipeline_layout.clone();
+					let vb_layout = vb_layout.clone();
+					let shader = outline_shader_module.as_ref().expect("outline shader module missing");
+					pipeline_outline_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&outline_pipeline_layout,
+								&shader,
+								format,
+								&vb_layout,
+								pipeline_cache,
+								label,
+								"vs_outline",
+								"fs_outline",
+								MeshPipelineRenderState::outline(sample_count).with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+				}
+			}
 			let compute_fur_cards_compute_pipeline_handle = needs_fur_pipelines.then(|| {
 				let label = "compute_fur_cards";
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
@@ -9899,64 +10181,75 @@ impl SceneMeshes {
 					pipeline
 				})
 			});
-			let pipeline_compute_fur_cards_pre_toon_handle = needs_fur_pipelines.then(|| {
-				let label = "mesh_compute_fur_cards_pre_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let pipeline_layout = pipeline_layout.clone();
-				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
-				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&pipeline_layout,
-						&shader,
-						format,
-						&compute_fur_cards_vb_layout,
-						pipeline_cache,
-						label,
-						"vs_compute_fur_cards_pre",
-						"fs_fur_toon_pre",
-						MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
-			let pipeline_compute_fur_cards_toon_handle = needs_fur_pipelines.then(|| {
-				let label = "mesh_compute_fur_cards_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let pipeline_layout = pipeline_layout.clone();
-				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
-				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&pipeline_layout,
-						&shader,
-						format,
-						&compute_fur_cards_vb_layout,
-						pipeline_cache,
-						label,
-						"vs_compute_fur_cards",
-						"fs_fur_toon",
-						MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
+			let mut pipeline_compute_fur_cards_pre_toon_handles = Vec::new();
+			let mut pipeline_compute_fur_cards_toon_handles = Vec::new();
+			if needs_fur_pipelines {
+				for key in fur_pipeline_keys {
+					let label = "mesh_compute_fur_cards_pre_toon";
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let pre_pipeline_layout = pipeline_layout.clone();
+					let pre_compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+					let shader = fur_shader_module.as_ref().expect("fur shader module missing");
+					pipeline_compute_fur_cards_pre_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&pre_pipeline_layout,
+								&shader,
+								format,
+								&pre_compute_fur_cards_vb_layout,
+								pipeline_cache,
+								label,
+								"vs_compute_fur_cards_pre",
+								"fs_fur_toon_pre",
+								MeshPipelineRenderState::mesh_main(None, true, sample_count)
+									.with_alpha_coverage(MeshPipelineAlphaCoverage::On)
+									.with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+					let label = "mesh_compute_fur_cards_toon";
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let toon_pipeline_layout = pipeline_layout.clone();
+					let toon_compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+					let shader = fur_shader_module.as_ref().expect("fur shader module missing");
+					pipeline_compute_fur_cards_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&toon_pipeline_layout,
+								&shader,
+								format,
+								&toon_compute_fur_cards_vb_layout,
+								pipeline_cache,
+								label,
+								"vs_compute_fur_cards",
+								"fs_fur_toon",
+								MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count)
+									.with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+				}
+			}
 			let mut pipeline_handles = Vec::new();
-			for kind in required_pipeline_kinds {
-				let label = kind.label();
+			for key in required_pipeline_keys {
+				let label = key.label();
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let shader_features = pipeline_shader_features_by_kind.get(&kind).copied().unwrap_or_default();
+				let shader_features = pipeline_shader_features_by_key.get(&key).copied().unwrap_or_default();
 				let shader = draw_shader_modules.get(&shader_features).expect("draw shader module missing");
 				let pipeline_layout = pipeline_layout.clone();
 				let vb_layout = vb_layout.clone();
 				pipeline_handles.push((
-					kind,
+					key,
 					scope.spawn(move || {
 						let start = Instant::now();
 						let pipeline = Self::create_draw_pipeline(
@@ -9966,7 +10259,7 @@ impl SceneMeshes {
 							format,
 							&vb_layout,
 							pipeline_cache,
-							kind,
+							key,
 							sample_count,
 						);
 						log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
@@ -9974,23 +10267,29 @@ impl SceneMeshes {
 					}),
 				));
 			}
-			let pipeline_outline_toon =
-				pipeline_outline_toon_handle.map(|handle| handle.join().expect("mesh outline pipeline worker panicked"));
+			let mut pipelines_outline_toon = BTreeMap::new();
+			for (key, handle) in pipeline_outline_toon_handles {
+				pipelines_outline_toon.insert(key, handle.join().expect("mesh outline pipeline worker panicked"));
+			}
 			let compute_fur_cards_compute_pipeline =
 				compute_fur_cards_compute_pipeline_handle.map(|handle| handle.join().expect("compute fur pipeline worker panicked"));
-			let pipeline_compute_fur_cards_pre_toon =
-				pipeline_compute_fur_cards_pre_toon_handle.map(|handle| handle.join().expect("compute fur pre pipeline worker panicked"));
-			let pipeline_compute_fur_cards_toon =
-				pipeline_compute_fur_cards_toon_handle.map(|handle| handle.join().expect("compute fur draw pipeline worker panicked"));
+			let mut pipelines_compute_fur_cards_pre_toon = BTreeMap::new();
+			for (key, handle) in pipeline_compute_fur_cards_pre_toon_handles {
+				pipelines_compute_fur_cards_pre_toon.insert(key, handle.join().expect("compute fur pre pipeline worker panicked"));
+			}
+			let mut pipelines_compute_fur_cards_toon = BTreeMap::new();
+			for (key, handle) in pipeline_compute_fur_cards_toon_handles {
+				pipelines_compute_fur_cards_toon.insert(key, handle.join().expect("compute fur draw pipeline worker panicked"));
+			}
 			let mut pipelines = BTreeMap::new();
 			for (kind, handle) in pipeline_handles {
 				pipelines.insert(kind, handle.join().expect("mesh draw pipeline worker panicked"));
 			}
 			(
-				pipeline_outline_toon,
+				pipelines_outline_toon,
 				compute_fur_cards_compute_pipeline,
-				pipeline_compute_fur_cards_pre_toon,
-				pipeline_compute_fur_cards_toon,
+				pipelines_compute_fur_cards_pre_toon,
+				pipelines_compute_fur_cards_toon,
 				pipelines,
 			)
 		});
@@ -10007,11 +10306,11 @@ impl SceneMeshes {
 
 		let mut scene_meshes = Self {
 			pipelines,
-			pipeline_outline_toon,
+			pipelines_outline_toon,
 			compute_fur_cards_bind_group_layout,
 			compute_fur_cards_compute_pipeline,
-			pipeline_compute_fur_cards_pre_toon,
-			pipeline_compute_fur_cards_toon,
+			pipelines_compute_fur_cards_pre_toon,
+			pipelines_compute_fur_cards_toon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_layout,
@@ -10314,15 +10613,22 @@ impl SceneMeshes {
 		{
 			return;
 		}
-		let Some(pipeline_outline_toon) = self.pipeline_outline_toon.as_ref() else {
-			return;
-		};
-		pass.set_pipeline(pipeline_outline_toon);
 		let mut state = DrawBindState::default();
+		let mut current_key = None;
 		for &draw_index in &self.outline_draw_indices {
+			let key = MaterialRenderStateKey::from_draw_outline(&self.draws[draw_index], &self.opts);
+			if current_key != Some(key) {
+				let Some(pipeline_outline_toon) = self.pipelines_outline_toon.get(&key) else {
+					continue;
+				};
+				pass.set_pipeline(pipeline_outline_toon);
+				current_key = Some(key);
+				state = DrawBindState::default();
+			}
 			let Some(bind_material) = self.draws[draw_index].bind_outline_material.as_ref() else {
 				continue;
 			};
+			pass.set_stencil_reference(self.draws[draw_index].outline_stencil_state.reference as u32);
 			self.draw_inner_with_material(pass, &mut state, draw_index, bind_material);
 		}
 	}
@@ -10471,6 +10777,12 @@ impl SceneMeshes {
 				let draw = &mut self.draws[draw_index];
 				draw.material_slot_index = material_slot_index;
 				draw.material = material.clone();
+				draw.stencil_state = material_stencil_state(&draw.material);
+				draw.color_mask = material_color_mask(&draw.material);
+				draw.outline_stencil_state = material_outline_stencil_state(&draw.material);
+				draw.outline_color_mask = material_outline_color_mask(&draw.material);
+				draw.fur_stencil_state = material_fur_stencil_state(&draw.material);
+				draw.fur_color_mask = material_fur_color_mask(&draw.material);
 				draw.texture_indices = material_texture_indices(&draw.material);
 				draw.cube_texture_indices = material_cube_texture_indices(&draw.material);
 				draw.shading = material.shading;
@@ -10511,8 +10823,16 @@ impl SceneMeshes {
 	}
 
 	#[inline]
-	fn pipeline_for_kind(&self, kind: DrawPipelineKind) -> &wgpu::RenderPipeline {
-		self.pipelines.get(&kind).expect("draw pipeline was requested but not created")
+	fn pipeline_for_key(&self, key: DrawPipelineKey) -> &wgpu::RenderPipeline {
+		self.pipelines.get(&key).expect("draw pipeline was requested but not created")
+	}
+
+	fn set_draw_stencil_reference(pass: &mut wgpu::RenderPass<'_>, draw: &MeshDraw) {
+		pass.set_stencil_reference(draw.stencil_state.reference as u32);
+	}
+
+	fn set_fur_stencil_reference(pass: &mut wgpu::RenderPass<'_>, draw: &MeshDraw) {
+		pass.set_stencil_reference(draw.fur_stencil_state.reference as u32);
 	}
 
 	pub fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -10521,8 +10841,9 @@ impl SceneMeshes {
 		}
 		let mut state = DrawBindState::default();
 		for batch in &self.opaque_batches {
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			for &draw_index in &batch.draw_indices {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, &mut state, draw_index);
 			}
 		}
@@ -10543,21 +10864,27 @@ impl SceneMeshes {
 
 	fn draw_transparent_backpass(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.transparent_backpass_draw_indices.is_empty() {
-			let mut backpass_zwrite = None;
+			let mut backpass_key = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
 				let zwrite = self.draws[draw_index]
 					.material
 					.liltoon_like_runtime()
 					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-				if backpass_zwrite != Some(zwrite) {
-					pass.set_pipeline(if zwrite {
-						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpass)
+				let key = DrawPipelineKey::new(
+					if zwrite {
+						DrawPipelineKind::TransparentToonBackpass
 					} else {
-						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpassNoZWrite)
-					});
-					backpass_zwrite = Some(zwrite);
+						DrawPipelineKind::TransparentToonBackpassNoZWrite
+					},
+					&self.draws[draw_index],
+					&self.opts,
+				);
+				if backpass_key != Some(key) {
+					pass.set_pipeline(self.pipeline_for_key(key));
+					backpass_key = Some(key);
 					*state = DrawBindState::default();
 				}
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10583,13 +10910,14 @@ impl SceneMeshes {
 			if batch_index > end_batch {
 				break;
 			}
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			let len = if batch_index == end_batch {
 				end_pos
 			} else {
 				batch.draw_indices.len()
 			};
 			for &draw_index in batch.draw_indices.iter().take(len) {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10598,9 +10926,10 @@ impl SceneMeshes {
 	fn draw_blended_batches_from(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, start: Option<(usize, usize)>) {
 		let (start_batch, start_pos) = start.unwrap_or((0, 0));
 		for (batch_index, batch) in self.blended_batches.iter().enumerate().skip(start_batch) {
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			let skip = if batch_index == start_batch { start_pos } else { 0 };
 			for &draw_index in batch.draw_indices.iter().skip(skip) {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10608,20 +10937,34 @@ impl SceneMeshes {
 
 	fn draw_fur_blended(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.fur_draw_indices.is_empty() {
-			let (Some(pre_toon), Some(toon)) = (
-				self.pipeline_compute_fur_cards_pre_toon.as_ref(),
-				self.pipeline_compute_fur_cards_toon.as_ref(),
-			) else {
-				return;
-			};
 			*state = DrawBindState::default();
-			pass.set_pipeline(pre_toon);
+			let mut current_key = None;
 			for &draw_index in &self.fur_draw_indices {
+				let key = MaterialRenderStateKey::from_draw_fur(&self.draws[draw_index], &self.opts);
+				if current_key != Some(key) {
+					let Some(pre_toon) = self.pipelines_compute_fur_cards_pre_toon.get(&key) else {
+						continue;
+					};
+					pass.set_pipeline(pre_toon);
+					current_key = Some(key);
+					*state = DrawBindState::default();
+				}
+				Self::set_fur_stencil_reference(pass, &self.draws[draw_index]);
 				let _ = self.draw_compute_fur_cards_inner(pass, state, draw_index);
 			}
 			*state = DrawBindState::default();
-			pass.set_pipeline(toon);
+			let mut current_key = None;
 			for &draw_index in &self.fur_draw_indices {
+				let key = MaterialRenderStateKey::from_draw_fur(&self.draws[draw_index], &self.opts);
+				if current_key != Some(key) {
+					let Some(toon) = self.pipelines_compute_fur_cards_toon.get(&key) else {
+						continue;
+					};
+					pass.set_pipeline(toon);
+					current_key = Some(key);
+					*state = DrawBindState::default();
+				}
+				Self::set_fur_stencil_reference(pass, &self.draws[draw_index]);
 				if self.draw_compute_fur_cards_inner(pass, state, draw_index) {
 					continue;
 				}
@@ -11292,6 +11635,98 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn liltoon_stencil_writer_maps_from_exported_float_params() {
+		let material = UnaMaterialPbr {
+			unavatar_material: Some(serde_json::json!({
+				"floatParams": {
+					"_StencilComp": 8,
+					"_StencilPass": 2,
+					"_StencilReadMask": 255,
+					"_StencilRef": 12,
+					"_StencilWriteMask": 255,
+					"_StencilFail": 0,
+					"_StencilZFail": 0,
+					"_ColorMask": 0
+				}
+			})),
+			..Default::default()
+		};
+
+		let stencil = material_stencil_state(&material);
+
+		assert_eq!(stencil.reference, 12);
+		assert_eq!(unity_compare_function(stencil.compare), wgpu::CompareFunction::Always);
+		assert_eq!(unity_stencil_operation(stencil.pass_op), wgpu::StencilOperation::Replace);
+		assert_eq!(material_color_mask(&material), 0);
+		assert_eq!(
+			color_writes_from_unity_mask(material_color_mask(&material)),
+			wgpu::ColorWrites::empty()
+		);
+	}
+
+	#[test]
+	fn liltoon_stencil_consumer_maps_not_equal_test() {
+		let material = UnaMaterialPbr {
+			unavatar_material: Some(serde_json::json!({
+				"floatParams": {
+					"_StencilComp": 6,
+					"_StencilPass": 0,
+					"_StencilReadMask": 255,
+					"_StencilRef": 12,
+					"_StencilWriteMask": 255,
+					"_StencilFail": 0,
+					"_StencilZFail": 0,
+					"_ColorMask": 15
+				}
+			})),
+			..Default::default()
+		};
+
+		let stencil = material_stencil_state(&material);
+		let wgpu_stencil = stencil.to_wgpu();
+
+		assert_eq!(stencil.reference, 12);
+		assert_eq!(wgpu_stencil.front.compare, wgpu::CompareFunction::NotEqual);
+		assert_eq!(wgpu_stencil.front.pass_op, wgpu::StencilOperation::Keep);
+		assert_eq!(wgpu_stencil.read_mask, 255);
+		assert_eq!(wgpu_stencil.write_mask, 255);
+		assert_eq!(color_writes_from_unity_mask(material_color_mask(&material)), wgpu::ColorWrites::ALL);
+	}
+
+	#[test]
+	fn liltoon_outline_and_fur_stencil_use_dedicated_prefixes() {
+		let material = UnaMaterialPbr {
+			unavatar_material: Some(serde_json::json!({
+				"floatParams": {
+					"_OutlineStencilComp": 6,
+					"_OutlineStencilRef": 1,
+					"_OutlineStencilPass": 0,
+					"_OutlineColorMask": 15,
+					"_FurStencilComp": 3,
+					"_FurStencilRef": 7,
+					"_FurStencilPass": 2,
+					"_FurColorMask": 8
+				}
+			})),
+			..Default::default()
+		};
+
+		let outline = material_outline_stencil_state(&material);
+		let fur = material_fur_stencil_state(&material);
+
+		assert_eq!(outline.reference, 1);
+		assert_eq!(unity_compare_function(outline.compare), wgpu::CompareFunction::NotEqual);
+		assert_eq!(material_outline_color_mask(&material), 15);
+		assert_eq!(fur.reference, 7);
+		assert_eq!(unity_compare_function(fur.compare), wgpu::CompareFunction::Equal);
+		assert_eq!(unity_stencil_operation(fur.pass_op), wgpu::StencilOperation::Replace);
+		assert_eq!(
+			color_writes_from_unity_mask(material_fur_color_mask(&material)),
+			wgpu::ColorWrites::RED
+		);
 	}
 
 	#[test]
@@ -12694,39 +13129,47 @@ mod tests {
 
 	#[test]
 	fn ordered_draw_batches_preserve_transparent_sequence() {
+		fn key(kind: DrawPipelineKind) -> DrawPipelineKey {
+			DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15)
+		}
+
 		let mut batches = Vec::new();
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonZWrite, 1, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 2, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 3, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 4, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 0, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToonZWrite), 1, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendLit), 2, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 3, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 4, 1);
 
 		assert_eq!(batches.len(), 4);
-		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendToon);
+		assert_eq!(batches[0].pipeline, key(DrawPipelineKind::BlendToon));
 		assert_eq!(batches[0].draw_indices, vec![0]);
-		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendToonZWrite);
+		assert_eq!(batches[1].pipeline, key(DrawPipelineKind::BlendToonZWrite));
 		assert_eq!(batches[1].draw_indices, vec![1]);
-		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendLit);
+		assert_eq!(batches[2].pipeline, key(DrawPipelineKind::BlendLit));
 		assert_eq!(batches[2].draw_indices, vec![2]);
-		assert_eq!(batches[3].pipeline, DrawPipelineKind::BlendToon);
+		assert_eq!(batches[3].pipeline, key(DrawPipelineKind::BlendToon));
 		assert_eq!(batches[3].draw_indices, vec![3, 4]);
 	}
 
 	#[test]
 	fn ordered_draw_batches_keep_gem_prepass_adjacent_to_forward() {
+		fn key(kind: DrawPipelineKind) -> DrawPipelineKey {
+			DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15)
+		}
+
 		let mut batches = Vec::new();
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::LilToonGemPre, 1, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonAdd, 1, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 2, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 0, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::LilToonGemPre), 1, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToonAdd), 1, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 2, 4);
 
 		assert_eq!(
 			batches.iter().map(|batch| batch.pipeline).collect::<Vec<_>>(),
 			vec![
-				DrawPipelineKind::BlendToon,
-				DrawPipelineKind::LilToonGemPre,
-				DrawPipelineKind::BlendToonAdd,
-				DrawPipelineKind::BlendToon
+				key(DrawPipelineKind::BlendToon),
+				key(DrawPipelineKind::LilToonGemPre),
+				key(DrawPipelineKind::BlendToonAdd),
+				key(DrawPipelineKind::BlendToon)
 			]
 		);
 		assert_eq!(batches[1].draw_indices, vec![1]);

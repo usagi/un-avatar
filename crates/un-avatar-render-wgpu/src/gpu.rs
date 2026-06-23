@@ -5263,7 +5263,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Clear(1.0),
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_clear_ops()),
 				}),
 				timestamp_writes: None,
 				occlusion_query_set: None,
@@ -5320,7 +5320,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Load,
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_load_ops()),
 				}),
 				timestamp_writes: None,
 				occlusion_query_set: None,
@@ -5352,7 +5352,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Clear(1.0),
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_clear_ops()),
 				}),
 				timestamp_writes: None,
 				occlusion_query_set: None,
@@ -5446,7 +5446,7 @@ impl GpuState {
 							load: wgpu::LoadOp::Load,
 							store: wgpu::StoreOp::Store,
 						}),
-						stencil_ops: None,
+						stencil_ops: Some(stencil_load_ops()),
 					}),
 					timestamp_writes: None,
 					occlusion_query_set: None,
@@ -7450,7 +7450,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Clear(1.0),
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_clear_ops()),
 				}),
 				timestamp_writes,
 				occlusion_query_set: None,
@@ -7507,7 +7507,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Load,
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_load_ops()),
 				}),
 				timestamp_writes: None,
 				occlusion_query_set: None,
@@ -7553,7 +7553,7 @@ impl GpuState {
 						load: wgpu::LoadOp::Clear(1.0),
 						store: wgpu::StoreOp::Store,
 					}),
-					stencil_ops: None,
+					stencil_ops: Some(stencil_clear_ops()),
 				}),
 				timestamp_writes,
 				occlusion_query_set: None,
@@ -7666,7 +7666,7 @@ impl GpuState {
 							load: wgpu::LoadOp::Load,
 							store: wgpu::StoreOp::Store,
 						}),
-						stencil_ops: None,
+						stencil_ops: Some(stencil_load_ops()),
 					}),
 					timestamp_writes: None,
 					occlusion_query_set: None,
@@ -7772,12 +7772,26 @@ fn create_depth(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Textur
 		mip_level_count: 1,
 		sample_count: 1,
 		dimension: wgpu::TextureDimension::D2,
-		format: wgpu::TextureFormat::Depth24Plus,
+		format: wgpu::TextureFormat::Depth24PlusStencil8,
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
 		view_formats: &[],
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	(texture, view)
+}
+
+fn stencil_clear_ops() -> wgpu::Operations<u32> {
+	wgpu::Operations {
+		load: wgpu::LoadOp::Clear(0),
+		store: wgpu::StoreOp::Store,
+	}
+}
+
+fn stencil_load_ops() -> wgpu::Operations<u32> {
+	wgpu::Operations {
+		load: wgpu::LoadOp::Load,
+		store: wgpu::StoreOp::Store,
+	}
 }
 
 #[cfg(windows)]
@@ -7956,7 +7970,7 @@ fn create_sky_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(true),
 			depth_compare: Some(wgpu::CompareFunction::LessEqual),
 			stencil: wgpu::StencilState::default(),
@@ -8012,7 +8026,7 @@ fn create_axes_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(false),
 			depth_compare: Some(wgpu::CompareFunction::LessEqual),
 			stencil: wgpu::StencilState::default(),
@@ -8081,7 +8095,7 @@ fn create_bone_collider_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(false),
 			depth_compare: Some(wgpu::CompareFunction::LessEqual),
 			stencil: wgpu::StencilState::default(),
@@ -8138,7 +8152,7 @@ fn create_contact_shadow_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(false),
 			depth_compare: Some(wgpu::CompareFunction::Always),
 			stencil: wgpu::StencilState::default(),
@@ -8194,7 +8208,7 @@ fn create_startup_progress_overlay_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(false),
 			depth_compare: Some(wgpu::CompareFunction::Always),
 			stencil: wgpu::StencilState::default(),
@@ -8249,7 +8263,7 @@ fn create_wardrobe_billboard_pipeline(
 			..Default::default()
 		},
 		depth_stencil: Some(wgpu::DepthStencilState {
-			format: wgpu::TextureFormat::Depth24Plus,
+			format: wgpu::TextureFormat::Depth24PlusStencil8,
 			depth_write_enabled: Some(false),
 			depth_compare: Some(wgpu::CompareFunction::Always),
 			stencil: wgpu::StencilState::default(),
