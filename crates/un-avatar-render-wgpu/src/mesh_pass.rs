@@ -3734,7 +3734,7 @@ fn build_scene_image_texture_upload(
 	gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
 ) -> Option<SceneImageTextureUpload> {
 	if lazy.texture_max_dimension.is_none() && lazy.texture_compression != TextureCompressionMode::Compat {
-		if let Some(source_upload) = source_texture_upload(im) {
+		if let Some(source_upload) = source_texture_upload(im, source_metadata, lazy.role) {
 			return Some(SceneImageTextureUpload::Source(source_upload));
 		}
 	}
@@ -8707,7 +8707,7 @@ impl SceneMeshes {
 				&& texture_compression != TextureCompressionMode::Compat
 			{
 				let source_upload_start = Instant::now();
-				if let Some(source_upload) = source_texture_upload(im) {
+				if let Some(source_upload) = source_texture_upload(im, source_metadata, role) {
 					image_prepare_timings.source += source_upload_start.elapsed();
 					if image_resident {
 						report(
