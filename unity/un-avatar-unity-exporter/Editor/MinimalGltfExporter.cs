@@ -436,15 +436,11 @@ namespace UNAvatar.UnityExporter
                 var morphTargets = BuildMorphTargets(mesh, vertices.Length);
                 var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>(0);
 
-                var primitives = new List<object>(mesh.subMeshCount);
-                for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
+                var primitiveCapacity = sourceMaterials != null ? Math.Max(mesh.subMeshCount, sourceMaterials.Length) : mesh.subMeshCount;
+                var primitives = new List<object>(primitiveCapacity);
+                int[] firstSubmeshIndices = null;
+                void AddPrimitive(int[] indices, Material material)
                 {
-                    var indices = mesh.GetIndices(submesh);
-                    if (indices == null || indices.Length == 0)
-                    {
-                        continue;
-                    }
-
                     var attributes = new Dictionary<string, object> { ["POSITION"] = positionAccessor };
                     if (normalAccessor >= 0) attributes["NORMAL"] = normalAccessor;
                     if (tangentAccessor >= 0) attributes["TANGENT"] = tangentAccessor;
@@ -461,7 +457,6 @@ namespace UNAvatar.UnityExporter
                         targets.Add(target.ToJson());
                     }
 
-                    var material = sourceMaterials != null && submesh < sourceMaterials.Length ? sourceMaterials[submesh] : null;
                     var primitive = new Dictionary<string, object>
                     {
                         ["attributes"] = attributes,
@@ -474,6 +469,29 @@ namespace UNAvatar.UnityExporter
                         primitive["targets"] = targets;
                     }
                     primitives.Add(primitive);
+                }
+
+                for (var submesh = 0; submesh < mesh.subMeshCount; submesh++)
+                {
+                    var indices = mesh.GetIndices(submesh);
+                    if (indices == null || indices.Length == 0)
+                    {
+                        continue;
+                    }
+                    if (submesh == 0)
+                    {
+                        firstSubmeshIndices = indices;
+                    }
+                    var material = sourceMaterials != null && submesh < sourceMaterials.Length ? sourceMaterials[submesh] : null;
+                    AddPrimitive(indices, material);
+                }
+                if (firstSubmeshIndices != null && sourceMaterials != null)
+                {
+                    // Unity renders material slots beyond subMeshCount as extra passes over the first submesh.
+                    for (var materialSlot = mesh.subMeshCount; materialSlot < sourceMaterials.Length; materialSlot++)
+                    {
+                        AddPrimitive(firstSubmeshIndices, sourceMaterials[materialSlot]);
+                    }
                 }
                 if (primitives.Count == 0)
                 {
