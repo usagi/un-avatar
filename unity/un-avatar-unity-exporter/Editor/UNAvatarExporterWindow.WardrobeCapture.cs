@@ -80,7 +80,7 @@ namespace UNAvatar.UnityExporter
             set.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             capturedWardrobeSets.Add(set);
             selectedWardrobeSetIndex = capturedWardrobeSets.Count - 1;
-            lastSummary = $"Captured wardrobe set `{set.displayName}`: {set.operations.Count} operations, {set.previewImages.Count} previews.";
+            lastSummary = $"Captured wardrobe set `{set.displayName}`: {set.operations.Count} operations, {set.previewImages.Count} previews." + WardrobeAssetGroupWarningSuffix(set);
         }
 
         private void UpdateSelectedWardrobeSetFromScene()
@@ -105,6 +105,12 @@ namespace UNAvatar.UnityExporter
             var existing = capturedWardrobeSets[selectedWardrobeSetIndex];
             var nextName = string.IsNullOrWhiteSpace(wardrobeSetName) ? existing.displayName : wardrobeSetName.Trim();
             var updated = WardrobeSnapshotCapture.Diff(baseSnapshot, current, nextName, avatarRoot);
+            var groupValidation = ValidateWardrobeSetAssetGroupsForUpdate(existing, updated);
+            if (!string.IsNullOrEmpty(groupValidation))
+            {
+                lastSummary = groupValidation;
+                return;
+            }
             updated.id = string.Equals(nextName, existing.displayName, StringComparison.Ordinal)
                 ? WardrobeSnapshotCapture.NormalizeWardrobeSetId(existing.id, nextName)
                 : WardrobeSnapshotCapture.MakeWardrobeSetId(nextName);
@@ -113,7 +119,100 @@ namespace UNAvatar.UnityExporter
             updated.capturedSnapshot = current;
             updated.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
             capturedWardrobeSets[selectedWardrobeSetIndex] = updated;
-            lastSummary = $"Updated wardrobe set `{updated.displayName}`: {updated.operations.Count} operations, {updated.previewImages.Count} previews.";
+            lastSummary = $"Updated wardrobe set `{updated.displayName}`: {updated.operations.Count} operations, {updated.previewImages.Count} previews." + WardrobeAssetGroupWarningSuffix(updated);
+        }
+
+        private void RebuildSelectedWardrobeSetSnapshotFromOperations()
+        {
+            if (avatarRoot == null)
+            {
+                lastSummary = "Avatar Root is missing.";
+                return;
+            }
+            if (!EnsureBaseCanBeApplied(true))
+            {
+                return;
+            }
+            if (selectedWardrobeSetIndex < 0 || selectedWardrobeSetIndex >= capturedWardrobeSets.Count)
+            {
+                lastSummary = "No wardrobe set is selected.";
+                return;
+            }
+
+            var set = capturedWardrobeSets[selectedWardrobeSetIndex];
+            var baseSummary = ApplyBaseStateToRoot(avatarRoot);
+            var setReport = ApplyWardrobeOperationsToRoot(avatarRoot, set.operations);
+            var rebuiltSnapshot = WardrobeSnapshotCapture.Capture(avatarRoot);
+            var rebased = WardrobeSnapshotCapture.Diff(baseSnapshot, rebuiltSnapshot, set.displayName, avatarRoot);
+            var groupValidation = ValidateWardrobeSetAssetGroupsForUpdate(set, rebased);
+            if (!string.IsNullOrEmpty(groupValidation))
+            {
+                lastSummary = groupValidation + "\nScene was rebuilt from existing operations but the set was not overwritten.";
+                return;
+            }
+
+            rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
+            rebased.displayName = set.displayName;
+            rebased.source = set.source + "_snapshot_rebuilt";
+            rebased.capturedSnapshot = rebuiltSnapshot;
+            rebased.previewImages = WardrobePreviewCapture.Capture(avatarRoot, CurrentPreviewCaptureOptions());
+            capturedWardrobeSets[selectedWardrobeSetIndex] = rebased;
+            lastSummary = $"Rebuilt wardrobe set `{rebased.displayName}` from stored operations: {rebased.operations.Count} operations, {rebased.previewImages.Count} previews. Base: {baseSummary} Set: {setReport.ToSummary()}" + WardrobeAssetGroupWarningSuffix(rebased);
+            SceneView.RepaintAll();
+        }
+
+        private static string WardrobeAssetGroupWarningSuffix(WardrobeSetDraft set)
+        {
+            var groups = NormalizedNonBaseAssetGroups(set != null ? set.assetGroups : null);
+            return groups.Count > 1
+                ? "\nWarning: this wardrobe set declares multiple outfit asset groups: " + string.Join(", ", groups) + ". This is valid only for an intentional multi-part outfit."
+                : "";
+        }
+
+        private static string ValidateWardrobeSetAssetGroupsForUpdate(WardrobeSetDraft existing, WardrobeSetDraft updated)
+        {
+            if (updated == null)
+            {
+                return "";
+            }
+            var updatedGroups = NormalizedNonBaseAssetGroups(updated.assetGroups);
+            var existingGroups = NormalizedNonBaseAssetGroups(existing != null ? existing.assetGroups : null);
+            if (updatedGroups.Count > 1 && existingGroups.Count == 0)
+            {
+                return "Wardrobe set update was refused because the captured scene enables multiple outfit asset groups: " + string.Join(", ", updatedGroups) + ". Apply Base, enable only the intended outfit, then update again.";
+            }
+
+            if (existingGroups.Count > 0)
+            {
+                foreach (var group in updatedGroups)
+                {
+                    if (!existingGroups.Contains(group))
+                    {
+                        return "Wardrobe set update was refused because the captured scene adds asset group `" + group + "` to `" + (existing != null ? existing.displayName : updated.displayName) + "`. Existing groups: " + string.Join(", ", existingGroups) + ". Captured groups: " + string.Join(", ", updatedGroups) + ".";
+                    }
+                }
+            }
+            return "";
+        }
+
+        private static List<string> NormalizedNonBaseAssetGroups(IEnumerable<string> groups)
+        {
+            var result = new List<string>();
+            if (groups == null)
+            {
+                return result;
+            }
+            foreach (var group in groups)
+            {
+                var normalized = group != null ? group.Trim() : "";
+                if (string.IsNullOrWhiteSpace(normalized) || result.Contains(normalized))
+                {
+                    continue;
+                }
+                result.Add(normalized);
+            }
+            result.Sort(StringComparer.Ordinal);
+            return result;
         }
 
         private WardrobePreviewCaptureOptions CurrentPreviewCaptureOptions()
@@ -184,6 +283,15 @@ namespace UNAvatar.UnityExporter
                 selectedWardrobeSetIndex = hasImportedBaseOperations ? BaseSelectionIndex : capturedWardrobeSets.Count > 0 ? 0 : -1;
                 wardrobeSetName = capturedWardrobeSets.Count > 0 ? capturedWardrobeSets[capturedWardrobeSets.Count - 1].displayName : wardrobeSetName;
                 lastSummary = $"Imported wardrobe sets from .unavatar: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}. Imported ids: {string.Join(", ", imported.importedSetIds)}.";
+                if (TryAutoAssignAvatarRoot(false))
+                {
+                    BuildSnapshotsFromCurrentSets();
+                    lastSummary = $"Imported wardrobe sets from .unavatar and rebuilt snapshots for the current scene: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}. Imported ids: {string.Join(", ", imported.importedSetIds)}.";
+                }
+                else
+                {
+                    lastSummary += "\nAvatar Root is not selected. Select the avatar root or press Auto, then restore again to rebuild editable snapshots.";
+                }
             }
             catch (Exception ex)
             {

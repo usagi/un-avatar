@@ -473,8 +473,100 @@ namespace UNAvatar.UnityExporter
             {
                 ["baseSet"] = full.TryGetValue("baseSet", out var baseSet) ? baseSet : "base",
                 ["setCount"] = sets.Count,
-                ["sets"] = sets
+                ["sets"] = sets,
+                ["assetGroupDiagnostics"] = BuildWardrobeAssetGroupDiagnostics(sets)
             };
+        }
+
+        private static Dictionary<string, object> BuildWardrobeAssetGroupDiagnostics(List<object> sets)
+        {
+            var multiGroupSets = new List<object>();
+            var cumulativeGroups = new List<object>();
+            var previousSetId = "";
+            var previousGroups = new List<string>();
+            if (sets != null)
+            {
+                foreach (var item in sets)
+                {
+                    if (!(item is Dictionary<string, object> set))
+                    {
+                        continue;
+                    }
+                    var isDefault = set.TryGetValue("default", out var rawDefault) && rawDefault is bool defaultValue && defaultValue;
+                    if (isDefault)
+                    {
+                        continue;
+                    }
+                    var id = set.TryGetValue("id", out var rawId) ? rawId as string ?? "" : "";
+                    var displayName = set.TryGetValue("displayName", out var rawDisplayName) ? rawDisplayName as string ?? "" : "";
+                    var groups = AssetGroupsFromReportSet(set);
+                    if (groups.Count > 1)
+                    {
+                        multiGroupSets.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = id,
+                            ["displayName"] = displayName,
+                            ["assetGroupCount"] = groups.Count,
+                            ["assetGroups"] = StringsToObjectList(groups)
+                        });
+                    }
+                    if (previousGroups.Count > 0 && groups.Count > previousGroups.Count && ContainsAllGroups(groups, previousGroups))
+                    {
+                        cumulativeGroups.Add(new Dictionary<string, object>
+                        {
+                            ["previousSet"] = previousSetId,
+                            ["set"] = id,
+                            ["previousAssetGroups"] = StringsToObjectList(previousGroups),
+                            ["assetGroups"] = StringsToObjectList(groups)
+                        });
+                    }
+                    previousSetId = id;
+                    previousGroups = groups;
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["multiGroupSetCount"] = multiGroupSets.Count,
+                ["multiGroupSets"] = multiGroupSets,
+                ["cumulativeGroupStepCount"] = cumulativeGroups.Count,
+                ["cumulativeGroupSteps"] = cumulativeGroups
+            };
+        }
+
+        private static List<string> AssetGroupsFromReportSet(Dictionary<string, object> set)
+        {
+            var result = new List<string>();
+            if (set == null || !set.TryGetValue("assetGroups", out var rawGroups) || !(rawGroups is List<object> groups))
+            {
+                return result;
+            }
+            foreach (var rawGroup in groups)
+            {
+                var group = rawGroup as string;
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    continue;
+                }
+                group = group.Trim();
+                if (!result.Contains(group))
+                {
+                    result.Add(group);
+                }
+            }
+            result.Sort(StringComparer.Ordinal);
+            return result;
+        }
+
+        private static bool ContainsAllGroups(List<string> groups, List<string> required)
+        {
+            foreach (var group in required)
+            {
+                if (!groups.Contains(group))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static Dictionary<string, object> CountOperationTypes(List<object> operations)

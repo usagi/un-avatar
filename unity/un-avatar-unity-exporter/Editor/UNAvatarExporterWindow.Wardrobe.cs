@@ -70,11 +70,14 @@ namespace UNAvatar.UnityExporter
                         {
                             if (GUILayout.Button("Update", GUILayout.Width(88)))
                             {
-                                if (selectedWardrobeSetIndex != i)
+                                var updateFromCurrentScene = selectedWardrobeSetIndex == i;
+                                selectedWardrobeSetIndex = i;
+                                if (!updateFromCurrentScene)
                                 {
                                     wardrobeSetName = set.displayName;
+                                    RebuildSelectedWardrobeSetSnapshotFromOperations();
+                                    continue;
                                 }
-                                selectedWardrobeSetIndex = i;
                                 wardrobeSetName = string.IsNullOrWhiteSpace(wardrobeSetName) ? set.displayName : wardrobeSetName;
                                 UpdateSelectedWardrobeSetFromScene();
                             }

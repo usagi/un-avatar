@@ -276,29 +276,94 @@ namespace UNAvatar.UnityExporter
 
         private List<WardrobeSetDraft> WardrobeSetsForExport()
         {
-            if (!hasBaseSnapshot)
+            if (!hasBaseSnapshot && !hasImportedBaseOperations)
             {
                 return capturedWardrobeSets;
             }
 
             var sets = new List<WardrobeSetDraft>(capturedWardrobeSets.Count);
-            foreach (var set in capturedWardrobeSets)
+            GameObject normalizeRoot = null;
+            WardrobeSnapshotDraft exportBaseSnapshot = hasBaseSnapshot ? baseSnapshot : null;
+            try
             {
-                if (set.capturedSnapshot == null || set.capturedSnapshot.nodes.Count == 0)
+                if (NeedsWardrobeExportNormalizeRoot())
                 {
-                    sets.Add(CloneWardrobeSetForExport(set));
-                    continue;
+                    normalizeRoot = CreateWardrobePreviewClone("export-normalize");
+                    ApplyWardrobeOperationsToRoot(normalizeRoot, CurrentBaseOperationsForSceneApply());
+                    if (exportBaseSnapshot == null || exportBaseSnapshot.nodes.Count == 0)
+                    {
+                        exportBaseSnapshot = WardrobeSnapshotCapture.Capture(normalizeRoot);
+                    }
                 }
 
-                var rebased = WardrobeSnapshotCapture.Diff(baseSnapshot, set.capturedSnapshot, set.displayName, avatarRoot);
-                rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
-                rebased.displayName = set.displayName;
-                rebased.source = set.source + "_export_rebased";
-                rebased.capturedSnapshot = set.capturedSnapshot;
-                rebased.previewImages = ClonePreviewImages(set.previewImages);
-                sets.Add(rebased);
+                foreach (var set in capturedWardrobeSets)
+                {
+                    sets.Add(NormalizeWardrobeSetForExport(set, exportBaseSnapshot, normalizeRoot));
+                }
+            }
+            finally
+            {
+                if (normalizeRoot != null)
+                {
+                    DestroyImmediate(normalizeRoot);
+                }
             }
             return sets;
+        }
+
+        private bool NeedsWardrobeExportNormalizeRoot()
+        {
+            if (avatarRoot == null)
+            {
+                return false;
+            }
+            if (!hasBaseSnapshot && hasImportedBaseOperations)
+            {
+                return true;
+            }
+            foreach (var set in capturedWardrobeSets)
+            {
+                if (set != null && (set.capturedSnapshot == null || set.capturedSnapshot.nodes.Count == 0))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private WardrobeSetDraft NormalizeWardrobeSetForExport(WardrobeSetDraft set, WardrobeSnapshotDraft exportBaseSnapshot, GameObject normalizeRoot)
+        {
+            if (set == null || exportBaseSnapshot == null || exportBaseSnapshot.nodes.Count == 0)
+            {
+                return CloneWardrobeSetForExport(set);
+            }
+
+            var snapshot = set.capturedSnapshot;
+            if ((snapshot == null || snapshot.nodes.Count == 0) && normalizeRoot != null)
+            {
+                ApplyWardrobeOperationsToRoot(normalizeRoot, CurrentBaseOperationsForSceneApply());
+                ApplyWardrobeOperationsToRoot(normalizeRoot, set.operations);
+                snapshot = WardrobeSnapshotCapture.Capture(normalizeRoot);
+            }
+            if (snapshot == null || snapshot.nodes.Count == 0)
+            {
+                return CloneWardrobeSetForExport(set);
+            }
+
+            var referenceRoot = normalizeRoot != null ? normalizeRoot : avatarRoot;
+            var rebased = WardrobeSnapshotCapture.Diff(exportBaseSnapshot, snapshot, set.displayName, referenceRoot);
+            var groupValidation = ValidateWardrobeSetAssetGroupsForUpdate(set, rebased);
+            if (!string.IsNullOrEmpty(groupValidation))
+            {
+                return CloneWardrobeSetForExport(set);
+            }
+
+            rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
+            rebased.displayName = set.displayName;
+            rebased.source = set.source + "_export_normalized";
+            rebased.capturedSnapshot = snapshot;
+            rebased.previewImages = ClonePreviewImages(set.previewImages);
+            return rebased;
         }
 
         private WardrobeSetDraft CloneWardrobeSetForExport(WardrobeSetDraft source)

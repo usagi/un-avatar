@@ -512,6 +512,11 @@ namespace UNAvatar.UnityExporter
                     descriptorCandidates.Add(go);
                 }
             }
+            var preferredDescriptor = PreferNamedAvatarRootCandidate(descriptorCandidates);
+            if (preferredDescriptor != null)
+            {
+                return preferredDescriptor;
+            }
             if (descriptorCandidates.Count == 1)
             {
                 return descriptorCandidates[0];
@@ -527,12 +532,53 @@ namespace UNAvatar.UnityExporter
                     humanoidCandidates.Add(animator.gameObject);
                 }
             }
+            var preferredHumanoid = PreferNamedAvatarRootCandidate(humanoidCandidates);
+            if (preferredHumanoid != null)
+            {
+                return preferredHumanoid;
+            }
             if (humanoidCandidates.Count == 1)
             {
                 return humanoidCandidates[0];
             }
 
             return null;
+        }
+
+        private static GameObject PreferNamedAvatarRootCandidate(List<GameObject> candidates)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return null;
+            }
+
+            var vrc = new List<GameObject>();
+            foreach (var candidate in candidates)
+            {
+                var name = candidate != null ? candidate.name ?? "" : "";
+                if (name.IndexOf("vrc", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    vrc.Add(candidate);
+                }
+            }
+            if (vrc.Count == 1)
+            {
+                return vrc[0];
+            }
+
+            var filtered = new List<GameObject>();
+            foreach (var candidate in candidates)
+            {
+                var name = candidate != null ? candidate.name ?? "" : "";
+                if (name.IndexOf("vrm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("merge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    name.IndexOf("merged", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    continue;
+                }
+                filtered.Add(candidate);
+            }
+            return filtered.Count == 1 ? filtered[0] : null;
         }
 
         private static List<GameObject> SceneObjects()
