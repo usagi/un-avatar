@@ -206,6 +206,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	window_x: number | null;
 	window_y: number | null;
 	allow_multiple_renderers: boolean;
+	gpu_adapter: string;
 	notes: string | null;
 	group: string;
 	scene_cache_fingerprint: string;
@@ -275,7 +276,19 @@ export type SpoutOutputSetting = Pick<
 	"spout_enabled" | "spout_name" | "spout_width" | "spout_height" | "minimized" | "window_width" | "window_height"
 >;
 
-export type IdentitySetting = Pick<AvatarSetting, "name" | "group" | "icon_path" | "avatar_path" | "allow_multiple_renderers" | "notes">;
+export type IdentitySetting = Pick<
+	AvatarSetting,
+	"name" | "group" | "icon_path" | "avatar_path" | "allow_multiple_renderers" | "gpu_adapter" | "render_backend" | "notes"
+>;
+
+export type GpuAdapterOption = {
+	value: string;
+	label: string;
+	name: string;
+	device_type: string;
+	vendor: number;
+	device: number;
+};
 
 export type WardrobeSetOption = {
 	id: string;

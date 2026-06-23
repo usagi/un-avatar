@@ -3952,6 +3952,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			self.opts.contact_shadow,
 			self.opts.aa,
 			self.opts.render_backend,
+			self.opts.gpu_adapter.as_deref(),
 			self.opts.texture_compression,
 			self.opts.debug.clone(),
 			self.opts.disable_expression_morphs,
@@ -6763,6 +6764,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		mipmap_filter: TextureMipmapFilter,
 		#[arg(long, value_enum, default_value_t = RenderBackend::Vulkan, help = "wgpu backend: vulkan / dx12 / auto。既定はvulkan")]
 		render_backend: RenderBackend,
+		#[arg(
+			long,
+			value_name = "SELECTOR",
+			help = "wgpu adapter selector。auto なら従来通りHighPerformance adapterを自動選択"
+		)]
+		gpu_adapter: Option<String>,
 		#[arg(long, value_enum, default_value_t = BlockCompressionEncoder::Gpu, help = "BCn encoder: gpu / cpu。既定はgpu")]
 		block_compression_encoder: BlockCompressionEncoder,
 		#[arg(
@@ -6968,6 +6975,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		texture_compression: cli.texture_compression,
 		mipmap_filter: cli.mipmap_filter,
 		render_backend: cli.render_backend,
+		gpu_adapter: cli.gpu_adapter.clone().and_then(normalize_gpu_adapter_cli_value),
 		block_compression_encoder: cli.block_compression_encoder,
 		block_compression_cpu_threads: cli.block_compression_cpu_threads.max(1),
 		texture_compression_advanced: TextureCompressionAdvancedOptions::default(),
@@ -7125,6 +7133,15 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 	}
 }
 
+fn normalize_gpu_adapter_cli_value(value: String) -> Option<String> {
+	let value = value.trim().to_string();
+	if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+		None
+	} else {
+		Some(value)
+	}
+}
+
 fn standalone_runtime_bus_key_for_manifest(path: &Path) -> String {
 	format!("un-avatar/runtime/standalone/{:016x}", stable_manifest_path_hash(path))
 }
@@ -7242,6 +7259,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.render_backend != default.render_backend {
 		opts.render_backend = cli.render_backend;
+	}
+	if let Some(gpu_adapter) = cli.gpu_adapter {
+		opts.gpu_adapter = Some(gpu_adapter);
 	}
 	if cli.block_compression_encoder != default.block_compression_encoder {
 		opts.block_compression_encoder = cli.block_compression_encoder;

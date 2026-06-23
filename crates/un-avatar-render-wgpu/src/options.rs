@@ -583,6 +583,8 @@ pub struct AvatarWindowOptions {
 	pub mipmap_filter: TextureMipmapFilter,
 	/// WGPU backend preference. Vulkan is the default for cross-platform behavior and BC7 compute stability.
 	pub render_backend: RenderBackend,
+	/// Optional WGPU adapter selector. `None`/`auto` keeps wgpu's HighPerformance selection.
+	pub gpu_adapter: Option<String>,
 	/// BCn encoder used when textures are uploaded as BC1/BC5/BC7.
 	pub block_compression_encoder: BlockCompressionEncoder,
 	/// CPU BCn worker count. Clamped to the system logical CPU count at use sites.
@@ -765,6 +767,7 @@ impl Default for AvatarWindowOptions {
 			texture_compression: TextureCompressionMode::Balanced,
 			mipmap_filter: TextureMipmapFilter::default(),
 			render_backend: RenderBackend::Vulkan,
+			gpu_adapter: None,
 			block_compression_encoder: BlockCompressionEncoder::Gpu,
 			block_compression_cpu_threads: 4,
 			texture_compression_advanced: TextureCompressionAdvancedOptions::default(),

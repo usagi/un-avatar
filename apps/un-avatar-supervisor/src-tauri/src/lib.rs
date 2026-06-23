@@ -1501,6 +1501,7 @@ struct AvatarSetting {
 	window_height: u32,
 	icon_path: Option<String>,
 	allow_multiple_renderers: bool,
+	gpu_adapter: String,
 	notes: Option<String>,
 	group: String,
 	scene_cache_fingerprint: String,
@@ -1737,6 +1738,7 @@ struct ManifestProfile {
 	created_at: Option<String>,
 	sort_order: Option<u32>,
 	allow_multiple_renderers: Option<bool>,
+	gpu_adapter: Option<String>,
 	notes: Option<String>,
 	group: Option<String>,
 	scene_cache: Option<ManifestProfileSceneCache>,
@@ -1747,6 +1749,16 @@ struct ManifestProfile {
 struct ManifestProfileSceneCache {
 	fingerprint: Option<String>,
 	prewarmed_at: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct GpuAdapterOption {
+	value: String,
+	label: String,
+	name: String,
+	device_type: String,
+	vendor: u32,
+	device: u32,
 }
 
 #[derive(Default, Deserialize)]
@@ -2540,6 +2552,7 @@ pub fn run() {
 			get_native_notification_status,
 			list_app_notifications,
 			list_avatar_settings,
+			list_gpu_adapters,
 			list_diagnostics_exports,
 			list_renderers,
 			launch_renderer,
@@ -3329,6 +3342,7 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 			("created_at".to_string(), toml::Value::String(created_at.clone())),
 			("sort_order".to_string(), toml::Value::Integer(next_avatar_sort_order()? as i64)),
 			("allow_multiple_renderers".to_string(), toml::Value::Boolean(false)),
+			("gpu_adapter".to_string(), toml::Value::String("auto".to_string())),
 			("group".to_string(), toml::Value::String(String::new())),
 			("notes".to_string(), toml::Value::String(String::new())),
 		])),
@@ -6519,6 +6533,7 @@ fn apply_profile_setting_value(manifest: &mut toml::Value, field: &str, value: s
 			"allow_multiple_renderers",
 			toml::Value::Boolean(json_bool(&value, field)?),
 		),
+		"profile.gpu_adapter" => set_profile_value(manifest, "gpu_adapter", toml::Value::String(json_gpu_adapter(&value, field)?)),
 		"profile.notes" => set_profile_value(manifest, "notes", toml::Value::String(json_string(&value, field)?)),
 		"profile.group" => set_profile_value(
 			manifest,
@@ -9270,6 +9285,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		window_height: window.height,
 		icon_path: window.icon_path,
 		allow_multiple_renderers: profile.allow_multiple_renderers.unwrap_or(false),
+		gpu_adapter: normalize_gpu_adapter_profile_value(profile.gpu_adapter.as_deref()),
 		notes: profile.notes,
 		group: profile.group.unwrap_or_default().trim().to_string(),
 		scene_cache_fingerprint,
@@ -9285,6 +9301,70 @@ fn resolve_avatar_setting(setting_id: &str) -> Result<AvatarSetting, String> {
 		}
 	}
 	Err(format!("avatar setting not found: {setting_id}"))
+}
+
+#[tauri::command]
+fn list_gpu_adapters() -> Result<Vec<GpuAdapterOption>, String> {
+	let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+	descriptor.backends = wgpu::Backends::all();
+	let instance = wgpu::Instance::new(descriptor);
+	let mut devices = BTreeMap::<String, GpuAdapterOption>::new();
+	for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {
+		let info = adapter.get_info();
+		if !gpu_adapter_visible_in_profile_ui(&info) {
+			continue;
+		}
+		let device_type = format!("{:?}", info.device_type);
+		let value = gpu_device_selector_from_info(&info);
+		let label = format!(
+			"{} ({}, vendor {:04x}, device {:04x})",
+			info.name, device_type, info.vendor, info.device
+		);
+		devices.entry(value.clone()).or_insert(GpuAdapterOption {
+			value,
+			label,
+			name: info.name,
+			device_type,
+			vendor: info.vendor,
+			device: info.device,
+		});
+	}
+	let mut options = devices.into_values().collect::<Vec<_>>();
+	options.sort_by(|a, b| {
+		gpu_device_type_sort_key(&a.device_type)
+			.cmp(&gpu_device_type_sort_key(&b.device_type))
+			.then_with(|| a.name.cmp(&b.name))
+			.then_with(|| a.value.cmp(&b.value))
+	});
+	Ok(options)
+}
+
+fn normalize_gpu_adapter_profile_value(value: Option<&str>) -> String {
+	let value = value.unwrap_or_default().trim();
+	if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+		"auto".to_string()
+	} else {
+		value.to_string()
+	}
+}
+
+fn gpu_adapter_visible_in_profile_ui(info: &wgpu::AdapterInfo) -> bool {
+	!matches!(info.backend, wgpu::Backend::Noop | wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu)
+		&& !matches!(info.device_type, wgpu::DeviceType::Cpu)
+}
+
+fn gpu_device_type_sort_key(device_type: &str) -> u8 {
+	match device_type {
+		"DiscreteGpu" => 0,
+		"IntegratedGpu" => 1,
+		"VirtualGpu" => 2,
+		"Other" => 3,
+		_ => 4,
+	}
+}
+
+fn gpu_device_selector_from_info(info: &wgpu::AdapterInfo) -> String {
+	format!("gpu:{:04x}:{:04x}:{}", info.vendor, info.device, info.name)
 }
 
 fn resolve_avatar_setting_direct(setting_id: &str) -> Result<AvatarSetting, String> {
@@ -10356,6 +10436,17 @@ fn json_mipmap_filter(value: &serde_json::Value, field: &str) -> Result<String, 
 
 fn json_render_backend(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	json_lowercase_choice(value, field, &["vulkan", "dx12", "auto"])
+}
+
+fn json_gpu_adapter(value: &serde_json::Value, field: &str) -> Result<String, String> {
+	let value = json_string(value, field)?.trim().to_string();
+	if value.is_empty() {
+		return Ok("auto".to_string());
+	}
+	if value.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0') {
+		return Err(format!("{field} must not contain control separators"));
+	}
+	Ok(value)
 }
 
 fn json_block_compression_encoder(value: &serde_json::Value, field: &str) -> Result<String, String> {

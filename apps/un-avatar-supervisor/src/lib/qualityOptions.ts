@@ -84,9 +84,9 @@ export const MIPMAP_FILTER_OPTIONS = [
 ] as const;
 
 export const RENDER_BACKEND_OPTIONS = [
-	["vulkan", "Vulkan (default)"],
-	["dx12", "DX12"],
 	["auto", "Auto"],
+	["vulkan", "Vulkan"],
+	["dx12", "DX12"],
 ] as const;
 
 export const BCN_ENCODER_OPTIONS = [

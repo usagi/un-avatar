@@ -7253,6 +7253,7 @@ dependencies = [
  "image",
  "jiff",
  "midir",
+ "pollster",
  "rfd",
  "rust-i18n",
  "serde",
@@ -7266,6 +7267,7 @@ dependencies = [
  "un-avatar-core",
  "un-avatar-io-vrm",
  "un-i18n",
+ "wgpu",
  "windows 0.61.3",
  "zenoh",
 ]

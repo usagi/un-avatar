@@ -2666,6 +2666,99 @@ fn log_effective_window_backend(requested: RenderBackend, effective: RenderBacke
 	let _ = (requested, effective, transparent);
 }
 
+fn gpu_backend_label(backend: wgpu::Backend) -> &'static str {
+	match backend {
+		wgpu::Backend::Noop => "noop",
+		wgpu::Backend::Vulkan => "vulkan",
+		wgpu::Backend::Metal => "metal",
+		wgpu::Backend::Dx12 => "dx12",
+		wgpu::Backend::Gl => "gl",
+		wgpu::Backend::BrowserWebGpu => "webgpu",
+	}
+}
+
+fn gpu_adapter_selector_from_info(info: &wgpu::AdapterInfo) -> String {
+	format!(
+		"{}:{:04x}:{:04x}:{}",
+		gpu_backend_label(info.backend),
+		info.vendor,
+		info.device,
+		info.name
+	)
+}
+
+fn gpu_device_selector_from_info(info: &wgpu::AdapterInfo) -> String {
+	format!("gpu:{:04x}:{:04x}:{}", info.vendor, info.device, info.name)
+}
+
+fn adapter_matches_selector(info: &wgpu::AdapterInfo, selector: &str) -> bool {
+	let selector = selector.trim();
+	if selector.is_empty() || selector.eq_ignore_ascii_case("auto") {
+		return false;
+	}
+	gpu_device_selector_from_info(info).eq_ignore_ascii_case(selector)
+		|| gpu_adapter_selector_from_info(info).eq_ignore_ascii_case(selector)
+		|| info.name.eq_ignore_ascii_case(selector)
+}
+
+fn request_auto_adapter(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'static>>) -> Result<wgpu::Adapter, String> {
+	pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+		power_preference: wgpu::PowerPreference::HighPerformance,
+		compatible_surface: surface,
+		force_fallback_adapter: false,
+	}))
+	.map_err(|e| format!("request_adapter: {e}"))
+}
+
+fn adapter_surface_compatible(adapter: &wgpu::Adapter, surface: Option<&wgpu::Surface<'static>>) -> bool {
+	let Some(surface) = surface else {
+		return true;
+	};
+	!surface.get_capabilities(adapter).formats.is_empty()
+}
+
+fn resolve_adapter(
+	instance: &wgpu::Instance,
+	backends: wgpu::Backends,
+	surface: Option<&wgpu::Surface<'static>>,
+	gpu_adapter: Option<&str>,
+	context: &str,
+) -> Result<wgpu::Adapter, String> {
+	let selector = gpu_adapter
+		.map(str::trim)
+		.filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("auto"));
+	if let Some(selector) = selector {
+		for adapter in pollster::block_on(instance.enumerate_adapters(backends)) {
+			let info = adapter.get_info();
+			if adapter_matches_selector(&info, selector) {
+				if adapter_surface_compatible(&adapter, surface) {
+					eprintln!(
+						"un-avatar-renderer: {context} selected GPU adapter {} ({:?}, {}, vendor {:04x}, device {:04x})",
+						info.name,
+						info.device_type,
+						gpu_backend_label(info.backend),
+						info.vendor,
+						info.device
+					);
+					return Ok(adapter);
+				}
+				return Err(format!(
+					"{context}: selected GPU '{}' matched {} ({:?}, {}) but is not compatible with this surface",
+					selector,
+					info.name,
+					info.device_type,
+					gpu_backend_label(info.backend)
+				));
+			}
+		}
+		return Err(format!(
+			"{context}: selected GPU '{}' is not available for the requested render backend",
+			selector
+		));
+	}
+	request_auto_adapter(instance, surface)
+}
+
 pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions) -> SceneMeshLoadOpts {
 	let mut mesh_diagnostics = opts.mesh_diagnostics.clone();
 	mesh_diagnostics.force_simple_basecolor |= opts.simple_basecolor_only;
@@ -2732,14 +2825,11 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 	let requested_render_backend = opts.render_backend;
 	let render_backend = effective_window_backend(requested_render_backend, opts.transparent);
 	log_effective_window_backend(requested_render_backend, render_backend, opts.transparent);
-	let instance = wgpu::Instance::new(instance_descriptor_for_backend(render_backend));
+	let instance_descriptor = instance_descriptor_for_backend(render_backend);
+	let backends = instance_descriptor.backends;
+	let instance = wgpu::Instance::new(instance_descriptor);
 	let adapter_started = Instant::now();
-	let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-		power_preference: wgpu::PowerPreference::HighPerformance,
-		compatible_surface: None,
-		force_fallback_adapter: false,
-	}))
-	.map_err(|e| format!("{label}: request_adapter: {e}"))?;
+	let adapter = resolve_adapter(&instance, backends, None, opts.gpu_adapter.as_deref(), label).map_err(|e| format!("{label}: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
 	let adapter_features = adapter.features();
@@ -2832,14 +2922,12 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 	let requested_render_backend = opts.render_backend;
 	let render_backend = effective_window_backend(requested_render_backend, opts.transparent);
 	log_effective_window_backend(requested_render_backend, render_backend, opts.transparent);
-	let instance = wgpu::Instance::new(instance_descriptor_for_backend(render_backend));
+	let instance_descriptor = instance_descriptor_for_backend(render_backend);
+	let backends = instance_descriptor.backends;
+	let instance = wgpu::Instance::new(instance_descriptor);
 	let adapter_started = Instant::now();
-	let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-		power_preference: wgpu::PowerPreference::HighPerformance,
-		compatible_surface: None,
-		force_fallback_adapter: false,
-	}))
-	.map_err(|e| format!("shader prewarm: request_adapter: {e}"))?;
+	let adapter = resolve_adapter(&instance, backends, None, opts.gpu_adapter.as_deref(), "shader prewarm")
+		.map_err(|e| format!("shader prewarm: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
 	let adapter_features = adapter.features();
@@ -4011,6 +4099,7 @@ impl GpuState {
 		contact_shadow: ContactShadowOptions,
 		aa: AaMode,
 		render_backend: RenderBackend,
+		gpu_adapter: Option<&str>,
 		texture_compression: TextureCompressionMode,
 		debug: WindowDebugOptions,
 		disable_expression_morphs: bool,
@@ -4043,16 +4132,12 @@ impl GpuState {
 		let render_backend = effective_window_backend(requested_render_backend, transparent);
 		log_effective_window_backend(requested_render_backend, render_backend, transparent);
 		let instance_descriptor = instance_descriptor_for_backend(render_backend);
+		let backends = instance_descriptor.backends;
 		let instance = wgpu::Instance::new(instance_descriptor);
 
 		let surface: wgpu::Surface<'static> = instance.create_surface(window).map_err(|e| format!("create_surface: {e}"))?;
 
-		let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-			power_preference: wgpu::PowerPreference::HighPerformance,
-			compatible_surface: Some(&surface),
-			force_fallback_adapter: false,
-		}))
-		.map_err(|e| format!("request_adapter: {e}"))?;
+		let adapter = resolve_adapter(&instance, backends, Some(&surface), gpu_adapter, "window startup")?;
 
 		let adapter_limits = adapter.limits();
 		let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);

@@ -4067,6 +4067,14 @@ dd {
 	grid-column: 1 / -1;
 }
 
+.identity-gpu-row {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.8fr);
+	gap: 12px;
+	min-width: 0;
+}
+
 .notes-field {
 	grid-column: 1 / -1;
 }

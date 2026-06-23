@@ -194,6 +194,7 @@ pub(crate) struct AnimatorBindingManifest {
 pub(crate) struct ProfileManifest {
 	pub id: Option<String>,
 	pub display_name: Option<String>,
+	pub gpu_adapter: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -788,6 +789,14 @@ fn animator_binding_from_manifest(binding: AnimatorBindingManifest) -> Option<An
 
 impl ProfileManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(gpu_adapter) = self.gpu_adapter.as_deref() {
+			let gpu_adapter = gpu_adapter.trim();
+			if gpu_adapter.is_empty() || gpu_adapter.eq_ignore_ascii_case("auto") {
+				opts.gpu_adapter = None;
+			} else {
+				opts.gpu_adapter = Some(gpu_adapter.to_string());
+			}
+		}
 		let profile_key = self.id.or(self.display_name);
 		if let Some(profile_key) = profile_key {
 			if let Some(app_id) = renderer_profile_app_user_model_id(&profile_key) {
@@ -1481,6 +1490,7 @@ billboard_y_offset_mm = 35.0
 
 [profile]
 id = "mizuki-copy"
+gpu_adapter = "gpu:8086:a780:Intel UHD Graphics"
 
 [render_quality]
 aa = "fxaa"
@@ -1670,6 +1680,7 @@ constraint_iterations = 6
 			opts.app_user_model_id.as_deref(),
 			Some("UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy")
 		);
+		assert_eq!(opts.gpu_adapter.as_deref(), Some("gpu:8086:a780:Intel UHD Graphics"));
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
 		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));

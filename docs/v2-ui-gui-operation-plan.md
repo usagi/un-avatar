@@ -69,6 +69,7 @@ The profile stage presents shortcut, launcher, cache warmup, launch, and live re
 - `Check Now` launches the selected profile from Supervisor so the user can verify appearance, physics, output, and motion before turning it into daily operation.
 - `Live Renderer` appears when the selected profile already has a Renderer. It exposes inspect, activate, and screenshot actions without making the user search the Renderers tab first.
 - These actions are not developer utilities. They are the main reason to open Supervisor after a profile exists: prepare, verify, and hand the profile to direct Renderer / tray operation.
+- GPU device selection and render backend selection are launch/runtime-device policy, not visual quality controls. Keep them together in Profile Settings, with `Auto` first in both selectors. The GPU selector is a physical GPU choice (`Auto`, then GPU device names); do not expose duplicate DX12/Vulkan/GL raw adapter entries in the normal UI.
 - Running Renderer controls in Supervisor expose wardrobe switching in Controls and expression / Animator actions in the UNAnimator tab. They may group or scroll candidates, but must not impose an app-side fixed candidate cap. If an action is available from the normalized runtime status and is not a known non-user runtime control such as VRCFT metadata, the user should be able to invoke it without switching surfaces.
 
 ### `.unavatar` Asset Review
@@ -94,6 +95,7 @@ The `.unavatar` rights / asset review dialog is part of profile creation, not a 
 - Screen / viewer effects may be profile controls: Silhouette Outline, Bloom, SSAO, contact shadow, color grading, background, capture / output policy.
 - Runtime status labels should describe user-visible operation. Prefer `Live` / `No response` style wording over transport-centric `connected` / `disconnected` in Supervisor UI and diagnostics previews.
 - Runtime UI should show only operations that can work now, or clearly mark unavailable backend support. Do not advertise headless output until the renderer architecture supports it.
+- Explicit GPU device selection must be fail-fast for incompatible render backends. If a selected physical GPU has no adapter for the chosen backend or cannot present to the surface, the Renderer startup should fail with a clear Supervisor-visible error instead of silently falling back to another GPU or backend. Only `Auto` owns automatic adapter selection.
 - `VRC Menu` is not a primary user-facing surface name in v2. Source VRC menu metadata is an import path into normalized UNAnimator actions; raw VRC menu diagnostics may remain in diagnostics until the exporter/runtime normalization is complete.
 
 ## Implementation Order

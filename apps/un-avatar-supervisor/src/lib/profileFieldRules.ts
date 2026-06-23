@@ -11,6 +11,7 @@ export function isLaunchTimeRendererField(field: string): boolean {
 		field.startsWith("wardrobe.transition.") ||
 		field === "icon_path" ||
 		field === "profile.display_name" ||
+		field === "profile.gpu_adapter" ||
 		field.startsWith("render_quality.") ||
 		field.startsWith("effects.") ||
 		field.startsWith("environment.") ||
@@ -51,6 +52,8 @@ export function profileFieldLabel(field: string, translate: (key: string) => str
 	if (field === "icon_path") return translate("profiles.fields.icon");
 	if (field === "profile.display_name") return translate("profiles.fields.name");
 	if (field === "profile.group") return translate("profiles.fields.group");
+	if (field === "profile.gpu_adapter") return translate("profiles.fields.gpu_adapter");
+	if (field === "render_quality.render_backend") return translate("profiles.fields.render_backend");
 	if (field.startsWith("render_quality.")) return translate("profiles.fields.render_quality");
 	if (field.startsWith("effects.")) return translate("profiles.fields.avatar_effects");
 	if (field.startsWith("expression.")) return translate("profiles.fields.expression_settings");
