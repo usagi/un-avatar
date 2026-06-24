@@ -5974,7 +5974,7 @@ fn collect_modular_avatar_reference_indices(
 fn collect_merge_armature_retain_nodes(
 	scene: &UnaSceneSnapshot,
 	components: &[Value],
-	unavatar: &UnaUnavatarExtension,
+	_unavatar: &UnaUnavatarExtension,
 	node_ids: &BTreeMap<String, usize>,
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
@@ -5992,16 +5992,6 @@ fn collect_merge_armature_retain_nodes(
 	}
 	for component in components {
 		collect_modular_avatar_reference_indices(component, node_ids, registry_paths, paths, normalized_paths, &mut retained_nodes);
-	}
-	if let Some(dynamics) = unavatar.source.get("dynamics").and_then(Value::as_array) {
-		for item in dynamics {
-			if let Some(root) = unavatar_dynamics_root_index(item, node_ids, registry_paths, paths, normalized_paths) {
-				retained_nodes.insert(root);
-			}
-			for index in unavatar_dynamics_node_index_set(item.get("ignoreTransforms"), node_ids, registry_paths, paths, normalized_paths) {
-				retained_nodes.insert(index);
-			}
-		}
 	}
 	retained_nodes.retain(|index| *index < scene.nodes.len());
 	retained_nodes
@@ -18131,6 +18121,115 @@ mod tests {
 		assert_eq!(scene.nodes[1].children, Vec::<usize>::new());
 		assert_eq!(scene.nodes[2].children, vec![3]);
 		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_reparents_auxiliary_bone_ancestors_with_dynamics_roots() {
+		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
+		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+		let hat_root_local = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
+		let ribbon_root_local = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_target_head".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: target_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Head".to_string()),
+					source_node_id: Some("node_source_head".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: source_world.to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("HatRoot".to_string()),
+					source_node_id: Some("node_hat_root".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: hat_root_local.to_cols_array(),
+					children: vec![4],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("RibbonRoot".to_string()),
+					source_node_id: Some("node_ribbon_root".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: ribbon_root_local.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source_head", "path": "Outfit/Armature/Head"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source_head", "path": "Outfit/Armature/Head"},
+							"targetBone": {"nodeId": "node_target_head", "path": "Armature/Head"}
+						}]
+					}]
+				},
+				"dynamics": [{
+					"id": "physbone:hat-ribbon",
+					"source": "vrc_physbone",
+					"enabled": true,
+					"roots": [{"nodeId": "node_ribbon_root", "path": "Outfit/Armature/Head/HatRoot/RibbonRoot"}],
+					"ignoreTransforms": [{"nodeId": "node_ribbon_root", "path": "Outfit/Armature/Head/HatRoot/RibbonRoot"}]
+				}]
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+
+		assert_eq!(scene.nodes[1].children, vec![3]);
+		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
+		assert_eq!(scene.nodes[3].children, vec![4]);
+		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+		assert_eq!(after[4].transform_point3(Vec3::ZERO), before[4].transform_point3(Vec3::ZERO));
 	}
 
 	#[test]
