@@ -2936,7 +2936,12 @@ fn simple_1d_blend_child_weight(children: &[Value], index: usize, value: f32) ->
 	}
 }
 
-fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> BTreeMap<String, f32> {
+fn dynamics_interaction_parameter_values_with_context(
+	doc: &UnaDocument,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	node_paths_by_index: &[Option<String>],
+	center_peak_angle_parameters: &BTreeSet<String>,
+) -> BTreeMap<String, f32> {
 	let mut values = BTreeMap::new();
 	let runtime = doc.runtime_model();
 	let Some(scene) = runtime.scene() else {
@@ -2944,9 +2949,7 @@ fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&
 	};
 	let dynamics = runtime.dynamics();
 	let active_dynamics_source_ids = active_dynamics_source_ids_for_scene(doc, scene);
-	let node_paths_by_index = scene_node_paths_by_index(scene);
 	let world = crate::scene_transform::scene_world_matrices(scene);
-	let center_peak_angle_parameters = animator_center_peak_angle_parameters(doc);
 	for group in dynamics.dynamics_groups() {
 		if !group.effective_enabled || !dynamics_source_id_resident(group.source_id, active_dynamics_source_ids.as_ref()) {
 			continue;
@@ -2975,6 +2978,17 @@ fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&
 		values.insert(format!("{}_Squish", interaction.parameter), 0.0);
 	}
 	values
+}
+
+#[cfg(test)]
+fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> BTreeMap<String, f32> {
+	let runtime = doc.runtime_model();
+	let Some(scene) = runtime.scene() else {
+		return BTreeMap::new();
+	};
+	let node_paths_by_index = scene_node_paths_by_index(scene);
+	let center_peak_angle_parameters = animator_center_peak_angle_parameters(doc);
+	dynamics_interaction_parameter_values_with_context(doc, rest_nodes, &node_paths_by_index, &center_peak_angle_parameters)
 }
 
 fn animator_center_peak_angle_parameters(doc: &UnaDocument) -> BTreeSet<String> {
@@ -6494,6 +6508,8 @@ pub(crate) struct GpuState {
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
 	motion_runtime_parameter_names: BTreeSet<String>,
+	runtime_scene_node_paths_by_index: Vec<Option<String>>,
+	runtime_center_peak_angle_parameters: BTreeSet<String>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
 	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
@@ -6871,6 +6887,8 @@ impl GpuState {
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
 			motion_runtime_parameter_names: BTreeSet::new(),
+			runtime_scene_node_paths_by_index: Vec::new(),
+			runtime_center_peak_angle_parameters: BTreeSet::new(),
 			motion_retarget_runtime: None,
 			rest_nodes: None,
 			primary_motion_source,
@@ -8603,11 +8621,7 @@ impl GpuState {
 			return Ok(BTreeMap::new());
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		let (emissions, changed) = doc.runtime_model_mut().apply_contact_parameter_emissions_with_changes();
-		if emissions.is_empty() {
-			return Ok(BTreeMap::new());
-		}
-		Ok(changed)
+		Ok(doc.runtime_model_mut().apply_contact_parameter_values_with_changes())
 	}
 
 	pub(crate) fn apply_dynamics_interaction_parameter_emissions(&mut self) -> Result<BTreeMap<String, f32>, String> {
@@ -8615,7 +8629,12 @@ impl GpuState {
 			return Ok(BTreeMap::new());
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		let values = dynamics_interaction_parameter_values(&doc, self.rest_nodes.as_deref().map(Vec::as_slice));
+		let values = dynamics_interaction_parameter_values_with_context(
+			&doc,
+			self.rest_nodes.as_deref().map(Vec::as_slice),
+			&self.runtime_scene_node_paths_by_index,
+			&self.runtime_center_peak_angle_parameters,
+		);
 		if values.is_empty() {
 			return Ok(BTreeMap::new());
 		}
@@ -9252,14 +9271,21 @@ impl GpuState {
 			.runtime_model_mut()
 			.apply_runtime_parameter_initial_values();
 		log_slow_gpu_scene_context_step("attach initial runtime parameters", apply_initial_values_start.elapsed());
-		let motion_runtime_parameter_names = {
+		let (motion_runtime_parameter_names, runtime_scene_node_paths_by_index, runtime_center_peak_angle_parameters) = {
 			let doc = prepared.document.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			motion_signal_runtime_parameter_names(&doc)
+			let runtime_model = doc.runtime_model();
+			(
+				motion_signal_runtime_parameter_names(&doc),
+				runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default(),
+				animator_center_peak_angle_parameters(&doc),
+			)
 		};
 		let state_assign_start = Instant::now();
 		self.document = Some(prepared.document);
 		self.invalidate_applied_document_state();
 		self.motion_runtime_parameter_names = motion_runtime_parameter_names;
+		self.runtime_scene_node_paths_by_index = runtime_scene_node_paths_by_index;
+		self.runtime_center_peak_angle_parameters = runtime_center_peak_angle_parameters;
 		self.scene_meshes = prepared.scene_meshes;
 		self.texture_summary = prepared.texture_summary;
 		self.dynamics_sim = prepared.dynamics_sim;

@@ -2901,6 +2901,44 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 			})
 			.collect()
 	}
+
+	pub fn contact_parameter_values(self) -> BTreeMap<String, f32> {
+		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
+		let world = scene_world_matrices(self.scene);
+		let senders = contacts
+			.iter()
+			.filter_map(|sender| {
+				if sender.kind != UnaDynamicsContactKind::Sender {
+					return None;
+				}
+				Some((sender, contact_probe_shape(sender, &world)?))
+			})
+			.collect::<Vec<_>>();
+		let mut values = BTreeMap::<String, f32>::new();
+		for receiver in &contacts {
+			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
+				continue;
+			}
+			let mut emitted = false;
+			if let Some(receiver_shape) = contact_probe_shape(receiver, &world) {
+				for (sender, sender_shape) in &senders {
+					if !contact_tags_match(&receiver.collision_tags, &sender.collision_tags) {
+						continue;
+					}
+					let (overlap, _, _, _, _, _) = contact_probe_overlap(receiver_shape, *sender_shape);
+					if overlap {
+						emitted = true;
+						break;
+					}
+				}
+			}
+			let value = values.entry(receiver.parameter.clone()).or_insert(0.0);
+			if emitted {
+				*value = 1.0;
+			}
+		}
+		values
+	}
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3591,6 +3629,29 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			runtime_state.parameter_values.insert(name, value);
 		}
 		(emissions, changed)
+	}
+
+	pub fn apply_contact_parameter_values_with_changes(&mut self) -> BTreeMap<String, f32> {
+		if !self.document.runtime_model().contact_parameter_emission_enabled() {
+			return BTreeMap::new();
+		}
+		let Some(values) = self
+			.document
+			.runtime_model()
+			.scene_profile_dynamics()
+			.map(UnaRuntimeSceneDynamics::contact_parameter_values)
+		else {
+			return BTreeMap::new();
+		};
+		let runtime_state = self.runtime_state_mut();
+		let mut changed = BTreeMap::new();
+		for (name, value) in values {
+			if runtime_state.parameter_values.get(&name).copied() != Some(value) {
+				changed.insert(name.clone(), value);
+			}
+			runtime_state.parameter_values.insert(name, value);
+		}
+		changed
 	}
 
 	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
@@ -8966,6 +9027,15 @@ mod tests {
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("MenuToggle"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
+
+		document.runtime_state.parameter_values.clear();
+		let changed = document.runtime_model_mut().apply_contact_parameter_values_with_changes();
+		assert_eq!(
+			changed,
+			BTreeMap::from([("ContactFar".to_string(), 0.0), ("ContactHand".to_string(), 1.0)])
+		);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
 	}
 
 	#[test]
@@ -9031,6 +9101,11 @@ mod tests {
 		assert_eq!(separated.len(), 1);
 		assert!(!separated[0].emitted);
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&0.0));
+
+		document.scene.as_mut().unwrap().nodes[2].transform[12] = 0.08;
+		let changed = document.runtime_model_mut().apply_contact_parameter_values_with_changes();
+		assert_eq!(changed, BTreeMap::from([("ContactHand".to_string(), 1.0)]));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
 	}
 
 	#[test]
