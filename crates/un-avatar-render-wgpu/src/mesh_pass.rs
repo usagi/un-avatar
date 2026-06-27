@@ -2455,30 +2455,31 @@ fn residency_unload_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 	residency_transition_indices(old, next, true, false)
 }
 
-fn texture_residency_for_scene(
+fn texture_residency_for_active_draws<'a>(
 	scene: &UnaSceneSnapshot,
 	asset_residency: &SceneAssetResidencySets,
-	active_image_texture_indices: &[usize],
-	active_cube_texture_indices: &[usize],
+	active_draw_texture_indices: impl IntoIterator<Item = (&'a [usize], &'a [usize])>,
 ) -> (Vec<bool>, Vec<bool>) {
-	let image_residency = scene
-		.images
-		.iter()
-		.enumerate()
-		.map(|(image_index, _)| {
-			asset_residency.image_resident(image_index) && active_image_texture_indices.binary_search(&image_index).is_ok()
-		})
-		.collect();
-	let cube_residency = scene
-		.images
-		.iter()
-		.enumerate()
-		.map(|(image_index, _)| {
-			asset_residency.image_resident(image_index)
-				&& active_cube_texture_indices.binary_search(&image_index).is_ok()
+	let mut image_residency = vec![false; scene.images.len()];
+	let mut cube_residency = vec![false; scene.images.len()];
+	for (image_indices, cube_indices) in active_draw_texture_indices {
+		for &image_index in image_indices {
+			if asset_residency.image_resident(image_index) {
+				if let Some(resident) = image_residency.get_mut(image_index) {
+					*resident = true;
+				}
+			}
+		}
+		for &image_index in cube_indices {
+			if asset_residency.image_resident(image_index)
 				&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
-		})
-		.collect();
+			{
+				if let Some(resident) = cube_residency.get_mut(image_index) {
+					*resident = true;
+				}
+			}
+		}
+	}
 	(image_residency, cube_residency)
 }
 
@@ -11689,23 +11690,6 @@ impl SceneMeshes {
 		promoted
 	}
 
-	fn active_draw_texture_indices(&self) -> (Vec<usize>, Vec<usize>) {
-		let mut image_indices = Vec::new();
-		let mut cube_indices = Vec::new();
-		for &draw_index in &self.active_draw_indices {
-			let Some(draw) = self.draws.get(draw_index) else {
-				continue;
-			};
-			for &texture_index in draw.texture_indices.iter() {
-				push_unique_index(&mut image_indices, texture_index);
-			}
-			for &texture_index in draw.cube_texture_indices.iter() {
-				push_unique_index(&mut cube_indices, texture_index);
-			}
-		}
-		(sorted_unique_indices(image_indices), sorted_unique_indices(cube_indices))
-	}
-
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
 		self.refresh_asset_group_residency_with_changes(scene, active_asset_groups)
 			.active_draw_state_changed_count
@@ -11733,9 +11717,13 @@ impl SceneMeshes {
 				refresh.active_draw_state_changed_count += 1;
 			}
 		}
-		let (active_image_texture_indices, active_cube_texture_indices) = self.active_draw_texture_indices();
+		let active_draw_texture_indices = self.active_draw_indices.iter().filter_map(|&draw_index| {
+			self.draws
+				.get(draw_index)
+				.map(|draw| (draw.texture_indices.as_ref(), draw.cube_texture_indices.as_ref()))
+		});
 		let (next_image_texture_residency, next_cube_texture_residency) =
-			texture_residency_for_scene(scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
+			texture_residency_for_active_draws(scene, &asset_residency, active_draw_texture_indices);
 		refresh.image_texture_load_indices = residency_load_indices(&self.image_texture_residency, &next_image_texture_residency);
 		refresh.image_texture_unload_indices = residency_unload_indices(&self.image_texture_residency, &next_image_texture_residency);
 		refresh.cube_texture_load_indices = residency_load_indices(&self.cube_texture_residency, &next_cube_texture_residency);
@@ -12674,14 +12662,13 @@ mod tests {
 			..Default::default()
 		};
 		let asset_residency = SceneAssetResidencySets::for_scene(&scene, &["outfit:coat".to_string()]);
-		let active_image_texture_indices = vec![0];
-		let active_cube_texture_indices = vec![2];
+		let active_image_texture_indices = [0usize];
+		let active_cube_texture_indices = [2usize];
 
-		let (image_residency, cube_residency) = texture_residency_for_scene(
+		let (image_residency, cube_residency) = texture_residency_for_active_draws(
 			&scene,
 			&asset_residency,
-			&active_image_texture_indices,
-			&active_cube_texture_indices,
+			std::iter::once((active_image_texture_indices.as_slice(), active_cube_texture_indices.as_slice())),
 		);
 
 		assert_eq!(image_residency, vec![true, false, false]);
