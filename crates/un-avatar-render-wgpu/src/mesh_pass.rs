@@ -2132,7 +2132,9 @@ impl SceneMeshIndexUpload {
 		if indices.iter().any(|&index| index > u16::MAX as u32) {
 			return Self::U32(indices.into_boxed_slice());
 		}
-		Self::U16(indices.into_iter().map(|index| index as u16).collect::<Vec<_>>().into_boxed_slice())
+		let mut compact = Vec::with_capacity(indices.len());
+		compact.extend(indices.into_iter().map(|index| index as u16));
+		Self::U16(compact.into_boxed_slice())
 	}
 
 	fn len(&self) -> usize {
