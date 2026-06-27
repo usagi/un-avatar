@@ -402,45 +402,48 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 	}
 }
 
+#[cfg(test)]
 pub(crate) fn push_out_of_world_colliders(point: Vec3, colliders: &[WorldBoneColliderPrimitive], extra_radius: f32) -> Vec3 {
 	let mut p = point;
 	let extra = extra_radius.max(0.0);
 	for collider in colliders {
-		match *collider {
-			WorldBoneColliderPrimitive::Sphere {
-				center,
-				radius,
-				inside_bounds,
-			} => {
-				p = if inside_bounds {
-					push_into_sphere(p, center, radius - extra)
-				} else {
-					push_out_sphere(p, center, radius + extra)
-				};
-			}
-			WorldBoneColliderPrimitive::Capsule {
-				a,
-				b,
-				radius,
-				inside_bounds,
-			} => {
-				let center = closest_on_segment(p, a, b);
-				p = if inside_bounds {
-					push_into_sphere(p, center, radius - extra)
-				} else {
-					push_out_sphere(p, center, radius + extra)
-				};
-			}
-			WorldBoneColliderPrimitive::Plane {
-				point,
-				normal,
-				inside_bounds,
-			} => {
-				p = push_plane_half_space(p, point, normal, extra, inside_bounds);
-			}
-		}
+		p = push_out_of_world_collider(p, *collider, extra);
 	}
 	p
+}
+
+pub(crate) fn push_out_of_world_collider(point: Vec3, collider: WorldBoneColliderPrimitive, extra_radius: f32) -> Vec3 {
+	match collider {
+		WorldBoneColliderPrimitive::Sphere {
+			center,
+			radius,
+			inside_bounds,
+		} => {
+			if inside_bounds {
+				push_into_sphere(point, center, radius - extra_radius)
+			} else {
+				push_out_sphere(point, center, radius + extra_radius)
+			}
+		}
+		WorldBoneColliderPrimitive::Capsule {
+			a,
+			b,
+			radius,
+			inside_bounds,
+		} => {
+			let center = closest_on_segment(point, a, b);
+			if inside_bounds {
+				push_into_sphere(point, center, radius - extra_radius)
+			} else {
+				push_out_sphere(point, center, radius + extra_radius)
+			}
+		}
+		WorldBoneColliderPrimitive::Plane {
+			point: plane_point,
+			normal,
+			inside_bounds,
+		} => push_plane_half_space(point, plane_point, normal, extra_radius, inside_bounds),
+	}
 }
 
 #[cfg(test)]

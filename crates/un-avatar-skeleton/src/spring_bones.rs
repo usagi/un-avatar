@@ -51,7 +51,7 @@ use un_avatar_core::{
 };
 
 use crate::bone_colliders::{
-	push_out_of_world_colliders, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive,
+	push_out_of_world_collider, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -1199,7 +1199,6 @@ struct GroupRuntime {
 	invalid_match_regexes: Vec<String>,
 	joints: Vec<JointRuntime>,
 	params: ResolvedDynamicsPhysicsParams,
-	collider_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1214,6 +1213,88 @@ struct RuntimeSurfaceConstraint {
 	b: RuntimeJointHandle,
 	rest_distance: f32,
 	stiffness: f32,
+}
+
+#[derive(Clone, Copy)]
+enum WorldColliderSelection<'a> {
+	All {
+		colliders: &'a [WorldBoneColliderPrimitive],
+		paths: &'a [String],
+	},
+	Selected {
+		colliders: &'a [WorldBoneColliderPrimitive],
+		paths: &'a [String],
+		indices: &'a [usize],
+	},
+}
+
+impl<'a> WorldColliderSelection<'a> {
+	fn new(colliders: &'a [WorldBoneColliderPrimitive], paths: &'a [String], all_global: bool, selected_indices: &'a [usize]) -> Self {
+		if all_global {
+			Self::All { colliders, paths }
+		} else {
+			Self::Selected {
+				colliders,
+				paths,
+				indices: selected_indices,
+			}
+		}
+	}
+
+	fn is_empty(self) -> bool {
+		match self {
+			Self::All { colliders, .. } => colliders.is_empty(),
+			Self::Selected { indices, .. } => indices.is_empty(),
+		}
+	}
+
+	fn push_out(self, mut point: Vec3, extra_radius: f32) -> Vec3 {
+		let extra_radius = extra_radius.max(0.0);
+		match self {
+			Self::All { colliders, .. } => {
+				for &collider in colliders {
+					point = push_out_of_world_collider(point, collider, extra_radius);
+				}
+			}
+			Self::Selected { colliders, indices, .. } => {
+				for &index in indices {
+					if let Some(&collider) = colliders.get(index) {
+						point = push_out_of_world_collider(point, collider, extra_radius);
+					}
+				}
+			}
+		}
+		point
+	}
+
+	fn projected_path(self, mut point: Vec3, extra_radius: f32) -> Option<&'a str> {
+		let extra_radius = extra_radius.max(0.0);
+		let mut projected_path = None;
+		match self {
+			Self::All { colliders, paths } => {
+				for (index, &collider) in colliders.iter().enumerate() {
+					let before = point;
+					point = push_out_of_world_collider(point, collider, extra_radius);
+					if (point - before).length_squared() > 1e-12 {
+						projected_path = paths.get(index).map(String::as_str).filter(|path| !path.is_empty());
+					}
+				}
+			}
+			Self::Selected { colliders, paths, indices } => {
+				for &index in indices {
+					let Some(&collider) = colliders.get(index) else {
+						continue;
+					};
+					let before = point;
+					point = push_out_of_world_collider(point, collider, extra_radius);
+					if (point - before).length_squared() > 1e-12 {
+						projected_path = paths.get(index).map(String::as_str).filter(|path| !path.is_empty());
+					}
+				}
+			}
+		}
+		projected_path
+	}
 }
 
 impl GroupRuntime {
@@ -1278,9 +1359,8 @@ pub struct DynamicsSimulator {
 	bone_collider_source_ids: Vec<String>,
 	all_bone_colliders_global: bool,
 	bone_collider_paths: Vec<String>,
+	runtime_collider_indices: Vec<Vec<usize>>,
 	world_colliders: Vec<WorldBoneColliderPrimitive>,
-	group_world_colliders: Vec<WorldBoneColliderPrimitive>,
-	group_world_collider_paths: Vec<String>,
 	post_surface_projections: Vec<(RuntimeJointHandle, Vec3)>,
 	physics: DynamicsPhysicsConfig,
 	tuning_warnings: Vec<String>,
@@ -1605,9 +1685,8 @@ impl Default for DynamicsSimulator {
 			bone_collider_source_ids: Vec::new(),
 			all_bone_colliders_global: true,
 			bone_collider_paths: Vec::new(),
+			runtime_collider_indices: Vec::new(),
 			world_colliders: Vec::new(),
-			group_world_colliders: Vec::new(),
-			group_world_collider_paths: Vec::new(),
 			post_surface_projections: Vec::new(),
 			physics: DynamicsPhysicsConfig::default().normalized(),
 			tuning_warnings: Vec::new(),
@@ -2497,7 +2576,6 @@ impl DynamicsSimulator {
 					invalid_match_regexes,
 					joints,
 					params,
-					collider_indices: Vec::new(),
 				}));
 			}
 		}
@@ -2522,9 +2600,14 @@ impl DynamicsSimulator {
 			}
 			let bone_colliders = resolved_bone_colliders;
 			let all_bone_colliders_global = bone_collider_source_ids.iter().all(String::is_empty);
+			let mut runtime_collider_indices = vec![Vec::new(); runtimes.len()];
 			if !all_bone_colliders_global {
-				for runtime in runtimes.iter_mut().flatten() {
-					runtime.collider_indices = selected_group_collider_indices(&bone_collider_source_ids, &runtime.source_id);
+				for (runtime_index, runtime) in runtimes.iter_mut().enumerate() {
+					let Some(runtime) = runtime.as_mut() else {
+						continue;
+					};
+					let indices = selected_group_collider_indices(&bone_collider_source_ids, &runtime.source_id);
+					runtime_collider_indices[runtime_index] = indices;
 				}
 			}
 			Some(Self {
@@ -2540,9 +2623,8 @@ impl DynamicsSimulator {
 				bone_collider_source_ids,
 				all_bone_colliders_global,
 				bone_collider_paths,
+				runtime_collider_indices,
 				world_colliders: Vec::new(),
-				group_world_colliders: Vec::new(),
-				group_world_collider_paths: Vec::new(),
 				post_surface_projections: Vec::new(),
 				physics,
 				tuning_warnings,
@@ -2618,14 +2700,12 @@ impl DynamicsSimulator {
 				if !g.effective_enabled {
 					continue;
 				}
-				let group_world_colliders = select_group_world_colliders(
+				let group_world_colliders = WorldColliderSelection::new(
 					&self.world_colliders,
 					&self.bone_collider_paths,
-					(!self.all_bone_colliders_global).then_some(rt.collider_indices.as_slice()),
-					&mut self.group_world_colliders,
-					profile.is_some().then_some(&mut self.group_world_collider_paths),
+					self.all_bone_colliders_global,
+					self.runtime_collider_indices.get(runtime_index).map(Vec::as_slice).unwrap_or(&[]),
 				);
-				let (group_world_colliders, group_world_collider_paths) = group_world_colliders;
 				for _ in 0..substeps {
 					step_group_solver::<false>(
 						scene,
@@ -2633,7 +2713,6 @@ impl DynamicsSimulator {
 						rt,
 						&mut self.world_scratch,
 						group_world_colliders,
-						group_world_collider_paths,
 						sub_dt,
 						profile.as_deref_mut(),
 					);
@@ -2655,14 +2734,12 @@ impl DynamicsSimulator {
 				if !g.effective_enabled {
 					continue;
 				}
-				let group_world_colliders = select_group_world_colliders(
+				let group_world_colliders = WorldColliderSelection::new(
 					&self.world_colliders,
 					&self.bone_collider_paths,
-					(!self.all_bone_colliders_global).then_some(rt.collider_indices.as_slice()),
-					&mut self.group_world_colliders,
-					profile.is_some().then_some(&mut self.group_world_collider_paths),
+					self.all_bone_colliders_global,
+					self.runtime_collider_indices.get(runtime_index).map(Vec::as_slice).unwrap_or(&[]),
 				);
-				let (group_world_colliders, group_world_collider_paths) = group_world_colliders;
 				for _ in 0..substeps {
 					rt.reset_xpbd_lambdas();
 					step_group_solver::<true>(
@@ -2671,7 +2748,6 @@ impl DynamicsSimulator {
 						rt,
 						&mut self.world_scratch,
 						group_world_colliders,
-						group_world_collider_paths,
 						sub_dt,
 						profile.as_deref_mut(),
 					);
@@ -2688,8 +2764,8 @@ impl DynamicsSimulator {
 					&mut self.world_scratch,
 					&self.world_colliders,
 					&self.bone_collider_paths,
+					&self.runtime_collider_indices,
 					self.all_bone_colliders_global,
-					&mut self.group_world_colliders,
 					&mut self.post_surface_projections,
 				);
 				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
@@ -3437,8 +3513,7 @@ fn step_group_solver<const XPBD: bool>(
 	group: UnaDynamicsGroup<'_>,
 	rt: &mut GroupRuntime,
 	world_scratch: &mut [Mat4],
-	bone_colliders: &[WorldBoneColliderPrimitive],
-	bone_collider_paths: &[String],
+	bone_colliders: WorldColliderSelection<'_>,
 	dt: f32,
 	mut profile: Option<&mut DynamicsStepProfile>,
 ) {
@@ -3552,8 +3627,7 @@ fn step_group_solver<const XPBD: bool>(
 				collision_projected |= (next_tail - before_collision).length_squared() > 1e-12;
 				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
 					if (next_tail - before_collision).length_squared() > 1e-12 {
-						let collider_path =
-							projected_collider_path(before_collision, bone_colliders, bone_collider_paths, joint.hit_radius);
+						let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
 						profile.record_collision_projection(group.source_id, collider_path);
 					}
 					profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
@@ -3578,7 +3652,7 @@ fn step_group_solver<const XPBD: bool>(
 			collision_projected |= (next_tail - before_collision).length_squared() > 1e-12;
 			if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
 				if (next_tail - before_collision).length_squared() > 1e-12 {
-					let collider_path = projected_collider_path(before_collision, bone_colliders, bone_collider_paths, joint.hit_radius);
+					let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
 					profile.record_collision_projection(group.source_id, collider_path);
 				}
 				profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
@@ -3680,8 +3754,8 @@ fn apply_post_surface_collider_constraints(
 	world_scratch: &mut [Mat4],
 	world_colliders: &[WorldBoneColliderPrimitive],
 	bone_collider_paths: &[String],
+	runtime_collider_indices: &[Vec<usize>],
 	all_bone_colliders_global: bool,
-	group_world_colliders: &mut Vec<WorldBoneColliderPrimitive>,
 	projection_scratch: &mut Vec<(RuntimeJointHandle, Vec3)>,
 ) {
 	if world_colliders.is_empty() {
@@ -3698,12 +3772,11 @@ fn apply_post_surface_collider_constraints(
 			if !group.effective_enabled {
 				continue;
 			}
-			let (selected_colliders, _) = select_group_world_colliders(
+			let selected_colliders = WorldColliderSelection::new(
 				world_colliders,
 				bone_collider_paths,
-				(!all_bone_colliders_global).then_some(runtime.collider_indices.as_slice()),
-				group_world_colliders,
-				None,
+				all_bone_colliders_global,
+				runtime_collider_indices.get(runtime_index).map(Vec::as_slice).unwrap_or(&[]),
 			);
 			if selected_colliders.is_empty() {
 				continue;
@@ -3733,7 +3806,7 @@ fn apply_post_surface_collider_constraints(
 	}
 }
 
-fn post_surface_collider_tail(joint: &JointRuntime, world_scratch: &[Mat4], bone_colliders: &[WorldBoneColliderPrimitive]) -> Option<Vec3> {
+fn post_surface_collider_tail(joint: &JointRuntime, world_scratch: &[Mat4], bone_colliders: WorldColliderSelection<'_>) -> Option<Vec3> {
 	if joint.parent_node >= world_scratch.len() || joint.child_node >= world_scratch.len() {
 		return None;
 	}
@@ -4063,13 +4136,13 @@ fn constrain_tail_colliders(
 	child_pos: Vec3,
 	fallback_axis: Vec3,
 	length: f32,
-	bone_colliders: &[WorldBoneColliderPrimitive],
+	bone_colliders: WorldColliderSelection<'_>,
 	hit_radius: f32,
 ) -> Vec3 {
 	if bone_colliders.is_empty() {
 		return next_tail;
 	}
-	let pushed = push_out_of_world_colliders(next_tail, bone_colliders, hit_radius.max(0.0));
+	let pushed = bone_colliders.push_out(next_tail, hit_radius);
 	if (pushed - next_tail).length_squared() <= 1e-12 {
 		return next_tail;
 	}
@@ -4079,24 +4152,6 @@ fn constrain_tail_colliders(
 	} else {
 		child_pos + fallback_axis * length
 	}
-}
-
-fn projected_collider_path<'a>(
-	next_tail: Vec3,
-	bone_colliders: &[WorldBoneColliderPrimitive],
-	bone_collider_paths: &'a [String],
-	hit_radius: f32,
-) -> Option<&'a str> {
-	let mut point = next_tail;
-	let mut projected_path = None;
-	for (index, collider) in bone_colliders.iter().enumerate() {
-		let before = point;
-		point = push_out_of_world_colliders(point, std::slice::from_ref(collider), hit_radius.max(0.0));
-		if (point - before).length_squared() > 1e-12 {
-			projected_path = bone_collider_paths.get(index).map(String::as_str).filter(|path| !path.is_empty());
-		}
-	}
-	projected_path
 }
 
 fn selected_group_collider_indices(source_ids: &[String], group_source_id: &str) -> Vec<usize> {
@@ -4109,6 +4164,7 @@ fn selected_group_collider_indices(source_ids: &[String], group_source_id: &str)
 		.collect()
 }
 
+#[cfg(test)]
 fn select_group_world_colliders<'a>(
 	world_colliders: &'a [WorldBoneColliderPrimitive],
 	collider_paths: &'a [String],
@@ -4673,7 +4729,7 @@ mod tests {
 		];
 		let paths = vec!["near_origin".to_string(), "right_col".to_string()];
 
-		let path = projected_collider_path(Vec3::new(0.9, 0.0, 0.0), &colliders, &paths, 0.0);
+		let path = WorldColliderSelection::new(&colliders, &paths, true, &[]).projected_path(Vec3::new(0.9, 0.0, 0.0), 0.0);
 
 		assert_eq!(path, Some("right_col"));
 	}
@@ -4750,7 +4806,6 @@ mod tests {
 				drag_scale: 1.0,
 				constraint_iterations: 1,
 			},
-			collider_indices: vec![0, 1],
 		})];
 		sim.active_runtime_indices = vec![0];
 
@@ -4773,7 +4828,14 @@ mod tests {
 		}];
 		let child_pos = Vec3::new(-1.0, 0.0, 0.0);
 		let next_tail = Vec3::new(1.0, 0.0, 0.0);
-		let pushed = constrain_tail_colliders(next_tail, child_pos, Vec3::X, 2.0, &colliders, 0.0);
+		let pushed = constrain_tail_colliders(
+			next_tail,
+			child_pos,
+			Vec3::X,
+			2.0,
+			WorldColliderSelection::new(&colliders, &[], true, &[]),
+			0.0,
+		);
 		assert_eq!(pushed, next_tail);
 	}
 
