@@ -3735,7 +3735,9 @@ fn apply_surface_constraints(
 	if constraints.is_empty() {
 		return;
 	}
-	write_world_from_snapshot(scene, world_scratch);
+	if world_scratch.len() != scene.nodes.len().max(1) {
+		write_world_from_snapshot(scene, world_scratch);
+	}
 	for _ in 0..1 {
 		for constraint in constraints {
 			let Some(a_tail) = runtime_joint_tail(runtimes, constraint.a) else {
