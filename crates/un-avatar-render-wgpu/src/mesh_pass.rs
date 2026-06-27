@@ -1329,6 +1329,15 @@ struct ExpandedPrimitive {
 }
 
 #[derive(Clone)]
+struct ExpandedPrimitivePayload {
+	verts: Vec<Vertex>,
+	morph_pos: Vec<Vec<[f32; 3]>>,
+	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_source_indices: Vec<usize>,
+	default_morph_weights: Vec<f32>,
+}
+
+#[derive(Clone)]
 struct ExpandedMorphPayload {
 	morph_pos: Box<[Vec<[f32; 3]>]>,
 	morph_nrm: Option<Box<[Vec<[f32; 3]>]>>,
@@ -3515,6 +3524,27 @@ fn expanded_morph_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedMor
 		morph_nrm: exp.morph_nrm.clone().map(Vec::into_boxed_slice),
 		morph_source_indices: exp.morph_source_indices.clone().into_boxed_slice(),
 		default_morph_weights: exp.default_morph_weights.clone().into_boxed_slice(),
+	}
+}
+
+fn expanded_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedPrimitivePayload {
+	ExpandedPrimitivePayload {
+		verts: exp.verts.clone(),
+		morph_pos: exp.morph_pos.clone(),
+		morph_nrm: exp.morph_nrm.clone(),
+		morph_source_indices: exp.morph_source_indices.clone(),
+		default_morph_weights: exp.default_morph_weights.clone(),
+	}
+}
+
+fn expanded_primitive_from_cached_payload(payload: ExpandedPrimitivePayload, indices: Vec<u32>) -> ExpandedPrimitive {
+	ExpandedPrimitive {
+		verts: payload.verts,
+		indices,
+		morph_pos: payload.morph_pos,
+		morph_nrm: payload.morph_nrm,
+		morph_source_indices: payload.morph_source_indices,
+		default_morph_weights: payload.default_morph_weights,
 	}
 }
 
@@ -10237,7 +10267,7 @@ impl SceneMeshes {
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		let mut empty_morph_resources: Option<MorphGpuResources> = None;
-		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitive> = BTreeMap::new();
+		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitivePayload> = BTreeMap::new();
 		let mut expanded_morph_payload_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedMorphPayload> = BTreeMap::new();
 		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
 		let mut morph_delta_scratch: Vec<[f32; 4]> = Vec::new();
@@ -10294,11 +10324,9 @@ impl SceneMeshes {
 					dynamic_morph_targets: dynamic_morph_target_list,
 				});
 				let exp = if let Some(cache_key) = expanded_cache_key.as_ref() {
-					if let Some(exp) = expanded_primitive_cache.get(cache_key).cloned() {
+					if let Some(payload) = expanded_primitive_cache.get(cache_key).cloned() {
 						mesh_prepare_summary.expanded_cache_hits += 1;
-						let mut exp = exp;
-						exp.indices = primitive_indices(buf);
-						Some(exp)
+						Some(expanded_primitive_from_cached_payload(payload, primitive_indices(buf)))
 					} else {
 						mesh_prepare_summary.expanded_cache_misses += 1;
 						let exp = expand_primitive_with_cached_morph(
@@ -10309,7 +10337,7 @@ impl SceneMeshes {
 								.and_then(|cache_key| expanded_morph_payload_cache.get(cache_key)),
 						);
 						if let Some(exp) = &exp {
-							expanded_primitive_cache.insert(cache_key.clone(), exp.clone());
+							expanded_primitive_cache.insert(cache_key.clone(), expanded_payload_from_primitive(exp));
 							if let Some(morph_cache_key) = morph_delta_cache_key.as_ref() {
 								expanded_morph_payload_cache
 									.entry(morph_cache_key.clone())
