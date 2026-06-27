@@ -9087,15 +9087,17 @@ impl GpuState {
 		let doc_arc = Arc::clone(doc_arc);
 		let (parameter_values, action_ids, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-			let parameter_values = doc.runtime_model().runtime_parameter_values().clone();
-			if parameter_values == self.last_runtime_parameter_action_values {
+			let runtime = doc.runtime_model();
+			let parameter_values = runtime.runtime_parameter_values();
+			if parameter_values == &self.last_runtime_parameter_action_values {
 				return Ok(Vec::new());
 			}
-			let Some(actions) = doc.runtime_model().runtime_actions() else {
+			let parameter_values = parameter_values.clone();
+			let Some(actions) = runtime.runtime_actions() else {
 				self.last_runtime_parameter_action_values = parameter_values;
 				return Ok(Vec::new());
 			};
-			let action_ids = runtime_action_ids_for_parameter_values(actions, doc.runtime_model().scene(), &parameter_values);
+			let action_ids = runtime_action_ids_for_parameter_values(actions, runtime.scene(), &parameter_values);
 			(parameter_values, action_ids, actions.clone())
 		};
 		self.last_runtime_parameter_action_values = parameter_values;
