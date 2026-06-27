@@ -1336,12 +1336,14 @@ fn build_runtime_surface_constraints(
 }
 
 fn surface_constraint_runtime_indices(constraints: &[RuntimeSurfaceConstraint]) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::with_capacity(constraints.len().saturating_mul(2));
 	for constraint in constraints {
-		indices.insert(constraint.a.runtime_index);
-		indices.insert(constraint.b.runtime_index);
+		indices.push(constraint.a.runtime_index);
+		indices.push(constraint.b.runtime_index);
 	}
-	indices.into_iter().collect()
+	indices.sort_unstable();
+	indices.dedup();
+	indices
 }
 
 /// 全グループのランタイム状態。
