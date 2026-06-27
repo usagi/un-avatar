@@ -9024,7 +9024,9 @@ impl GpuState {
 			drop(doc);
 			self.apply_restored_runtime_action_effects(&restored);
 		}
-		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
+		if last_activation.is_none() {
+			self.last_runtime_parameter_action_values = self.runtime_parameter_values();
+		}
 		Ok(last_activation)
 	}
 
@@ -9327,18 +9329,21 @@ impl GpuState {
 				}
 			}
 		}
-		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		doc.runtime_model_mut().set_last_action_id(Some(resolved_action_id.clone()));
-		{
-			let mut runtime = doc.runtime_model_mut();
-			for (name, value) in &parameter_values {
-				runtime.set_runtime_parameter_value(name.clone(), *value);
+		let (restored, runtime_parameter_snapshot) = {
+			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+			doc.runtime_model_mut().set_last_action_id(Some(resolved_action_id.clone()));
+			{
+				let mut runtime = doc.runtime_model_mut();
+				for (name, value) in &parameter_values {
+					runtime.set_runtime_parameter_value(name.clone(), *value);
+				}
 			}
-		}
-		let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
-		drop(doc);
+			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
+			let runtime_parameter_snapshot = doc.runtime_model().runtime_parameter_values().clone();
+			(restored, runtime_parameter_snapshot)
+		};
 		self.apply_restored_runtime_action_effects(&restored);
-		self.last_runtime_parameter_action_values = self.runtime_parameter_values();
+		self.last_runtime_parameter_action_values = runtime_parameter_snapshot;
 		Ok(RuntimeActionActivation {
 			action_id: resolved_action_id,
 			active_wardrobe_set,
