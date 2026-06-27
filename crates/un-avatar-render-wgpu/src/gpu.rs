@@ -931,6 +931,30 @@ fn runtime_action_ids_for_parameter_values(
 	ids
 }
 
+fn runtime_action_parameter_values(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	parameter_values: &BTreeMap<String, f32>,
+) -> BTreeMap<String, f32> {
+	let mut values = BTreeMap::new();
+	for action in &actions.actions {
+		for condition in &action.conditions {
+			if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
+				if let Some(value) = parameter_values.get(name).copied() {
+					values.insert(name.to_string(), value);
+				}
+			}
+		}
+		for trigger in &action.triggers {
+			if let UnaRuntimeActionTrigger::ParameterValue { name, .. } = trigger {
+				if let Some(value) = parameter_values.get(name).copied() {
+					values.insert(name.clone(), value);
+				}
+			}
+		}
+	}
+	values
+}
+
 fn runtime_actions_reference_parameter(actions: &un_avatar_core::UnaRuntimeActionSet, name: &str) -> bool {
 	actions.actions.iter().any(|action| {
 		action
@@ -8566,6 +8590,20 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	fn runtime_action_parameter_values_snapshot(&self) -> BTreeMap<String, f32> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return BTreeMap::new();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return BTreeMap::new();
+		};
+		let runtime = doc.runtime_model();
+		runtime
+			.runtime_actions()
+			.map(|actions| runtime_action_parameter_values(actions, runtime.runtime_parameter_values()))
+			.unwrap_or_default()
+	}
+
 	pub(crate) fn dump_runtime_state(&self, path: &std::path::Path) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not loaded".to_string());
@@ -9175,7 +9213,7 @@ impl GpuState {
 			self.apply_restored_runtime_action_effects(&restored);
 		}
 		if last_activation.is_none() {
-			self.last_runtime_parameter_action_values = self.runtime_parameter_values();
+			self.last_runtime_parameter_action_values = self.runtime_action_parameter_values_snapshot();
 		}
 		Ok(last_activation)
 	}
@@ -9236,15 +9274,14 @@ impl GpuState {
 		let (parameter_values, action_ids, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
-			let parameter_values = runtime.runtime_parameter_values();
-			if parameter_values == &self.last_runtime_parameter_action_values {
-				return Ok(Vec::new());
-			}
-			let parameter_values = parameter_values.clone();
 			let Some(actions) = runtime.runtime_actions() else {
-				self.last_runtime_parameter_action_values = parameter_values;
+				self.last_runtime_parameter_action_values = BTreeMap::new();
 				return Ok(Vec::new());
 			};
+			let parameter_values = runtime_action_parameter_values(actions, runtime.runtime_parameter_values());
+			if parameter_values == self.last_runtime_parameter_action_values {
+				return Ok(Vec::new());
+			}
 			let action_ids = runtime_action_ids_for_parameter_values(actions, runtime.scene(), &parameter_values);
 			let actions_snapshot = actions.restore_effect_snapshot();
 			(parameter_values, action_ids, actions_snapshot)
@@ -9515,7 +9552,11 @@ impl GpuState {
 				}
 			}
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
-			let runtime_parameter_snapshot = doc.runtime_model().runtime_parameter_values().clone();
+			let runtime = doc.runtime_model();
+			let runtime_parameter_snapshot = runtime
+				.runtime_actions()
+				.map(|actions| runtime_action_parameter_values(actions, runtime.runtime_parameter_values()))
+				.unwrap_or_default();
 			(restored, runtime_parameter_snapshot)
 		};
 		self.apply_restored_runtime_action_effects(&restored);
@@ -11467,12 +11508,13 @@ mod tests {
 		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference, sorted_unique_index_union, transparent_alpha_mode,
-		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
-		wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation,
-		RuntimeDynamicsColliderPathCandidateSummary, RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus,
-		RuntimeDynamicsColliderStatus, RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame,
-		SurfaceConstraintNode, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
+		runtime_action_parameter_values, runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference,
+		sorted_unique_index_union, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind,
+		RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
+		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
+		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
+		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
@@ -12747,6 +12789,31 @@ mod tests {
 		assert_eq!(
 			runtime_action_ids_for_parameter_values(&actions, None, &parameter_values),
 			vec!["shared:glow".to_string(), "hat:on".to_string()]
+		);
+	}
+
+	#[test]
+	fn runtime_action_parameter_values_filters_unreferenced_parameters() {
+		let actions = un_avatar_core::UnaRuntimeActionSet {
+			actions: vec![un_avatar_core::UnaRuntimeAction {
+				id: "hat:on".to_string(),
+				triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+					name: "Hat".to_string(),
+					value: 1.0,
+				}],
+				conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+					parameter_name: Some("Glow".to_string()),
+					parameter_value: Some(1.0),
+					..Default::default()
+				}],
+				..Default::default()
+			}],
+		};
+		let parameter_values = BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0), ("Unrelated".to_string(), 0.5)]);
+
+		assert_eq!(
+			runtime_action_parameter_values(&actions, &parameter_values),
+			BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0)])
 		);
 	}
 
