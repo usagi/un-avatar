@@ -3384,8 +3384,32 @@ impl<'a> UnaRuntimeModel<'a> {
 			.collect()
 	}
 
+	pub fn runtime_action_restore_baseline_candidates(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
+		self.runtime_action_restore_readiness(action)
+			.into_iter()
+			.filter_map(|readiness| {
+				if !readiness.restore_target {
+					return None;
+				}
+				let baseline_value = readiness.current_value?;
+				Some(UnaEvaluationRestoreBaselineCandidate {
+					owner_key: readiness.owner_key,
+					action_id: readiness.action_id,
+					effect_kind: readiness.effect_kind,
+					target_kind: readiness.target_kind,
+					target_key: readiness.target_key,
+					baseline_value,
+				})
+			})
+			.collect()
+	}
+
 	pub fn runtime_action_set_restore_baseline_capture_plan(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		restore_baseline_capture_plan_from_candidates(self.runtime_action_set_restore_baseline_candidates(actions))
+	}
+
+	pub fn runtime_action_restore_baseline_capture_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		restore_baseline_capture_plan_from_candidates(self.runtime_action_restore_baseline_candidates(action))
 	}
 
 	pub fn runtime_action_restore_apply_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreApplyEntry> {
@@ -3672,6 +3696,18 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			.document
 			.runtime_model()
 			.runtime_action_set_restore_baseline_capture_plan(actions);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	pub fn capture_runtime_action_restore_baseline(&mut self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		let plan = self.document.runtime_model().runtime_action_restore_baseline_capture_plan(action);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	fn capture_runtime_action_restore_baseline_plan(
+		&mut self,
+		plan: Vec<UnaEvaluationRestoreBaselineEntry>,
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		let runtime_state = self.runtime_state_mut();
 		for entry in &plan {
 			let owner_entries = runtime_state.restore_baselines.entry(entry.owner_key.clone()).or_default();

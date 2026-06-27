@@ -9450,10 +9450,7 @@ impl GpuState {
 		};
 		{
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-			doc.runtime_model_mut()
-				.capture_runtime_action_restore_baselines(&un_avatar_core::UnaRuntimeActionSet {
-					actions: vec![action.clone()],
-				});
+			doc.runtime_model_mut().capture_runtime_action_restore_baseline(&action);
 		}
 		let mut active_wardrobe_set = None;
 		for effect in action.effects {
