@@ -3389,13 +3389,15 @@ fn expand_primitive_with_cached_morph(
 
 	let num_morph = buf.morph_targets.len();
 	let cached_morph_payload = cached_morph_payload.filter(|payload| payload.morph_source_indices.iter().all(|&index| index < num_morph));
-	let morph_source_indices: Vec<usize> = cached_morph_payload.map_or_else(
+	let morph_source_indices: Cow<'_, [usize]> = cached_morph_payload.map_or_else(
 		|| {
-			dynamic_morph_targets
-				.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
-				.unwrap_or_else(|| (0..num_morph).collect())
+			Cow::Owned(
+				dynamic_morph_targets
+					.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
+					.unwrap_or_else(|| (0..num_morph).collect()),
+			)
 		},
-		|payload| payload.morph_source_indices.to_vec(),
+		|payload| Cow::Borrowed(payload.morph_source_indices.as_ref()),
 	);
 	let vertex_capacity = positions.len();
 	let mut morph_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() {
@@ -3403,11 +3405,12 @@ fn expand_primitive_with_cached_morph(
 	} else {
 		None
 	};
-	let has_morph_normals = morph_source_indices.iter().any(|&target_index| {
-		buf.morph_targets
-			.get(target_index)
-			.is_some_and(|target| target.normal_deltas.is_some())
-	});
+	let has_morph_normals = cached_morph_payload.is_none()
+		&& morph_source_indices.iter().any(|&target_index| {
+			buf.morph_targets
+				.get(target_index)
+				.is_some_and(|target| target.normal_deltas.is_some())
+		});
 	let mut morph_nrm_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() && has_morph_normals {
 		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
 	} else {
@@ -3510,7 +3513,7 @@ fn expand_primitive_with_cached_morph(
 			.map(|&target_index| default_morph_weight_for(buf, target_index))
 			.collect::<Vec<_>>()
 			.into_boxed_slice(),
-		morph_source_indices: morph_source_indices.into_boxed_slice(),
+		morph_source_indices: morph_source_indices.into_owned().into_boxed_slice(),
 	});
 
 	Some(ExpandedPrimitive {
