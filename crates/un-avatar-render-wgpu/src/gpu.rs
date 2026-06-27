@@ -10504,7 +10504,9 @@ impl GpuState {
 			frame.present();
 			submit_present_ms += t_present0.elapsed().as_secs_f32() * 1000.0;
 		}
-		self.last_dynamics_profile = dynamics_profile.clone();
+		if self.dynamics_profile_enabled {
+			self.last_dynamics_profile = dynamics_profile.clone();
+		}
 
 		Some(FrameTimings {
 			wall_since_last_ms: wall_since_last.as_secs_f32() * 1000.0,

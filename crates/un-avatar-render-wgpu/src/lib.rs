@@ -2980,15 +2980,23 @@ impl AvatarApp {
 			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
 			status.dynamics_collision_projection_count = timings.dynamics_profile.collision_projection_count;
-			status.dynamics_collision_projection_source_ids =
-				runtime_sample_strings(&timings.dynamics_profile.collision_projection_source_ids, 16);
-			status.dynamics_collision_projection_collider_paths =
-				runtime_sample_strings(&timings.dynamics_profile.collision_projection_collider_paths, 16);
-			status.dynamics_collision_projection_collider_path_counts =
-				runtime_count_entries(&timings.dynamics_profile.collision_projection_collider_path_counts, 16);
-			let top_collider_path = runtime_top_count_entry(&timings.dynamics_profile.collision_projection_collider_path_counts);
-			status.dynamics_collision_projection_top_collider_path = top_collider_path.as_ref().map(|entry| entry.key.clone());
-			status.dynamics_collision_projection_top_collider_count = top_collider_path.map(|entry| entry.count);
+			if timings.dynamics_profile.collision_projection_count == 0 {
+				status.dynamics_collision_projection_source_ids.clear();
+				status.dynamics_collision_projection_collider_paths.clear();
+				status.dynamics_collision_projection_collider_path_counts.clear();
+				status.dynamics_collision_projection_top_collider_path = None;
+				status.dynamics_collision_projection_top_collider_count = None;
+			} else {
+				status.dynamics_collision_projection_source_ids =
+					runtime_sample_strings(&timings.dynamics_profile.collision_projection_source_ids, 16);
+				status.dynamics_collision_projection_collider_paths =
+					runtime_sample_strings(&timings.dynamics_profile.collision_projection_collider_paths, 16);
+				status.dynamics_collision_projection_collider_path_counts =
+					runtime_count_entries(&timings.dynamics_profile.collision_projection_collider_path_counts, 16);
+				let top_collider_path = runtime_top_count_entry(&timings.dynamics_profile.collision_projection_collider_path_counts);
+				status.dynamics_collision_projection_top_collider_path = top_collider_path.as_ref().map(|entry| entry.key.clone());
+				status.dynamics_collision_projection_top_collider_count = top_collider_path.map(|entry| entry.count);
+			}
 			let refresh_runtime_metadata =
 				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
