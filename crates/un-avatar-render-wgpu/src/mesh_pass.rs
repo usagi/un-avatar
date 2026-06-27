@@ -2198,8 +2198,8 @@ struct MeshDraw {
 	outline_color_mask: u8,
 	fur_stencil_state: MaterialStencilState,
 	fur_color_mask: u8,
-	texture_indices: Vec<usize>,
-	cube_texture_indices: Vec<usize>,
+	texture_indices: Box<[usize]>,
+	cube_texture_indices: Box<[usize]>,
 	mesh_index: usize,
 	primitive_index: usize,
 }
@@ -10432,8 +10432,8 @@ impl SceneMeshes {
 					outline_color_mask: material_outline_color_mask(mat),
 					fur_stencil_state: material_fur_stencil_state(mat),
 					fur_color_mask: material_fur_color_mask(mat),
-					texture_indices: material_texture_indices(mat),
-					cube_texture_indices: material_cube_texture_indices(mat),
+					texture_indices: material_texture_indices(mat).into_boxed_slice(),
+					cube_texture_indices: material_cube_texture_indices(mat).into_boxed_slice(),
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
 				});
@@ -11227,8 +11227,8 @@ impl SceneMeshes {
 				draw.outline_color_mask = material_outline_color_mask(&draw.material);
 				draw.fur_stencil_state = material_fur_stencil_state(&draw.material);
 				draw.fur_color_mask = material_fur_color_mask(&draw.material);
-				draw.texture_indices = material_texture_indices(&draw.material);
-				draw.cube_texture_indices = material_cube_texture_indices(&draw.material);
+				draw.texture_indices = material_texture_indices(&draw.material).into_boxed_slice();
+				draw.cube_texture_indices = material_cube_texture_indices(&draw.material).into_boxed_slice();
 				draw.shading = material.shading;
 				draw.alpha_mode = material.alpha_mode;
 				draw._compute_fur_cards = None;
@@ -11873,8 +11873,8 @@ impl SceneMeshes {
 			self.draws.iter().map(|draw| {
 				(
 					draw.active(),
-					draw.texture_indices.as_slice(),
-					draw.cube_texture_indices.as_slice(),
+					&*draw.texture_indices,
+					&*draw.cube_texture_indices,
 					draw.material_slot_index,
 				)
 			}),
