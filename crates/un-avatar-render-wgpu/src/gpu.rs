@@ -652,6 +652,7 @@ struct WardrobeResidencyGapIndexStatus {
 	truncated: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct WardrobeScopedUploadWork {
 	image_texture_indices: Vec<usize>,
@@ -662,12 +663,14 @@ struct WardrobeScopedUploadWork {
 	active_draws_using_inactive_material_slot_count: usize,
 }
 
+#[cfg(test)]
 impl WardrobeScopedUploadWork {
 	fn has_pending_uploads(&self) -> bool {
 		!self.image_texture_indices.is_empty() || !self.cube_texture_indices.is_empty() || !self.material_slot_indices.is_empty()
 	}
 }
 
+#[cfg(test)]
 fn wardrobe_scoped_upload_work_for_active_gaps(active_gaps: Option<SceneMeshActiveResidencyGaps>) -> WardrobeScopedUploadWork {
 	let Some(active_gaps) = active_gaps else {
 		return WardrobeScopedUploadWork::default();
@@ -8487,13 +8490,16 @@ impl GpuState {
 			return WardrobeAssetUploadPlan::default();
 		};
 		let active_gaps = self.active_wardrobe_residency_gaps();
-		let scoped_upload_work = wardrobe_scoped_upload_work_for_active_gaps(active_gaps.clone());
 		let draw_counts = self.scene_meshes.as_ref().map(SceneMeshes::asset_residency_counts);
 		let mut plan = wardrobe_asset_upload_plan_with_draw_counts(wardrobe_asset_upload_plan_for_document(&doc), draw_counts);
-		plan.pending_image_texture_upload_count = scoped_upload_work.image_texture_indices.len();
-		plan.pending_cube_texture_upload_count = scoped_upload_work.cube_texture_indices.len();
-		plan.pending_material_slot_upload_count = scoped_upload_work.material_slot_indices.len();
-		plan.active_residency_gaps_detected |= scoped_upload_work.has_pending_uploads();
+		if let Some(active_gaps) = active_gaps.as_ref() {
+			plan.pending_image_texture_upload_count = active_gaps.inactive_image_texture_indices.len();
+			plan.pending_cube_texture_upload_count = active_gaps.inactive_cube_texture_indices.len();
+			plan.pending_material_slot_upload_count = active_gaps.inactive_material_slot_indices.len();
+			plan.active_residency_gaps_detected |= !active_gaps.inactive_image_texture_indices.is_empty()
+				|| !active_gaps.inactive_cube_texture_indices.is_empty()
+				|| !active_gaps.inactive_material_slot_indices.is_empty();
+		}
 		plan.last_residency_refresh_active_draw_change_count = self.last_asset_residency_refresh.active_draw_state_changed_count;
 		plan.last_residency_refresh_image_load_count = self.last_asset_residency_refresh.image_texture_load_indices.len();
 		plan.last_residency_refresh_image_unload_count = self.last_asset_residency_refresh.image_texture_unload_indices.len();
@@ -9137,7 +9143,7 @@ impl GpuState {
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model_mut().set_runtime_parameter_value(name.to_string(), value);
 		}
-		let (matching_action_ids, parameter_is_action_related, actions_snapshot) = {
+		let (matching_action_ids, parameter_is_action_related) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
 			let Some(actions) = runtime.runtime_actions() else {
@@ -9146,7 +9152,6 @@ impl GpuState {
 			(
 				runtime_action_ids_for_parameter(actions, runtime.scene(), name, value),
 				runtime_actions_reference_parameter(actions, name),
-				actions.clone(),
 			)
 		};
 		let mut last_activation = None;
@@ -9157,6 +9162,13 @@ impl GpuState {
 			self.apply_metadata_expression_menu_parameter(name, value)?;
 		}
 		if last_activation.is_none() && parameter_is_action_related {
+			let actions_snapshot = {
+				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+				let Some(actions) = doc.runtime_model().runtime_actions() else {
+					return Ok(None);
+				};
+				actions.clone()
+			};
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
