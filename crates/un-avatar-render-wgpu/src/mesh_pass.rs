@@ -11554,14 +11554,12 @@ impl SceneMeshes {
 		let t_expression0 = Instant::now();
 		self.expression_value_scratch.clear();
 		if !self.active_morph_draw_indices.is_empty() && (expr_weights.is_some() || expression_overrides.is_some()) {
-			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
-			for (index, name) in self.expression_names.iter().enumerate() {
-				let value = expression_overrides
+			self.expression_value_scratch.extend(self.expression_names.iter().map(|name| {
+				expression_overrides
 					.and_then(|overrides| overrides.get(name).copied())
 					.or_else(|| expr_weights.and_then(|weights| weights.preset_weights.get(name).copied()))
-					.unwrap_or(0.0);
-				self.expression_value_scratch[index] = value;
-			}
+					.unwrap_or(0.0)
+			}));
 		}
 		timings.expression_values_ms = t_expression0.elapsed().as_secs_f32() * 1000.0;
 		let t_skin0 = Instant::now();
