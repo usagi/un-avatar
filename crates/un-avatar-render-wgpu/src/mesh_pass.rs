@@ -2432,13 +2432,13 @@ fn active_residency_gaps_from_draws<'a>(
 		let mut draw_uses_inactive_cube_texture = false;
 		for texture_index in texture_indices {
 			if image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				push_unique_index(&mut inactive_image_texture_indices, *texture_index);
+				inactive_image_texture_indices.push(*texture_index);
 				draw_uses_inactive_image_texture = true;
 			}
 		}
 		for texture_index in cube_texture_indices {
 			if cube_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				push_unique_index(&mut inactive_cube_texture_indices, *texture_index);
+				inactive_cube_texture_indices.push(*texture_index);
 				draw_uses_inactive_cube_texture = true;
 			}
 		}
@@ -2450,7 +2450,7 @@ fn active_residency_gaps_from_draws<'a>(
 		}
 		if let Some(material_slot_index) = material_slot_index {
 			if material_slot_residency.get(material_slot_index).is_some_and(|resident| !resident) {
-				push_unique_index(&mut inactive_material_slot_indices, material_slot_index);
+				inactive_material_slot_indices.push(material_slot_index);
 				active_draws_using_inactive_material_slot_count += 1;
 			}
 		}
