@@ -2114,15 +2114,15 @@ pub(crate) struct DrawTransformUpdateTimings {
 }
 
 enum SceneMeshIndexUpload {
-	U16(Vec<u16>),
-	U32(Vec<u32>),
+	U16(Box<[u16]>),
+	U32(Box<[u32]>),
 }
 
 impl SceneMeshIndexUpload {
 	fn from_indices(index_format: wgpu::IndexFormat, indices: Vec<u32>) -> Self {
 		match index_format {
-			wgpu::IndexFormat::Uint16 => Self::U16(indices.into_iter().map(|index| index as u16).collect()),
-			wgpu::IndexFormat::Uint32 => Self::U32(indices),
+			wgpu::IndexFormat::Uint16 => Self::U16(indices.into_iter().map(|index| index as u16).collect::<Vec<_>>().into_boxed_slice()),
+			wgpu::IndexFormat::Uint32 => Self::U32(indices.into_boxed_slice()),
 		}
 	}
 
@@ -2164,7 +2164,7 @@ impl SceneMeshIndexUpload {
 }
 
 struct SceneMeshBufferUpload {
-	vertices: Vec<Vertex>,
+	vertices: Box<[Vertex]>,
 	indices: SceneMeshIndexUpload,
 }
 
@@ -10296,7 +10296,7 @@ impl SceneMeshes {
 				let skin_palette_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let index_format = compact_index_format(&indices);
 				let buffer_upload = SceneMeshBufferUpload {
-					vertices: verts,
+					vertices: verts.into_boxed_slice(),
 					indices: SceneMeshIndexUpload::from_indices(index_format, indices),
 				};
 				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
