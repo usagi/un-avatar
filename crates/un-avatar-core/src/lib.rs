@@ -2459,11 +2459,12 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 	}
 
 	pub fn set_all_groups_enabled(&mut self, enabled: bool) -> usize {
-		let source_ids = self
+		let mut source_ids = self
 			.groups_mut()
 			.iter()
 			.filter_map(|group| (!group.source_id.is_empty()).then_some(group.source_id.clone()))
-			.collect::<BTreeSet<_>>();
+			.collect::<Vec<_>>();
+		sort_dedup(&mut source_ids);
 		let count = source_ids.len();
 		if count > 0 {
 			if let Some(runtime_state) = self.runtime_state.as_deref_mut() {
