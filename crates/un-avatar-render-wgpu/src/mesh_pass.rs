@@ -2080,9 +2080,59 @@ pub(crate) struct DrawTransformUpdateTimings {
 	pub draw_transform_ms: f32,
 }
 
+enum SceneMeshIndexUpload {
+	U16(Vec<u16>),
+	U32(Vec<u32>),
+}
+
+impl SceneMeshIndexUpload {
+	fn from_indices(index_format: wgpu::IndexFormat, indices: Vec<u32>) -> Self {
+		match index_format {
+			wgpu::IndexFormat::Uint16 => Self::U16(indices.into_iter().map(|index| index as u16).collect()),
+			wgpu::IndexFormat::Uint32 => Self::U32(indices),
+		}
+	}
+
+	fn len(&self) -> usize {
+		match self {
+			Self::U16(indices) => indices.len(),
+			Self::U32(indices) => indices.len(),
+		}
+	}
+
+	fn buffer_bytes(&self) -> u64 {
+		match self {
+			Self::U16(indices) => (indices.len() * std::mem::size_of::<u16>()) as u64,
+			Self::U32(indices) => (indices.len() * std::mem::size_of::<u32>()) as u64,
+		}
+	}
+
+	fn create_buffer(&self, device: &wgpu::Device) -> wgpu::Buffer {
+		match self {
+			Self::U16(indices) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("mesh_i_u16"),
+				contents: bytemuck::cast_slice(indices),
+				usage: wgpu::BufferUsages::INDEX,
+			}),
+			Self::U32(indices) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("mesh_i_u32"),
+				contents: bytemuck::cast_slice(indices),
+				usage: wgpu::BufferUsages::INDEX,
+			}),
+		}
+	}
+
+	fn source_triangles(&self, vertex_count: usize) -> Vec<ComputeFurCardsSourceTriangleGpu> {
+		match self {
+			Self::U16(indices) => compute_fur_cards_source_triangles_from_indices_u16(indices, vertex_count),
+			Self::U32(indices) => compute_fur_cards_source_triangles_from_indices(indices, vertex_count),
+		}
+	}
+}
+
 struct SceneMeshBufferUpload {
 	vertices: Vec<Vertex>,
-	indices: Vec<u32>,
+	indices: SceneMeshIndexUpload,
 }
 
 impl SceneMeshBufferUpload {
@@ -2090,14 +2140,11 @@ impl SceneMeshBufferUpload {
 		(self.vertices.len() * std::mem::size_of::<Vertex>()) as u64
 	}
 
-	fn index_buffer_bytes(&self, index_format: wgpu::IndexFormat) -> u64 {
-		match index_format {
-			wgpu::IndexFormat::Uint16 => (self.indices.len() * std::mem::size_of::<u16>()) as u64,
-			wgpu::IndexFormat::Uint32 => (self.indices.len() * std::mem::size_of::<u32>()) as u64,
-		}
+	fn index_buffer_bytes(&self) -> u64 {
+		self.indices.buffer_bytes()
 	}
 
-	fn create_buffers(&self, device: &wgpu::Device, queue: &wgpu::Queue, index_format: wgpu::IndexFormat) -> (wgpu::Buffer, wgpu::Buffer) {
+	fn create_buffers(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Buffer, wgpu::Buffer) {
 		let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_v"),
 			size: self.vertex_buffer_bytes(),
@@ -2105,21 +2152,7 @@ impl SceneMeshBufferUpload {
 			mapped_at_creation: false,
 		});
 		queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
-		let index_buffer = match index_format {
-			wgpu::IndexFormat::Uint16 => {
-				let indices16: Vec<u16> = self.indices.iter().map(|&index| index as u16).collect();
-				device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-					label: Some("mesh_i_u16"),
-					contents: bytemuck::cast_slice(&indices16),
-					usage: wgpu::BufferUsages::INDEX,
-				})
-			}
-			wgpu::IndexFormat::Uint32 => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-				label: Some("mesh_i_u32"),
-				contents: bytemuck::cast_slice(&self.indices),
-				usage: wgpu::BufferUsages::INDEX,
-			}),
-		};
+		let index_buffer = self.indices.create_buffer(device);
 		(vertex_buffer, index_buffer)
 	}
 }
@@ -2205,7 +2238,7 @@ impl MeshDraw {
 		if self.mesh_buffers_resident() {
 			return false;
 		}
-		let (vertex_buffer, index_buffer) = self.buffer_upload.create_buffers(device, queue, self.index_format);
+		let (vertex_buffer, index_buffer) = self.buffer_upload.create_buffers(device, queue);
 		self.vertex_buffer = Some(vertex_buffer);
 		self.index_buffer = Some(index_buffer);
 		true
@@ -6373,7 +6406,20 @@ fn compute_fur_cards_source_triangles_from_indices(indices: &[u32], vertex_count
 		.collect()
 }
 
-#[allow(dead_code)]
+fn compute_fur_cards_source_triangles_from_indices_u16(indices: &[u16], vertex_count: usize) -> Vec<ComputeFurCardsSourceTriangleGpu> {
+	indices
+		.chunks_exact(3)
+		.filter_map(|tri| {
+			let i0 = tri[0] as usize;
+			let i1 = tri[1] as usize;
+			let i2 = tri[2] as usize;
+			(i0 < vertex_count && i1 < vertex_count && i2 < vertex_count).then_some(ComputeFurCardsSourceTriangleGpu {
+				indices: [i0 as u32, i1 as u32, i2 as u32, 0],
+			})
+		})
+		.collect()
+}
+
 #[allow(dead_code)]
 fn compute_fur_cards_cpu_map_red_at(map: Option<&UnaImageRgba>, uv: Vec2, fallback: f32) -> f32 {
 	map.map(|image| sample_image_bilinear(image, uv.x, uv.y, true, false)[0])
@@ -6597,7 +6643,7 @@ fn create_compute_fur_cards_draw_resources(
 	compute_fur_cards_bind_group_layout: &wgpu::BindGroupLayout,
 	material: &UnaMaterialPbr,
 	verts: &[Vertex],
-	indices: &[u32],
+	indices: &SceneMeshIndexUpload,
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 	fur_vector_view: &wgpu::TextureView,
 	fur_length_mask_view: &wgpu::TextureView,
@@ -6606,7 +6652,7 @@ fn create_compute_fur_cards_draw_resources(
 	fur_sampler: &wgpu::Sampler,
 ) -> Option<ComputeFurCardsDrawResources> {
 	let source_vertices = compute_fur_cards_source_vertices_from_mesh(verts);
-	let source_triangles = compute_fur_cards_source_triangles_from_indices(indices, source_vertices.len());
+	let source_triangles = indices.source_triangles(source_vertices.len());
 	let triangle_count = u32::try_from(source_triangles.len()).ok()?;
 	if triangle_count == 0 {
 		return None;
@@ -10204,9 +10250,12 @@ impl SceneMeshes {
 				);
 				let skin_palette_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let index_format = compact_index_format(&indices);
-				let buffer_upload = SceneMeshBufferUpload { vertices: verts, indices };
+				let buffer_upload = SceneMeshBufferUpload {
+					vertices: verts,
+					indices: SceneMeshIndexUpload::from_indices(index_format, indices),
+				};
 				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
-				let index_buffer_bytes = buffer_upload.index_buffer_bytes(index_format);
+				let index_buffer_bytes = buffer_upload.index_buffer_bytes();
 				let index_count = buffer_upload.indices.len() as u32;
 				let asset_resident = asset_residency.mesh_primitive_resident(mesh_i, prim_i);
 				mesh_prepare_summary.prepared_primitives += 1;
@@ -10222,7 +10271,7 @@ impl SceneMeshes {
 					mesh_prepare_summary.deferred_index_bytes += index_buffer_bytes;
 				}
 				let (vertex_buffer, index_buffer) = if asset_resident {
-					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue, index_format);
+					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue);
 					(Some(vertex_buffer), Some(index_buffer))
 				} else {
 					(None, None)
@@ -14753,6 +14802,8 @@ mod tests {
 				ComputeFurCardsSourceTriangleGpu { indices: [2, 1, 0, 0] },
 			]
 		);
+		let source_triangles_u16 = compute_fur_cards_source_triangles_from_indices_u16(&[0, 1, 2, 0, 2, 9, 2, 1, 0], verts.len());
+		assert_eq!(source_triangles_u16, source_triangles);
 
 		let source_req = compute_fur_cards_source_buffer_requirements(source_vertices.len() as u32, source_triangles.len() as u32)
 			.expect("source requirements");
