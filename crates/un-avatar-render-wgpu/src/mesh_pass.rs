@@ -2820,7 +2820,7 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 				state.active_morph_draw_indices.push(draw_index);
 			}
 			if !draw.skin_palette_static_identity {
-				state.active_skin_palette_indices.push(draw.skin_palette_index);
+				push_unique_index(&mut state.active_skin_palette_indices, draw.skin_palette_index);
 			}
 		}
 		let requirements = material_runtime_requirements(&draw.material, draw.shading, opts);
