@@ -2101,6 +2101,8 @@ struct SkinPalette {
 	inverse_bind_matrices: Box<[Mat4]>,
 	raw: Vec<f32>,
 	uploaded: Vec<f32>,
+	computed_matrices: Vec<Mat4>,
+	uploaded_matrices: Vec<Mat4>,
 	uploaded_changed: bool,
 }
 
@@ -3237,7 +3239,6 @@ pub(crate) struct SceneMeshes {
 	expression_names: Box<[String]>,
 	expression_value_scratch: Vec<f32>,
 	fur_source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
-	fur_palette_matrix_scratch: Vec<Mat4>,
 	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
 }
@@ -4152,6 +4153,11 @@ fn write_matrix_to_raw_slot(raw: &mut [f32], matrix_index: usize, matrix: Mat4) 
 	if let Some(slot) = raw.get_mut(start..end) {
 		slot.copy_from_slice(&matrix.to_cols_array());
 	}
+}
+
+fn write_palette_matrix_slot(raw: &mut [f32], matrices: &mut Vec<Mat4>, matrix_index: usize, matrix: Mat4) {
+	write_matrix_to_raw_slot(raw, matrix_index, matrix);
+	matrices.push(matrix);
 }
 
 fn identity_matrix_raw() -> Vec<f32> {
@@ -6377,6 +6383,7 @@ fn compute_fur_cards_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<ComputeF
 	verts.iter().map(compute_fur_cards_source_vertex_from_vertex).collect()
 }
 
+#[cfg(test)]
 fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
 	out.clear();
 	out.reserve(raw.len() / 16);
@@ -10893,7 +10900,6 @@ impl SceneMeshes {
 			expression_names: expression_names.into_boxed_slice(),
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
 			fur_source_vertex_scratch: Vec::new(),
-			fur_palette_matrix_scratch: Vec::new(),
 			has_morph_draws,
 			opts,
 		};
@@ -10959,29 +10965,32 @@ impl SceneMeshes {
 		if palette.static_identity {
 			return;
 		}
+		palette.computed_matrices.clear();
 		if let Some(skin) = skin {
 			let mesh_world = world.get(palette.key.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			let inv_mesh = safe_inverse_mesh_world(mesh_world);
 			let joint_count = skin.joint_nodes.len().min(palette.matrix_capacity).min(MAX_BONES);
 			if joint_count == 0 {
 				palette.raw.resize(matrix_raw_capacity(1), 0.0);
-				write_matrix_to_raw_slot(&mut palette.raw, 0, Mat4::IDENTITY);
+				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
 			} else {
 				palette.raw.resize(matrix_raw_capacity(joint_count), 0.0);
+				palette.computed_matrices.reserve(joint_count);
 			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
 				let ibm = palette.inverse_bind_matrices.get(j).copied().unwrap_or(Mat4::IDENTITY);
 				let matrix = if legacy_no_inv_mesh { wj * ibm } else { inv_mesh * wj * ibm };
-				write_matrix_to_raw_slot(&mut palette.raw, j, matrix);
+				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, j, matrix);
 			}
 		} else {
 			palette.raw.resize(matrix_raw_capacity(1), 0.0);
-			write_matrix_to_raw_slot(&mut palette.raw, 0, Mat4::IDENTITY);
+			write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
 		}
 		if palette.uploaded != palette.raw {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
 			std::mem::swap(&mut palette.uploaded, &mut palette.raw);
+			std::mem::swap(&mut palette.uploaded_matrices, &mut palette.computed_matrices);
 			palette.uploaded_changed = true;
 		}
 	}
@@ -11015,13 +11024,18 @@ impl SceneMeshes {
 		});
 		let index = skin_palettes.len();
 		let static_identity = key.skin_index.is_none();
-		let (raw, uploaded) = if static_identity {
+		let (raw, uploaded, computed_matrices, uploaded_matrices) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
-			(Vec::new(), Vec::new())
+			(Vec::new(), Vec::new(), Vec::new(), Vec::new())
 		} else {
 			let raw_capacity = matrix_raw_capacity(matrix_capacity);
-			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
+			(
+				Vec::with_capacity(raw_capacity),
+				Vec::with_capacity(raw_capacity),
+				Vec::with_capacity(matrix_capacity),
+				Vec::with_capacity(matrix_capacity),
+			)
 		};
 		let inverse_bind_matrices = skin
 			.map(|skin| {
@@ -11042,6 +11056,8 @@ impl SceneMeshes {
 			inverse_bind_matrices,
 			raw,
 			uploaded,
+			computed_matrices,
+			uploaded_matrices,
 			uploaded_changed: false,
 		});
 		skin_palette_indices.insert(key, index);
@@ -11215,8 +11231,8 @@ impl SceneMeshes {
 		let draws = &mut self.draws;
 		let skin_palettes = &self.skin_palettes;
 		let source_vertex_scratch = &mut self.fur_source_vertex_scratch;
-		let palette_matrix_scratch = &mut self.fur_palette_matrix_scratch;
 		let mut palette_matrix_scratch_index = None;
+		let mut palette_matrices: &[Mat4] = &[];
 		for &draw_index in &self.fur_draw_indices {
 			let Some(draw) = draws.get_mut(draw_index) else {
 				continue;
@@ -11234,11 +11250,11 @@ impl SceneMeshes {
 				continue;
 			}
 			if palette_matrix_scratch_index != Some(draw.skin_palette_index) {
-				compute_fur_cards_palette_matrices(&palette.uploaded, palette_matrix_scratch);
+				palette_matrices = &palette.uploaded_matrices;
 				palette_matrix_scratch_index = Some(draw.skin_palette_index);
 			}
 			let base_vertices = &draw.buffer_upload.vertices;
-			compute_fur_cards_skinned_source_vertices_from_matrices(base_vertices, palette_matrix_scratch, source_vertex_scratch);
+			compute_fur_cards_skinned_source_vertices_from_matrices(base_vertices, palette_matrices, source_vertex_scratch);
 			if source_vertex_scratch.len() != base_vertices.len() {
 				continue;
 			}
