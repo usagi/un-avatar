@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, BTreeSet, HashMap},
+	collections::{BTreeMap, HashMap},
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -2277,17 +2277,18 @@ fn menu_graph_node_display_label(node: &RuntimeMenuGraphNode) -> Option<String> 
 
 fn menu_graph_node_path(nodes: &[RuntimeMenuGraphNode], node_index: usize) -> RuntimeMenuGraphNodePath {
 	let mut labels = Vec::new();
-	let mut seen = BTreeSet::new();
+	let mut seen = Vec::new();
 	let mut current_index = Some(node_index);
 	while let Some(index) = current_index {
 		if index >= nodes.len() {
 			labels.reverse();
 			return RuntimeMenuGraphNodePath { labels, truncated: true };
 		}
-		if !seen.insert(index) {
+		if seen.contains(&index) {
 			labels.reverse();
 			return RuntimeMenuGraphNodePath { labels, truncated: true };
 		}
+		seen.push(index);
 		let node = &nodes[index];
 		if let Some(label) = menu_graph_node_display_label(node) {
 			labels.push(label);
@@ -5061,13 +5062,15 @@ fn reset_runtime_dynamics_nodes_to_rest_for_source_id(
 }
 
 fn restored_dynamics_source_ids(restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) -> Vec<String> {
-	let mut source_ids = BTreeSet::new();
+	let mut source_ids = Vec::new();
 	for entry in restored {
 		if entry.target_kind == UnaEvaluationTargetKind::DynamicsEnabled && !entry.target_key.is_empty() {
-			source_ids.insert(entry.target_key.clone());
+			source_ids.push(entry.target_key.clone());
 		}
 	}
-	source_ids.into_iter().collect()
+	source_ids.sort_unstable();
+	source_ids.dedup();
+	source_ids
 }
 
 fn log_slow_gpu_scene_context_step(label: impl std::fmt::Display, elapsed: Duration) {
