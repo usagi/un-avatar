@@ -7155,7 +7155,6 @@ impl GpuState {
 			let mut residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
 			let visible_residency_promotions = sm.promote_visible_draw_residency();
 			if !visible_residency_promotions.is_empty() {
-				let promoted = visible_residency_promotions.iter().copied().collect::<BTreeSet<_>>();
 				residency_refresh
 					.mesh_buffer_load_indices
 					.extend(visible_residency_promotions.iter().copied());
@@ -7163,7 +7162,7 @@ impl GpuState {
 				residency_refresh.mesh_buffer_load_indices.dedup();
 				residency_refresh
 					.mesh_buffer_unload_indices
-					.retain(|index| !promoted.contains(index));
+					.retain(|index| visible_residency_promotions.binary_search(index).is_err());
 				if self.debug_log.is_enabled() {
 					self.debug_log.line(
 						"wardrobe",
@@ -7221,13 +7220,12 @@ impl GpuState {
 				.collect::<Vec<_>>();
 			image_load_indices.sort_unstable();
 			image_load_indices.dedup();
-			let image_load_set = image_load_indices.iter().copied().collect::<BTreeSet<_>>();
 			let image_unload_indices = self
 				.last_asset_residency_refresh
 				.image_texture_unload_indices
 				.iter()
 				.copied()
-				.filter(|index| !image_load_set.contains(index))
+				.filter(|index| image_load_indices.binary_search(index).is_err())
 				.collect::<Vec<_>>();
 			let mut cube_load_indices = self
 				.last_asset_residency_refresh
@@ -7238,13 +7236,12 @@ impl GpuState {
 				.collect::<Vec<_>>();
 			cube_load_indices.sort_unstable();
 			cube_load_indices.dedup();
-			let cube_load_set = cube_load_indices.iter().copied().collect::<BTreeSet<_>>();
 			let cube_unload_indices = self
 				.last_asset_residency_refresh
 				.cube_texture_unload_indices
 				.iter()
 				.copied()
-				.filter(|index| !cube_load_set.contains(index))
+				.filter(|index| cube_load_indices.binary_search(index).is_err())
 				.collect::<Vec<_>>();
 			sm.promote_image_texture_residency(&image_load_indices);
 			sm.promote_cube_texture_residency(&cube_load_indices);
