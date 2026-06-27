@@ -3792,28 +3792,38 @@ fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
 }
 
 fn scene_node_paths(scene: &UnaSceneSnapshot) -> Vec<String> {
-	let mut parents = vec![None; scene.nodes.len()];
-	for (parent, node) in scene.nodes.iter().enumerate() {
+	let mut out = vec![String::new(); scene.nodes.len()];
+	let mut visited = vec![false; scene.nodes.len()];
+	fn visit(scene: &UnaSceneSnapshot, out: &mut [String], visited: &mut [bool], node_index: usize, parent_path: &str) {
+		let Some(node) = scene.nodes.get(node_index) else {
+			return;
+		};
+		if visited.get(node_index).copied().unwrap_or(true) {
+			return;
+		}
+		visited[node_index] = true;
+		let path = match node.name.as_deref().filter(|name| !name.is_empty()) {
+			Some(name) if parent_path.is_empty() => name.to_string(),
+			Some(name) => format!("{parent_path}/{name}"),
+			None => parent_path.to_string(),
+		};
+		out[node_index] = path.clone();
 		for &child in &node.children {
-			if child < parents.len() {
-				parents[child] = Some(parent);
-			}
+			visit(scene, out, visited, child, &path);
 		}
 	}
-	let mut out = vec![String::new(); scene.nodes.len()];
-	for index in 0..scene.nodes.len() {
-		let mut chain = Vec::new();
-		let mut cursor = Some(index);
-		while let Some(node_index) = cursor {
-			if let Some(node) = scene.nodes.get(node_index) {
-				if let Some(name) = node.name.as_deref().filter(|name| !name.is_empty()) {
-					chain.push(name.to_string());
-				}
-			}
-			cursor = parents.get(node_index).copied().flatten();
+	let roots = if scene.roots.is_empty() {
+		scene.resolved_roots().to_vec()
+	} else {
+		scene.roots.clone()
+	};
+	for root in roots {
+		visit(scene, &mut out, &mut visited, root, "");
+	}
+	for node_index in 0..scene.nodes.len() {
+		if !visited[node_index] {
+			visit(scene, &mut out, &mut visited, node_index, "");
 		}
-		chain.reverse();
-		out[index] = chain.join("/");
 	}
 	out
 }
@@ -14217,6 +14227,67 @@ mod tests {
 		};
 
 		assert_eq!(scene_effective_visibility(&scene), vec![true, true, false]);
+	}
+
+	#[test]
+	fn scene_node_paths_follow_roots_and_parentless_nodes() {
+		let identity = Mat4::IDENTITY.to_cols_array();
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("root".to_string()),
+					visible: true,
+					transform: identity,
+					children: vec![1],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: None,
+					visible: true,
+					transform: identity,
+					children: vec![2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("leaf".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("loose".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(1),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: Vec::new(),
+			..Default::default()
+		};
+
+		assert_eq!(scene_node_paths(&scene), vec!["root", "root", "root/leaf", "loose"]);
 	}
 
 	#[test]
