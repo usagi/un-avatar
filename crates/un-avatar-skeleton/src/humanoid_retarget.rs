@@ -4676,6 +4676,81 @@ mod tests {
 	}
 
 	#[test]
+	fn node_parent_constraint_chain_uses_updated_subtree_world() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				children: vec![4],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[2].transform = Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0)).to_cols_array();
+		let parent_kind = un_avatar_core::UnaNodeConstraintKind::Parent {
+			translate_x: true,
+			translate_y: true,
+			translate_z: true,
+			rotate_x: true,
+			rotate_y: true,
+			rotate_z: true,
+			translation_at_rest: [0.0; 3],
+			rotation_at_rest: [0.0; 3],
+		};
+		let constraints = vec![
+			un_avatar_core::UnaNodeConstraint {
+				target_node: 1,
+				source_node: 2,
+				weight: 1.0,
+				kind: parent_kind.clone(),
+				sources: vec![un_avatar_core::UnaNodeConstraintSource {
+					source_node: 2,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			},
+			un_avatar_core::UnaNodeConstraint {
+				target_node: 3,
+				source_node: 4,
+				weight: 1.0,
+				kind: parent_kind,
+				sources: vec![un_avatar_core::UnaNodeConstraintSource {
+					source_node: 4,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			},
+		];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let world = scene_world_matrices(&nodes, &[0]);
+		let target_world_translation = world[3].transform_point3(Vec3::ZERO);
+		assert!(
+			(target_world_translation - Vec3::new(4.0, 0.0, 0.0)).length() < 1e-5,
+			"target_world_translation={target_world_translation:?}"
+		);
+	}
+
+	#[test]
 	fn frame_updates_expression_weight() {
 		let mut document = UnaDocument::default();
 		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
