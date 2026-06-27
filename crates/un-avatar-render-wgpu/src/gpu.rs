@@ -3028,7 +3028,8 @@ fn dynamics_interaction_parameter_values_with_context(
 	node_paths_by_index: &[Option<String>],
 	center_peak_angle_parameters: &[String],
 ) -> BTreeMap<String, f32> {
-	dynamics_interaction_parameter_updates_with_context(doc, rest_nodes, node_paths_by_index, center_peak_angle_parameters, None).values
+	dynamics_interaction_parameter_updates_with_context(doc, rest_nodes, node_paths_by_index, center_peak_angle_parameters, None, None)
+		.values
 }
 
 struct DynamicsInteractionParameterUpdates {
@@ -3042,6 +3043,7 @@ fn dynamics_interaction_parameter_updates_with_context(
 	node_paths_by_index: &[Option<String>],
 	center_peak_angle_parameters: &[String],
 	before: Option<&BTreeMap<String, f32>>,
+	current_world: Option<&[Mat4]>,
 ) -> DynamicsInteractionParameterUpdates {
 	let mut values = BTreeMap::new();
 	let mut changed = BTreeMap::new();
@@ -3051,7 +3053,7 @@ fn dynamics_interaction_parameter_updates_with_context(
 	};
 	let dynamics = runtime.dynamics();
 	let active_dynamics_source_ids = active_dynamics_source_ids_for_scene(doc, scene);
-	let mut world = None;
+	let mut computed_world = None;
 	for group in dynamics.dynamics_groups() {
 		if !group.effective_enabled || !dynamics_source_id_resident(group.source_id, active_dynamics_source_ids.as_ref()) {
 			continue;
@@ -3063,7 +3065,8 @@ fn dynamics_interaction_parameter_updates_with_context(
 			continue;
 		}
 		let shape_angle = dynamics_group_shape_angle(rest_nodes, &scene.nodes, group, &node_paths_by_index).unwrap_or(0.0);
-		let world = world.get_or_insert_with(|| crate::scene_transform::scene_world_matrices(scene));
+		let world =
+			current_world.unwrap_or_else(|| computed_world.get_or_insert_with(|| crate::scene_transform::scene_world_matrices(scene)));
 		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, world, group, &node_paths_by_index).unwrap_or(0.0);
 		let angle = shape_angle.max(gravity_angle);
 		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
@@ -8900,12 +8903,14 @@ impl GpuState {
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 		let before = doc.runtime_model().runtime_parameter_values();
+		let current_world = (!self.world_scratch.is_empty()).then_some(self.world_scratch.as_slice());
 		let updates = dynamics_interaction_parameter_updates_with_context(
 			&doc,
 			self.rest_nodes.as_deref().map(Vec::as_slice),
 			&self.runtime_scene_node_paths_by_index,
 			&self.runtime_center_peak_angle_parameters,
 			Some(before),
+			current_world,
 		);
 		if updates.values.is_empty() {
 			return Ok(BTreeMap::new());
