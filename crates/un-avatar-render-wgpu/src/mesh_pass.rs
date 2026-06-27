@@ -3501,15 +3501,16 @@ fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indice
 	if bindings.is_empty() || morph_source_indices.is_empty() {
 		return Vec::new();
 	}
-	let compact_indices: BTreeMap<usize, usize> = morph_source_indices
-		.iter()
-		.enumerate()
-		.map(|(compact_index, &source_index)| (source_index, compact_index))
-		.collect();
+	let mut compact_indices = vec![None; morph_source_indices.iter().copied().max().unwrap_or(0).saturating_add(1)];
+	for (compact_index, &source_index) in morph_source_indices.iter().enumerate() {
+		if let Some(slot) = compact_indices.get_mut(source_index) {
+			*slot = Some(compact_index);
+		}
+	}
 	bindings
 		.iter()
 		.filter_map(|binding| {
-			let &morph_target_index = compact_indices.get(&binding.morph_target_index)?;
+			let morph_target_index = compact_indices.get(binding.morph_target_index).and_then(|index| *index)?;
 			Some(ExpressionBinding {
 				preset_index: binding.preset_index,
 				morph_target_index,
