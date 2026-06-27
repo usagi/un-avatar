@@ -2098,6 +2098,7 @@ struct SkinPalette {
 	bind_group: wgpu::BindGroup,
 	matrix_capacity: usize,
 	static_identity: bool,
+	inverse_bind_matrices: Box<[Mat4]>,
 	raw: Vec<f32>,
 	uploaded: Vec<f32>,
 	uploaded_changed: bool,
@@ -10930,7 +10931,7 @@ impl SceneMeshes {
 			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
-				let ibm = Mat4::from_cols_array(&skin.inverse_bind_matrices[j]);
+				let ibm = palette.inverse_bind_matrices.get(j).copied().unwrap_or(Mat4::IDENTITY);
 				let matrix = if legacy_no_inv_mesh { wj * ibm } else { inv_mesh * wj * ibm };
 				write_matrix_to_raw_slot(&mut palette.raw, j, matrix);
 			}
@@ -10982,12 +10983,23 @@ impl SceneMeshes {
 			let raw_capacity = matrix_raw_capacity(matrix_capacity);
 			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
 		};
+		let inverse_bind_matrices = skin
+			.map(|skin| {
+				skin.inverse_bind_matrices
+					.iter()
+					.take(matrix_capacity)
+					.map(Mat4::from_cols_array)
+					.collect::<Vec<_>>()
+					.into_boxed_slice()
+			})
+			.unwrap_or_default();
 		skin_palettes.push(SkinPalette {
 			key,
 			buffer: bone_buffer,
 			bind_group: bone_bind_group,
 			matrix_capacity,
 			static_identity,
+			inverse_bind_matrices,
 			raw,
 			uploaded,
 			uploaded_changed: false,
