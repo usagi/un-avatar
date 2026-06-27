@@ -2100,7 +2100,6 @@ struct SkinPalette {
 	static_identity: bool,
 	inverse_bind_matrices: Box<[Mat4]>,
 	raw: Vec<f32>,
-	uploaded: Vec<f32>,
 	computed_matrices: Vec<Mat4>,
 	uploaded_matrices: Vec<Mat4>,
 	uploaded_changed: bool,
@@ -10987,9 +10986,8 @@ impl SceneMeshes {
 			palette.raw.resize(matrix_raw_capacity(1), 0.0);
 			write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
 		}
-		if palette.uploaded != palette.raw {
+		if palette.uploaded_matrices != palette.computed_matrices {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
-			std::mem::swap(&mut palette.uploaded, &mut palette.raw);
 			std::mem::swap(&mut palette.uploaded_matrices, &mut palette.computed_matrices);
 			palette.uploaded_changed = true;
 		}
@@ -11024,14 +11022,13 @@ impl SceneMeshes {
 		});
 		let index = skin_palettes.len();
 		let static_identity = key.skin_index.is_none();
-		let (raw, uploaded, computed_matrices, uploaded_matrices) = if static_identity {
+		let (raw, computed_matrices, uploaded_matrices) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
-			(Vec::new(), Vec::new(), Vec::new(), Vec::new())
+			(Vec::new(), Vec::new(), Vec::new())
 		} else {
 			let raw_capacity = matrix_raw_capacity(matrix_capacity);
 			(
-				Vec::with_capacity(raw_capacity),
 				Vec::with_capacity(raw_capacity),
 				Vec::with_capacity(matrix_capacity),
 				Vec::with_capacity(matrix_capacity),
@@ -11055,7 +11052,6 @@ impl SceneMeshes {
 			static_identity,
 			inverse_bind_matrices,
 			raw,
-			uploaded,
 			computed_matrices,
 			uploaded_matrices,
 			uploaded_changed: false,
