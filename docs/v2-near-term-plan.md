@@ -113,6 +113,7 @@ mizuki-split class の `.unavatar` でも起動体験は実用域に近づいた
    - 同 profile では Animator morph override の JSON tree 走査を document revision / runtime parameter snapshot で cache し、入力が変わらない通常 frame では再構築しない。`expr_select` は平均ほぼ `0.00ms` になり、Animator 近似の意味論は同じ parameter snapshot からの再評価として維持する。
    - skin palette update は GPU upload 後に `raw` から `uploaded` へ再コピーせず buffer を swap する。`usagi-test / StarMemoryBG` では `skin_palette=0.22ms -> 0.19ms` 程度の小幅改善だが、CPU copy と一時メモリ churn を減らす等価変更として採用する。
    - fur card の CPU source skinning は palette raw から influence ごとに `Mat4` を復元せず、frame update 単位の共有 scratch に一度だけ展開する。さらに fur 用 `Vec<Vertex>` と per-draw source vertex scratch を廃止し、既存 `MeshDraw.buffer_upload.vertices` と `SceneMeshes` 共有 scratch を使う。`usagi-test / StarMemoryBG` では `cpu_no_surface_avg=0.94-0.96ms`、`fur_source=0.13-0.14ms`。
+   - `MeshDraw.world_origin` は現在の renderer 経路で読まれず、全 active draw で毎 frame bounds/anchor transform だけを実行していたため削除する。fur param 更新では `model` 配列も再利用する。`usagi-test / StarMemoryBG` では `cpu_no_surface_avg=0.99 -> 0.96ms`、`draw_update=0.41 -> 0.40ms` 程度の小幅改善。
    - mesh index の CPU upload cache は `Vec<u32>` 固定ではなく `u16/u32` enum で保持する。GPU draw の `IndexFormat::Uint16` と同じ幅で resident / deferred mesh index を保持し、hot switch 時の u16 変換用一時 allocation も避ける。
    - wardrobe residency refresh の active texture 集計は全 draw 走査ではなく、既に維持している `active_draw_indices` だけを走査する。小幅だが active scope へ寄せる方針に沿う変更。
    - skin palette の joint list / inverse bind matrix を palette 作成時に前処理して毎 frame の `Mat4` 化を消す案は、`skin_palette` 実測が改善せず起動時 prepare と常駐メモリを増やしたため採用しない。

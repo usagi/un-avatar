@@ -13,7 +13,7 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use half::f16;
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaBounds, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
+	UnaAlphaMode, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
 	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
 	UnaTextureWrapMode,
 };
@@ -2202,9 +2202,6 @@ struct MeshDraw {
 	cube_texture_indices: Vec<usize>,
 	mesh_index: usize,
 	primitive_index: usize,
-	probe_anchor_node: Option<usize>,
-	local_bounds: Option<UnaBounds>,
-	world_origin: Vec3,
 }
 
 struct SceneTextureViews {
@@ -10435,9 +10432,6 @@ impl SceneMeshes {
 					cube_texture_indices: material_cube_texture_indices(mat),
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
-					probe_anchor_node: node.probe_anchor_node,
-					local_bounds: node.local_bounds,
-					world_origin: Vec3::ZERO,
 				});
 				let draw_push_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				mesh_prepare_summary.record_timings(MeshPrepareTimings {
@@ -11489,12 +11483,6 @@ impl SceneMeshes {
 				continue;
 			};
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
-			d.world_origin = if let Some(bounds) = d.local_bounds {
-				let reference_world = d.probe_anchor_node.and_then(|node| world.get(node)).copied().unwrap_or(mesh_world);
-				reference_world.transform_point3(Vec3::from(bounds.center))
-			} else {
-				mesh_world.transform_point3(Vec3::ZERO)
-			};
 
 			if d.morph_target_count > 0 {
 				let t_morph0 = Instant::now();
@@ -11546,15 +11534,13 @@ impl SceneMeshes {
 				morph_weights_ms += t_morph0.elapsed().as_secs_f32() * 1000.0;
 			}
 
-			let transform = MeshDrawTransformGpu {
-				model: mesh_world.to_cols_array_2d(),
-			};
+			let model = mesh_world.to_cols_array_2d();
+			let transform = MeshDrawTransformGpu { model };
 			if d.draw_transform_uploaded != Some(transform) {
 				queue.write_buffer(&d.draw_transform, 0, bytemuck::bytes_of(&transform));
 				d.draw_transform_uploaded = Some(transform);
 			}
 			if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
-				let model = mesh_world.to_cols_array_2d();
 				let inv_model = mesh_world.inverse().to_cols_array_2d();
 				if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
 					compute_fur_cards.params.model = model;
