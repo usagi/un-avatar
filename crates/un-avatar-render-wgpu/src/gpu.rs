@@ -3170,36 +3170,49 @@ fn dynamics_interaction_parameter_diagnostics(doc: &UnaDocument, rest_nodes: Opt
 	out
 }
 
-fn active_dynamics_source_ids_for_scene(doc: &UnaDocument, scene: &UnaSceneSnapshot) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+struct ActiveDynamicsSourceIds {
+	owned: Vec<String>,
+	active: Vec<String>,
+}
+
+fn active_dynamics_source_ids_for_scene(doc: &UnaDocument, scene: &UnaSceneSnapshot) -> Option<ActiveDynamicsSourceIds> {
 	let active_groups = doc.runtime_state.active_asset_groups.as_slice();
 	if active_groups.is_empty() || scene.asset_group_ownership.is_empty() {
 		return None;
 	}
-	let active_groups = active_groups.iter().collect::<BTreeSet<_>>();
-	let mut owned = BTreeSet::new();
-	let mut active = BTreeSet::new();
+	let mut owned = Vec::new();
+	let mut active = Vec::new();
 	for group in &scene.asset_group_ownership {
+		let group_active = active_groups.iter().any(|active_group| active_group == &group.group_id);
 		for source_id in &group.dynamics_source_ids {
 			if source_id.is_empty() {
 				continue;
 			}
-			owned.insert(source_id.clone());
-			if active_groups.contains(&group.group_id) {
-				active.insert(source_id.clone());
+			owned.push(source_id.clone());
+			if group_active {
+				active.push(source_id.clone());
 			}
 		}
 	}
 	if owned.is_empty() {
 		return None;
 	}
-	Some((owned, active))
+	owned.sort_unstable();
+	owned.dedup();
+	active.sort_unstable();
+	active.dedup();
+	Some(ActiveDynamicsSourceIds { owned, active })
 }
 
-fn dynamics_source_id_resident(source_id: &str, source_ids: Option<&(BTreeSet<String>, BTreeSet<String>)>) -> bool {
-	let Some((owned_source_ids, active_source_ids)) = source_ids else {
+fn sorted_strings_contains(values: &[String], needle: &str) -> bool {
+	values.binary_search_by(|value| value.as_str().cmp(needle)).is_ok()
+}
+
+fn dynamics_source_id_resident(source_id: &str, source_ids: Option<&ActiveDynamicsSourceIds>) -> bool {
+	let Some(source_ids) = source_ids else {
 		return true;
 	};
-	source_id.is_empty() || !owned_source_ids.contains(source_id) || active_source_ids.contains(source_id)
+	source_id.is_empty() || !sorted_strings_contains(&source_ids.owned, source_id) || sorted_strings_contains(&source_ids.active, source_id)
 }
 
 fn dynamics_group_shape_angle(
