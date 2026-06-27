@@ -11669,8 +11669,12 @@ impl SceneMeshes {
 			let Some(draw) = self.draws.get(draw_index) else {
 				continue;
 			};
-			image_indices.extend(draw.texture_indices.iter().copied());
-			cube_indices.extend(draw.cube_texture_indices.iter().copied());
+			for &texture_index in draw.texture_indices.iter() {
+				push_unique_index(&mut image_indices, texture_index);
+			}
+			for &texture_index in draw.cube_texture_indices.iter() {
+				push_unique_index(&mut cube_indices, texture_index);
+			}
 		}
 		(sorted_unique_indices(image_indices), sorted_unique_indices(cube_indices))
 	}
