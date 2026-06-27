@@ -2839,8 +2839,9 @@ fn accumulate_animator_motion_morph_overrides(
 				return;
 			};
 			let value = animator_parameter_value(parameter, parameter_values, parameter_defaults);
+			let sorted_thresholds = simple_1d_blend_child_thresholds(children);
 			for (child_index, child) in children.iter().enumerate() {
-				let child_weight = simple_1d_blend_child_weight(children, child_index, value);
+				let child_weight = simple_1d_blend_child_weight(&sorted_thresholds, child_index, value);
 				if child_weight > 0.0001 {
 					accumulate_animator_motion_morph_overrides(
 						child,
@@ -2882,10 +2883,7 @@ fn animator_resolve_binding_path(motion_base_path: &str, binding_path: &str) -> 
 	}
 }
 
-fn simple_1d_blend_child_weight(children: &[Value], index: usize, value: f32) -> f32 {
-	if children.is_empty() || index >= children.len() {
-		return 0.0;
-	}
+fn simple_1d_blend_child_thresholds(children: &[Value]) -> Vec<(usize, f32)> {
 	let threshold = |child: &Value| {
 		child
 			.get("threshold")
@@ -2899,6 +2897,13 @@ fn simple_1d_blend_child_weight(children: &[Value], index: usize, value: f32) ->
 		.map(|(child_index, child)| (child_index, threshold(child)))
 		.collect::<Vec<_>>();
 	sorted.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal));
+	sorted
+}
+
+fn simple_1d_blend_child_weight(sorted: &[(usize, f32)], index: usize, value: f32) -> f32 {
+	if sorted.is_empty() {
+		return 0.0;
+	}
 	let Some(rank) = sorted.iter().position(|(child_index, _)| *child_index == index) else {
 		return 0.0;
 	};
