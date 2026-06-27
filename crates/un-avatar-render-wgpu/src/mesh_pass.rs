@@ -3614,10 +3614,20 @@ fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indice
 	if bindings.is_empty() || morph_source_indices.is_empty() {
 		return Vec::new();
 	}
+	let Some(&max_source_index) = morph_source_indices.last() else {
+		return Vec::new();
+	};
+	let mut compact_indices = vec![usize::MAX; max_source_index.saturating_add(1)];
+	for (compact_index, &source_index) in morph_source_indices.iter().enumerate() {
+		compact_indices[source_index] = compact_index;
+	}
 	bindings
 		.iter()
 		.filter_map(|binding| {
-			let morph_target_index = morph_source_indices.binary_search(&binding.morph_target_index).ok()?;
+			let morph_target_index = *compact_indices.get(binding.morph_target_index)?;
+			if morph_target_index == usize::MAX {
+				return None;
+			}
 			Some(ExpressionBinding {
 				preset_index: binding.preset_index,
 				morph_target_index,
