@@ -10504,13 +10504,13 @@ impl SceneMeshes {
 
 		let draw_state = build_draw_order(&draws, &opts);
 		let pipeline_draw_state = build_potential_draw_order(&draws, &opts);
-		let mut required_pipeline_keys = BTreeSet::new();
+		let mut required_pipeline_keys = Vec::new();
 		for batch in pipeline_draw_state
 			.opaque_batches
 			.iter()
 			.chain(pipeline_draw_state.blended_batches.iter())
 		{
-			required_pipeline_keys.insert(batch.pipeline);
+			required_pipeline_keys.push(batch.pipeline);
 		}
 		for &draw_index in &pipeline_draw_state.transparent_backpass_draw_indices {
 			if let Some(draw) = draws.get(draw_index) {
@@ -10518,7 +10518,7 @@ impl SceneMeshes {
 					.material
 					.liltoon_like_runtime()
 					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-				required_pipeline_keys.insert(DrawPipelineKey::new(
+				required_pipeline_keys.push(DrawPipelineKey::new(
 					if zwrite {
 						DrawPipelineKind::TransparentToonBackpass
 					} else {
@@ -10529,13 +10529,15 @@ impl SceneMeshes {
 				));
 			}
 		}
+		required_pipeline_keys.sort_unstable();
+		required_pipeline_keys.dedup();
 		let needs_outline_pipeline = !pipeline_draw_state.outline_draw_indices.is_empty()
 			&& !opts.force_simple_basecolor
 			&& !opts.debug_bind_pose
 			&& !opts.debug_primitive_colors;
 		let needs_fur_pipelines = !pipeline_draw_state.fur_draw_indices.is_empty();
-		let outline_pipeline_keys: BTreeSet<_> = if needs_outline_pipeline {
-			pipeline_draw_state
+		let outline_pipeline_keys = if needs_outline_pipeline {
+			let mut keys = pipeline_draw_state
 				.outline_draw_indices
 				.iter()
 				.filter_map(|&draw_index| {
@@ -10543,18 +10545,24 @@ impl SceneMeshes {
 						.get(draw_index)
 						.map(|draw| MaterialRenderStateKey::from_draw_outline(draw, &opts))
 				})
-				.collect()
+				.collect::<Vec<_>>();
+			keys.sort_unstable();
+			keys.dedup();
+			keys
 		} else {
-			BTreeSet::new()
+			Vec::new()
 		};
-		let fur_pipeline_keys: BTreeSet<_> = if needs_fur_pipelines {
-			pipeline_draw_state
+		let fur_pipeline_keys = if needs_fur_pipelines {
+			let mut keys = pipeline_draw_state
 				.fur_draw_indices
 				.iter()
 				.filter_map(|&draw_index| draws.get(draw_index).map(|draw| MaterialRenderStateKey::from_draw_fur(draw, &opts)))
-				.collect()
+				.collect::<Vec<_>>();
+			keys.sort_unstable();
+			keys.dedup();
+			keys
 		} else {
-			BTreeSet::new()
+			Vec::new()
 		};
 		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &pipeline_draw_state, &opts);
 		let mut outline_shader_features = UntoonShaderFeatures::default();
