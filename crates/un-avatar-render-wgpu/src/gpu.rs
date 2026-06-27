@@ -5920,8 +5920,8 @@ fn motion_signal_runtime_parameter_value(signal: &un_motion_frame::MotionSignal)
 	}
 }
 
-fn motion_signal_runtime_parameter_names(document: &UnaDocument) -> BTreeSet<String> {
-	document
+fn motion_signal_runtime_parameter_names(document: &UnaDocument) -> Vec<String> {
+	let mut names = document
 		.runtime_model()
 		.runtime_parameter_definitions()
 		.into_iter()
@@ -5932,13 +5932,16 @@ fn motion_signal_runtime_parameter_names(document: &UnaDocument) -> BTreeSet<Str
 				.any(|kind| matches!(kind.as_str(), "action_trigger" | "action_condition" | "modular_avatar_parameter"))
 		})
 		.map(|definition| definition.name)
-		.collect()
+		.collect::<Vec<_>>();
+	names.sort_unstable();
+	names.dedup();
+	names
 }
 
 fn apply_motion_signal_runtime_parameters_with_names(
 	document: &mut UnaDocument,
 	frames: &[un_motion_frame::UNMotionFrame],
-	parameter_names: &BTreeSet<String>,
+	parameter_names: &[String],
 ) -> BTreeMap<String, f32> {
 	if parameter_names.is_empty() {
 		return BTreeMap::new();
@@ -5947,7 +5950,10 @@ fn apply_motion_signal_runtime_parameters_with_names(
 	let mut changed = BTreeMap::<String, f32>::new();
 	for frame in frames {
 		for signal in &frame.signals {
-			if !parameter_names.contains(&signal.name) {
+			if parameter_names
+				.binary_search_by(|parameter_name| parameter_name.as_str().cmp(signal.name.as_str()))
+				.is_err()
+			{
 				continue;
 			}
 			let Some(value) = motion_signal_runtime_parameter_value(signal) else {
@@ -6609,7 +6615,7 @@ pub(crate) struct GpuState {
 	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
-	motion_runtime_parameter_names: BTreeSet<String>,
+	motion_runtime_parameter_names: Vec<String>,
 	runtime_scene_node_paths_by_index: Vec<Option<String>>,
 	runtime_center_peak_angle_parameters: BTreeSet<String>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
@@ -6989,7 +6995,7 @@ impl GpuState {
 			motion_apply_opts,
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
-			motion_runtime_parameter_names: BTreeSet::new(),
+			motion_runtime_parameter_names: Vec::new(),
 			runtime_scene_node_paths_by_index: Vec::new(),
 			runtime_center_peak_angle_parameters: BTreeSet::new(),
 			motion_retarget_runtime: None,
