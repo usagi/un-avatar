@@ -1530,15 +1530,25 @@ pub fn una_dynamics_translation_writeback_candidate_count(
 	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation {
 		return 0;
 	}
-	let skinned_joint_nodes = scene
+	let skinned_joint_nodes = skinned_joint_node_indices(scene);
+	translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, bone_node_indices)
+}
+
+fn skinned_joint_node_indices(scene: &UnaSceneSnapshot) -> Vec<usize> {
+	let mut nodes = scene
 		.skins
 		.iter()
 		.flat_map(|skin| skin.joint_nodes.iter().copied())
-		.collect::<BTreeSet<_>>();
+		.collect::<Vec<_>>();
+	sort_dedup(&mut nodes);
+	nodes
+}
+
+fn translation_writeback_candidate_count_for_skinned_nodes(skinned_joint_nodes: &[usize], bone_node_indices: &[usize]) -> usize {
 	bone_node_indices
 		.iter()
 		.skip(1)
-		.filter(|node| !skinned_joint_nodes.contains(node))
+		.filter(|node| skinned_joint_nodes.binary_search(node).is_err())
 		.count()
 }
 
@@ -1550,16 +1560,17 @@ pub fn una_dynamics_translation_writeback_target_count(
 	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation || bone_node_indices.len() < 2 {
 		return 0;
 	}
+	let skinned_joint_nodes = skinned_joint_node_indices(scene);
 	let mut count = 0;
 	for joint_index in 0..bone_node_indices.len() - 1 {
 		if joint_index + 2 < bone_node_indices.len() {
 			let anchor = bone_node_indices[joint_index + 1];
 			let target = bone_node_indices[joint_index + 2];
-			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+			count += translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, &[anchor, target]);
 		} else if bone_node_indices.len() == 2 {
 			let anchor = bone_node_indices[joint_index];
 			let target = bone_node_indices[joint_index + 1];
-			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+			count += translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, &[anchor, target]);
 		}
 	}
 	count
