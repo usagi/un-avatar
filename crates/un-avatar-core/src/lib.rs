@@ -2903,10 +2903,10 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 	}
 
 	pub fn contact_parameter_values(self) -> BTreeMap<String, f32> {
-		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
 		let world = scene_world_matrices(self.scene);
-		let senders = contacts
-			.iter()
+		let senders = self
+			.dynamics
+			.contacts()
 			.filter_map(|sender| {
 				if sender.kind != UnaDynamicsContactKind::Sender {
 					return None;
@@ -2915,7 +2915,7 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 			})
 			.collect::<Vec<_>>();
 		let mut values = BTreeMap::<String, f32>::new();
-		for receiver in &contacts {
+		for receiver in self.dynamics.contacts() {
 			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
 				continue;
 			}
