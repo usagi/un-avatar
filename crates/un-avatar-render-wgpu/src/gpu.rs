@@ -873,6 +873,23 @@ fn runtime_action_ids_for_parameter(
 ) -> Vec<String> {
 	let mut condition_matches = Vec::new();
 	let mut trigger_matches = Vec::new();
+	runtime_action_ids_for_parameter_into(actions, scene, name, value, &mut condition_matches, &mut trigger_matches);
+	if !condition_matches.is_empty() {
+		return condition_matches;
+	}
+	trigger_matches
+}
+
+fn runtime_action_ids_for_parameter_into(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
+	name: &str,
+	value: f32,
+	condition_matches: &mut Vec<String>,
+	trigger_matches: &mut Vec<String>,
+) {
+	condition_matches.clear();
+	trigger_matches.clear();
 	let query = UnaRuntimeActionQuery {
 		parameter_name: Some(name),
 		parameter_value: Some(value),
@@ -885,10 +902,6 @@ fn runtime_action_ids_for_parameter(
 			_ => {}
 		}
 	}
-	if !condition_matches.is_empty() {
-		return condition_matches;
-	}
-	trigger_matches
 }
 
 fn runtime_action_ids_for_parameter_values(
@@ -897,10 +910,18 @@ fn runtime_action_ids_for_parameter_values(
 	parameter_values: &BTreeMap<String, f32>,
 ) -> Vec<String> {
 	let mut ids = Vec::new();
+	let mut condition_matches = Vec::new();
+	let mut trigger_matches = Vec::new();
 	for (name, value) in parameter_values {
-		for id in runtime_action_ids_for_parameter(actions, scene, name, *value) {
-			if !ids.iter().any(|seen| seen == &id) {
-				ids.push(id);
+		runtime_action_ids_for_parameter_into(actions, scene, name, *value, &mut condition_matches, &mut trigger_matches);
+		let matches = if condition_matches.is_empty() {
+			trigger_matches.as_slice()
+		} else {
+			condition_matches.as_slice()
+		};
+		for id in matches {
+			if !ids.iter().any(|seen| seen == id) {
+				ids.push(id.clone());
 			}
 		}
 	}
