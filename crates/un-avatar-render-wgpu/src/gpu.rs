@@ -9050,13 +9050,15 @@ impl GpuState {
 				&& (candidate.parameter_value - value).abs() <= un_avatar_core::UNA_RUNTIME_ACTION_PARAMETER_EPSILON
 		});
 		let active_label = active_candidate.and_then(|candidate| candidate.menu_label.clone());
-		let affected = candidates
+		let mut affected = candidates
 			.iter()
 			.filter(|candidate| candidate.match_kind == "metadata" && candidate.parameter_name == name)
 			.filter_map(|candidate| candidate.menu_label.as_deref())
 			.filter(|label| self.expression_presets.iter().any(|preset| preset == label))
 			.map(str::to_owned)
-			.collect::<BTreeSet<_>>();
+			.collect::<Vec<_>>();
+		affected.sort_unstable();
+		affected.dedup();
 		if affected.is_empty() {
 			return Ok(());
 		}
