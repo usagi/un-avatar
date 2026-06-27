@@ -2817,6 +2817,18 @@ fn animator_morph_override_parameter_values(
 		.collect()
 }
 
+fn animator_morph_override_parameter_values_match(
+	parameter_values: &BTreeMap<String, f32>,
+	parameter_dependencies: &[String],
+	cached_values: &[Option<f32>],
+) -> bool {
+	parameter_dependencies.len() == cached_values.len()
+		&& parameter_dependencies
+			.iter()
+			.zip(cached_values)
+			.all(|(parameter, cached_value)| parameter_values.get(parameter).copied() == *cached_value)
+}
+
 fn animator_controller_parameter_defaults(controller: &Value) -> BTreeMap<String, f32> {
 	let mut out = BTreeMap::new();
 	let Some(parameters) = controller.get("parameters").and_then(Value::as_array) else {
@@ -7301,12 +7313,13 @@ impl GpuState {
 				cache.overrides = animator_morph_overrides_for_doc(&doc);
 				cache.document_revision = active_document_revision;
 				cache.valid = true;
-			} else {
-				let parameter_values = animator_morph_override_parameter_values(runtime_parameter_values, &cache.parameter_dependencies);
-				if cache.parameter_values != parameter_values {
-					cache.parameter_values = parameter_values;
-					cache.overrides = animator_morph_overrides_for_doc(&doc);
-				}
+			} else if !animator_morph_override_parameter_values_match(
+				runtime_parameter_values,
+				&cache.parameter_dependencies,
+				&cache.parameter_values,
+			) {
+				cache.parameter_values = animator_morph_override_parameter_values(runtime_parameter_values, &cache.parameter_dependencies);
+				cache.overrides = animator_morph_overrides_for_doc(&doc);
 			}
 			(!cache.overrides.is_empty()).then_some(&cache.overrides)
 		};
@@ -11382,8 +11395,9 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		accumulate_spatial_surface_seams, animator_morph_override_parameter_dependencies, animator_morph_overrides_for_doc,
-		augment_dynamics_bone_colliders, dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
+		accumulate_spatial_surface_seams, animator_morph_override_parameter_dependencies, animator_morph_override_parameter_values,
+		animator_morph_override_parameter_values_match, animator_morph_overrides_for_doc, augment_dynamics_bone_colliders,
+		dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
 		dynamics_collider_path_runtime_summary_statuses, dynamics_collider_shape_kind, dynamics_group_statuses_with_limit,
 		dynamics_interaction_angle_normalizer, dynamics_interaction_parameter_values, effective_window_backend,
 		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
@@ -11965,6 +11979,18 @@ mod tests {
 			animator_morph_override_parameter_dependencies(&document),
 			vec!["A".to_string(), "B".to_string()]
 		);
+	}
+
+	#[test]
+	fn animator_morph_override_parameter_cache_matches_without_allocating_snapshot() {
+		let dependencies = vec!["A".to_string(), "B".to_string()];
+		let values = BTreeMap::from([("A".to_string(), 0.25)]);
+		let cached = animator_morph_override_parameter_values(&values, &dependencies);
+
+		assert!(animator_morph_override_parameter_values_match(&values, &dependencies, &cached));
+
+		let changed = BTreeMap::from([("A".to_string(), 0.25), ("B".to_string(), 1.0)]);
+		assert!(!animator_morph_override_parameter_values_match(&changed, &dependencies, &cached));
 	}
 
 	#[test]
