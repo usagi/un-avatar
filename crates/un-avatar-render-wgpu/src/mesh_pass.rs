@@ -6366,13 +6366,6 @@ fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
 	}
 }
 
-fn compute_fur_cards_palette_matrix(matrices: &[Mat4], joint_index: u16) -> Mat4 {
-	if matrices.is_empty() {
-		return Mat4::IDENTITY;
-	}
-	matrices[(joint_index as usize).min(matrices.len() - 1)]
-}
-
 fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_matrices: &[Mat4]) -> ComputeFurCardsSourceVertexGpu {
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
@@ -6380,12 +6373,17 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_m
 	let mut skinned_position = Vec3::ZERO;
 	let mut skinned_normal = Vec3::ZERO;
 	let mut skinned_tangent = Vec3::ZERO;
+	let palette_matrix_count = palette_matrices.len();
 	for i in 0..4 {
 		let weight = vertex.weights[i];
 		if weight.abs() <= 0.000001 {
 			continue;
 		}
-		let matrix = compute_fur_cards_palette_matrix(palette_matrices, vertex.joints[i]);
+		let matrix = if palette_matrix_count == 0 {
+			Mat4::IDENTITY
+		} else {
+			palette_matrices[(vertex.joints[i] as usize).min(palette_matrix_count - 1)]
+		};
 		skinned_position += matrix.transform_point3(position) * weight;
 		skinned_normal += matrix.transform_vector3(normal) * weight;
 		skinned_tangent += matrix.transform_vector3(tangent) * weight;
