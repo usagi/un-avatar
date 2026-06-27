@@ -1328,7 +1328,7 @@ struct ExpandedMorphPayload {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExpandedPrimitiveCacheKey {
 	vertex_payload_id: u64,
-	dynamic_morph_targets: Vec<usize>,
+	dynamic_morph_targets: Box<[usize]>,
 }
 
 #[derive(Clone, Debug)]
@@ -10106,16 +10106,17 @@ impl SceneMeshes {
 					opts.debug_zero_morphs,
 				);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
+				let dynamic_morph_target_list = dynamic_morph_targets.iter().copied().collect::<Vec<_>>().into_boxed_slice();
 				let expanded_cache_key = buf
 					.vertex_payload_id
 					.filter(|_| primitive_expand_cache_safe(buf))
 					.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
 						vertex_payload_id,
-						dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+						dynamic_morph_targets: dynamic_morph_target_list.clone(),
 					});
 				let morph_delta_cache_key = buf.vertex_payload_id.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
 					vertex_payload_id,
-					dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+					dynamic_morph_targets: dynamic_morph_target_list,
 				});
 				let exp = if let Some(cache_key) = expanded_cache_key.as_ref() {
 					if let Some(exp) = expanded_primitive_cache.get(cache_key).cloned() {
