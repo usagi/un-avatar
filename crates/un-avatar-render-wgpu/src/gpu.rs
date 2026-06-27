@@ -2672,21 +2672,23 @@ fn active_expression_overrides<'a>(
 	}
 }
 
-fn animator_dynamic_morph_target_names(doc: &UnaDocument) -> BTreeSet<String> {
-	let mut names = BTreeSet::new();
+fn animator_dynamic_morph_target_names(doc: &UnaDocument) -> Vec<String> {
+	let mut names = Vec::new();
 	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
 		return names;
 	};
 	collect_animator_motion_morph_target_names(animator, &mut names);
+	names.sort_unstable();
+	names.dedup();
 	names
 }
 
-fn collect_animator_motion_morph_target_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {
+fn collect_animator_motion_morph_target_names(value: &serde_json::Value, names: &mut Vec<String>) {
 	match value {
 		serde_json::Value::Object(map) => {
 			if let Some(property) = map.get("propertyName").and_then(serde_json::Value::as_str) {
 				if let Some(name) = property.strip_prefix("blendShape.").map(str::trim).filter(|name| !name.is_empty()) {
-					names.insert(name.to_string());
+					names.push(name.to_string());
 				}
 			}
 			for child in map.values() {

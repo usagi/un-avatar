@@ -3485,7 +3485,7 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 fn dynamic_morph_target_indices(
 	buf: &UnaMeshBuffers,
 	bindings: &[ExpressionBinding],
-	dynamic_morph_target_names: &BTreeSet<String>,
+	dynamic_morph_target_names: &[String],
 	include_all: bool,
 ) -> Vec<usize> {
 	if include_all {
@@ -3503,7 +3503,11 @@ fn dynamic_morph_target_indices(
 		}
 	}
 	for (index, name) in buf.morph_target_names.iter().enumerate() {
-		if index < buf.morph_targets.len() && dynamic_morph_target_names.contains(name) {
+		if index < buf.morph_targets.len()
+			&& dynamic_morph_target_names
+				.binary_search_by(|candidate| candidate.as_str().cmp(name.as_str()))
+				.is_ok()
+		{
 			push_unique_index(&mut indices, index);
 		}
 	}
@@ -8810,7 +8814,7 @@ impl SceneMeshes {
 		pipeline_cache: Option<&wgpu::PipelineCache>,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
-		dynamic_morph_target_names: &BTreeSet<String>,
+		dynamic_morph_target_names: &[String],
 		active_asset_groups: &[String],
 		opts: SceneMeshLoadOpts,
 		texture_max_dimension: Option<u32>,
@@ -13475,7 +13479,7 @@ mod tests {
 			},
 		];
 
-		let indices = dynamic_morph_target_indices(&buf, &bindings, &BTreeSet::new(), false);
+		let indices = dynamic_morph_target_indices(&buf, &bindings, &[], false);
 
 		assert_eq!(indices, vec![0, 1, 2]);
 	}
@@ -13510,7 +13514,7 @@ mod tests {
 			morph_target_names: vec!["Unused".to_string(), "(Do not Modify)ArmPit_Fix_L".to_string()],
 			default_morph_weights: vec![0.0, 0.0],
 		};
-		let names = BTreeSet::from(["(Do not Modify)ArmPit_Fix_L".to_string()]);
+		let names = vec!["(Do not Modify)ArmPit_Fix_L".to_string()];
 
 		let indices = dynamic_morph_target_indices(&buf, &[], &names, false);
 
