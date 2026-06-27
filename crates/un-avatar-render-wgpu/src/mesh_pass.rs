@@ -3919,6 +3919,13 @@ fn refresh_morph_default_weights(
 
 fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize) -> Vec<[f32; 4]> {
 	let mut out = Vec::with_capacity(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2).max(1));
+	fill_morph_delta_data(morph_pos, morph_nrm, vertex_count, &mut out);
+	out
+}
+
+fn fill_morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize, out: &mut Vec<[f32; 4]>) {
+	out.clear();
+	out.reserve(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2));
 	for (target_index, target_pos) in morph_pos.iter().enumerate() {
 		let target_nrm = morph_nrm.and_then(|all| all.get(target_index));
 		for vertex_index in 0..vertex_count {
@@ -3931,7 +3938,6 @@ fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3
 	if out.is_empty() {
 		out.push([0.0; 4]);
 	}
-	out
 }
 
 fn create_morph_resources(
@@ -10066,6 +10072,7 @@ impl SceneMeshes {
 		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitive> = BTreeMap::new();
 		let mut expanded_morph_payload_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedMorphPayload> = BTreeMap::new();
 		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
+		let mut morph_delta_scratch: Vec<[f32; 4]> = Vec::new();
 		let default_material = UnaMaterialPbr::default();
 		let default_mtoon = UnaMtoonMaterial::default();
 		let mesh_prepare_start = Instant::now();
@@ -10329,27 +10336,37 @@ impl SceneMeshes {
 							if let Some(shared) = shared_morph_delta_cache.get(cache_key) {
 								create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, shared)
 							} else {
-								let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+								fill_morph_delta_data(
+									&morph_pos,
+									morph_nrm.as_deref(),
+									buffer_upload.vertices.len(),
+									&mut morph_delta_scratch,
+								);
 								let shared = create_shared_morph_delta_resources(
 									device,
 									queue,
 									morph_target_count as u32,
 									buffer_upload.vertices.len() as u32,
-									&morph_deltas,
+									&morph_delta_scratch,
 								);
 								let resources = create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, &shared);
 								shared_morph_delta_cache.insert(cache_key.clone(), shared);
 								resources
 							}
 						} else {
-							let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+							fill_morph_delta_data(
+								&morph_pos,
+								morph_nrm.as_deref(),
+								buffer_upload.vertices.len(),
+								&mut morph_delta_scratch,
+							);
 							create_morph_resources(
 								device,
 								queue,
 								&morph_bind_group_layout,
 								morph_target_count as u32,
 								buffer_upload.vertices.len() as u32,
-								&morph_deltas,
+								&morph_delta_scratch,
 							)
 						}
 					} else {
