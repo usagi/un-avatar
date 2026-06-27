@@ -82,6 +82,14 @@ pub(crate) struct RuntimeActionActivation {
 	pub(crate) parameter_values: BTreeMap<String, f32>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AnimatorMorphOverrideCache {
+	document_revision: u64,
+	parameter_values: BTreeMap<String, f32>,
+	overrides: BTreeMap<String, f32>,
+	valid: bool,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub(crate) struct RuntimeWardrobeActionStatus {
 	pub(crate) action_id: String,
@@ -6503,6 +6511,7 @@ pub(crate) struct GpuState {
 	expression_overrides: std::collections::BTreeMap<String, f32>,
 	expression_overrides_revision: u64,
 	applied_expression_overrides_revision: u64,
+	animator_morph_override_cache: AnimatorMorphOverrideCache,
 	expression_presets: Vec<String>,
 	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
@@ -6882,6 +6891,7 @@ impl GpuState {
 			expression_overrides: std::collections::BTreeMap::new(),
 			expression_overrides_revision: 0,
 			applied_expression_overrides_revision: 0,
+			animator_morph_override_cache: AnimatorMorphOverrideCache::default(),
 			expression_presets: Vec::new(),
 			motion_apply_opts,
 			motion_buffer,
@@ -7032,9 +7042,23 @@ impl GpuState {
 		let t_expr0 = Instant::now();
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
-		let animator_morph_overrides = animator_morph_overrides_for_doc(&doc);
-		let animator_morph_overrides =
-			(!self.disable_expression_morphs && !animator_morph_overrides.is_empty()).then_some(animator_morph_overrides);
+		let active_document_revision = document_revision_to_apply.unwrap_or(self.applied_document_revision);
+		let animator_morph_overrides = if self.disable_expression_morphs {
+			None
+		} else {
+			let runtime_parameter_values = runtime_model.runtime_parameter_values();
+			let cache = &mut self.animator_morph_override_cache;
+			if !cache.valid || cache.document_revision != active_document_revision || cache.parameter_values != *runtime_parameter_values {
+				cache.overrides = animator_morph_overrides_for_doc(&doc);
+				cache.parameter_values.clear();
+				cache
+					.parameter_values
+					.extend(runtime_parameter_values.iter().map(|(key, value)| (key.clone(), *value)));
+				cache.document_revision = active_document_revision;
+				cache.valid = true;
+			}
+			(!cache.overrides.is_empty()).then_some(&cache.overrides)
+		};
 		self.last_draw_expression_select_ms = t_expr0.elapsed().as_secs_f32() * 1000.0;
 		if document_changed {
 			sm.refresh_draw_visibility_from_scene(runtime.scene);
@@ -7195,7 +7219,7 @@ impl GpuState {
 			&self.world_scratch,
 			expr_weights,
 			expression_overrides,
-			animator_morph_overrides.as_ref(),
+			animator_morph_overrides,
 			refresh_scene_morph_defaults,
 		);
 		self.last_draw_update_total_ms = t_update0.elapsed().as_secs_f32() * 1000.0;
