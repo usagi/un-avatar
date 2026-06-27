@@ -9012,11 +9012,8 @@ impl GpuState {
 				self.last_runtime_parameter_action_values = parameter_values;
 				return Ok(Vec::new());
 			};
-			(
-				parameter_values.clone(),
-				runtime_action_ids_for_parameter_values(actions, doc.runtime_model().scene(), &parameter_values),
-				actions.clone(),
-			)
+			let action_ids = runtime_action_ids_for_parameter_values(actions, doc.runtime_model().scene(), &parameter_values);
+			(parameter_values, action_ids, actions.clone())
 		};
 		self.last_runtime_parameter_action_values = parameter_values;
 		if action_ids.is_empty() {
