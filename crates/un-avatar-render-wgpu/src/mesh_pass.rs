@@ -10043,8 +10043,8 @@ impl SceneMeshes {
 			blue: blue_view.clone(),
 			neutral_vector: neutral_vector_view.clone(),
 			black_cube: black_cube_view.clone(),
-			images: image_views.clone(),
-			cubes: cube_image_views.clone(),
+			images: image_views,
+			cubes: cube_image_views,
 		};
 
 		let scene_has_morph_targets = scene_has_morph_targets(scene);
