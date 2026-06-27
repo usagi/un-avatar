@@ -2953,7 +2953,7 @@ fn dynamics_interaction_parameter_values_with_context(
 	doc: &UnaDocument,
 	rest_nodes: Option<&[UnaSceneNode]>,
 	node_paths_by_index: &[Option<String>],
-	center_peak_angle_parameters: &BTreeSet<String>,
+	center_peak_angle_parameters: &[String],
 ) -> BTreeMap<String, f32> {
 	dynamics_interaction_parameter_updates_with_context(doc, rest_nodes, node_paths_by_index, center_peak_angle_parameters, None).values
 }
@@ -2967,7 +2967,7 @@ fn dynamics_interaction_parameter_updates_with_context(
 	doc: &UnaDocument,
 	rest_nodes: Option<&[UnaSceneNode]>,
 	node_paths_by_index: &[Option<String>],
-	center_peak_angle_parameters: &BTreeSet<String>,
+	center_peak_angle_parameters: &[String],
 	before: Option<&BTreeMap<String, f32>>,
 ) -> DynamicsInteractionParameterUpdates {
 	let mut values = BTreeMap::new();
@@ -2996,7 +2996,10 @@ fn dynamics_interaction_parameter_updates_with_context(
 		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
 		let angle_parameter = format!("{}_Angle", interaction.parameter);
 		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
-		let angle_value = if center_peak_angle_parameters.contains(&angle_parameter) {
+		let angle_value = if center_peak_angle_parameters
+			.binary_search_by(|parameter| parameter.as_str().cmp(angle_parameter.as_str()))
+			.is_ok()
+		{
 			(angle_norm * 0.5).clamp(0.0, 1.0)
 		} else {
 			angle_norm
@@ -3044,16 +3047,18 @@ fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&
 	dynamics_interaction_parameter_values_with_context(doc, rest_nodes, &node_paths_by_index, &center_peak_angle_parameters)
 }
 
-fn animator_center_peak_angle_parameters(doc: &UnaDocument) -> BTreeSet<String> {
-	let mut out = BTreeSet::new();
+fn animator_center_peak_angle_parameters(doc: &UnaDocument) -> Vec<String> {
+	let mut out = Vec::new();
 	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
 		return out;
 	};
 	collect_center_peak_angle_parameters(animator, &mut out);
+	out.sort_unstable();
+	out.dedup();
 	out
 }
 
-fn collect_center_peak_angle_parameters(value: &Value, out: &mut BTreeSet<String>) {
+fn collect_center_peak_angle_parameters(value: &Value, out: &mut Vec<String>) {
 	if let Some(motion_type) = value.get("motionType").and_then(Value::as_str) {
 		if motion_type == "BlendTree" {
 			let blend_type = value.get("blendType").and_then(Value::as_str).unwrap_or("");
@@ -3064,7 +3069,7 @@ fn collect_center_peak_angle_parameters(value: &Value, out: &mut BTreeSet<String
 					.is_some_and(|parameter| parameter.ends_with("_Angle") && blend_tree_has_center_peak_thresholds(value))
 			{
 				if let Some(parameter) = value.get("blendParameter").and_then(Value::as_str) {
-					out.insert(parameter.to_string());
+					out.push(parameter.to_string());
 				}
 			}
 		}
@@ -6617,7 +6622,7 @@ pub(crate) struct GpuState {
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
 	motion_runtime_parameter_names: Vec<String>,
 	runtime_scene_node_paths_by_index: Vec<Option<String>>,
-	runtime_center_peak_angle_parameters: BTreeSet<String>,
+	runtime_center_peak_angle_parameters: Vec<String>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
 	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
@@ -6997,7 +7002,7 @@ impl GpuState {
 			pending_motion_frames: Vec::new(),
 			motion_runtime_parameter_names: Vec::new(),
 			runtime_scene_node_paths_by_index: Vec::new(),
-			runtime_center_peak_angle_parameters: BTreeSet::new(),
+			runtime_center_peak_angle_parameters: Vec::new(),
 			motion_retarget_runtime: None,
 			rest_nodes: None,
 			primary_motion_source,
