@@ -11256,9 +11256,9 @@ impl SceneMeshes {
 		queue: &wgpu::Queue,
 		scene: &UnaSceneSnapshot,
 	) -> usize {
-		let active_draw_indices = self.active_draw_indices.clone();
 		let mut ensured = 0;
-		for draw_index in active_draw_indices {
+		for active_index in 0..self.active_draw_indices.len() {
+			let draw_index = self.active_draw_indices[active_index];
 			if self.ensure_draw_gpu_resources(device, queue, scene, draw_index) {
 				ensured += 1;
 			}
