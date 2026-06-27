@@ -4099,6 +4099,14 @@ fn write_matrix_to_raw(raw: &mut Vec<f32>, matrix: Mat4) {
 	raw.extend_from_slice(&matrix.to_cols_array());
 }
 
+fn write_matrix_to_raw_slot(raw: &mut [f32], matrix_index: usize, matrix: Mat4) {
+	let start = matrix_index.saturating_mul(16);
+	let end = start.saturating_add(16);
+	if let Some(slot) = raw.get_mut(start..end) {
+		slot.copy_from_slice(&matrix.to_cols_array());
+	}
+}
+
 fn identity_matrix_raw() -> Vec<f32> {
 	let mut raw = Vec::with_capacity(matrix_raw_capacity(1));
 	write_matrix_to_raw(&mut raw, Mat4::IDENTITY);
@@ -10884,23 +10892,25 @@ impl SceneMeshes {
 		if palette.static_identity {
 			return;
 		}
-		palette.raw.clear();
 		if let Some(skin) = skin {
 			let mesh_world = world.get(palette.key.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			let inv_mesh = safe_inverse_mesh_world(mesh_world);
 			let joint_count = skin.joint_nodes.len().min(palette.matrix_capacity).min(MAX_BONES);
-			palette.raw.reserve(joint_count * 16);
+			if joint_count == 0 {
+				palette.raw.resize(matrix_raw_capacity(1), 0.0);
+				write_matrix_to_raw_slot(&mut palette.raw, 0, Mat4::IDENTITY);
+			} else {
+				palette.raw.resize(matrix_raw_capacity(joint_count), 0.0);
+			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
 				let ibm = Mat4::from_cols_array(&skin.inverse_bind_matrices[j]);
 				let matrix = if legacy_no_inv_mesh { wj * ibm } else { inv_mesh * wj * ibm };
-				write_matrix_to_raw(&mut palette.raw, matrix);
+				write_matrix_to_raw_slot(&mut palette.raw, j, matrix);
 			}
 		} else {
-			write_matrix_to_raw(&mut palette.raw, Mat4::IDENTITY);
-		}
-		if palette.raw.is_empty() {
-			write_matrix_to_raw(&mut palette.raw, Mat4::IDENTITY);
+			palette.raw.resize(matrix_raw_capacity(1), 0.0);
+			write_matrix_to_raw_slot(&mut palette.raw, 0, Mat4::IDENTITY);
 		}
 		if palette.uploaded != palette.raw {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
