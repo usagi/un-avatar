@@ -6368,20 +6368,12 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_m
 	if skinned_tangent.length_squared() <= 0.0000001 {
 		skinned_tangent = tangent;
 	}
+	let skinned_normal = skinned_normal.normalize_or_zero();
+	let skinned_tangent = skinned_tangent.normalize_or_zero();
 	ComputeFurCardsSourceVertexGpu {
 		position: [skinned_position.x, skinned_position.y, skinned_position.z, 1.0],
-		normal: [
-			skinned_normal.normalize_or_zero().x,
-			skinned_normal.normalize_or_zero().y,
-			skinned_normal.normalize_or_zero().z,
-			0.0,
-		],
-		tangent: [
-			skinned_tangent.normalize_or_zero().x,
-			skinned_tangent.normalize_or_zero().y,
-			skinned_tangent.normalize_or_zero().z,
-			vertex.tangent[3],
-		],
+		normal: [skinned_normal.x, skinned_normal.y, skinned_normal.z, 0.0],
+		tangent: [skinned_tangent.x, skinned_tangent.y, skinned_tangent.z, vertex.tangent[3]],
 		uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
 		color: vertex.color,
 		joints: [
