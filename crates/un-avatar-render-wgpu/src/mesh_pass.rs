@@ -3200,15 +3200,15 @@ pub(crate) struct SceneMeshes {
 	_cube_textures: Vec<wgpu::Texture>,
 	draws: Vec<MeshDraw>,
 	skin_palettes: Vec<SkinPalette>,
-	outline_draw_indices: Vec<usize>,
-	fur_draw_indices: Vec<usize>,
+	outline_draw_indices: Box<[usize]>,
+	fur_draw_indices: Box<[usize]>,
 	opaque_batches: Vec<DrawBatch>,
-	transparent_backpass_draw_indices: Vec<usize>,
+	transparent_backpass_draw_indices: Box<[usize]>,
 	blended_batches: Vec<DrawBatch>,
-	active_draw_indices: Vec<usize>,
-	active_morph_draw_indices: Vec<usize>,
+	active_draw_indices: Box<[usize]>,
+	active_morph_draw_indices: Box<[usize]>,
 	needs_screen_refraction: bool,
-	active_skin_palette_indices: Vec<usize>,
+	active_skin_palette_indices: Box<[usize]>,
 	image_texture_residency: Vec<bool>,
 	cube_texture_residency: Vec<bool>,
 	material_slot_residency: Vec<bool>,
@@ -10825,15 +10825,15 @@ impl SceneMeshes {
 			_cube_textures: cube_textures,
 			draws,
 			skin_palettes,
-			outline_draw_indices: draw_state.outline_draw_indices,
-			fur_draw_indices: draw_state.fur_draw_indices,
+			outline_draw_indices: draw_state.outline_draw_indices.into_boxed_slice(),
+			fur_draw_indices: draw_state.fur_draw_indices.into_boxed_slice(),
 			opaque_batches: draw_state.opaque_batches,
-			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices,
+			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices.into_boxed_slice(),
 			blended_batches: draw_state.blended_batches,
-			active_draw_indices: draw_state.active_draw_indices,
-			active_morph_draw_indices: draw_state.active_morph_draw_indices,
+			active_draw_indices: draw_state.active_draw_indices.into_boxed_slice(),
+			active_morph_draw_indices: draw_state.active_morph_draw_indices.into_boxed_slice(),
 			needs_screen_refraction: draw_state.needs_screen_refraction,
-			active_skin_palette_indices: draw_state.active_skin_palette_indices,
+			active_skin_palette_indices: draw_state.active_skin_palette_indices.into_boxed_slice(),
 			image_texture_residency,
 			cube_texture_residency,
 			material_slot_residency,
@@ -11201,15 +11201,15 @@ impl SceneMeshes {
 
 	fn rebuild_draw_order(&mut self) {
 		let draw_state = build_draw_order(&self.draws, &self.opts);
-		self.outline_draw_indices = draw_state.outline_draw_indices;
-		self.fur_draw_indices = draw_state.fur_draw_indices;
+		self.outline_draw_indices = draw_state.outline_draw_indices.into_boxed_slice();
+		self.fur_draw_indices = draw_state.fur_draw_indices.into_boxed_slice();
 		self.opaque_batches = draw_state.opaque_batches;
-		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices;
+		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices.into_boxed_slice();
 		self.blended_batches = draw_state.blended_batches;
-		self.active_draw_indices = draw_state.active_draw_indices;
-		self.active_morph_draw_indices = draw_state.active_morph_draw_indices;
+		self.active_draw_indices = draw_state.active_draw_indices.into_boxed_slice();
+		self.active_morph_draw_indices = draw_state.active_morph_draw_indices.into_boxed_slice();
 		self.needs_screen_refraction = draw_state.needs_screen_refraction;
-		self.active_skin_palette_indices = draw_state.active_skin_palette_indices;
+		self.active_skin_palette_indices = draw_state.active_skin_palette_indices.into_boxed_slice();
 		self.runtime_requirements = draw_state.runtime_requirements;
 	}
 
