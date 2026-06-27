@@ -1341,9 +1341,34 @@ fn surface_constraint_runtime_indices(constraints: &[RuntimeSurfaceConstraint]) 
 		indices.push(constraint.a.runtime_index);
 		indices.push(constraint.b.runtime_index);
 	}
-	indices.sort_unstable();
-	indices.dedup();
+	sort_dedup(&mut indices);
 	indices
+}
+
+fn sort_dedup<T: Ord>(values: &mut Vec<T>) {
+	values.sort_unstable();
+	values.dedup();
+}
+
+fn visible_mesh_used_skin_joint_indices(scene: &UnaSceneSnapshot, mesh_index: usize) -> Vec<usize> {
+	let Some(primitives) = scene.meshes.get(mesh_index) else {
+		return Vec::new();
+	};
+	let mut out = Vec::new();
+	for primitive in primitives {
+		let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+			continue;
+		};
+		for (joint_indices, joint_weights) in joints.iter().zip(weights.iter()) {
+			for (&joint_index, &weight) in joint_indices.iter().zip(joint_weights.iter()) {
+				if weight > 1.0e-5 {
+					out.push(joint_index as usize);
+				}
+			}
+		}
+	}
+	sort_dedup(&mut out);
+	out
 }
 
 /// 全グループのランタイム状態。
@@ -1490,7 +1515,7 @@ pub struct DynamicsResponseGroupSummary {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DynamicsVisualTargetContext {
-	visible_skinned_joint_nodes: BTreeSet<usize>,
+	visible_skinned_joint_nodes: Vec<usize>,
 	visible_mesh_nodes: Vec<usize>,
 	parent_by_node: Vec<Option<usize>>,
 }
@@ -1505,7 +1530,7 @@ impl DynamicsVisualTargetContext {
 				}
 			}
 		}
-		let mut visible_skinned_joint_nodes = BTreeSet::new();
+		let mut visible_skinned_joint_nodes = Vec::new();
 		let mut visible_mesh_nodes = Vec::new();
 		let mut visited = vec![false; scene.nodes.len()];
 		for &root in scene.resolved_roots().iter() {
@@ -1530,6 +1555,7 @@ impl DynamicsVisualTargetContext {
 				);
 			}
 		}
+		sort_dedup(&mut visible_skinned_joint_nodes);
 		Self {
 			visible_skinned_joint_nodes,
 			visible_mesh_nodes,
@@ -1543,7 +1569,7 @@ impl DynamicsVisualTargetContext {
 			.enumerate()
 			.filter(|(index, node)| !bone_node_indices[..*index].contains(node))
 			.map(|(_, node)| node)
-			.filter(|node| self.visible_skinned_joint_nodes.contains(node))
+			.filter(|node| self.visible_skinned_joint_nodes.binary_search(node).is_ok())
 			.count();
 		let mut mesh_subtree_node_count = 0usize;
 		for &mesh_node in &self.visible_mesh_nodes {
@@ -1591,7 +1617,7 @@ fn visit_visual_target_scene(
 	inherited_visible: bool,
 	visited: &mut [bool],
 	visible_mesh_nodes: &mut Vec<usize>,
-	visible_skinned_joint_nodes: &mut BTreeSet<usize>,
+	visible_skinned_joint_nodes: &mut Vec<usize>,
 ) {
 	let Some(node) = scene.nodes.get(node_index) else {
 		return;
@@ -1606,7 +1632,7 @@ fn visit_visual_target_scene(
 		if let (Some(mesh_index), Some(skin)) = (node.mesh, node.skin.and_then(|skin_index| scene.skins.get(skin_index))) {
 			for joint_index in visible_mesh_used_skin_joint_indices(scene, mesh_index) {
 				if let Some(&joint_node) = skin.joint_nodes.get(joint_index) {
-					visible_skinned_joint_nodes.insert(joint_node);
+					visible_skinned_joint_nodes.push(joint_node);
 				}
 			}
 		}
@@ -1614,26 +1640,6 @@ fn visit_visual_target_scene(
 	for &child in &node.children {
 		visit_visual_target_scene(scene, child, visible, visited, visible_mesh_nodes, visible_skinned_joint_nodes);
 	}
-}
-
-fn visible_mesh_used_skin_joint_indices(scene: &UnaSceneSnapshot, mesh_index: usize) -> BTreeSet<usize> {
-	let mut out = BTreeSet::new();
-	let Some(primitives) = scene.meshes.get(mesh_index) else {
-		return out;
-	};
-	for primitive in primitives {
-		let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
-			continue;
-		};
-		for (joint_indices, joint_weights) in joints.iter().zip(weights.iter()) {
-			for (&joint_index, &weight) in joint_indices.iter().zip(joint_weights.iter()) {
-				if weight > 1.0e-5 {
-					out.insert(joint_index as usize);
-				}
-			}
-		}
-	}
-	out
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
