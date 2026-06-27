@@ -3625,19 +3625,15 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			return (Vec::new(), BTreeMap::new());
 		}
 		let emissions = self.document.runtime_model().contact_parameter_emissions();
-		let mut contact_parameter_values = BTreeMap::<String, f32>::new();
+		let mut contact_parameter_values = Vec::<(String, f32)>::new();
 		for emission in &emissions {
-			let value = contact_parameter_values.entry(emission.parameter.clone()).or_insert(0.0);
-			*value = value.max(emission.value);
-		}
-		let runtime_state = self.runtime_state_mut();
-		let mut changed = BTreeMap::new();
-		for (name, value) in contact_parameter_values {
-			if runtime_state.parameter_values.get(&name).copied() != Some(value) {
-				changed.insert(name.clone(), value);
+			if let Some((_, value)) = contact_parameter_values.iter_mut().find(|(name, _)| name == &emission.parameter) {
+				*value = value.max(emission.value);
+			} else {
+				contact_parameter_values.push((emission.parameter.clone(), emission.value));
 			}
-			runtime_state.parameter_values.insert(name, value);
 		}
+		let changed = apply_runtime_parameter_value_pairs(self.runtime_state_mut(), contact_parameter_values);
 		(emissions, changed)
 	}
 
@@ -3653,15 +3649,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		else {
 			return BTreeMap::new();
 		};
-		let runtime_state = self.runtime_state_mut();
-		let mut changed = BTreeMap::new();
-		for (name, value) in values {
-			if runtime_state.parameter_values.get(&name).copied() != Some(value) {
-				changed.insert(name.clone(), value);
-			}
-			runtime_state.parameter_values.insert(name, value);
-		}
-		changed
+		apply_runtime_parameter_value_pairs(self.runtime_state_mut(), values)
 	}
 
 	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
@@ -3892,6 +3880,17 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		}
 		None
 	}
+}
+
+fn apply_runtime_parameter_value_pairs(runtime_state: &mut UnaRuntimeState, values: Vec<(String, f32)>) -> BTreeMap<String, f32> {
+	let mut changed = BTreeMap::new();
+	for (name, value) in values {
+		if runtime_state.parameter_values.get(&name).copied() != Some(value) {
+			changed.insert(name.clone(), value);
+		}
+		runtime_state.parameter_values.insert(name, value);
+	}
+	changed
 }
 
 fn resolve_runtime_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
