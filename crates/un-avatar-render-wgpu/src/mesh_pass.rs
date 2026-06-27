@@ -1831,10 +1831,18 @@ fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
 	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
-fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
+fn push_texture_index(indices: &mut Vec<usize>, index: Option<usize>) {
 	if let Some(index) = index {
-		indices.insert(index);
+		if !indices.contains(&index) {
+			indices.push(index);
+		}
 	}
+}
+
+fn sorted_texture_indices(mut indices: Vec<usize>) -> Vec<usize> {
+	indices.sort_unstable();
+	indices.dedup();
+	indices
 }
 
 fn lil_enabled(value: f32) -> bool {
@@ -1842,7 +1850,7 @@ fn lil_enabled(value: f32) -> bool {
 }
 
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	push_texture_index(&mut indices, material.base_color_texture_index);
 	push_texture_index(&mut indices, material.normal_texture_index);
 	push_texture_index(&mut indices, material.occlusion_texture_index);
@@ -1958,25 +1966,24 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 			push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
 		}
 	}
-	indices.into_iter().collect()
+	sorted_texture_indices(indices)
 }
 
 fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	if let Some(mtoon) = material.mtoon_like_runtime() {
 		push_texture_index(&mut indices, mtoon.reflection_cube_texture_index);
 	}
 	if let Some(liltoon) = material.liltoon_like_runtime() {
 		push_texture_index(&mut indices, liltoon_reflection_texture_index(liltoon));
 	}
-	indices.into_iter().collect()
+	sorted_texture_indices(indices)
 }
 
 fn material_resident_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
-	indices.extend(material_texture_indices(material));
+	let mut indices = material_texture_indices(material);
 	indices.extend(material_cube_texture_indices(material));
-	indices.into_iter().collect()
+	sorted_texture_indices(indices)
 }
 
 fn initial_active_texture_indices_for_scene(
