@@ -85,7 +85,8 @@ pub(crate) struct RuntimeActionActivation {
 #[derive(Clone, Debug, Default)]
 struct AnimatorMorphOverrideCache {
 	document_revision: u64,
-	parameter_values: BTreeMap<String, f32>,
+	parameter_dependencies: Box<[String]>,
+	parameter_values: Vec<Option<f32>>,
 	overrides: BTreeMap<String, f32>,
 	valid: bool,
 }
@@ -2753,6 +2754,67 @@ fn animator_morph_overrides_for_doc(doc: &UnaDocument) -> BTreeMap<String, f32> 
 		}
 	}
 	out
+}
+
+fn animator_morph_override_parameter_dependencies(doc: &UnaDocument) -> Vec<String> {
+	let mut out = Vec::new();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return out;
+	};
+	collect_animator_morph_override_parameter_dependencies(animator, &mut out);
+	out.sort_unstable();
+	out.dedup();
+	out
+}
+
+fn collect_animator_morph_override_parameter_dependencies(value: &Value, out: &mut Vec<String>) {
+	if value.get("motionType").and_then(Value::as_str) == Some("BlendTree") {
+		let blend_type = value.get("blendType").and_then(Value::as_str).unwrap_or("");
+		if blend_type == "Simple1D" || blend_type == "1D" {
+			if let Some(parameter) = value
+				.get("blendParameter")
+				.and_then(Value::as_str)
+				.filter(|parameter| !parameter.is_empty())
+			{
+				out.push(parameter.to_string());
+			}
+		}
+	}
+	if let Some(children) = value.get("children").and_then(Value::as_array) {
+		for child in children {
+			collect_animator_morph_override_parameter_dependencies(child, out);
+		}
+	}
+	if let Some(controllers) = value.get("controllers").and_then(Value::as_array) {
+		for controller in controllers {
+			if controller.get("source").and_then(Value::as_str) == Some("modularAvatarMergeAnimator") {
+				collect_animator_morph_override_parameter_dependencies(controller, out);
+			}
+		}
+	}
+	if let Some(layers) = value.get("layers").and_then(Value::as_array) {
+		for layer in layers {
+			collect_animator_morph_override_parameter_dependencies(layer, out);
+		}
+	}
+	if let Some(states) = value.get("states").and_then(Value::as_array) {
+		for state in states {
+			collect_animator_morph_override_parameter_dependencies(state, out);
+		}
+	}
+	if let Some(motion) = value.get("motion") {
+		collect_animator_morph_override_parameter_dependencies(motion, out);
+	}
+}
+
+fn animator_morph_override_parameter_values(
+	parameter_values: &BTreeMap<String, f32>,
+	parameter_dependencies: &[String],
+) -> Vec<Option<f32>> {
+	parameter_dependencies
+		.iter()
+		.map(|parameter| parameter_values.get(parameter).copied())
+		.collect()
 }
 
 fn animator_controller_parameter_defaults(controller: &Value) -> BTreeMap<String, f32> {
@@ -7233,14 +7295,18 @@ impl GpuState {
 		} else {
 			let runtime_parameter_values = runtime_model.runtime_parameter_values();
 			let cache = &mut self.animator_morph_override_cache;
-			if !cache.valid || cache.document_revision != active_document_revision || cache.parameter_values != *runtime_parameter_values {
+			if !cache.valid || cache.document_revision != active_document_revision {
+				cache.parameter_dependencies = animator_morph_override_parameter_dependencies(&doc).into_boxed_slice();
+				cache.parameter_values = animator_morph_override_parameter_values(runtime_parameter_values, &cache.parameter_dependencies);
 				cache.overrides = animator_morph_overrides_for_doc(&doc);
-				cache.parameter_values.clear();
-				cache
-					.parameter_values
-					.extend(runtime_parameter_values.iter().map(|(key, value)| (key.clone(), *value)));
 				cache.document_revision = active_document_revision;
 				cache.valid = true;
+			} else {
+				let parameter_values = animator_morph_override_parameter_values(runtime_parameter_values, &cache.parameter_dependencies);
+				if cache.parameter_values != parameter_values {
+					cache.parameter_values = parameter_values;
+					cache.overrides = animator_morph_overrides_for_doc(&doc);
+				}
 			}
 			(!cache.overrides.is_empty()).then_some(&cache.overrides)
 		};
@@ -11316,8 +11382,8 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		accumulate_spatial_surface_seams, animator_morph_overrides_for_doc, augment_dynamics_bone_colliders,
-		dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
+		accumulate_spatial_surface_seams, animator_morph_override_parameter_dependencies, animator_morph_overrides_for_doc,
+		augment_dynamics_bone_colliders, dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
 		dynamics_collider_path_runtime_summary_statuses, dynamics_collider_shape_kind, dynamics_group_statuses_with_limit,
 		dynamics_interaction_angle_normalizer, dynamics_interaction_parameter_values, effective_window_backend,
 		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
@@ -11846,6 +11912,58 @@ mod tests {
 		assert_eq!(
 			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
 			Some(1.0)
+		);
+	}
+
+	#[test]
+	fn animator_morph_override_dependencies_are_modular_avatar_blend_parameters() {
+		let document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"animator": {
+						"controllers": [
+							{
+								"source": "modularAvatarMergeAnimator",
+								"layers": [{
+									"states": [{
+										"motion": {
+											"motionType": "BlendTree",
+											"blendType": "Simple1D",
+											"blendParameter": "B",
+											"children": [{
+												"motionType": "BlendTree",
+												"blendType": "1D",
+												"blendParameter": "A",
+												"children": []
+											}]
+										}
+									}]
+								}]
+							},
+							{
+								"source": "other",
+								"layers": [{
+									"states": [{
+										"motion": {
+											"motionType": "BlendTree",
+											"blendType": "Simple1D",
+											"blendParameter": "Ignored",
+											"children": []
+										}
+									}]
+								}]
+							}
+						]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(
+			animator_morph_override_parameter_dependencies(&document),
+			vec!["A".to_string(), "B".to_string()]
 		);
 	}
 
