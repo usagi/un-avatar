@@ -1708,6 +1708,14 @@ fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelin
 	batches.push(batch);
 }
 
+fn finalize_draw_batches(batches: &mut Vec<DrawBatch>) {
+	batches.retain(|batch| !batch.draw_indices.is_empty());
+	for batch in batches.iter_mut() {
+		batch.draw_indices.shrink_to_fit();
+	}
+	batches.shrink_to_fit();
+}
+
 fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	let zwrite = draw
 		.material
@@ -2876,7 +2884,8 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 	group_draw_indices_by_skin_palette(draws, &mut state.fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut state.transparent_backpass_draw_indices);
 
-	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
+	finalize_draw_batches(&mut opaque_batches);
+	finalize_draw_batches(&mut blended_batches);
 	state.opaque_batches = opaque_batches;
 	state.blended_batches = blended_batches;
 	state.active_skin_palette_indices.sort_unstable();
