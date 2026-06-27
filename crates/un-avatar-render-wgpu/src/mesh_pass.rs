@@ -4027,25 +4027,26 @@ fn update_cached_optional_f32_map(cache: &mut BTreeMap<String, f32>, valid: &mut
 	}
 }
 
+#[cfg(test)]
 fn scene_default_morph_weights_for_draw(
 	scene: &UnaSceneSnapshot,
 	mesh_index: usize,
 	primitive_index: usize,
 	morph_source_indices: &[usize],
 ) -> Vec<f32> {
-	let mut out = vec![0.0; morph_source_indices.len()];
-	let Some(primitive) = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index)) else {
-		return out;
-	};
-	for (dst, &source_index) in out.iter_mut().zip(morph_source_indices) {
-		*dst = primitive
-			.default_morph_weights
-			.get(source_index)
-			.copied()
-			.unwrap_or(0.0)
-			.clamp(0.0, 1.0);
-	}
-	out
+	let primitive = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index));
+	morph_source_indices
+		.iter()
+		.map(|&source_index| scene_default_morph_weight_for_source(primitive, source_index))
+		.collect()
+}
+
+fn scene_default_morph_weight_for_source(primitive: Option<&UnaMeshBuffers>, source_index: usize) -> f32 {
+	primitive
+		.and_then(|primitive| primitive.default_morph_weights.get(source_index))
+		.copied()
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0)
 }
 
 fn refresh_morph_default_weights(
@@ -4056,13 +4057,22 @@ fn refresh_morph_default_weights(
 	primitive_index: usize,
 	morph_source_indices: &[usize],
 ) -> bool {
-	let next = scene_default_morph_weights_for_draw(scene, mesh_index, primitive_index, morph_source_indices);
-	if *default_morph_weights == next {
-		return false;
+	let primitive = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index));
+	let mut changed = default_morph_weights.len() != morph_source_indices.len();
+	if changed {
+		default_morph_weights.resize(morph_source_indices.len(), 0.0);
 	}
-	*default_morph_weights = next;
-	uploaded_morph_weights.clear();
-	true
+	for (slot, &source_index) in default_morph_weights.iter_mut().zip(morph_source_indices) {
+		let next = scene_default_morph_weight_for_source(primitive, source_index);
+		if *slot != next {
+			*slot = next;
+			changed = true;
+		}
+	}
+	if changed {
+		uploaded_morph_weights.clear();
+	}
+	changed
 }
 
 fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize) -> Vec<[f32; 4]> {
@@ -13577,6 +13587,10 @@ mod tests {
 		uploaded.push(0.75);
 		assert!(!refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0]));
 		assert_eq!(uploaded, vec![0.75]);
+
+		assert!(refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0, 1]));
+		assert_eq!(defaults, vec![0.75, 0.0]);
+		assert!(uploaded.is_empty());
 	}
 
 	#[test]
