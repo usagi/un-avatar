@@ -3591,8 +3591,9 @@ fn step_group_solver<const XPBD: bool>(
 			effective_limit,
 		);
 		let rest_offset = target_tail - joint.curr_tail;
+		let rest_offset_len = rest_offset.length();
 		let displacement_boost = unphysics_displacement_boost(
-			rest_offset.length(),
+			rest_offset_len,
 			joint.length,
 			joint.rest_response,
 			joint.parent_motion_follow,
@@ -3604,7 +3605,7 @@ fn step_group_solver<const XPBD: bool>(
 			* unphysics_displacement_response_gain(
 				joint.rest_response,
 				dt,
-				rest_offset.length(),
+				rest_offset_len,
 				joint.length,
 				joint.parent_motion_follow,
 				joint.chain_joint_count,
@@ -3635,9 +3636,10 @@ fn step_group_solver<const XPBD: bool>(
 					bone_colliders,
 					joint.hit_radius,
 				);
-				collision_projected |= (next_tail - before_collision).length_squared() > 1e-12;
+				let projected = (next_tail - before_collision).length_squared() > 1e-12;
+				collision_projected |= projected;
 				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
-					if (next_tail - before_collision).length_squared() > 1e-12 {
+					if projected {
 						let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
 						profile.record_collision_projection(group.source_id, collider_path);
 					}
@@ -3660,9 +3662,10 @@ fn step_group_solver<const XPBD: bool>(
 				bone_colliders,
 				joint.hit_radius,
 			);
-			collision_projected |= (next_tail - before_collision).length_squared() > 1e-12;
+			let projected = (next_tail - before_collision).length_squared() > 1e-12;
+			collision_projected |= projected;
 			if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
-				if (next_tail - before_collision).length_squared() > 1e-12 {
+				if projected {
 					let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
 					profile.record_collision_projection(group.source_id, collider_path);
 				}
