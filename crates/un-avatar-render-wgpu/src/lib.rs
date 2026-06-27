@@ -29,7 +29,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
 	cell::Cell,
-	collections::{BTreeMap, BTreeSet, VecDeque},
+	collections::{BTreeMap, VecDeque},
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
@@ -1597,7 +1597,7 @@ struct AvatarApp {
 	#[cfg(windows)]
 	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
 	wardrobe_midi: Option<WardrobeMidiRuntime>,
-	active_profile_animator_actions: BTreeSet<String>,
+	active_profile_animator_actions: Vec<String>,
 	active_animator_transitions: Vec<ActiveAnimatorTransition>,
 }
 
@@ -1915,7 +1915,7 @@ impl AvatarApp {
 			#[cfg(windows)]
 			wardrobe_hotkeys: None,
 			wardrobe_midi: None,
-			active_profile_animator_actions: BTreeSet::new(),
+			active_profile_animator_actions: Vec::new(),
 			active_animator_transitions: Vec::new(),
 		}
 	}
@@ -2216,17 +2216,19 @@ impl AvatarApp {
 			.get(action_id)
 			.cloned()
 			.unwrap_or_else(|| "toggle".to_string());
-		let active = self.active_profile_animator_actions.contains(action_id)
-			|| self
-				.runtime_status
-				.as_ref()
-				.and_then(|status| status.lock().ok())
-				.is_some_and(|status| {
-					status
-						.runtime_actions
-						.iter()
-						.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
-				});
+		let active = self
+			.active_profile_animator_actions
+			.binary_search_by(|id| id.as_str().cmp(action_id))
+			.is_ok() || self
+			.runtime_status
+			.as_ref()
+			.and_then(|status| status.lock().ok())
+			.is_some_and(|status| {
+				status
+					.runtime_actions
+					.iter()
+					.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
+			});
 		if mode == "toggle" && active {
 			let parameter = self.runtime_status.as_ref().and_then(|status| {
 				status.lock().ok().and_then(|status| {
@@ -2264,7 +2266,12 @@ impl AvatarApp {
 					}
 				}
 			};
-			self.active_profile_animator_actions.remove(action_id);
+			if let Ok(index) = self
+				.active_profile_animator_actions
+				.binary_search_by(|id| id.as_str().cmp(action_id))
+			{
+				self.active_profile_animator_actions.remove(index);
+			}
 			if let Some(activation) = activation.as_ref() {
 				self.apply_runtime_activation_status(activation);
 			}
@@ -2277,7 +2284,12 @@ impl AvatarApp {
 		}?;
 		self.schedule_animator_activation_transitions(action_id, &outcome);
 		if mode == "toggle" {
-			self.active_profile_animator_actions.insert(action_id.to_string());
+			if let Err(index) = self
+				.active_profile_animator_actions
+				.binary_search_by(|id| id.as_str().cmp(action_id))
+			{
+				self.active_profile_animator_actions.insert(index, action_id.to_string());
+			}
 		}
 		self.apply_runtime_activation_status(&outcome);
 		self.request_redraw();
@@ -2851,7 +2863,9 @@ impl AvatarApp {
 			return;
 		};
 		if let Ok(mut status) = status.lock() {
-			status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+			status
+				.active_profile_animator_actions
+				.clone_from(&self.active_profile_animator_actions);
 			if let Some(gpu) = self.gpu.as_ref() {
 				status.runtime_actions = gpu.runtime_actions();
 				status.menu_action_candidates = gpu.menu_action_candidates();
@@ -3030,7 +3044,9 @@ impl AvatarApp {
 				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
 				status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 				status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
-				status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+				status
+					.active_profile_animator_actions
+					.clone_from(&self.active_profile_animator_actions);
 				status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
 				status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
 				status.runtime_action_restore_baseline_candidates =
