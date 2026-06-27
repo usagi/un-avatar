@@ -2107,7 +2107,6 @@ struct SkinPalette {
 	static_identity: bool,
 	inverse_bind_matrices: Box<[Mat4]>,
 	raw: Vec<f32>,
-	computed_matrices: Vec<Mat4>,
 	uploaded_matrices: Vec<Mat4>,
 	uploaded_changed: bool,
 }
@@ -4204,15 +4203,30 @@ fn write_matrix_to_raw_slot(raw: &mut [f32], matrix_index: usize, matrix: Mat4) 
 	}
 }
 
-fn write_palette_matrix_slot(raw: &mut [f32], matrices: &mut Vec<Mat4>, matrix_index: usize, matrix: Mat4) {
+fn write_palette_matrix_slot(raw: &mut [f32], uploaded_matrices: &mut Vec<Mat4>, matrix_index: usize, matrix: Mat4) -> bool {
 	write_matrix_to_raw_slot(raw, matrix_index, matrix);
-	matrices.push(matrix);
+	if uploaded_matrices.get(matrix_index).copied() == Some(matrix) {
+		false
+	} else if let Some(slot) = uploaded_matrices.get_mut(matrix_index) {
+		*slot = matrix;
+		true
+	} else {
+		false
+	}
 }
 
 fn resize_f32_zeroed_if_needed(values: &mut Vec<f32>, len: usize) {
 	if values.len() != len {
 		values.resize(len, 0.0);
 	}
+}
+
+fn resize_mat4_identity_if_needed(values: &mut Vec<Mat4>, len: usize) -> bool {
+	if values.len() == len {
+		return false;
+	}
+	values.resize(len, Mat4::IDENTITY);
+	true
 }
 
 fn identity_matrix_raw() -> Vec<f32> {
@@ -11025,30 +11039,32 @@ impl SceneMeshes {
 		if palette.static_identity {
 			return;
 		}
-		palette.computed_matrices.clear();
+		let mut changed = false;
 		if let Some(skin) = skin {
 			let mesh_world = world.get(palette.key.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			let inv_mesh = safe_inverse_mesh_world(mesh_world);
 			let joint_count = skin.joint_nodes.len().min(palette.matrix_capacity).min(MAX_BONES);
 			if joint_count == 0 {
 				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
-				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
+				changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, 1);
+				changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, 0, Mat4::IDENTITY);
 			} else {
 				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(joint_count));
+				changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, joint_count);
 			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
 				let ibm = palette.inverse_bind_matrices.get(j).copied().unwrap_or(Mat4::IDENTITY);
 				let matrix = if legacy_no_inv_mesh { wj * ibm } else { inv_mesh * wj * ibm };
-				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, j, matrix);
+				changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, j, matrix);
 			}
 		} else {
 			resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
-			write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
+			changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, 1);
+			changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, 0, Mat4::IDENTITY);
 		}
-		if palette.uploaded_matrices != palette.computed_matrices {
+		if changed {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
-			std::mem::swap(&mut palette.uploaded_matrices, &mut palette.computed_matrices);
 			palette.uploaded_changed = true;
 		}
 	}
@@ -11082,17 +11098,13 @@ impl SceneMeshes {
 		});
 		let index = skin_palettes.len();
 		let static_identity = key.skin_index.is_none();
-		let (raw, computed_matrices, uploaded_matrices) = if static_identity {
+		let (raw, uploaded_matrices) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
-			(Vec::new(), Vec::new(), Vec::new())
+			(Vec::new(), Vec::new())
 		} else {
 			let raw_capacity = matrix_raw_capacity(matrix_capacity);
-			(
-				Vec::with_capacity(raw_capacity),
-				Vec::with_capacity(matrix_capacity),
-				Vec::with_capacity(matrix_capacity),
-			)
+			(Vec::with_capacity(raw_capacity), Vec::with_capacity(matrix_capacity))
 		};
 		let inverse_bind_matrices = skin
 			.map(|skin| {
@@ -11112,7 +11124,6 @@ impl SceneMeshes {
 			static_identity,
 			inverse_bind_matrices,
 			raw,
-			computed_matrices,
 			uploaded_matrices,
 			uploaded_changed: false,
 		});
