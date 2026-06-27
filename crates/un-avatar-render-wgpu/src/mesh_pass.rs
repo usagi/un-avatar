@@ -2009,7 +2009,9 @@ fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 
 fn material_resident_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = material_texture_indices(material);
-	indices.extend(material_cube_texture_indices(material));
+	for texture_index in material_cube_texture_indices(material) {
+		push_unique_index(&mut indices, texture_index);
+	}
 	sorted_unique_indices(indices)
 }
 
@@ -2040,7 +2042,9 @@ fn initial_active_texture_indices_for_scene(
 			if material_is_fully_invisible_for_draw(material, opts) {
 				continue;
 			}
-			indices.extend(material_resident_texture_indices(material));
+			for texture_index in material_resident_texture_indices(material) {
+				push_unique_index(&mut indices, texture_index);
+			}
 		}
 	}
 	sorted_unique_indices(indices)
@@ -2073,7 +2077,9 @@ fn initial_active_2d_texture_indices_for_scene(
 			if material_is_fully_invisible_for_draw(material, opts) {
 				continue;
 			}
-			indices.extend(material_texture_indices(material));
+			for texture_index in material_texture_indices(material) {
+				push_unique_index(&mut indices, texture_index);
+			}
 		}
 	}
 	sorted_unique_indices(indices)
