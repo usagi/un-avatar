@@ -6,6 +6,7 @@ use std::{
 	fs,
 	io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
 	path::{Path, PathBuf},
+	sync::Arc,
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -1338,7 +1339,7 @@ struct ExpandedMorphPayload {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExpandedPrimitiveCacheKey {
 	vertex_payload_id: u64,
-	dynamic_morph_targets: Box<[usize]>,
+	dynamic_morph_targets: Arc<[usize]>,
 }
 
 #[derive(Clone, Debug)]
@@ -10211,7 +10212,7 @@ impl SceneMeshes {
 					opts.debug_zero_morphs,
 				);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let dynamic_morph_target_list = dynamic_morph_targets.clone().into_boxed_slice();
+				let dynamic_morph_target_list = Arc::<[usize]>::from(dynamic_morph_targets.as_slice());
 				let expanded_cache_key = buf
 					.vertex_payload_id
 					.filter(|_| primitive_expand_cache_safe(buf))
