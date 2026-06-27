@@ -4352,7 +4352,7 @@ fn dynamics_collider_details_by_selection_source<'a>(
 	collider_selections: &'a [RuntimeDynamicsColliderSelectionStatus],
 ) -> BTreeMap<&'a str, Vec<&'a serde_json::Value>> {
 	let mut colliders_by_source_id = BTreeMap::<&str, Vec<&serde_json::Value>>::new();
-	let mut seen = BTreeSet::<(&str, String)>::new();
+	let mut seen = Vec::<(&str, String)>::new();
 	for selection in collider_selections {
 		for detail in &selection.sample_collider_details {
 			let key = (
@@ -4364,7 +4364,8 @@ fn dynamics_collider_details_by_selection_source<'a>(
 					.or_else(|| detail.get("collider_path").and_then(Value::as_str).map(str::to_string))
 					.unwrap_or_default(),
 			);
-			if seen.insert(key) {
+			if !seen.iter().any(|seen| seen == &key) {
+				seen.push(key);
 				colliders_by_source_id.entry(selection.source_id.as_str()).or_default().push(detail);
 			}
 		}
@@ -4471,7 +4472,7 @@ fn dynamics_collider_path_contact_summary_statuses(
 	#[derive(Clone)]
 	struct Accum {
 		summary: RuntimeDynamicsColliderPathContactSummary,
-		source_ids: BTreeSet<String>,
+		source_ids: Vec<String>,
 	}
 	let mut by_collider = BTreeMap::<String, Accum>::new();
 	for contact in contacts {
@@ -4495,7 +4496,7 @@ fn dynamics_collider_path_contact_summary_statuses(
 				min_threshold: contact.threshold,
 				sample_source_ids: Vec::new(),
 			},
-			source_ids: BTreeSet::new(),
+			source_ids: Vec::new(),
 		});
 		accum.summary.contact_count += 1;
 		if contact.penetrating {
@@ -4507,8 +4508,11 @@ fn dynamics_collider_path_contact_summary_statuses(
 			accum.summary.min_threshold = contact.threshold;
 			accum.summary.collider_shape = contact.collider_shape.clone();
 		}
-		if accum.source_ids.insert(contact.source_id.clone()) && accum.summary.sample_source_ids.len() < 8 {
-			accum.summary.sample_source_ids.push(contact.source_id.clone());
+		if !accum.source_ids.iter().any(|source_id| source_id == &contact.source_id) {
+			accum.source_ids.push(contact.source_id.clone());
+			if accum.summary.sample_source_ids.len() < 8 {
+				accum.summary.sample_source_ids.push(contact.source_id.clone());
+			}
 		}
 	}
 	by_collider
@@ -4527,7 +4531,7 @@ fn dynamics_collider_path_candidate_summary_statuses(
 	#[derive(Clone)]
 	struct Accum {
 		summary: RuntimeDynamicsColliderPathCandidateSummary,
-		source_ids: BTreeSet<String>,
+		source_ids: Vec<String>,
 	}
 	let colliders_by_source_id = dynamics_collider_details_by_selection_source(collider_selections);
 
@@ -4565,7 +4569,7 @@ fn dynamics_collider_path_candidate_summary_statuses(
 					min_threshold: contact.threshold,
 					sample_source_ids: Vec::new(),
 				},
-				source_ids: BTreeSet::new(),
+				source_ids: Vec::new(),
 			});
 			accum.summary.candidate_count += 1;
 			if contact.penetrating {
@@ -4577,8 +4581,11 @@ fn dynamics_collider_path_candidate_summary_statuses(
 				accum.summary.min_threshold = contact.threshold;
 				accum.summary.collider_shape = contact.collider_shape.clone();
 			}
-			if accum.source_ids.insert(contact.source_id.clone()) && accum.summary.sample_source_ids.len() < 8 {
-				accum.summary.sample_source_ids.push(contact.source_id.clone());
+			if !accum.source_ids.iter().any(|source_id| source_id == &contact.source_id) {
+				accum.source_ids.push(contact.source_id.clone());
+				if accum.summary.sample_source_ids.len() < 8 {
+					accum.summary.sample_source_ids.push(contact.source_id.clone());
+				}
 			}
 		}
 	}
@@ -4602,7 +4609,7 @@ fn dynamics_collider_path_runtime_summary_statuses(
 		collider_path: String,
 		collider_shape: String,
 		runtime_collider_count: usize,
-		source_ids: BTreeSet<String>,
+		source_ids: Vec<String>,
 		sample_source_ids: Vec<String>,
 	}
 	fn push_sample_source_ids(accum: &mut Accum, sample_source_ids: &[String]) {
@@ -4639,8 +4646,11 @@ fn dynamics_collider_path_runtime_summary_statuses(
 			..Default::default()
 		});
 		accum.runtime_collider_count += 1;
-		if accum.source_ids.insert(collider.source_id.clone()) && accum.sample_source_ids.len() < 8 {
-			accum.sample_source_ids.push(collider.source_id.clone());
+		if !accum.source_ids.iter().any(|source_id| source_id == &collider.source_id) {
+			accum.source_ids.push(collider.source_id.clone());
+			if accum.sample_source_ids.len() < 8 {
+				accum.sample_source_ids.push(collider.source_id.clone());
+			}
 		}
 	}
 	for summary in contact_summaries {
