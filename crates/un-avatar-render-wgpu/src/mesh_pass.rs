@@ -134,7 +134,7 @@ pub struct SceneMeshLoadOpts {
 	pub mesh_cloth_assist_categories: Vec<DynamicsCategoryDefinition>,
 	/// Scene node indices that are actual dynamics deformation targets.
 	/// When this is non-empty, mesh cloth assist uses it instead of name-only cloth joint classification.
-	pub dynamic_deforming_node_indices: BTreeSet<usize>,
+	pub dynamic_deforming_node_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3619,7 +3619,7 @@ fn apply_mesh_cloth_assist_to_vertices(
 	mesh_path: &str,
 	config: &DynamicsMeshClothAssistConfig,
 	categories: &[DynamicsCategoryDefinition],
-	dynamic_deforming_node_indices: &BTreeSet<usize>,
+	dynamic_deforming_node_indices: &[usize],
 ) -> usize {
 	if !config.enabled || config.max_assist_weight <= 0.0 || verts.is_empty() || indices.is_empty() {
 		return 0;
@@ -3656,7 +3656,7 @@ fn debug_dump_mesh_vertex_weights_if_requested(
 	indices: &[u32],
 	skin: Option<&un_avatar_core::UnaSkin>,
 	node_paths: &[String],
-	dynamic_deforming_node_indices: &BTreeSet<usize>,
+	dynamic_deforming_node_indices: &[usize],
 	mesh_cloth_assist_vertices: usize,
 ) {
 	let Some(path) = std::env::var_os("UN_AVATAR_DEBUG_MESH_WEIGHTS_PATH") else {
@@ -3690,7 +3690,7 @@ fn debug_dump_mesh_vertex_weights_if_requested(
 						"weight": weight,
 						"node_index": node_index,
 						"path": node_path,
-						"dynamic_deforming": node_index.is_some_and(|node_index| dynamic_deforming_node_indices.contains(&node_index)),
+						"dynamic_deforming": node_index.is_some_and(|node_index| dynamic_deforming_node_indices.binary_search(&node_index).is_ok()),
 						"inverse_bind_matrix": inverse_bind_matrix,
 					})
 				})
@@ -13633,7 +13633,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::from([2usize]),
+			&[2usize],
 		);
 
 		assert_eq!(changed, 2);
@@ -13677,7 +13677,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::new(),
+			&[],
 		);
 
 		assert_eq!(changed, 1);
@@ -13715,7 +13715,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::new(),
+			&[],
 		);
 
 		assert_eq!(changed, 1);
@@ -13754,7 +13754,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::new(),
+			&[],
 		);
 
 		assert_eq!(changed, 2);
@@ -13814,7 +13814,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::new(),
+			&[],
 		);
 
 		assert_eq!(changed, 0);
@@ -13851,7 +13851,7 @@ mod tests {
 			max_assist_weight: 0.3,
 			mesh_path_contains: vec!["cloth".to_string()],
 		};
-		let dynamic_nodes = BTreeSet::from([2usize]);
+		let dynamic_nodes = vec![2usize];
 
 		let changed = apply_mesh_cloth_assist_to_vertices(
 			&mut verts,
@@ -13901,7 +13901,7 @@ mod tests {
 			max_assist_weight: 0.3,
 			mesh_path_contains: vec!["cloth".to_string()],
 		};
-		let dynamic_nodes = BTreeSet::from([2usize]);
+		let dynamic_nodes = vec![2usize];
 
 		let changed = apply_mesh_cloth_assist_to_vertices(
 			&mut verts,
@@ -13953,7 +13953,7 @@ mod tests {
 			"Avatar/Cloth_Panel_Mesh",
 			&config,
 			&[],
-			&BTreeSet::new(),
+			&[],
 		);
 
 		assert_eq!(changed, 0);

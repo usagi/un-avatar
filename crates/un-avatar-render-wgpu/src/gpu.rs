@@ -5280,11 +5280,11 @@ pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions
 fn dynamics_deforming_node_indices_for_mesh_assist(
 	runtime_model: un_avatar_core::UnaRuntimeModel<'_>,
 	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
-		return BTreeSet::new();
+		return Vec::new();
 	};
-	let mut out = BTreeSet::new();
+	let mut out = Vec::new();
 	let dynamics = runtime.dynamics;
 	for group in dynamics.dynamics_groups() {
 		if !group.effective_enabled || !dynamics.source_id_resident_in_scene(runtime.scene, group.source_id) {
@@ -5302,6 +5302,8 @@ fn dynamics_deforming_node_indices_for_mesh_assist(
 			group.chain.interaction_start_index,
 		));
 	}
+	out.sort_unstable();
+	out.dedup();
 	out
 }
 

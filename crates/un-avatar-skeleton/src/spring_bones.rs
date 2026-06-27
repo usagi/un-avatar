@@ -38,10 +38,7 @@
 //! - dt 可変だと Verlet 速度 `curr - prev` が前フレームの dt 分の変位を表すため発散しやすい
 //!   → accumulator で profile 設定の固定 dt サブステップ化を行う。
 
-use std::{
-	collections::{BTreeMap, BTreeSet},
-	time::Instant,
-};
+use std::{collections::BTreeMap, time::Instant};
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -467,7 +464,7 @@ pub fn dynamics_mesh_cloth_assist_transfer_candidate(
 pub fn dynamics_mesh_cloth_assist_joint_roles<'a>(
 	skin: &un_avatar_core::UnaSkin,
 	joint_count: usize,
-	dynamic_nodes: Option<&BTreeSet<usize>>,
+	dynamic_nodes: Option<&[usize]>,
 	mut joint_leaf: impl FnMut(usize) -> &'a str,
 ) -> Vec<DynamicsMeshClothAssistJointRole> {
 	let mut roles = vec![DynamicsMeshClothAssistJointRole::Other; joint_count];
@@ -476,7 +473,7 @@ pub fn dynamics_mesh_cloth_assist_joint_roles<'a>(
 			if skin
 				.joint_nodes
 				.get(joint_index)
-				.is_some_and(|node_index| nodes.contains(node_index))
+				.is_some_and(|node_index| nodes.binary_search(node_index).is_ok())
 			{
 				*role = DynamicsMeshClothAssistJointRole::Dynamic;
 				continue;
@@ -4362,7 +4359,7 @@ mod tests {
 			inverse_bind_matrices: vec![[1.0; 16]; 3],
 			skeleton_node: None,
 		};
-		let dynamic_nodes = BTreeSet::from([1usize]);
+		let dynamic_nodes = vec![1usize];
 		let leaves = ["Chest", "Accessory_Dyn", "Cloth_Static"];
 
 		let roles = dynamics_mesh_cloth_assist_joint_roles(&skin, 3, Some(&dynamic_nodes), |joint_index| leaves[joint_index]);

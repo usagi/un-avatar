@@ -3499,21 +3499,24 @@ fn dynamics_mesh_cloth_assist_source_group_is_cloth(
 fn dynamics_mesh_cloth_assist_source_dynamic_nodes(
 	scene: &un_avatar_core::UnaSceneSnapshot,
 	groups: &[un_avatar_core::UnaDynamicsSourceGroup],
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let physics_config = DynamicsPhysicsConfig::default().normalized();
-	groups
+	let mut nodes = groups
 		.iter()
 		.filter(|group| group.enabled && dynamics_mesh_cloth_assist_source_group_is_cloth(scene, group, &physics_config.categories))
 		.flat_map(|group| dynamics_mesh_cloth_assist_deforming_nodes(&group.bone_node_indices, group.interaction_chain_start_index))
-		.collect()
+		.collect::<Vec<_>>();
+	nodes.sort_unstable();
+	nodes.dedup();
+	nodes
 }
 
 fn dynamics_mesh_cloth_assist_runtime_dynamic_nodes(
 	scene: &un_avatar_core::UnaSceneSnapshot,
 	runtime_dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
 	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
-) -> BTreeSet<usize> {
-	runtime_dynamics
+) -> Vec<usize> {
+	let mut nodes = runtime_dynamics
 		.dynamics_groups()
 		.filter(|group| {
 			group.effective_enabled
@@ -3521,7 +3524,10 @@ fn dynamics_mesh_cloth_assist_runtime_dynamic_nodes(
 				&& classify_dynamics_group_category(scene, *group, &categories) == "cloth"
 		})
 		.flat_map(|group| dynamics_mesh_cloth_assist_deforming_nodes(group.chain.bone_node_indices, group.chain.interaction_start_index))
-		.collect()
+		.collect::<Vec<_>>();
+	nodes.sort_unstable();
+	nodes.dedup();
+	nodes
 }
 
 #[derive(Clone, Copy, Default)]
@@ -5667,7 +5673,7 @@ fn dynamics_vertex_probe_mesh_cloth_assist_config(physics_config: &DynamicsPhysi
 fn dynamics_vertex_probe_dynamic_weight_score(
 	mesh: &[un_avatar_core::UnaMeshBuffers],
 	skin: &un_avatar_core::UnaSkin,
-	dynamic_nodes: &BTreeSet<usize>,
+	dynamic_nodes: &[usize],
 ) -> (usize, f32) {
 	let mut vertex_count = 0usize;
 	let mut weight_sum = 0.0_f32;
@@ -5685,7 +5691,7 @@ fn dynamics_vertex_probe_dynamic_weight_score(
 				let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
 					continue;
 				};
-				if dynamic_nodes.contains(&node_index) {
+				if dynamic_nodes.binary_search(&node_index).is_ok() {
 					vertex_dynamic_weight += vertex_weights[lane].max(0.0);
 				}
 			}
@@ -5702,7 +5708,7 @@ fn dynamics_vertex_probe_dynamic_source_weight_sums(
 	runtime_dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
 	skin: Option<&un_avatar_core::UnaSkin>,
 	primitive: &un_avatar_core::UnaMeshBuffers,
-	dynamic_nodes: &BTreeSet<usize>,
+	dynamic_nodes: &[usize],
 ) -> BTreeMap<String, f32> {
 	let Some(skin) = skin else {
 		return BTreeMap::new();
@@ -5733,7 +5739,7 @@ fn dynamics_vertex_probe_dynamic_source_weight_sums(
 			let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
 				continue;
 			};
-			if !dynamic_nodes.contains(&node_index) {
+			if dynamic_nodes.binary_search(&node_index).is_err() {
 				continue;
 			}
 			let Some(source_ids) = source_ids_by_node.get(&node_index) else {
@@ -5789,7 +5795,7 @@ fn dynamics_vertex_probe_apply_mesh_cloth_assist(
 	node_paths: &[Option<String>],
 	node_path: &str,
 	config: &DynamicsMeshClothAssistConfig,
-	dynamic_nodes: &BTreeSet<usize>,
+	dynamic_nodes: &[usize],
 	categories: &[DynamicsCategoryDefinition],
 ) -> usize {
 	if !config.enabled || config.max_assist_weight <= 0.0 || primitive.positions.is_empty() {
@@ -12491,7 +12497,7 @@ mod tests {
 			Some("Avatar/AccessoryRoot".to_string()),
 			Some("Avatar/Cloth_Static".to_string()),
 		];
-		let runtime_dynamic_nodes = BTreeSet::from([1usize]);
+		let runtime_dynamic_nodes = vec![1usize];
 
 		let roles = dynamics_mesh_cloth_assist_joint_roles(&skin, 3, Some(&runtime_dynamic_nodes), |joint_index| {
 			dynamics_mesh_cloth_assist_joint_leaf(&skin, &node_paths, joint_index)
@@ -12747,7 +12753,7 @@ mod tests {
 			skeleton_node: None,
 		};
 		let node_paths = vec![Some("Avatar/Chest".to_string()), Some("Avatar/Cloth_Dyn".to_string())];
-		let dynamic_nodes = BTreeSet::from([1usize]);
+		let dynamic_nodes = vec![1usize];
 		let physics_config = DynamicsPhysicsConfig::default().normalized();
 		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
 		let mut primitive = un_avatar_core::UnaMeshBuffers {
@@ -12798,7 +12804,7 @@ mod tests {
 			Some("Avatar/Cloth_Static_L".to_string()),
 			Some("Avatar/Cloth_Dyn_L".to_string()),
 		];
-		let dynamic_nodes = BTreeSet::from([2usize]);
+		let dynamic_nodes = vec![2usize];
 		let physics_config = DynamicsPhysicsConfig::default().normalized();
 		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
 		let mut primitive = un_avatar_core::UnaMeshBuffers {
@@ -13000,7 +13006,7 @@ mod tests {
 			inverse_bind_matrices: vec![test_identity_mat4(), test_identity_mat4()],
 			skeleton_node: None,
 		};
-		let dynamic_nodes = BTreeSet::from([20usize]);
+		let dynamic_nodes = vec![20usize];
 
 		let (vertex_count, weight_sum) = dynamics_vertex_probe_dynamic_weight_score(&mesh, &skin, &dynamic_nodes);
 
@@ -13051,7 +13057,7 @@ mod tests {
 			],
 			..Default::default()
 		};
-		let dynamic_nodes = BTreeSet::from([20usize]);
+		let dynamic_nodes = vec![20usize];
 		let source_weights =
 			dynamics_vertex_probe_dynamic_source_weight_sums(settings.runtime_dynamics(), Some(&skin), &primitive, &dynamic_nodes);
 		let all_projection_counts = BTreeMap::from([
