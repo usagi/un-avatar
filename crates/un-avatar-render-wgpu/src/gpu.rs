@@ -5855,8 +5855,11 @@ fn motion_signal_runtime_parameter_names(document: &UnaDocument) -> BTreeSet<Str
 		.collect()
 }
 
-fn apply_motion_signal_runtime_parameters(document: &mut UnaDocument, frames: &[un_motion_frame::UNMotionFrame]) -> BTreeMap<String, f32> {
-	let parameter_names = motion_signal_runtime_parameter_names(document);
+fn apply_motion_signal_runtime_parameters_with_names(
+	document: &mut UnaDocument,
+	frames: &[un_motion_frame::UNMotionFrame],
+	parameter_names: &BTreeSet<String>,
+) -> BTreeMap<String, f32> {
 	if parameter_names.is_empty() {
 		return BTreeMap::new();
 	}
@@ -5886,6 +5889,12 @@ fn apply_motion_signal_runtime_parameters(document: &mut UnaDocument, frames: &[
 		document.runtime_model_mut().set_runtime_parameter_values(changed.clone());
 	}
 	changed
+}
+
+#[cfg(test)]
+fn apply_motion_signal_runtime_parameters(document: &mut UnaDocument, frames: &[un_motion_frame::UNMotionFrame]) -> BTreeMap<String, f32> {
+	let parameter_names = motion_signal_runtime_parameter_names(document);
+	apply_motion_signal_runtime_parameters_with_names(document, frames, &parameter_names)
 }
 
 #[cfg(test)]
@@ -6484,6 +6493,7 @@ pub(crate) struct GpuState {
 	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
+	motion_runtime_parameter_names: BTreeSet<String>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
 	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
@@ -6860,6 +6870,7 @@ impl GpuState {
 			motion_apply_opts,
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
+			motion_runtime_parameter_names: BTreeSet::new(),
 			motion_retarget_runtime: None,
 			rest_nodes: None,
 			primary_motion_source,
@@ -9241,9 +9252,14 @@ impl GpuState {
 			.runtime_model_mut()
 			.apply_runtime_parameter_initial_values();
 		log_slow_gpu_scene_context_step("attach initial runtime parameters", apply_initial_values_start.elapsed());
+		let motion_runtime_parameter_names = {
+			let doc = prepared.document.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+			motion_signal_runtime_parameter_names(&doc)
+		};
 		let state_assign_start = Instant::now();
 		self.document = Some(prepared.document);
 		self.invalidate_applied_document_state();
+		self.motion_runtime_parameter_names = motion_runtime_parameter_names;
 		self.scene_meshes = prepared.scene_meshes;
 		self.texture_summary = prepared.texture_summary;
 		self.dynamics_sim = prepared.dynamics_sim;
@@ -9649,7 +9665,11 @@ impl GpuState {
 			}
 			retarget_runtime.apply_frame(&mut document, frame, opts);
 		}
-		let changed_runtime_parameters = apply_motion_signal_runtime_parameters(&mut document, &self.pending_motion_frames);
+		let changed_runtime_parameters = apply_motion_signal_runtime_parameters_with_names(
+			&mut document,
+			&self.pending_motion_frames,
+			&self.motion_runtime_parameter_names,
+		);
 		if should_log && !changed_runtime_parameters.is_empty() {
 			self.debug_log
 				.line("motion", format!("runtime_parameters={changed_runtime_parameters:?}"));
