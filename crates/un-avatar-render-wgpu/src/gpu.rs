@@ -3241,6 +3241,46 @@ fn sorted_strings_contains(values: &[String], needle: &str) -> bool {
 	values.binary_search_by(|value| value.as_str().cmp(needle)).is_ok()
 }
 
+fn sorted_unique_index_union(a: &[usize], b: &[usize]) -> Vec<usize> {
+	let mut out = Vec::with_capacity(a.len() + b.len());
+	let mut ai = 0;
+	let mut bi = 0;
+	while ai < a.len() && bi < b.len() {
+		match a[ai].cmp(&b[bi]) {
+			std::cmp::Ordering::Less => {
+				out.push(a[ai]);
+				ai += 1;
+			}
+			std::cmp::Ordering::Equal => {
+				out.push(a[ai]);
+				ai += 1;
+				bi += 1;
+			}
+			std::cmp::Ordering::Greater => {
+				out.push(b[bi]);
+				bi += 1;
+			}
+		}
+	}
+	out.extend_from_slice(&a[ai..]);
+	out.extend_from_slice(&b[bi..]);
+	out
+}
+
+fn sorted_index_difference(indices: &[usize], excluded: &[usize]) -> Vec<usize> {
+	let mut out = Vec::with_capacity(indices.len());
+	let mut ei = 0;
+	for &index in indices {
+		while ei < excluded.len() && excluded[ei] < index {
+			ei += 1;
+		}
+		if excluded.get(ei).copied() != Some(index) {
+			out.push(index);
+		}
+	}
+	out
+}
+
 fn dynamics_source_id_resident(source_id: &str, source_ids: Option<&ActiveDynamicsSourceIds>) -> bool {
 	let Some(source_ids) = source_ids else {
 		return true;
@@ -7267,38 +7307,18 @@ impl GpuState {
 			}
 			self.last_asset_residency_refresh = residency_refresh;
 			let active_gaps = sm.active_residency_gaps();
-			let mut image_load_indices = self
-				.last_asset_residency_refresh
-				.image_texture_load_indices
-				.iter()
-				.chain(active_gaps.inactive_image_texture_indices.iter())
-				.copied()
-				.collect::<Vec<_>>();
-			image_load_indices.sort_unstable();
-			image_load_indices.dedup();
-			let image_unload_indices = self
-				.last_asset_residency_refresh
-				.image_texture_unload_indices
-				.iter()
-				.copied()
-				.filter(|index| image_load_indices.binary_search(index).is_err())
-				.collect::<Vec<_>>();
-			let mut cube_load_indices = self
-				.last_asset_residency_refresh
-				.cube_texture_load_indices
-				.iter()
-				.chain(active_gaps.inactive_cube_texture_indices.iter())
-				.copied()
-				.collect::<Vec<_>>();
-			cube_load_indices.sort_unstable();
-			cube_load_indices.dedup();
-			let cube_unload_indices = self
-				.last_asset_residency_refresh
-				.cube_texture_unload_indices
-				.iter()
-				.copied()
-				.filter(|index| cube_load_indices.binary_search(index).is_err())
-				.collect::<Vec<_>>();
+			let image_load_indices = sorted_unique_index_union(
+				&self.last_asset_residency_refresh.image_texture_load_indices,
+				&active_gaps.inactive_image_texture_indices,
+			);
+			let image_unload_indices =
+				sorted_index_difference(&self.last_asset_residency_refresh.image_texture_unload_indices, &image_load_indices);
+			let cube_load_indices = sorted_unique_index_union(
+				&self.last_asset_residency_refresh.cube_texture_load_indices,
+				&active_gaps.inactive_cube_texture_indices,
+			);
+			let cube_unload_indices =
+				sorted_index_difference(&self.last_asset_residency_refresh.cube_texture_unload_indices, &cube_load_indices);
 			sm.promote_image_texture_residency(&image_load_indices);
 			sm.promote_cube_texture_residency(&cube_load_indices);
 			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) = sm
@@ -11303,12 +11323,12 @@ mod tests {
 		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_statuses, scene_node_constraint_counts, transparent_alpha_mode, wardrobe_action_statuses,
-		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
-		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
-		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
-		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
+		runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference, sorted_unique_index_union, transparent_alpha_mode,
+		wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts,
+		wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation,
+		RuntimeDynamicsColliderPathCandidateSummary, RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus,
+		RuntimeDynamicsColliderStatus, RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame,
+		SurfaceConstraintNode, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
 		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
 		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
 		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
@@ -13119,6 +13139,22 @@ mod tests {
 		assert_eq!(work.active_draws_using_inactive_image_texture_count, 4);
 		assert_eq!(work.active_draws_using_inactive_cube_texture_count, 3);
 		assert_eq!(work.active_draws_using_inactive_material_slot_count, 5);
+	}
+
+	#[test]
+	fn sorted_unique_index_union_merges_sorted_inputs_without_duplicates() {
+		assert_eq!(sorted_unique_index_union(&[1, 3, 8], &[2, 3, 4, 9]), vec![1, 2, 3, 4, 8, 9]);
+		assert_eq!(sorted_unique_index_union(&[], &[2, 5]), vec![2, 5]);
+		assert_eq!(sorted_unique_index_union(&[1, 4], &[]), vec![1, 4]);
+		assert!(sorted_unique_index_union(&[], &[]).is_empty());
+	}
+
+	#[test]
+	fn sorted_index_difference_removes_sorted_exclusions() {
+		assert_eq!(sorted_index_difference(&[0, 1, 3, 5, 8], &[1, 2, 5, 9]), vec![0, 3, 8]);
+		assert_eq!(sorted_index_difference(&[1, 2], &[]), vec![1, 2]);
+		assert!(sorted_index_difference(&[1, 2], &[0, 1, 2, 3]).is_empty());
+		assert!(sorted_index_difference(&[], &[1, 2]).is_empty());
 	}
 
 	#[test]
