@@ -5939,7 +5939,8 @@ fn apply_motion_signal_runtime_parameters_with_names(
 	if parameter_names.is_empty() {
 		return BTreeMap::new();
 	}
-	let mut next_values = BTreeMap::<String, f32>::new();
+	let before = document.runtime_model().runtime_parameter_values();
+	let mut changed = BTreeMap::<String, f32>::new();
 	for frame in frames {
 		for signal in &frame.signals {
 			if !parameter_names.contains(&signal.name) {
@@ -5948,19 +5949,13 @@ fn apply_motion_signal_runtime_parameters_with_names(
 			let Some(value) = motion_signal_runtime_parameter_value(signal) else {
 				continue;
 			};
-			next_values.insert(signal.name.clone(), value);
+			if before.get(&signal.name).copied() == Some(value) {
+				changed.remove(&signal.name);
+			} else {
+				changed.insert(signal.name.clone(), value);
+			}
 		}
 	}
-	if next_values.is_empty() {
-		return BTreeMap::new();
-	}
-	let changed = {
-		let before = document.runtime_model().runtime_parameter_values();
-		next_values
-			.into_iter()
-			.filter(|(name, value)| before.get(name).copied() != Some(*value))
-			.collect::<BTreeMap<_, _>>()
-	};
 	if !changed.is_empty() {
 		let mut runtime = document.runtime_model_mut();
 		for (name, value) in &changed {
@@ -6138,6 +6133,43 @@ mod motion_buffer_tests {
 
 		assert!(changed.is_empty());
 		assert!(document.runtime_model().runtime_parameter_values().is_empty());
+	}
+
+	#[test]
+	fn motion_signals_use_last_value_when_filtering_unchanged_parameters() {
+		let mut document = UnaDocument {
+			runtime_actions: Some(un_avatar_core::UnaRuntimeActionSet {
+				actions: vec![un_avatar_core::UnaRuntimeAction {
+					id: "coat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Coat".to_string(),
+						value: 1.0,
+					}],
+					..Default::default()
+				}],
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().set_runtime_parameter_value("Coat".to_string(), 0.0);
+		let frames = vec![
+			signal_frame(
+				1,
+				"Coat",
+				un_motion_frame::MotionSignalValue::Scalar(1.0),
+				un_motion_frame::SampleState::Valid,
+			),
+			signal_frame(
+				2,
+				"Coat",
+				un_motion_frame::MotionSignalValue::Scalar(0.0),
+				un_motion_frame::SampleState::Valid,
+			),
+		];
+
+		let changed = apply_motion_signal_runtime_parameters(&mut document, &frames);
+
+		assert!(changed.is_empty());
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("Coat"), Some(&0.0));
 	}
 
 	#[test]
