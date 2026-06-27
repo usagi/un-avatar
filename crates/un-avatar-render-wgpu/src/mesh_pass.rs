@@ -11576,16 +11576,19 @@ impl SceneMeshes {
 
 			let model = mesh_world.to_cols_array_2d();
 			let transform = MeshDrawTransformGpu { model };
-			if d.draw_transform_uploaded != Some(transform) {
+			let transform_changed = d.draw_transform_uploaded != Some(transform);
+			if transform_changed {
 				queue.write_buffer(&d.draw_transform, 0, bytemuck::bytes_of(&transform));
 				d.draw_transform_uploaded = Some(transform);
 			}
-			if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
-				let inv_model = mesh_world.inverse().to_cols_array_2d();
-				if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
-					compute_fur_cards.params.model = model;
-					compute_fur_cards.params.inv_model = inv_model;
-					queue.write_buffer(&compute_fur_cards.params_buffer, 0, bytemuck::bytes_of(&compute_fur_cards.params));
+			if transform_changed {
+				if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
+					let inv_model = mesh_world.inverse().to_cols_array_2d();
+					if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
+						compute_fur_cards.params.model = model;
+						compute_fur_cards.params.inv_model = inv_model;
+						queue.write_buffer(&compute_fur_cards.params_buffer, 0, bytemuck::bytes_of(&compute_fur_cards.params));
+					}
 				}
 			}
 		}
