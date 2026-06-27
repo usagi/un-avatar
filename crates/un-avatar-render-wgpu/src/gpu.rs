@@ -899,11 +899,10 @@ fn runtime_action_ids_for_parameter_values(
 	scene: Option<&un_avatar_core::UnaSceneSnapshot>,
 	parameter_values: &BTreeMap<String, f32>,
 ) -> Vec<String> {
-	let mut seen = BTreeSet::new();
 	let mut ids = Vec::new();
 	for (name, value) in parameter_values {
 		for id in runtime_action_ids_for_parameter(actions, scene, name, *value) {
-			if seen.insert(id.clone()) {
+			if !ids.iter().any(|seen| seen == &id) {
 				ids.push(id);
 			}
 		}
