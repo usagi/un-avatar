@@ -3299,6 +3299,17 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_parameters_from_ref(&self, parameter_values: &BTreeMap<String, f32>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status
+				.runtime_parameter_values
+				.extend(parameter_values.iter().map(|(name, value)| (name.clone(), *value)));
+		}
+	}
+
 	fn update_runtime_parameter(&self, name: impl Into<String>, value: f32) {
 		let Some(status) = &self.runtime_status else {
 			return;
@@ -3316,7 +3327,7 @@ impl AvatarApp {
 			self.update_runtime_resolver_cache_key_deferred();
 		}
 		self.update_runtime_last_action(Some(activation.action_id.clone()));
-		self.update_runtime_parameters(activation.parameter_values.clone());
+		self.update_runtime_parameters_from_ref(&activation.parameter_values);
 	}
 
 	fn update_runtime_startup(&self) {
