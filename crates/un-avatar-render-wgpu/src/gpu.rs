@@ -68,6 +68,7 @@ const DYNAMICS_CONSTRAINT_REF_STATUS_LIMIT: usize = 64;
 const WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED: &str = "draw-scoped-resource-scoped";
 const CAMERA_NEAR_CLIP_M: f32 = 0.01;
 const CAMERA_FAR_CLIP_M: f32 = 200.0;
+const SURFACE_FRAME_LATENCY_ENV: &str = "UN_AVATAR_SURFACE_FRAME_LATENCY";
 
 #[derive(Clone, Debug)]
 pub(crate) struct MeshShaderResourcePlan {
@@ -5348,6 +5349,12 @@ fn log_effective_window_backend(requested: RenderBackend, effective: RenderBacke
 	let _ = (requested, effective, transparent);
 }
 
+fn surface_frame_latency_from_env() -> Option<u32> {
+	let raw = std::env::var(SURFACE_FRAME_LATENCY_ENV).ok()?;
+	let parsed = raw.trim().parse::<u32>().ok()?;
+	Some(parsed.clamp(1, 8))
+}
+
 fn gpu_backend_label(backend: wgpu::Backend) -> &'static str {
 	match backend {
 		wgpu::Backend::Noop => "noop",
@@ -6972,6 +6979,10 @@ impl GpuState {
 			.copied()
 			.find(|m| *m == wgpu::PresentMode::Fifo)
 			.unwrap_or(caps.present_modes[0]);
+		let desired_maximum_frame_latency = surface_frame_latency_from_env().unwrap_or(2);
+		eprintln!(
+			"un-avatar-renderer: surface config present_mode={present_mode:?} desired_maximum_frame_latency={desired_maximum_frame_latency}"
+		);
 
 		let config = wgpu::SurfaceConfiguration {
 			usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -6981,7 +6992,7 @@ impl GpuState {
 			present_mode,
 			alpha_mode,
 			view_formats: vec![],
-			desired_maximum_frame_latency: 2,
+			desired_maximum_frame_latency,
 		};
 
 		surface.configure(&device, &config);

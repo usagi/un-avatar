@@ -528,6 +528,9 @@ export type RendererRuntimeStatus = {
 	uptime_secs: number;
 	fps: number | null;
 	cpu_ms: number | null;
+	frame_wall_ms?: number | null;
+	frame_wall_max_recent_ms?: number | null;
+	frame_wall_spike_count_recent?: number | null;
 	frame_cpu_total_ms?: number | null;
 	frame_motion_apply_ms?: number | null;
 	frame_dynamics_step_ms?: number | null;

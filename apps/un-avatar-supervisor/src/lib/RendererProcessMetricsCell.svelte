@@ -7,6 +7,9 @@
 
 	$: startupLabel = startupStatusLabel(status);
 	$: frameDetails = [
+		["wall", runtimeMetric(status?.frame_wall_ms, " ms")],
+		["wall max", runtimeMetric(status?.frame_wall_max_recent_ms, " ms")],
+		["spikes", runtimeMetric(status?.frame_wall_spike_count_recent)],
 		[$_("renderers.metrics.frame_total"), runtimeMetric(status?.frame_cpu_total_ms, " ms")],
 		[$_("renderers.metrics.frame_wait"), runtimeMetric(status?.frame_surface_acquire_ms, " ms")],
 		[$_("renderers.metrics.frame_motion"), runtimeMetric(status?.frame_motion_apply_ms, " ms")],
@@ -46,7 +49,9 @@
 	{/if}
 	<small>{$_("renderers.metrics.cpu")} {runtimeMetric(status?.cpu_ms, " ms")}</small>
 	<small title={frameDetailTitle}>
-		{$_("renderers.metrics.frame_total")} {runtimeMetric(status?.frame_cpu_total_ms, " ms")} / {$_("renderers.metrics.frame_draw")}
+		wall {runtimeMetric(status?.frame_wall_ms, " ms")} / max {runtimeMetric(status?.frame_wall_max_recent_ms, " ms")} / spikes
+		{runtimeMetric(status?.frame_wall_spike_count_recent)} / {$_("renderers.metrics.frame_total")}
+		{runtimeMetric(status?.frame_cpu_total_ms, " ms")} / {$_("renderers.metrics.frame_draw")}
 		{runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / {$_("renderers.metrics.frame_wait")}
 		{runtimeMetric(status?.frame_surface_acquire_ms, " ms")}
 	</small>

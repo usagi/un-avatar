@@ -35,11 +35,11 @@ use std::{
 	path::{Path, PathBuf},
 	sync::{
 		atomic::{AtomicBool, AtomicU64, Ordering},
-		mpsc::{self, Receiver},
+		mpsc::{self, Receiver, TryRecvError},
 		Arc, Mutex,
 	},
 	thread,
-	time::{Duration, Instant},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub use debug_log::WindowDebugOptions;
@@ -98,8 +98,13 @@ const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
 const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 #[cfg(windows)]
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
-const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
+const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 3600;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
+const TARGET_FRAME_FPS: f32 = 60.0;
+const TARGET_FRAME_MS: f32 = 1000.0 / TARGET_FRAME_FPS;
+const TARGET_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const DEFAULT_FRAME_POLL_MARGIN: Duration = Duration::from_micros(500);
+const FRAME_POLL_MARGIN_ENV: &str = "UN_AVATAR_FRAME_POLL_MARGIN_US";
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 700;
 const WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 700;
@@ -185,6 +190,21 @@ fn default_camera_transition_duration_ms() -> u32 {
 	320
 }
 
+fn frame_poll_margin_from_env() -> Duration {
+	let Some(raw) = std::env::var_os(FRAME_POLL_MARGIN_ENV) else {
+		return DEFAULT_FRAME_POLL_MARGIN;
+	};
+	let raw = raw.to_string_lossy();
+	let trimmed = raw.trim();
+	if trimmed.is_empty() || trimmed == "0" || trimmed.eq_ignore_ascii_case("off") || trimmed.eq_ignore_ascii_case("false") {
+		return Duration::ZERO;
+	}
+	let Ok(micros) = trimmed.parse::<u64>() else {
+		return DEFAULT_FRAME_POLL_MARGIN;
+	};
+	Duration::from_micros(micros.min(5_000))
+}
+
 fn renderer_startup_frame_role(
 	renderer_startup_overlay: Option<gpu::StartupProgressOverlayFrame>,
 	startup_pending_document: bool,
@@ -211,6 +231,14 @@ fn wardrobe_billboard_min_visible_elapsed(started_at: Option<Instant>, now: Inst
 	started_at.is_none_or(|started_at| {
 		now.saturating_duration_since(started_at) >= Duration::from_millis(u64::from(WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS))
 	})
+}
+
+fn rendered_frame_role_label(frame_role: &gpu::RenderedFrameRole) -> &'static str {
+	match frame_role {
+		gpu::RenderedFrameRole::RuntimeAvatar => "runtime_avatar",
+		gpu::RenderedFrameRole::WardrobeTransition(_) => "wardrobe_transition",
+		gpu::RenderedFrameRole::RendererStartup(_) => "renderer_startup",
+	}
 }
 
 fn should_evaluate_runtime_actions_for_frame(frame_role: &gpu::RenderedFrameRole) -> bool {
@@ -1565,10 +1593,15 @@ struct AvatarApp {
 	startup_failed: Option<String>,
 	runtime_status: Option<Arc<Mutex<RendererRuntimeSnapshot>>>,
 	last_wall: Instant,
+	next_frame_at: Instant,
+	frame_poll_margin: Duration,
 	started_at: Instant,
 	fps_smooth: f32,
 	runtime_status_frame_seq: Cell<u32>,
+	frame_pacing: FramePacingState,
+	frame_trace: Option<FrameTraceState>,
 	resolver_cache_key_generation: Arc<AtomicU64>,
+	memory_stats_refresh_pending: Arc<AtomicBool>,
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
@@ -1646,6 +1679,214 @@ struct FrameBenchState {
 struct FrameBenchMetric {
 	sum: f32,
 	max: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FramePacingSnapshot {
+	wall_ms: f32,
+	frame_target_late_ms: f32,
+	wall_max_recent_ms: f32,
+	wall_spike_count_recent: u32,
+}
+
+#[derive(Debug, Default)]
+struct FramePacingState {
+	wall_ms: VecDeque<f32>,
+}
+
+const FRAME_PACING_WINDOW_FRAMES: usize = 120;
+const FRAME_PACING_SPIKE_MS: f32 = TARGET_FRAME_MS;
+const FRAME_TRACE_ENV: &str = "UN_AVATAR_FRAME_TRACE_JSON";
+const FRAME_TRACE_WINDOW_FRAMES: usize = 600;
+
+impl FramePacingState {
+	fn push(&mut self, wall_ms: f32, frame_target_late_ms: f32) -> FramePacingSnapshot {
+		self.wall_ms.push_back(wall_ms);
+		while self.wall_ms.len() > FRAME_PACING_WINDOW_FRAMES {
+			self.wall_ms.pop_front();
+		}
+		let mut wall_max_recent_ms = 0.0f32;
+		let mut wall_spike_count_recent = 0u32;
+		for value in &self.wall_ms {
+			wall_max_recent_ms = wall_max_recent_ms.max(*value);
+			if *value > FRAME_PACING_SPIKE_MS {
+				wall_spike_count_recent = wall_spike_count_recent.saturating_add(1);
+			}
+		}
+		FramePacingSnapshot {
+			wall_ms,
+			frame_target_late_ms,
+			wall_max_recent_ms,
+			wall_spike_count_recent,
+		}
+	}
+}
+
+#[derive(Debug)]
+struct FrameTraceState {
+	path: PathBuf,
+	started_at: Instant,
+	next_seq: u64,
+	last_unmotion_received_frames: u64,
+	last_motion_applied_frames: u64,
+	frames: VecDeque<FrameTraceEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct FrameTraceEntry {
+	seq: u64,
+	t_secs: f32,
+	role: &'static str,
+	wall_ms: f32,
+	frame_target_late_ms: f32,
+	wall_max_recent_ms: f32,
+	wall_spike_count_recent: u32,
+	cpu_busy_ms: f32,
+	cpu_total_ms: f32,
+	motion_apply_ms: f32,
+	dynamics_step_ms: f32,
+	dynamics_fixed_steps: u32,
+	dynamics_world_ms: f32,
+	dynamics_collider_ms: f32,
+	dynamics_solve_ms: f32,
+	dynamics_solve_collision_ms: f32,
+	dynamics_solve_propagate_ms: f32,
+	frame_globals_ms: f32,
+	surface_acquire_ms: f32,
+	target_prepare_ms: f32,
+	draw_state_refresh_ms: f32,
+	draw_doc_lock_ms: f32,
+	draw_expression_select_ms: f32,
+	draw_update_total_ms: f32,
+	scene_world_ms: f32,
+	draw_skin_palette_ms: f32,
+	draw_skin_palette_write_ms: f32,
+	draw_fur_source_vertices_ms: f32,
+	draw_expression_values_ms: f32,
+	draw_morph_weights_ms: f32,
+	draw_transform_loop_ms: f32,
+	bone_collider_debug_ms: f32,
+	command_encode_ms: f32,
+	submit_present_ms: f32,
+	spout_cpu_ms: f32,
+	contact_eval_ms: f32,
+	runtime_action_eval_ms: f32,
+	gpu_ms: f32,
+	unmotion_received_frames_total: u64,
+	unmotion_received_frames_delta: u64,
+	motion_applied_frames_total: u64,
+	motion_applied_frames_delta: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct FrameTraceFile<'a> {
+	version: u32,
+	window_frames: usize,
+	spike_threshold_ms: f32,
+	frame_count: usize,
+	frames: &'a VecDeque<FrameTraceEntry>,
+}
+
+impl FrameTraceState {
+	fn from_env() -> Option<Self> {
+		let raw = std::env::var_os(FRAME_TRACE_ENV)?;
+		let raw = raw.to_string_lossy().trim().to_string();
+		if raw.is_empty() || raw.eq_ignore_ascii_case("0") || raw.eq_ignore_ascii_case("false") || raw.eq_ignore_ascii_case("off") {
+			return None;
+		}
+		let path = if raw.eq_ignore_ascii_case("1") || raw.eq_ignore_ascii_case("true") || raw.eq_ignore_ascii_case("on") {
+			let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+			std::env::temp_dir().join(format!("un-avatar-frame-trace-{stamp}.json"))
+		} else {
+			PathBuf::from(raw)
+		};
+		eprintln!("un-avatar-renderer: frame trace enabled path={}", path.display());
+		Some(Self {
+			path,
+			started_at: Instant::now(),
+			next_seq: 0,
+			last_unmotion_received_frames: 0,
+			last_motion_applied_frames: 0,
+			frames: VecDeque::with_capacity(FRAME_TRACE_WINDOW_FRAMES),
+		})
+	}
+
+	fn push(
+		&mut self,
+		role: &'static str,
+		timings: &FrameTimings,
+		pacing: FramePacingSnapshot,
+		unmotion_received_frames: u64,
+		motion_applied_frames: u64,
+	) {
+		let unmotion_received_frames_delta = unmotion_received_frames.saturating_sub(self.last_unmotion_received_frames);
+		let motion_applied_frames_delta = motion_applied_frames.saturating_sub(self.last_motion_applied_frames);
+		self.last_unmotion_received_frames = unmotion_received_frames;
+		self.last_motion_applied_frames = motion_applied_frames;
+		self.frames.push_back(FrameTraceEntry {
+			seq: self.next_seq,
+			t_secs: self.started_at.elapsed().as_secs_f32(),
+			role,
+			wall_ms: pacing.wall_ms,
+			frame_target_late_ms: pacing.frame_target_late_ms,
+			wall_max_recent_ms: pacing.wall_max_recent_ms,
+			wall_spike_count_recent: pacing.wall_spike_count_recent,
+			cpu_busy_ms: frame_cpu_busy_ms(timings),
+			cpu_total_ms: timings.cpu_total_ms,
+			motion_apply_ms: timings.motion_apply_ms,
+			dynamics_step_ms: timings.dynamics_step_ms,
+			dynamics_fixed_steps: timings.dynamics_profile.fixed_steps,
+			dynamics_world_ms: timings.dynamics_profile.world_ms,
+			dynamics_collider_ms: timings.dynamics_profile.collider_ms,
+			dynamics_solve_ms: timings.dynamics_profile.solve_ms,
+			dynamics_solve_collision_ms: timings.dynamics_profile.solve_collision_ms,
+			dynamics_solve_propagate_ms: timings.dynamics_profile.solve_propagate_ms,
+			frame_globals_ms: timings.frame_globals_ms,
+			surface_acquire_ms: timings.surface_acquire_ms,
+			target_prepare_ms: timings.target_prepare_ms,
+			draw_state_refresh_ms: timings.draw_state_refresh_ms,
+			draw_doc_lock_ms: timings.draw_doc_lock_ms,
+			draw_expression_select_ms: timings.draw_expression_select_ms,
+			draw_update_total_ms: timings.draw_update_total_ms,
+			scene_world_ms: timings.scene_world_ms,
+			draw_skin_palette_ms: timings.draw_skin_palette_ms,
+			draw_skin_palette_write_ms: timings.draw_skin_palette_write_ms,
+			draw_fur_source_vertices_ms: timings.draw_fur_source_vertices_ms,
+			draw_expression_values_ms: timings.draw_expression_values_ms,
+			draw_morph_weights_ms: timings.draw_morph_weights_ms,
+			draw_transform_loop_ms: timings.draw_transform_loop_ms,
+			bone_collider_debug_ms: timings.bone_collider_debug_ms,
+			command_encode_ms: timings.command_encode_ms,
+			submit_present_ms: timings.submit_present_ms,
+			spout_cpu_ms: timings.spout_cpu_ms,
+			contact_eval_ms: timings.contact_eval_ms,
+			runtime_action_eval_ms: timings.runtime_action_eval_ms,
+			gpu_ms: timings.gpu_ms,
+			unmotion_received_frames_total: unmotion_received_frames,
+			unmotion_received_frames_delta,
+			motion_applied_frames_total: motion_applied_frames,
+			motion_applied_frames_delta,
+		});
+		self.next_seq = self.next_seq.saturating_add(1);
+		while self.frames.len() > FRAME_TRACE_WINDOW_FRAMES {
+			self.frames.pop_front();
+		}
+	}
+
+	fn write_json(&self) -> Result<(), String> {
+		if let Some(parent) = self.path.parent() {
+			std::fs::create_dir_all(parent).map_err(|e| format!("create frame trace dir {}: {e}", parent.display()))?;
+		}
+		let file = FrameTraceFile {
+			version: 1,
+			window_frames: FRAME_TRACE_WINDOW_FRAMES,
+			spike_threshold_ms: FRAME_PACING_SPIKE_MS,
+			frame_count: self.frames.len(),
+			frames: &self.frames,
+		};
+		let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize frame trace: {e}"))?;
+		std::fs::write(&self.path, json).map_err(|e| format!("write frame trace {}: {e}", self.path.display()))
+	}
 }
 
 impl FrameBenchMetric {
@@ -1886,10 +2127,15 @@ impl AvatarApp {
 			startup_failed: None,
 			runtime_status,
 			last_wall: Instant::now(),
+			next_frame_at: Instant::now(),
+			frame_poll_margin: frame_poll_margin_from_env(),
 			started_at: Instant::now(),
 			fps_smooth: 60.0,
 			runtime_status_frame_seq: Cell::new(0),
+			frame_pacing: FramePacingState::default(),
+			frame_trace: FrameTraceState::from_env(),
 			resolver_cache_key_generation: Arc::new(AtomicU64::new(0)),
+			memory_stats_refresh_pending: Arc::new(AtomicBool::new(false)),
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
@@ -1924,6 +2170,14 @@ impl AvatarApp {
 		if let Some(w) = &self.window {
 			w.request_redraw();
 		}
+	}
+
+	fn schedule_next_window_frame_after_render(&mut self, now: Instant) {
+		let mut next = self.next_frame_at + TARGET_FRAME_INTERVAL;
+		if next <= now {
+			next = now + TARGET_FRAME_INTERVAL;
+		}
+		self.next_frame_at = next;
 	}
 
 	fn reconfigure(&mut self, width: u32, height: u32) {
@@ -2472,8 +2726,19 @@ impl AvatarApp {
 		let Some(rx) = self.wardrobe_apply_rx.as_ref() else {
 			return;
 		};
-		let Ok(result) = rx.try_recv() else {
-			return;
+		let result = match rx.try_recv() {
+			Ok(result) => result,
+			Err(TryRecvError::Empty) => return,
+			Err(TryRecvError::Disconnected) => {
+				self.wardrobe_apply_rx = None;
+				self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+					outcome: Err("wardrobe apply worker disconnected before reporting a result".to_string()),
+					active_set_id: None,
+					active_asset_groups: Vec::new(),
+					asset_upload_plan: WardrobeAssetUploadPlan::default(),
+				});
+				return;
+			}
 		};
 		self.wardrobe_apply_rx = None;
 		let outcome = match result.scene {
@@ -2960,10 +3225,11 @@ impl AvatarApp {
 		}
 	}
 
-	fn update_runtime_frame(&self, timings: &FrameTimings) {
+	fn update_runtime_frame(&self, timings: &FrameTimings, pacing: FramePacingSnapshot) {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
+		let status_arc = Arc::clone(status);
 		if let Ok(mut status) = status.lock() {
 			let gpu = self.gpu.as_ref();
 			let runtime_status_frame_seq = self.runtime_status_frame_seq.get().wrapping_add(1);
@@ -2971,6 +3237,9 @@ impl AvatarApp {
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
 			status.cpu_ms = Some(frame_cpu_busy_ms(timings));
+			status.frame_wall_ms = Some(pacing.wall_ms);
+			status.frame_wall_max_recent_ms = Some(pacing.wall_max_recent_ms);
+			status.frame_wall_spike_count_recent = Some(pacing.wall_spike_count_recent);
 			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
 			status.frame_motion_apply_ms = Some(timings.motion_apply_ms);
 			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
@@ -3016,7 +3285,7 @@ impl AvatarApp {
 			let refresh_runtime_metadata =
 				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
-				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
+				spawn_runtime_memory_refresh(Arc::clone(&status_arc), Arc::clone(&self.memory_stats_refresh_pending));
 			}
 			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
 			if status.expression_presets.as_slice() != presets {
@@ -3754,6 +4023,11 @@ impl AvatarApp {
 	fn render_frame(&mut self) -> bool {
 		let now = Instant::now();
 		let wall = now.saturating_duration_since(self.last_wall);
+		let frame_target_late_ms = if now > self.next_frame_at {
+			now.saturating_duration_since(self.next_frame_at).as_secs_f32() * 1000.0
+		} else {
+			0.0
+		};
 		self.last_wall = now;
 
 		let Some(win) = self.window.as_ref().cloned() else {
@@ -3793,6 +4067,7 @@ impl AvatarApp {
 		)
 		.or_else(|| wardrobe_transition_frame_role(self.wardrobe_changing_billboard_frame(now)))
 		.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		let frame_role_label = rendered_frame_role_label(&frame_role);
 		let evaluate_runtime_actions = should_evaluate_runtime_actions_for_frame(&frame_role);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
@@ -3868,7 +4143,15 @@ impl AvatarApp {
 			self.fps_smooth
 		};
 		self.fps_smooth = self.fps_smooth * 0.9 + inst_fps * 0.1;
-		self.update_runtime_frame(&timings);
+		let pacing = self.frame_pacing.push(timings.wall_since_last_ms, frame_target_late_ms);
+		if let Some(trace) = self.frame_trace.as_mut() {
+			let (unmotion_received_frames, motion_applied_frames) = self
+				.gpu
+				.as_ref()
+				.map_or((0, 0), |gpu| (gpu.unmotion_zenoh_received_frames(), gpu.motion_applied_frames()));
+			trace.push(frame_role_label, &timings, pacing, unmotion_received_frames, motion_applied_frames);
+		}
+		self.update_runtime_frame(&timings, pacing);
 		self.update_runtime_spout_stats();
 		#[cfg(windows)]
 		self.refresh_renderer_tray();
@@ -3887,10 +4170,13 @@ impl AvatarApp {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
 				win.set_title(&format!(
-					"{}{} — {:.0} FPS  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
+					"{}{} — {:.0} FPS  wall {:.1}/{:.1} ms s{}  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
 					self.title_base,
 					self.title_diagnostic_suffix(),
 					self.fps_smooth,
+					pacing.wall_ms,
+					pacing.wall_max_recent_ms,
+					pacing.wall_spike_count_recent,
 					frame_cpu_busy_ms(&timings),
 					timings.surface_acquire_ms,
 					timings.gpu_ms
@@ -3908,7 +4194,7 @@ impl AvatarApp {
 		}
 
 		if self.preview_window_enabled {
-			win.request_redraw();
+			self.schedule_next_window_frame_after_render(now);
 		}
 		if self
 			.wardrobe_transition
@@ -3924,6 +4210,17 @@ impl AvatarApp {
 		self.close_hotkey
 			.as_ref()
 			.is_some_and(|hotkey| hotkey.matches(key, self.current_modifiers))
+	}
+}
+
+impl Drop for AvatarApp {
+	fn drop(&mut self) {
+		if let Some(trace) = self.frame_trace.as_ref() {
+			match trace.write_json() {
+				Ok(()) => eprintln!("un-avatar-renderer: frame trace written path={}", trace.path.display()),
+				Err(error) => eprintln!("un-avatar-renderer: frame trace write failed: {error}"),
+			}
+		}
 	}
 }
 
@@ -4085,6 +4382,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			win.focus_window();
 		}
 		self.last_wall = Instant::now();
+		self.next_frame_at = self.last_wall;
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
 		self.update_runtime_window_geometry();
@@ -4102,8 +4400,18 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				event_loop.exit();
 			}
 		} else if let Some(window) = &self.window {
-			event_loop.set_control_flow(ControlFlow::Wait);
-			window.request_redraw();
+			let now = Instant::now();
+			if now >= self.next_frame_at {
+				window.request_redraw();
+				event_loop.set_control_flow(ControlFlow::Wait);
+			} else {
+				let poll_at = self.next_frame_at.checked_sub(self.frame_poll_margin).unwrap_or(self.next_frame_at);
+				if self.frame_poll_margin > Duration::ZERO && now >= poll_at {
+					event_loop.set_control_flow(ControlFlow::Poll);
+				} else {
+					event_loop.set_control_flow(ControlFlow::WaitUntil(poll_at));
+				}
+			}
 		}
 	}
 
@@ -5832,6 +6140,23 @@ fn runtime_top_count_entry(counts: &BTreeMap<String, u32>) -> Option<RuntimeCoun
 		})
 }
 
+fn spawn_runtime_memory_refresh(status: Arc<Mutex<RendererRuntimeSnapshot>>, pending: Arc<AtomicBool>) {
+	if pending.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+		return;
+	}
+	let pending_for_worker = Arc::clone(&pending);
+	let spawn_result = thread::Builder::new().name("un-avatar-memory-stats".to_string()).spawn(move || {
+		let ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
+		if let Ok(mut status) = status.lock() {
+			status.ram_mb = ram_mb;
+		}
+		pending_for_worker.store(false, Ordering::Release);
+	});
+	if spawn_result.is_err() {
+		pending.store(false, Ordering::Release);
+	}
+}
+
 #[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
@@ -5844,6 +6169,9 @@ struct RendererRuntimeSnapshot {
 	uptime_secs: u64,
 	fps: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_wall_ms: Option<f32>,
+	frame_wall_max_recent_ms: Option<f32>,
+	frame_wall_spike_count_recent: Option<u32>,
 	frame_cpu_total_ms: Option<f32>,
 	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
@@ -6133,6 +6461,9 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		uptime_secs: 0,
 		fps: None,
 		cpu_ms: None,
+		frame_wall_ms: None,
+		frame_wall_max_recent_ms: None,
+		frame_wall_spike_count_recent: None,
 		frame_cpu_total_ms: None,
 		frame_motion_apply_ms: None,
 		frame_dynamics_step_ms: None,
@@ -7844,6 +8175,26 @@ mod tests {
 		assert!(!super::wardrobe_billboard_min_visible_elapsed(Some(started_at), before_minimum));
 		assert!(super::wardrobe_billboard_min_visible_elapsed(Some(started_at), after_minimum));
 		assert!(super::wardrobe_billboard_min_visible_elapsed(None, started_at));
+	}
+
+	#[test]
+	fn frame_pacing_tracks_recent_wall_spikes() {
+		let mut pacing = super::FramePacingState::default();
+		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
+			let snapshot = pacing.push(16.6, 0.0);
+			assert_eq!(snapshot.wall_spike_count_recent, 0);
+		}
+		let snapshot = pacing.push(super::FRAME_PACING_SPIKE_MS + 0.1, 0.0);
+		assert_eq!(snapshot.wall_spike_count_recent, 1);
+		assert!(snapshot.wall_max_recent_ms > super::FRAME_PACING_SPIKE_MS);
+		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
+			let snapshot = pacing.push(16.6, 0.0);
+			if snapshot.wall_spike_count_recent == 0 {
+				assert_eq!(snapshot.wall_max_recent_ms, 16.6);
+				return;
+			}
+		}
+		panic!("old pacing spike should age out of the recent window");
 	}
 
 	#[test]

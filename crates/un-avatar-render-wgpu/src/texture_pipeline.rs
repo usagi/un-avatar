@@ -1558,7 +1558,9 @@ fn download_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Bu
 		submission_index: None,
 		timeout: Some(Duration::from_secs(120)),
 	});
-	rx.recv().expect("BCn readback callback").expect("BCn readback map");
+	rx.recv_timeout(Duration::from_secs(1))
+		.expect("BCn readback callback")
+		.expect("BCn readback map");
 	let data = slice.get_mapped_range().to_vec();
 	staging.unmap();
 	data
