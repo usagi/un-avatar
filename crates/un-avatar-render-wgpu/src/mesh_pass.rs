@@ -3558,16 +3558,10 @@ fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indice
 	if bindings.is_empty() || morph_source_indices.is_empty() {
 		return Vec::new();
 	}
-	let mut compact_indices = vec![None; morph_source_indices.iter().copied().max().unwrap_or(0).saturating_add(1)];
-	for (compact_index, &source_index) in morph_source_indices.iter().enumerate() {
-		if let Some(slot) = compact_indices.get_mut(source_index) {
-			*slot = Some(compact_index);
-		}
-	}
 	bindings
 		.iter()
 		.filter_map(|binding| {
-			let morph_target_index = compact_indices.get(binding.morph_target_index).and_then(|index| *index)?;
+			let morph_target_index = morph_source_indices.binary_search(&binding.morph_target_index).ok()?;
 			Some(ExpressionBinding {
 				preset_index: binding.preset_index,
 				morph_target_index,
@@ -13613,6 +13607,37 @@ mod tests {
 		let indices = dynamic_morph_target_indices(&buf, &bindings, &names, true);
 
 		assert!(indices.is_empty());
+	}
+
+	#[test]
+	fn remap_expression_bindings_uses_compact_morph_indices() {
+		let bindings = [
+			ExpressionBinding {
+				preset_index: 0,
+				morph_target_index: 4,
+				weight_scale: 0.25,
+			},
+			ExpressionBinding {
+				preset_index: 1,
+				morph_target_index: 99,
+				weight_scale: 1.0,
+			},
+			ExpressionBinding {
+				preset_index: 2,
+				morph_target_index: 42,
+				weight_scale: 0.5,
+			},
+		];
+
+		let remapped = remap_expression_bindings(&bindings, &[4, 42]);
+
+		assert_eq!(remapped.len(), 2);
+		assert_eq!(remapped[0].preset_index, 0);
+		assert_eq!(remapped[0].morph_target_index, 0);
+		assert_eq!(remapped[0].weight_scale, 0.25);
+		assert_eq!(remapped[1].preset_index, 2);
+		assert_eq!(remapped[1].morph_target_index, 1);
+		assert_eq!(remapped[1].weight_scale, 0.5);
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
