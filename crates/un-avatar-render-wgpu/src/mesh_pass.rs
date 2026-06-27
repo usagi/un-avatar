@@ -10129,7 +10129,7 @@ impl SceneMeshes {
 					opts.debug_zero_morphs,
 				);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let dynamic_morph_target_list = dynamic_morph_targets.iter().copied().collect::<Vec<_>>().into_boxed_slice();
+				let dynamic_morph_target_list = dynamic_morph_targets.clone().into_boxed_slice();
 				let expanded_cache_key = buf
 					.vertex_payload_id
 					.filter(|_| primitive_expand_cache_safe(buf))
