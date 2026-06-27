@@ -11628,10 +11628,10 @@ impl SceneMeshes {
 	fn active_draw_texture_indices(&self) -> (BTreeSet<usize>, BTreeSet<usize>) {
 		let mut image_indices = BTreeSet::new();
 		let mut cube_indices = BTreeSet::new();
-		for draw in &self.draws {
-			if !draw.active() {
+		for &draw_index in &self.active_draw_indices {
+			let Some(draw) = self.draws.get(draw_index) else {
 				continue;
-			}
+			};
 			image_indices.extend(draw.texture_indices.iter().copied());
 			cube_indices.extend(draw.cube_texture_indices.iter().copied());
 		}
