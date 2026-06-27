@@ -1831,15 +1831,19 @@ fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
 	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
-fn push_texture_index(indices: &mut Vec<usize>, index: Option<usize>) {
-	if let Some(index) = index {
-		if !indices.contains(&index) {
-			indices.push(index);
-		}
+fn push_unique_index(indices: &mut Vec<usize>, index: usize) {
+	if !indices.contains(&index) {
+		indices.push(index);
 	}
 }
 
-fn sorted_texture_indices(mut indices: Vec<usize>) -> Vec<usize> {
+fn push_texture_index(indices: &mut Vec<usize>, index: Option<usize>) {
+	if let Some(index) = index {
+		push_unique_index(indices, index);
+	}
+}
+
+fn sorted_unique_indices(mut indices: Vec<usize>) -> Vec<usize> {
 	indices.sort_unstable();
 	indices.dedup();
 	indices
@@ -1966,7 +1970,7 @@ fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 			push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
 		}
 	}
-	sorted_texture_indices(indices)
+	sorted_unique_indices(indices)
 }
 
 fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
@@ -1977,13 +1981,13 @@ fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	if let Some(liltoon) = material.liltoon_like_runtime() {
 		push_texture_index(&mut indices, liltoon_reflection_texture_index(liltoon));
 	}
-	sorted_texture_indices(indices)
+	sorted_unique_indices(indices)
 }
 
 fn material_resident_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = material_texture_indices(material);
 	indices.extend(material_cube_texture_indices(material));
-	sorted_texture_indices(indices)
+	sorted_unique_indices(indices)
 }
 
 fn initial_active_texture_indices_for_scene(
@@ -2374,9 +2378,9 @@ fn active_residency_gaps_from_draws<'a>(
 	cube_texture_residency: &[bool],
 	material_slot_residency: &[bool],
 ) -> SceneMeshActiveResidencyGaps {
-	let mut inactive_image_texture_indices = BTreeSet::new();
-	let mut inactive_cube_texture_indices = BTreeSet::new();
-	let mut inactive_material_slot_indices = BTreeSet::new();
+	let mut inactive_image_texture_indices = Vec::new();
+	let mut inactive_cube_texture_indices = Vec::new();
+	let mut inactive_material_slot_indices = Vec::new();
 	let mut active_draws_using_inactive_image_texture_count = 0;
 	let mut active_draws_using_inactive_cube_texture_count = 0;
 	let mut active_draws_using_inactive_material_slot_count = 0;
@@ -2388,13 +2392,13 @@ fn active_residency_gaps_from_draws<'a>(
 		let mut draw_uses_inactive_cube_texture = false;
 		for texture_index in texture_indices {
 			if image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				inactive_image_texture_indices.insert(*texture_index);
+				push_unique_index(&mut inactive_image_texture_indices, *texture_index);
 				draw_uses_inactive_image_texture = true;
 			}
 		}
 		for texture_index in cube_texture_indices {
 			if cube_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				inactive_cube_texture_indices.insert(*texture_index);
+				push_unique_index(&mut inactive_cube_texture_indices, *texture_index);
 				draw_uses_inactive_cube_texture = true;
 			}
 		}
@@ -2406,15 +2410,15 @@ fn active_residency_gaps_from_draws<'a>(
 		}
 		if let Some(material_slot_index) = material_slot_index {
 			if material_slot_residency.get(material_slot_index).is_some_and(|resident| !resident) {
-				inactive_material_slot_indices.insert(material_slot_index);
+				push_unique_index(&mut inactive_material_slot_indices, material_slot_index);
 				active_draws_using_inactive_material_slot_count += 1;
 			}
 		}
 	}
 	SceneMeshActiveResidencyGaps {
-		inactive_image_texture_indices: inactive_image_texture_indices.into_iter().collect(),
-		inactive_cube_texture_indices: inactive_cube_texture_indices.into_iter().collect(),
-		inactive_material_slot_indices: inactive_material_slot_indices.into_iter().collect(),
+		inactive_image_texture_indices: sorted_unique_indices(inactive_image_texture_indices),
+		inactive_cube_texture_indices: sorted_unique_indices(inactive_cube_texture_indices),
+		inactive_material_slot_indices: sorted_unique_indices(inactive_material_slot_indices),
 		active_draws_using_inactive_image_texture_count,
 		active_draws_using_inactive_cube_texture_count,
 		active_draws_using_inactive_material_slot_count,
