@@ -939,20 +939,25 @@ fn runtime_action_parameter_values(
 	for action in &actions.actions {
 		for condition in &action.conditions {
 			if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
-				if let Some(value) = parameter_values.get(name).copied() {
-					values.insert(name.to_string(), value);
-				}
+				insert_runtime_action_parameter_value(&mut values, parameter_values, name);
 			}
 		}
 		for trigger in &action.triggers {
 			if let UnaRuntimeActionTrigger::ParameterValue { name, .. } = trigger {
-				if let Some(value) = parameter_values.get(name).copied() {
-					values.insert(name.clone(), value);
-				}
+				insert_runtime_action_parameter_value(&mut values, parameter_values, name);
 			}
 		}
 	}
 	values
+}
+
+fn insert_runtime_action_parameter_value(values: &mut BTreeMap<String, f32>, parameter_values: &BTreeMap<String, f32>, name: &str) {
+	if values.contains_key(name) {
+		return;
+	}
+	if let Some(value) = parameter_values.get(name).copied() {
+		values.insert(name.to_string(), value);
+	}
 }
 
 fn runtime_actions_reference_parameter(actions: &un_avatar_core::UnaRuntimeActionSet, name: &str) -> bool {
@@ -12795,19 +12800,30 @@ mod tests {
 	#[test]
 	fn runtime_action_parameter_values_filters_unreferenced_parameters() {
 		let actions = un_avatar_core::UnaRuntimeActionSet {
-			actions: vec![un_avatar_core::UnaRuntimeAction {
-				id: "hat:on".to_string(),
-				triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
-					name: "Hat".to_string(),
-					value: 1.0,
-				}],
-				conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
-					parameter_name: Some("Glow".to_string()),
-					parameter_value: Some(1.0),
+			actions: vec![
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:on".to_string(),
+					triggers: vec![un_avatar_core::UnaRuntimeActionTrigger::ParameterValue {
+						name: "Hat".to_string(),
+						value: 1.0,
+					}],
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Glow".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
 					..Default::default()
-				}],
-				..Default::default()
-			}],
+				},
+				un_avatar_core::UnaRuntimeAction {
+					id: "hat:duplicate".to_string(),
+					conditions: vec![un_avatar_core::UnaRuntimeActionCondition {
+						parameter_name: Some("Hat".to_string()),
+						parameter_value: Some(1.0),
+						..Default::default()
+					}],
+					..Default::default()
+				},
+			],
 		};
 		let parameter_values = BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0), ("Unrelated".to_string(), 0.5)]);
 
