@@ -3859,12 +3859,12 @@ fn fill_morph_weights_for_draw(
 	out: &mut Vec<f32>,
 ) {
 	out.clear();
-	out.resize(target_count, 0.0);
 	if target_count == 0 {
 		return;
 	}
 	let copy_len = default_morph_weights.len().min(target_count);
-	out[..copy_len].copy_from_slice(&default_morph_weights[..copy_len]);
+	out.extend_from_slice(&default_morph_weights[..copy_len]);
+	out.resize(target_count, 0.0);
 	if let Some(expression_values) = expression_values {
 		for binding in bindings {
 			let pw = expression_values.get(binding.preset_index).copied().unwrap_or(0.0);
@@ -13407,6 +13407,13 @@ mod tests {
 		let mut out = Vec::new();
 		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &[], &[], &[], None, &mut out);
 		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_zero_fills_missing_defaults() {
+		let mut out = Vec::new();
+		fill_morph_weights_for_draw(&[0.2], 3, &[], None, &[], &[], &[], None, &mut out);
+		assert_eq!(out, vec![0.2, 0.0, 0.0]);
 	}
 
 	#[test]
