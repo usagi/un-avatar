@@ -3617,7 +3617,21 @@ fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indice
 	let Some(&max_source_index) = morph_source_indices.last() else {
 		return Vec::new();
 	};
-	let mut compact_indices = vec![usize::MAX; max_source_index.saturating_add(1)];
+	let dense_lookup_len = max_source_index.saturating_add(1);
+	if dense_lookup_len > 4096 && dense_lookup_len > morph_source_indices.len().saturating_mul(4).max(64) {
+		return bindings
+			.iter()
+			.filter_map(|binding| {
+				let morph_target_index = morph_source_indices.binary_search(&binding.morph_target_index).ok()?;
+				Some(ExpressionBinding {
+					preset_index: binding.preset_index,
+					morph_target_index,
+					weight_scale: binding.weight_scale,
+				})
+			})
+			.collect();
+	}
+	let mut compact_indices = vec![usize::MAX; dense_lookup_len];
 	for (compact_index, &source_index) in morph_source_indices.iter().enumerate() {
 		compact_indices[source_index] = compact_index;
 	}
@@ -13850,6 +13864,28 @@ mod tests {
 		assert_eq!(remapped[1].preset_index, 2);
 		assert_eq!(remapped[1].morph_target_index, 1);
 		assert_eq!(remapped[1].weight_scale, 0.5);
+	}
+
+	#[test]
+	fn remap_expression_bindings_uses_dense_lookup_for_compact_indices() {
+		let bindings = [
+			ExpressionBinding {
+				preset_index: 0,
+				morph_target_index: 1,
+				weight_scale: 0.25,
+			},
+			ExpressionBinding {
+				preset_index: 1,
+				morph_target_index: 3,
+				weight_scale: 0.5,
+			},
+		];
+
+		let remapped = remap_expression_bindings(&bindings, &[1, 2, 3]);
+
+		assert_eq!(remapped.len(), 2);
+		assert_eq!(remapped[0].morph_target_index, 0);
+		assert_eq!(remapped[1].morph_target_index, 2);
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
