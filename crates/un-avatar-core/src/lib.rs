@@ -3346,10 +3346,17 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn runtime_action_restore_readiness(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreReadiness> {
-		action
-			.effects
+		self.runtime_action_effects_restore_readiness(&action.id, &action.effects)
+	}
+
+	pub fn runtime_action_effects_restore_readiness(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreReadiness> {
+		effects
 			.iter()
-			.map(|effect| self.runtime_action_effect_restore_readiness(&action.id, effect))
+			.map(|effect| self.runtime_action_effect_restore_readiness(action_id, effect))
 			.collect()
 	}
 
@@ -3385,7 +3392,15 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn runtime_action_restore_baseline_candidates(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
-		self.runtime_action_restore_readiness(action)
+		self.runtime_action_effects_restore_baseline_candidates(&action.id, &action.effects)
+	}
+
+	pub fn runtime_action_effects_restore_baseline_candidates(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
+		self.runtime_action_effects_restore_readiness(action_id, effects)
 			.into_iter()
 			.filter_map(|readiness| {
 				if !readiness.restore_target {
@@ -3410,6 +3425,14 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn runtime_action_restore_baseline_capture_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		restore_baseline_capture_plan_from_candidates(self.runtime_action_restore_baseline_candidates(action))
+	}
+
+	pub fn runtime_action_effects_restore_baseline_capture_plan(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		restore_baseline_capture_plan_from_candidates(self.runtime_action_effects_restore_baseline_candidates(action_id, effects))
 	}
 
 	pub fn runtime_action_restore_apply_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreApplyEntry> {
@@ -3701,6 +3724,18 @@ impl<'a> UnaRuntimeModelMut<'a> {
 
 	pub fn capture_runtime_action_restore_baseline(&mut self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		let plan = self.document.runtime_model().runtime_action_restore_baseline_capture_plan(action);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	pub fn capture_runtime_action_effect_restore_baseline(
+		&mut self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		let plan = self
+			.document
+			.runtime_model()
+			.runtime_action_effects_restore_baseline_capture_plan(action_id, effects);
 		self.capture_runtime_action_restore_baseline_plan(plan)
 	}
 
