@@ -8590,22 +8590,11 @@ impl GpuState {
 			return Ok(BTreeMap::new());
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		let before = doc.runtime_model().runtime_parameter_values().clone();
-		let emissions = doc.runtime_model_mut().apply_contact_parameter_emissions();
+		let (emissions, changed) = doc.runtime_model_mut().apply_contact_parameter_emissions_with_changes();
 		if emissions.is_empty() {
 			return Ok(BTreeMap::new());
 		}
-		let after = doc.runtime_model().runtime_parameter_values();
-		Ok(emissions
-			.into_iter()
-			.filter_map(|emission| {
-				let value = after.get(&emission.parameter).copied()?;
-				if before.get(&emission.parameter).copied() == Some(value) {
-					return None;
-				}
-				Some((emission.parameter, value))
-			})
-			.collect())
+		Ok(changed)
 	}
 
 	pub(crate) fn apply_dynamics_interaction_parameter_emissions(&mut self) -> Result<BTreeMap<String, f32>, String> {
@@ -8617,18 +8606,20 @@ impl GpuState {
 		if values.is_empty() {
 			return Ok(BTreeMap::new());
 		}
-		let before = doc.runtime_model().runtime_parameter_values().clone();
+		let changed = {
+			let before = doc.runtime_model().runtime_parameter_values();
+			values
+				.iter()
+				.filter_map(|(name, value)| {
+					(before.get(name).copied().unwrap_or(f32::NAN) - *value)
+						.abs()
+						.gt(&0.0001)
+						.then_some((name.clone(), *value))
+				})
+				.collect()
+		};
 		doc.runtime_model_mut().set_runtime_parameter_values(values);
-		let after = doc.runtime_model().runtime_parameter_values();
-		Ok(after
-			.iter()
-			.filter_map(|(name, value)| {
-				(before.get(name).copied().unwrap_or(f32::NAN) - *value)
-					.abs()
-					.gt(&0.0001)
-					.then_some((name.clone(), *value))
-			})
-			.collect())
+		Ok(changed)
 	}
 
 	fn apply_restored_runtime_action_effects(&mut self, restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) {

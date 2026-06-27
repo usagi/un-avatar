@@ -2309,6 +2309,12 @@ fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec
 		.collect()
 }
 
+fn contact_tags_match(receiver_tags: &[String], sender_tags: &[String]) -> bool {
+	receiver_tags
+		.iter()
+		.any(|receiver_tag| sender_tags.iter().any(|sender_tag| sender_tag == receiver_tag))
+}
+
 fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<[f32; 16]> {
 	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent: [f32; 16], world: &mut [[f32; 16]], seen: &mut [bool]) {
 		let Some(node) = scene.nodes.get(idx) else { return };
@@ -2850,7 +2856,16 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 
 	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
 		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
-		let probes = self.contact_probes();
+		let world = scene_world_matrices(self.scene);
+		let senders = contacts
+			.iter()
+			.filter_map(|sender| {
+				if sender.kind != UnaDynamicsContactKind::Sender {
+					return None;
+				}
+				Some((sender, contact_probe_shape(sender, &world)?))
+			})
+			.collect::<Vec<_>>();
 		contacts
 			.iter()
 			.enumerate()
@@ -2858,13 +2873,20 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 				if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
 					return None;
 				}
-				let sender_source_ids = probes
-					.iter()
-					.filter(|probe| probe.receiver_index == receiver_index && probe.would_emit)
-					.map(|probe| probe.sender_source_id.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let receiver_shape = contact_probe_shape(receiver, &world);
+				let mut sender_source_ids = BTreeSet::new();
+				if let Some(receiver_shape) = receiver_shape {
+					for (sender, sender_shape) in &senders {
+						if !contact_tags_match(&receiver.collision_tags, &sender.collision_tags) {
+							continue;
+						}
+						let (overlap, _, _, _, _, _) = contact_probe_overlap(receiver_shape, *sender_shape);
+						if overlap {
+							sender_source_ids.insert(sender.source_id.clone());
+						}
+					}
+				}
+				let sender_source_ids = sender_source_ids.into_iter().collect::<Vec<_>>();
 				let emitted = !sender_source_ids.is_empty();
 				Some(UnaEvaluationContactParameterEmission {
 					owner_key: contact_owner_key(&receiver.source_id, receiver_index),
@@ -3545,8 +3567,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 	}
 
 	pub fn apply_contact_parameter_emissions(&mut self) -> Vec<UnaEvaluationContactParameterEmission> {
+		self.apply_contact_parameter_emissions_with_changes().0
+	}
+
+	pub fn apply_contact_parameter_emissions_with_changes(
+		&mut self,
+	) -> (Vec<UnaEvaluationContactParameterEmission>, BTreeMap<String, f32>) {
 		if !self.document.runtime_model().contact_parameter_emission_enabled() {
-			return Vec::new();
+			return (Vec::new(), BTreeMap::new());
 		}
 		let emissions = self.document.runtime_model().contact_parameter_emissions();
 		let mut contact_parameter_values = BTreeMap::<String, f32>::new();
@@ -3555,10 +3583,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			*value = value.max(emission.value);
 		}
 		let runtime_state = self.runtime_state_mut();
+		let mut changed = BTreeMap::new();
 		for (name, value) in contact_parameter_values {
+			if runtime_state.parameter_values.get(&name).copied() != Some(value) {
+				changed.insert(name.clone(), value);
+			}
 			runtime_state.parameter_values.insert(name, value);
 		}
-		emissions
+		(emissions, changed)
 	}
 
 	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
@@ -7585,6 +7617,7 @@ mod tests {
 						allow_posing: Some(false),
 						parameter: "HairPB".to_string(),
 					}),
+					interaction_chain_start_index: 0,
 					bone_node_indices: vec![1, 2, 3],
 				}],
 				colliders: Vec::new(),
