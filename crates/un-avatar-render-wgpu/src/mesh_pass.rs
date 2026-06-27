@@ -10822,8 +10822,7 @@ impl SceneMeshes {
 		}
 		if palette.uploaded != palette.raw {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
-			palette.uploaded.clear();
-			palette.uploaded.extend_from_slice(&palette.raw);
+			std::mem::swap(&mut palette.uploaded, &mut palette.raw);
 			palette.uploaded_changed = true;
 		}
 	}
