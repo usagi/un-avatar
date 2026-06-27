@@ -6373,13 +6373,11 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_m
 	}
 }
 
-fn compute_fur_cards_skinned_source_vertices_from_mesh(
+fn compute_fur_cards_skinned_source_vertices_from_matrices(
 	verts: &[Vertex],
-	palette_raw: &[f32],
+	palette_matrices: &[Mat4],
 	out: &mut Vec<ComputeFurCardsSourceVertexGpu>,
-	palette_matrices: &mut Vec<Mat4>,
 ) {
-	compute_fur_cards_palette_matrices(palette_raw, palette_matrices);
 	out.clear();
 	out.reserve(verts.len());
 	out.extend(
@@ -11103,6 +11101,7 @@ impl SceneMeshes {
 		let skin_palettes = &self.skin_palettes;
 		let source_vertex_scratch = &mut self.fur_source_vertex_scratch;
 		let palette_matrix_scratch = &mut self.fur_palette_matrix_scratch;
+		let mut palette_matrix_scratch_index = None;
 		for &draw_index in &self.fur_draw_indices {
 			let Some(draw) = draws.get_mut(draw_index) else {
 				continue;
@@ -11119,13 +11118,12 @@ impl SceneMeshes {
 			if !palette.uploaded_changed {
 				continue;
 			}
+			if palette_matrix_scratch_index != Some(draw.skin_palette_index) {
+				compute_fur_cards_palette_matrices(&palette.uploaded, palette_matrix_scratch);
+				palette_matrix_scratch_index = Some(draw.skin_palette_index);
+			}
 			let base_vertices = &draw.buffer_upload.vertices;
-			compute_fur_cards_skinned_source_vertices_from_mesh(
-				base_vertices,
-				&palette.uploaded,
-				source_vertex_scratch,
-				palette_matrix_scratch,
-			);
+			compute_fur_cards_skinned_source_vertices_from_matrices(base_vertices, palette_matrix_scratch, source_vertex_scratch);
 			if source_vertex_scratch.len() != base_vertices.len() {
 				continue;
 			}
@@ -14835,7 +14833,8 @@ mod tests {
 		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
 		let mut source_vertices = Vec::new();
 		let mut palette_matrices = Vec::new();
-		compute_fur_cards_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices, &mut palette_matrices);
+		compute_fur_cards_palette_matrices(&palette, &mut palette_matrices);
+		compute_fur_cards_skinned_source_vertices_from_matrices(&verts, &palette_matrices, &mut source_vertices);
 
 		assert_eq!(source_vertices.len(), 1);
 		assert!((source_vertices[0].position[0] - 4.0).abs() < 0.00001);
