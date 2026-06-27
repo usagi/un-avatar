@@ -6371,6 +6371,38 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: &Vertex, palette_
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
 	let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
+	if vertex.weights == [1.0, 0.0, 0.0, 0.0] {
+		let palette_matrix_count = palette_matrices.len();
+		let matrix = if palette_matrix_count == 0 {
+			Mat4::IDENTITY
+		} else {
+			palette_matrices[(vertex.joints[0] as usize).min(palette_matrix_count - 1)]
+		};
+		let mut skinned_normal = matrix.transform_vector3(normal);
+		let mut skinned_tangent = matrix.transform_vector3(tangent);
+		if skinned_normal.length_squared() <= 0.0000001 {
+			skinned_normal = normal;
+		}
+		if skinned_tangent.length_squared() <= 0.0000001 {
+			skinned_tangent = tangent;
+		}
+		let skinned_normal = skinned_normal.normalize_or_zero();
+		let skinned_tangent = skinned_tangent.normalize_or_zero();
+		return ComputeFurCardsSourceVertexGpu {
+			position: matrix.transform_point3(position).extend(1.0).to_array(),
+			normal: [skinned_normal.x, skinned_normal.y, skinned_normal.z, 0.0],
+			tangent: [skinned_tangent.x, skinned_tangent.y, skinned_tangent.z, vertex.tangent[3]],
+			uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
+			color: vertex.color,
+			joints: [
+				vertex.joints[0] as u32,
+				vertex.joints[1] as u32,
+				vertex.joints[2] as u32,
+				vertex.joints[3] as u32,
+			],
+			weights: vertex.weights,
+		};
+	}
 	let mut skinned_position = Vec3::ZERO;
 	let mut skinned_normal = Vec3::ZERO;
 	let mut skinned_tangent = Vec3::ZERO;
@@ -14885,6 +14917,36 @@ mod tests {
 		assert_eq!(source_vertices[0].normal, [0.0, 1.0, 0.0, 0.0]);
 		assert_eq!(source_vertices[0].tangent, [1.0, 0.0, 0.0, -1.0]);
 		assert_eq!(source_vertices[0].color, [0.25, 0.5, 0.75, 1.0]);
+	}
+
+	#[test]
+	fn compute_fur_cards_single_weight_skinning_uses_same_palette_clamp() {
+		let verts = vec![Vertex {
+			pos: [1.0, 2.0, 3.0],
+			norm: [0.0, 1.0, 0.0],
+			tangent: [1.0, 0.0, 0.0, 1.0],
+			uv: [0.25, 0.5],
+			uv1: [0.25, 0.5],
+			uv2: [0.25, 0.5],
+			uv3: [0.25, 0.5],
+			joints: [9, 0, 0, 0],
+			weights: [1.0, 0.0, 0.0, 0.0],
+			color: [1.0, 1.0, 1.0, 1.0],
+		}];
+		let mut palette = Vec::new();
+		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
+		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
+		let mut source_vertices = Vec::new();
+		let mut palette_matrices = Vec::new();
+		compute_fur_cards_palette_matrices(&palette, &mut palette_matrices);
+		compute_fur_cards_skinned_source_vertices_from_matrices(&verts, &palette_matrices, &mut source_vertices);
+
+		assert_eq!(source_vertices.len(), 1);
+		assert_eq!(source_vertices[0].position, [5.0, 2.0, 3.0, 1.0]);
+		assert_eq!(source_vertices[0].normal, [0.0, 1.0, 0.0, 0.0]);
+		assert_eq!(source_vertices[0].tangent, [1.0, 0.0, 0.0, 1.0]);
+		assert_eq!(source_vertices[0].joints, [9, 0, 0, 0]);
+		assert_eq!(source_vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
 	}
 
 	#[test]
