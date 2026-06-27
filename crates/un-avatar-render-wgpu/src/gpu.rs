@@ -4811,7 +4811,9 @@ fn augment_dynamics_bone_colliders(
 	let mut existing_pairs = colliders
 		.iter()
 		.map(|collider| (collider.source_id.clone(), collider.collider_path.clone()))
-		.collect::<BTreeSet<_>>();
+		.collect::<Vec<_>>();
+	existing_pairs.sort_unstable();
+	existing_pairs.dedup();
 	for override_item in &config.collider_augment_overrides {
 		let source_needles = override_item
 			.source_id_contains
@@ -4865,13 +4867,14 @@ fn augment_dynamics_bone_colliders(
 					continue;
 				}
 				let pair = (target_source_id.clone(), candidate.collider_path.clone());
-				if existing_pairs.contains(&pair) {
-					continue;
-				}
+				let pair_index = match existing_pairs.binary_search(&pair) {
+					Ok(_) => continue,
+					Err(index) => index,
+				};
 				let mut augmented = candidate.clone();
 				augmented.source_id.clone_from(&target_source_id);
 				colliders.push(augmented);
-				existing_pairs.insert(pair);
+				existing_pairs.insert(pair_index, pair);
 			}
 		}
 		let added = colliders.len().saturating_sub(before_count);
