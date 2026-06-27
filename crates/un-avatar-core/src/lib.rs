@@ -2903,6 +2903,10 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 	}
 
 	pub fn contact_parameter_values(self) -> BTreeMap<String, f32> {
+		self.contact_parameter_value_pairs().into_iter().collect()
+	}
+
+	pub fn contact_parameter_value_pairs(self) -> Vec<(String, f32)> {
 		let world = scene_world_matrices(self.scene);
 		let senders = self
 			.dynamics
@@ -2914,7 +2918,7 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 				Some((sender, contact_probe_shape(sender, &world)?))
 			})
 			.collect::<Vec<_>>();
-		let mut values = BTreeMap::<String, f32>::new();
+		let mut values = Vec::<(String, f32)>::new();
 		for receiver in self.dynamics.contacts() {
 			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
 				continue;
@@ -2932,9 +2936,11 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 					}
 				}
 			}
-			let value = values.entry(receiver.parameter.clone()).or_insert(0.0);
-			if emitted {
-				*value = 1.0;
+			let next_value = if emitted { 1.0 } else { 0.0 };
+			if let Some((_, value)) = values.iter_mut().find(|(name, _)| name == &receiver.parameter) {
+				*value = value.max(next_value);
+			} else {
+				values.push((receiver.parameter.clone(), next_value));
 			}
 		}
 		values
@@ -3639,7 +3645,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			.document
 			.runtime_model()
 			.scene_profile_dynamics()
-			.map(UnaRuntimeSceneDynamics::contact_parameter_values)
+			.map(UnaRuntimeSceneDynamics::contact_parameter_value_pairs)
 		else {
 			return BTreeMap::new();
 		};
