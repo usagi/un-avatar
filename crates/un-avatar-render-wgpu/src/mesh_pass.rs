@@ -3164,6 +3164,7 @@ pub(crate) struct SceneMeshes {
 	visibility_scratch: Vec<bool>,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
+	fur_palette_matrix_scratch: Vec<Mat4>,
 	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
 }
@@ -6273,17 +6274,22 @@ fn compute_fur_cards_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<ComputeF
 	verts.iter().copied().map(compute_fur_cards_source_vertex_from_vertex).collect()
 }
 
-fn compute_fur_cards_palette_matrix(raw: &[f32], joint_index: u16) -> Mat4 {
-	let matrix_count = raw.len() / 16;
-	if matrix_count == 0 {
-		return Mat4::IDENTITY;
+fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
+	out.clear();
+	out.reserve(raw.len() / 16);
+	for matrix in raw.chunks_exact(16) {
+		out.push(Mat4::from_cols_array(matrix.try_into().expect("palette matrix slice length")));
 	}
-	let joint_index = (joint_index as usize).min(matrix_count - 1);
-	let base = joint_index * 16;
-	Mat4::from_cols_array(&raw[base..base + 16].try_into().expect("palette matrix slice length"))
 }
 
-fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -> ComputeFurCardsSourceVertexGpu {
+fn compute_fur_cards_palette_matrix(matrices: &[Mat4], joint_index: u16) -> Mat4 {
+	if matrices.is_empty() {
+		return Mat4::IDENTITY;
+	}
+	matrices[(joint_index as usize).min(matrices.len() - 1)]
+}
+
+fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_matrices: &[Mat4]) -> ComputeFurCardsSourceVertexGpu {
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
 	let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
@@ -6295,7 +6301,7 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_r
 		if weight.abs() <= 0.000001 {
 			continue;
 		}
-		let matrix = compute_fur_cards_palette_matrix(palette_raw, vertex.joints[i]);
+		let matrix = compute_fur_cards_palette_matrix(palette_matrices, vertex.joints[i]);
 		skinned_position += matrix.transform_point3(position) * weight;
 		skinned_normal += matrix.transform_vector3(normal) * weight;
 		skinned_tangent += matrix.transform_vector3(tangent) * weight;
@@ -6336,14 +6342,16 @@ fn compute_fur_cards_skinned_source_vertices_from_mesh(
 	verts: &[Vertex],
 	palette_raw: &[f32],
 	out: &mut Vec<ComputeFurCardsSourceVertexGpu>,
+	palette_matrices: &mut Vec<Mat4>,
 ) {
+	compute_fur_cards_palette_matrices(palette_raw, palette_matrices);
 	out.clear();
 	out.reserve(verts.len());
 	out.extend(
 		verts
 			.iter()
 			.copied()
-			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_raw)),
+			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_matrices)),
 	);
 }
 
@@ -10737,6 +10745,7 @@ impl SceneMeshes {
 			visibility_scratch: Vec::new(),
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
+			fur_palette_matrix_scratch: Vec::new(),
 			has_morph_draws,
 			opts,
 		};
@@ -11044,6 +11053,7 @@ impl SceneMeshes {
 	fn update_compute_fur_cards_source_vertices(&mut self, queue: &wgpu::Queue) {
 		let draws = &mut self.draws;
 		let skin_palettes = &self.skin_palettes;
+		let palette_matrix_scratch = &mut self.fur_palette_matrix_scratch;
 		for &draw_index in &self.fur_draw_indices {
 			let Some(draw) = draws.get_mut(draw_index) else {
 				continue;
@@ -11064,6 +11074,7 @@ impl SceneMeshes {
 				&compute_fur_cards.base_vertices,
 				&palette.uploaded,
 				&mut compute_fur_cards.source_vertex_scratch,
+				palette_matrix_scratch,
 			);
 			if compute_fur_cards.source_vertex_scratch.len() != compute_fur_cards.base_vertices.len() {
 				continue;
@@ -14773,7 +14784,8 @@ mod tests {
 		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
 		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
 		let mut source_vertices = Vec::new();
-		compute_fur_cards_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices);
+		let mut palette_matrices = Vec::new();
+		compute_fur_cards_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices, &mut palette_matrices);
 
 		assert_eq!(source_vertices.len(), 1);
 		assert!((source_vertices[0].position[0] - 4.0).abs() < 0.00001);
