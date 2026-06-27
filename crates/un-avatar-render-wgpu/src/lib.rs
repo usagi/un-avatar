@@ -2251,7 +2251,7 @@ impl AvatarApp {
 						Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
 						None => return Err("renderer is not initialized".to_string()),
 					};
-					self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
+					self.update_runtime_parameter(name, inactive_value);
 					activation
 				}
 			} else {
@@ -2653,7 +2653,7 @@ impl AvatarApp {
 		if let Some(gpu) = self.gpu.as_mut() {
 			let _ = gpu.set_runtime_parameter(name, start);
 		}
-		self.update_runtime_parameters(BTreeMap::from([(name.to_string(), start)]));
+		self.update_runtime_parameter(name, start);
 		self.replace_animator_transition(ActiveAnimatorTransition {
 			target: AnimatorTransitionTarget::Parameter { name: name.to_string() },
 			start,
@@ -3296,6 +3296,15 @@ impl AvatarApp {
 		};
 		if let Ok(mut status) = status.lock() {
 			status.runtime_parameter_values.extend(parameter_values);
+		}
+	}
+
+	fn update_runtime_parameter(&self, name: impl Into<String>, value: f32) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.runtime_parameter_values.insert(name.into(), value);
 		}
 	}
 
@@ -4365,7 +4374,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(activation) = &outcome {
-					self.update_runtime_parameters(BTreeMap::from([(name.clone(), value)]));
+					self.update_runtime_parameter(&name, value);
 					if let Some(activation) = activation {
 						self.apply_runtime_activation_status(activation);
 					}
