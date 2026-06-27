@@ -2293,6 +2293,7 @@ struct SceneMeshDrawState {
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	active_draw_indices: Vec<usize>,
+	active_morph_draw_indices: Vec<usize>,
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	runtime_requirements: SceneMeshRuntimeRequirements,
@@ -2752,6 +2753,7 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 		transparent_backpass_draw_indices: Vec::with_capacity(draws.len()),
 		blended_batches: Vec::new(),
 		active_draw_indices: Vec::with_capacity(draws.len()),
+		active_morph_draw_indices: Vec::new(),
 		needs_screen_refraction: false,
 		active_skin_palette_indices: Vec::with_capacity(draws.len()),
 		runtime_requirements: SceneMeshRuntimeRequirements::default(),
@@ -2767,6 +2769,9 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 		}
 		if draw.active() {
 			state.active_draw_indices.push(draw_index);
+			if draw.morph_target_count > 0 {
+				state.active_morph_draw_indices.push(draw_index);
+			}
 			if !draw.skin_palette_static_identity {
 				state.active_skin_palette_indices.push(draw.skin_palette_index);
 			}
@@ -3181,6 +3186,7 @@ pub(crate) struct SceneMeshes {
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	active_draw_indices: Vec<usize>,
+	active_morph_draw_indices: Vec<usize>,
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	image_texture_residency: Vec<bool>,
@@ -10774,6 +10780,7 @@ impl SceneMeshes {
 			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices,
 			blended_batches: draw_state.blended_batches,
 			active_draw_indices: draw_state.active_draw_indices,
+			active_morph_draw_indices: draw_state.active_morph_draw_indices,
 			needs_screen_refraction: draw_state.needs_screen_refraction,
 			active_skin_palette_indices: draw_state.active_skin_palette_indices,
 			image_texture_residency,
@@ -11147,6 +11154,7 @@ impl SceneMeshes {
 		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices;
 		self.blended_batches = draw_state.blended_batches;
 		self.active_draw_indices = draw_state.active_draw_indices;
+		self.active_morph_draw_indices = draw_state.active_morph_draw_indices;
 		self.needs_screen_refraction = draw_state.needs_screen_refraction;
 		self.active_skin_palette_indices = draw_state.active_skin_palette_indices;
 		self.runtime_requirements = draw_state.runtime_requirements;
@@ -11441,7 +11449,7 @@ impl SceneMeshes {
 		}
 		let t_expression0 = Instant::now();
 		self.expression_value_scratch.clear();
-		if self.has_morph_draws && (expr_weights.is_some() || expression_overrides.is_some()) {
+		if !self.active_morph_draw_indices.is_empty() && (expr_weights.is_some() || expression_overrides.is_some()) {
 			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
 			for (index, name) in self.expression_names.iter().enumerate() {
 				let value = expression_overrides
@@ -11478,14 +11486,12 @@ impl SceneMeshes {
 
 		let t_draw0 = Instant::now();
 		let mut morph_weights_ms = 0.0;
-		for &draw_index in &self.active_draw_indices {
-			let Some(d) = self.draws.get_mut(draw_index) else {
-				continue;
-			};
-			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
-
-			if d.morph_target_count > 0 {
-				let t_morph0 = Instant::now();
+		if !self.active_morph_draw_indices.is_empty() {
+			let t_morph0 = Instant::now();
+			for &draw_index in &self.active_morph_draw_indices {
+				let Some(d) = self.draws.get_mut(draw_index) else {
+					continue;
+				};
 				let Some(morph_resources) = d.morph_resources.as_ref() else {
 					continue;
 				};
@@ -11531,8 +11537,15 @@ impl SceneMeshes {
 						d.morph_weights.clear();
 					}
 				}
-				morph_weights_ms += t_morph0.elapsed().as_secs_f32() * 1000.0;
 			}
+			morph_weights_ms = t_morph0.elapsed().as_secs_f32() * 1000.0;
+		}
+
+		for &draw_index in &self.active_draw_indices {
+			let Some(d) = self.draws.get_mut(draw_index) else {
+				continue;
+			};
+			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 
 			let model = mesh_world.to_cols_array_2d();
 			let transform = MeshDrawTransformGpu { model };
