@@ -9167,7 +9167,7 @@ impl GpuState {
 				let Some(actions) = doc.runtime_model().runtime_actions() else {
 					return Ok(None);
 				};
-				actions.clone()
+				actions.restore_effect_snapshot()
 			};
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
@@ -9255,7 +9255,7 @@ impl GpuState {
 				let Some(actions) = doc.runtime_model().runtime_actions() else {
 					return Ok(Vec::new());
 				};
-				actions.clone()
+				actions.restore_effect_snapshot()
 			};
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
@@ -9450,7 +9450,7 @@ impl GpuState {
 				action.id.clone(),
 				action.parameter_assignments(),
 				action.effects.clone(),
-				actions.clone(),
+				actions.restore_effect_snapshot(),
 			)
 		};
 		{

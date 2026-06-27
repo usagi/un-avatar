@@ -149,6 +149,29 @@ impl UnaRuntimeActionSet {
 		self.actions.iter().find(|action| action.matches_query(query))
 	}
 
+	pub fn restore_effect_snapshot(&self) -> Self {
+		Self {
+			actions: self
+				.actions
+				.iter()
+				.filter_map(|action| {
+					let effects = action
+						.effects
+						.iter()
+						.filter(|effect| effect.is_restore_target())
+						.cloned()
+						.collect::<Vec<_>>();
+					(!effects.is_empty()).then(|| UnaRuntimeAction {
+						id: action.id.clone(),
+						conditions: action.conditions.clone(),
+						effects,
+						..UnaRuntimeAction::default()
+					})
+				})
+				.collect(),
+		}
+	}
+
 	pub fn evaluation_target_write_collisions(&self) -> Vec<UnaEvaluationTargetWriteCollision> {
 		let mut writes_by_target: BTreeMap<(UnaEvaluationTargetKind, String), Vec<UnaEvaluationRuntimeActionTargetWrite>> = BTreeMap::new();
 		for action in &self.actions {
@@ -1060,6 +1083,17 @@ pub enum UnaRuntimeActionEffect {
 }
 
 impl UnaRuntimeActionEffect {
+	pub fn is_restore_target(&self) -> bool {
+		matches!(
+			self,
+			UnaRuntimeActionEffect::NodeVisibility { .. }
+				| UnaRuntimeActionEffect::MaterialColor { .. }
+				| UnaRuntimeActionEffect::MaterialScalar { .. }
+				| UnaRuntimeActionEffect::MaterialSlot { .. }
+				| UnaRuntimeActionEffect::DynamicsEnabled { .. }
+		)
+	}
+
 	pub fn evaluation_target_write(&self, action_id: &str) -> UnaEvaluationRuntimeActionTargetWrite {
 		let owner_key = runtime_action_owner_key(action_id);
 		let action_id = action_id.to_string();
@@ -8421,6 +8455,53 @@ mod tests {
 		assert_eq!(writes[3].target_key, "Smile");
 		assert_eq!(writes[4].target_kind, UnaEvaluationTargetKind::DynamicsEnabled);
 		assert_eq!(writes[4].target_key, "physbone:hair");
+	}
+
+	#[test]
+	fn runtime_action_restore_effect_snapshot_keeps_only_restore_inputs() {
+		let actions = UnaRuntimeActionSet {
+			actions: vec![UnaRuntimeAction {
+				id: "variant:coat".to_string(),
+				label: "Coat".to_string(),
+				triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "coat".to_string(),
+				}],
+				conditions: vec![UnaRuntimeActionCondition {
+					parameter_name: Some("Coat".to_string()),
+					parameter_value: Some(1.0),
+					..Default::default()
+				}],
+				effects: vec![
+					UnaRuntimeActionEffect::WardrobeSet {
+						set_id: "coat".to_string(),
+					},
+					UnaRuntimeActionEffect::ExpressionWeight {
+						name: "Smile".to_string(),
+						weight: 1.0,
+					},
+					UnaRuntimeActionEffect::NodeVisibility {
+						target: UnaRuntimeNodeTarget {
+							path: Some("Root/Coat".to_string()),
+							..Default::default()
+						},
+						visible: true,
+					},
+				],
+			}],
+		};
+
+		let snapshot = actions.restore_effect_snapshot();
+
+		assert_eq!(snapshot.actions.len(), 1);
+		assert_eq!(snapshot.actions[0].id, "variant:coat");
+		assert!(snapshot.actions[0].label.is_empty());
+		assert!(snapshot.actions[0].triggers.is_empty());
+		assert_eq!(snapshot.actions[0].conditions.len(), 1);
+		assert_eq!(snapshot.actions[0].effects.len(), 1);
+		assert!(matches!(
+			snapshot.actions[0].effects[0],
+			UnaRuntimeActionEffect::NodeVisibility { .. }
+		));
 	}
 
 	#[test]
