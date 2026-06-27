@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
+	collections::BTreeMap,
 	fs,
 	io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
 	path::{Path, PathBuf},
@@ -1253,12 +1253,12 @@ fn scene_texture_upload_step_count(
 #[derive(Clone, Debug, Default)]
 struct SceneAssetResidencySets {
 	all_resident: bool,
-	owned_mesh_primitives: BTreeSet<(usize, usize)>,
-	resident_mesh_primitives: BTreeSet<(usize, usize)>,
-	owned_materials: BTreeSet<usize>,
-	resident_materials: BTreeSet<usize>,
-	owned_images: BTreeSet<usize>,
-	resident_images: BTreeSet<usize>,
+	owned_mesh_primitives: Vec<(usize, usize)>,
+	resident_mesh_primitives: Vec<(usize, usize)>,
+	owned_materials: Vec<usize>,
+	resident_materials: Vec<usize>,
+	owned_images: Vec<usize>,
+	resident_images: Vec<usize>,
 }
 
 impl SceneAssetResidencySets {
@@ -1289,21 +1289,31 @@ impl SceneAssetResidencySets {
 		);
 		sets.resident_materials.extend(selection.materials);
 		sets.resident_images.extend(selection.images);
+		sets.owned_mesh_primitives = sorted_unique(sets.owned_mesh_primitives);
+		sets.resident_mesh_primitives = sorted_unique(sets.resident_mesh_primitives);
+		sets.owned_materials = sorted_unique_indices(sets.owned_materials);
+		sets.resident_materials = sorted_unique_indices(sets.resident_materials);
+		sets.owned_images = sorted_unique_indices(sets.owned_images);
+		sets.resident_images = sorted_unique_indices(sets.resident_images);
 		sets
 	}
 
 	fn mesh_primitive_resident(&self, mesh_index: usize, primitive_index: usize) -> bool {
 		self.all_resident
-			|| !self.owned_mesh_primitives.contains(&(mesh_index, primitive_index))
-			|| self.resident_mesh_primitives.contains(&(mesh_index, primitive_index))
+			|| self.owned_mesh_primitives.binary_search(&(mesh_index, primitive_index)).is_err()
+			|| self.resident_mesh_primitives.binary_search(&(mesh_index, primitive_index)).is_ok()
 	}
 
 	fn material_resident(&self, material_index: usize) -> bool {
-		self.all_resident || !self.owned_materials.contains(&material_index) || self.resident_materials.contains(&material_index)
+		self.all_resident
+			|| self.owned_materials.binary_search(&material_index).is_err()
+			|| self.resident_materials.binary_search(&material_index).is_ok()
 	}
 
 	fn image_resident(&self, image_index: usize) -> bool {
-		self.all_resident || !self.owned_images.contains(&image_index) || self.resident_images.contains(&image_index)
+		self.all_resident
+			|| self.owned_images.binary_search(&image_index).is_err()
+			|| self.resident_images.binary_search(&image_index).is_ok()
 	}
 }
 
@@ -1843,10 +1853,14 @@ fn push_texture_index(indices: &mut Vec<usize>, index: Option<usize>) {
 	}
 }
 
-fn sorted_unique_indices(mut indices: Vec<usize>) -> Vec<usize> {
-	indices.sort_unstable();
-	indices.dedup();
-	indices
+fn sorted_unique<T: Ord>(mut values: Vec<T>) -> Vec<T> {
+	values.sort_unstable();
+	values.dedup();
+	values
+}
+
+fn sorted_unique_indices(indices: Vec<usize>) -> Vec<usize> {
+	sorted_unique(indices)
 }
 
 fn lil_enabled(value: f32) -> bool {
@@ -8303,9 +8317,9 @@ impl SceneMeshes {
 				walk(scene, *child, path.clone(), paths);
 			}
 		}
-		let child_nodes: BTreeSet<usize> = scene.nodes.iter().flat_map(|node| node.children.iter().copied()).collect();
+		let child_nodes = sorted_unique_indices(scene.nodes.iter().flat_map(|node| node.children.iter().copied()).collect());
 		for index in 0..scene.nodes.len() {
-			if !child_nodes.contains(&index) {
+			if child_nodes.binary_search(&index).is_err() {
 				walk(scene, index, String::new(), &mut paths);
 			}
 		}
