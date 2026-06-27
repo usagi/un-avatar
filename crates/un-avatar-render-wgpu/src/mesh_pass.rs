@@ -2239,6 +2239,7 @@ struct MeshDraw {
 	default_morph_weights: Vec<f32>,
 	expression_bindings: Box<[ExpressionBinding]>,
 	morph_weights: Vec<f32>,
+	morph_weights_match_default: bool,
 	morph_weight_scratch: Vec<f32>,
 	alpha_mode: UnaAlphaMode,
 	material_slot_index: Option<usize>,
@@ -10530,6 +10531,7 @@ impl SceneMeshes {
 					expression_bindings: compact_expression_bindings.into_boxed_slice(),
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_target_count),
+					morph_weights_match_default: false,
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
 					material_slot_index,
@@ -11636,7 +11638,7 @@ impl SceneMeshes {
 				let skip_static_default_morph = !draw_has_active_expression
 					&& !draw_has_active_morph_name_override
 					&& !debug_zero_morphs
-					&& morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
+					&& d.morph_weights_match_default;
 				if !skip_static_default_morph {
 					d.morph_weight_scratch.clear();
 					if debug_zero_morphs {
@@ -11661,11 +11663,14 @@ impl SceneMeshes {
 							d.morph_weights.clear();
 							d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
 						}
+						d.morph_weights_match_default =
+							morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
 					} else if !d.morph_weights.is_empty() {
 						d.morph_weight_scratch.clear();
 						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
 						queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 						d.morph_weights.clear();
+						d.morph_weights_match_default = false;
 					}
 				}
 			}
@@ -11719,6 +11724,7 @@ impl SceneMeshes {
 				draw.primitive_index,
 				&draw.morph_source_indices,
 			) {
+				draw.morph_weights_match_default = false;
 				changed += 1;
 			}
 		}
