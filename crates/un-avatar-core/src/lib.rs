@@ -1966,38 +1966,47 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn reset_node_indices(self) -> Vec<usize> {
-		let mut nodes = BTreeSet::new();
+		let mut nodes = Vec::new();
 		for node in self.dynamic_bone_node_indices() {
-			nodes.insert(node);
+			nodes.push(node);
 		}
 		for constraint_ref in self.constraint_refs() {
-			nodes.insert(constraint_ref.target_node);
+			nodes.push(constraint_ref.target_node);
 			nodes.extend(constraint_ref.source_nodes.iter().copied());
 		}
-		nodes.into_iter().collect()
+		nodes.sort_unstable();
+		nodes.dedup();
+		nodes
 	}
 
 	pub fn reset_node_indices_for_source_id(self, source_id: &str) -> Vec<usize> {
 		if source_id.is_empty() {
 			return Vec::new();
 		}
-		let mut nodes = BTreeSet::new();
+		let mut nodes = Vec::new();
 		for group in self.groups().iter().filter(|group| group.source_id == source_id) {
 			nodes.extend(group.bone_node_indices.iter().copied());
 		}
+		nodes.sort_unstable();
+		nodes.dedup();
 		if nodes.is_empty() {
 			return Vec::new();
 		}
 		let source_nodes = nodes.clone();
 		for constraint_ref in self.constraint_refs() {
-			let overlaps = source_nodes.contains(&constraint_ref.target_node)
-				|| constraint_ref.source_nodes.iter().any(|node| source_nodes.contains(node));
+			let overlaps = source_nodes.binary_search(&constraint_ref.target_node).is_ok()
+				|| constraint_ref
+					.source_nodes
+					.iter()
+					.any(|node| source_nodes.binary_search(node).is_ok());
 			if overlaps {
-				nodes.insert(constraint_ref.target_node);
+				nodes.push(constraint_ref.target_node);
 				nodes.extend(constraint_ref.source_nodes.iter().copied());
 			}
 		}
-		nodes.into_iter().collect()
+		nodes.sort_unstable();
+		nodes.dedup();
+		nodes
 	}
 
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
