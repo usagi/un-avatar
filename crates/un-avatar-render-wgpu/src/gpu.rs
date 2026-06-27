@@ -5875,11 +5875,13 @@ fn apply_motion_signal_runtime_parameters(document: &mut UnaDocument, frames: &[
 	if next_values.is_empty() {
 		return BTreeMap::new();
 	}
-	let before = document.runtime_model().runtime_parameter_values().clone();
-	let changed = next_values
-		.into_iter()
-		.filter(|(name, value)| before.get(name).copied() != Some(*value))
-		.collect::<BTreeMap<_, _>>();
+	let changed = {
+		let before = document.runtime_model().runtime_parameter_values();
+		next_values
+			.into_iter()
+			.filter(|(name, value)| before.get(name).copied() != Some(*value))
+			.collect::<BTreeMap<_, _>>()
+	};
 	if !changed.is_empty() {
 		document.runtime_model_mut().set_runtime_parameter_values(changed.clone());
 	}
