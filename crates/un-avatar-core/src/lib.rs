@@ -166,21 +166,15 @@ impl UnaRuntimeActionSet {
 		writes_by_target
 			.into_iter()
 			.filter_map(|((target_kind, target_key), writes)| {
-				let owner_keys = writes
-					.iter()
-					.map(|write| write.owner_key.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let mut owner_keys = writes.iter().map(|write| write.owner_key.clone()).collect::<Vec<_>>();
+				owner_keys.sort_unstable();
+				owner_keys.dedup();
 				if owner_keys.len() < 2 {
 					return None;
 				}
-				let action_ids = writes
-					.iter()
-					.map(|write| write.action_id.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let mut action_ids = writes.iter().map(|write| write.action_id.clone()).collect::<Vec<_>>();
+				action_ids.sort_unstable();
+				action_ids.dedup();
 				Some(UnaEvaluationTargetWriteCollision {
 					target_kind,
 					target_key,
@@ -285,13 +279,15 @@ impl UnaRuntimeAction {
 	}
 
 	pub fn condition_parameter_names(&self) -> Vec<String> {
-		let mut names = BTreeSet::new();
+		let mut names = Vec::new();
 		for condition in &self.conditions {
 			if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
-				names.insert(name.to_string());
+				names.push(name.to_string());
 			}
 		}
-		names.into_iter().collect()
+		names.sort_unstable();
+		names.dedup();
+		names
 	}
 
 	pub fn current_parameter_condition_state(
