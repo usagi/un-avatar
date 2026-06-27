@@ -3247,6 +3247,11 @@ pub(crate) struct SceneMeshes {
 	visibility_scratch: Vec<bool>,
 	expression_names: Box<[String]>,
 	expression_value_scratch: Vec<f32>,
+	last_morph_expression_values: Vec<f32>,
+	last_morph_expression_values_valid: bool,
+	last_morph_name_overrides: BTreeMap<String, f32>,
+	last_morph_name_overrides_valid: bool,
+	last_morph_debug_zero_morphs: bool,
 	fur_source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
@@ -3956,6 +3961,41 @@ fn morph_weights_match_default(uploaded: &[f32], default_morph_weights: &[f32], 
 	}
 	let copy_len = default_morph_weights.len().min(target_count);
 	uploaded[..copy_len] == default_morph_weights[..copy_len] && uploaded[copy_len..].iter().all(|&weight| weight == 0.0)
+}
+
+fn update_cached_optional_f32_slice(cache: &mut Vec<f32>, valid: &mut bool, values: Option<&[f32]>) -> bool {
+	match values {
+		Some(values) if *valid && cache.as_slice() == values => false,
+		Some(values) => {
+			cache.clear();
+			cache.extend_from_slice(values);
+			*valid = true;
+			true
+		}
+		None if *valid => {
+			cache.clear();
+			*valid = false;
+			true
+		}
+		None => false,
+	}
+}
+
+fn update_cached_optional_f32_map(cache: &mut BTreeMap<String, f32>, valid: &mut bool, values: Option<&BTreeMap<String, f32>>) -> bool {
+	match values {
+		Some(values) if *valid && cache == values => false,
+		Some(values) => {
+			cache.clone_from(values);
+			*valid = true;
+			true
+		}
+		None if *valid => {
+			cache.clear();
+			*valid = false;
+			true
+		}
+		None => false,
+	}
 }
 
 fn scene_default_morph_weights_for_draw(
@@ -10908,6 +10948,11 @@ impl SceneMeshes {
 			visibility_scratch: Vec::new(),
 			expression_names: expression_names.into_boxed_slice(),
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
+			last_morph_expression_values: Vec::with_capacity(expression_value_capacity),
+			last_morph_expression_values_valid: false,
+			last_morph_name_overrides: BTreeMap::new(),
+			last_morph_name_overrides_valid: false,
+			last_morph_debug_zero_morphs: false,
 			fur_source_vertex_scratch: Vec::new(),
 			has_morph_draws,
 			opts,
@@ -11293,6 +11338,12 @@ impl SceneMeshes {
 		self.needs_screen_refraction = draw_state.needs_screen_refraction;
 		self.active_skin_palette_indices = draw_state.active_skin_palette_indices.into_boxed_slice();
 		self.runtime_requirements = draw_state.runtime_requirements;
+		self.invalidate_morph_input_cache();
+	}
+
+	fn invalidate_morph_input_cache(&mut self) {
+		self.last_morph_expression_values_valid = false;
+		self.last_morph_name_overrides_valid = false;
 	}
 
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
@@ -11623,61 +11674,74 @@ impl SceneMeshes {
 		let mut morph_weights_ms = 0.0;
 		if !self.active_morph_draw_indices.is_empty() {
 			let t_morph0 = Instant::now();
-			let static_default_morph_frame = expression_values.is_none() && morph_name_overrides.is_none() && !debug_zero_morphs;
-			for &draw_index in &self.active_morph_draw_indices {
-				let Some(d) = self.draws.get_mut(draw_index) else {
-					continue;
-				};
-				let Some(morph_resources) = d.morph_resources.as_ref() else {
-					continue;
-				};
-				let skip_static_default_morph = if static_default_morph_frame {
-					d.morph_weights_match_default
-				} else {
-					let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
-					let draw_has_active_morph_name_override = morph_names_have_active_override(
-						&d.morph_target_names,
-						&d.morph_target_override_keys,
-						&d.morph_target_override_suffix_keys,
-						morph_name_overrides,
-					);
-					!draw_has_active_expression
-						&& !draw_has_active_morph_name_override
-						&& !debug_zero_morphs
-						&& d.morph_weights_match_default
-				};
-				if !skip_static_default_morph {
-					d.morph_weight_scratch.clear();
-					if debug_zero_morphs {
-						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
+			let expression_values_changed = update_cached_optional_f32_slice(
+				&mut self.last_morph_expression_values,
+				&mut self.last_morph_expression_values_valid,
+				expression_values,
+			);
+			let morph_name_overrides_changed = update_cached_optional_f32_map(
+				&mut self.last_morph_name_overrides,
+				&mut self.last_morph_name_overrides_valid,
+				morph_name_overrides,
+			);
+			let debug_zero_morphs_changed = self.last_morph_debug_zero_morphs != debug_zero_morphs;
+			self.last_morph_debug_zero_morphs = debug_zero_morphs;
+			if refresh_scene_morph_defaults || expression_values_changed || morph_name_overrides_changed || debug_zero_morphs_changed {
+				let static_default_morph_frame = expression_values.is_none() && morph_name_overrides.is_none() && !debug_zero_morphs;
+				for &draw_index in &self.active_morph_draw_indices {
+					let Some(d) = self.draws.get_mut(draw_index) else {
+						continue;
+					};
+					let Some(morph_resources) = d.morph_resources.as_ref() else {
+						continue;
+					};
+					let skip_static_default_morph = if static_default_morph_frame {
+						d.morph_weights_match_default
 					} else {
-						fill_morph_weights_for_draw(
-							&d.default_morph_weights,
-							d.morph_target_count,
-							&d.expression_bindings,
-							expression_values,
+						let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
+						let draw_has_active_morph_name_override = morph_names_have_active_override(
 							&d.morph_target_names,
 							&d.morph_target_override_keys,
 							&d.morph_target_override_suffix_keys,
 							morph_name_overrides,
-							&mut d.morph_weight_scratch,
 						);
-					}
+						!draw_has_active_expression
+							&& !draw_has_active_morph_name_override
+							&& !debug_zero_morphs && d.morph_weights_match_default
+					};
+					if !skip_static_default_morph {
+						d.morph_weight_scratch.clear();
+						if debug_zero_morphs {
+							d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
+						} else {
+							fill_morph_weights_for_draw(
+								&d.default_morph_weights,
+								d.morph_target_count,
+								&d.expression_bindings,
+								expression_values,
+								&d.morph_target_names,
+								&d.morph_target_override_keys,
+								&d.morph_target_override_suffix_keys,
+								morph_name_overrides,
+								&mut d.morph_weight_scratch,
+							);
+						}
 
-					if d.morph_weight_scratch.len() == d.morph_target_count {
-						if d.morph_weights != d.morph_weight_scratch {
+						if d.morph_weight_scratch.len() == d.morph_target_count {
+							if d.morph_weights != d.morph_weight_scratch {
+								queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
+								d.morph_weights.clear();
+								d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
+							}
+							d.morph_weights_match_default =
+								morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
+						} else if !d.morph_weights.is_empty() {
+							d.morph_weight_scratch.clear();
+							d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
 							queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
 							d.morph_weights.clear();
-							d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
+							d.morph_weights_match_default = false;
 						}
-						d.morph_weights_match_default =
-							morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
-					} else if !d.morph_weights.is_empty() {
-						d.morph_weight_scratch.clear();
-						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
-						queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
-						d.morph_weights.clear();
-						d.morph_weights_match_default = false;
 					}
 				}
 			}
@@ -13362,6 +13426,32 @@ mod tests {
 		assert!(morph_weights_match_default(&[0.25, 0.0, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.1, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.0], &[0.25], 3));
+	}
+
+	#[test]
+	fn cached_optional_morph_inputs_report_only_real_changes() {
+		let mut values = Vec::new();
+		let mut values_valid = false;
+		assert!(!update_cached_optional_f32_slice(&mut values, &mut values_valid, None));
+		assert!(update_cached_optional_f32_slice(&mut values, &mut values_valid, Some(&[0.25, 0.5])));
+		assert!(!update_cached_optional_f32_slice(
+			&mut values,
+			&mut values_valid,
+			Some(&[0.25, 0.5])
+		));
+		assert!(update_cached_optional_f32_slice(
+			&mut values,
+			&mut values_valid,
+			Some(&[0.25, 0.75])
+		));
+		assert!(update_cached_optional_f32_slice(&mut values, &mut values_valid, None));
+
+		let mut map = BTreeMap::new();
+		let mut map_valid = false;
+		let overrides = BTreeMap::from([("Smile".to_string(), 1.0)]);
+		assert!(update_cached_optional_f32_map(&mut map, &mut map_valid, Some(&overrides)));
+		assert!(!update_cached_optional_f32_map(&mut map, &mut map_valid, Some(&overrides)));
+		assert!(update_cached_optional_f32_map(&mut map, &mut map_valid, None));
 	}
 
 	#[test]
