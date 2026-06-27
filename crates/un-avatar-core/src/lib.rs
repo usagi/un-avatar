@@ -150,26 +150,26 @@ impl UnaRuntimeActionSet {
 	}
 
 	pub fn restore_effect_snapshot(&self) -> Self {
-		Self {
-			actions: self
-				.actions
-				.iter()
-				.filter_map(|action| {
-					let effects = action
-						.effects
-						.iter()
-						.filter(|effect| effect.is_restore_target())
-						.cloned()
-						.collect::<Vec<_>>();
-					(!effects.is_empty()).then(|| UnaRuntimeAction {
-						id: action.id.clone(),
-						conditions: action.conditions.clone(),
-						effects,
-						..UnaRuntimeAction::default()
-					})
-				})
-				.collect(),
+		let mut actions = Vec::with_capacity(self.actions.len());
+		for action in &self.actions {
+			let mut effects = None;
+			for effect in &action.effects {
+				if effect.is_restore_target() {
+					effects
+						.get_or_insert_with(|| Vec::with_capacity(action.effects.len()))
+						.push(effect.clone());
+				}
+			}
+			if let Some(effects) = effects {
+				actions.push(UnaRuntimeAction {
+					id: action.id.clone(),
+					conditions: action.conditions.clone(),
+					effects,
+					..UnaRuntimeAction::default()
+				});
+			}
 		}
+		Self { actions }
 	}
 
 	pub fn evaluation_target_write_collisions(&self) -> Vec<UnaEvaluationTargetWriteCollision> {
