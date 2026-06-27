@@ -2230,7 +2230,6 @@ struct ComputeFurCardsDrawResources {
 	card_count: u32,
 	generated_index_count: u32,
 	dispatch_workgroups: u32,
-	base_vertices: Vec<Vertex>,
 	source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 }
 
@@ -6705,7 +6704,6 @@ fn create_compute_fur_cards_draw_resources(
 		card_count: generated_requirements.card_count,
 		generated_index_count: generated_requirements.index_count,
 		dispatch_workgroups: compute_fur_cards_dispatch_workgroups(card_count),
-		base_vertices: verts.to_vec(),
 		source_vertex_scratch: Vec::with_capacity(verts.len()),
 	})
 }
@@ -11070,13 +11068,14 @@ impl SceneMeshes {
 			if !palette.uploaded_changed {
 				continue;
 			}
+			let base_vertices = &draw.buffer_upload.vertices;
 			compute_fur_cards_skinned_source_vertices_from_mesh(
-				&compute_fur_cards.base_vertices,
+				base_vertices,
 				&palette.uploaded,
 				&mut compute_fur_cards.source_vertex_scratch,
 				palette_matrix_scratch,
 			);
-			if compute_fur_cards.source_vertex_scratch.len() != compute_fur_cards.base_vertices.len() {
+			if compute_fur_cards.source_vertex_scratch.len() != base_vertices.len() {
 				continue;
 			}
 			queue.write_buffer(
