@@ -1234,14 +1234,14 @@ fn scene_texture_upload_step_count(
 	scene: &UnaSceneSnapshot,
 	texture_roles: &[TextureRole],
 	texture_max_dimension: Option<u32>,
-	active_texture_indices: Option<&BTreeSet<usize>>,
+	active_texture_indices: Option<&[usize]>,
 ) -> u32 {
 	scene
 		.images
 		.iter()
 		.enumerate()
 		.map(|(image_index, im)| {
-			if active_texture_indices.is_some_and(|indices| !indices.contains(&image_index)) {
+			if active_texture_indices.is_some_and(|indices| indices.binary_search(&image_index).is_err()) {
 				return 1;
 			}
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
@@ -1995,9 +1995,9 @@ fn initial_active_texture_indices_for_scene(
 	effective_visibility: &[bool],
 	asset_residency: &SceneAssetResidencySets,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let default_material = UnaMaterialPbr::default();
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	for (node_index, node) in scene.nodes.iter().enumerate() {
 		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
 			continue;
@@ -2020,7 +2020,7 @@ fn initial_active_texture_indices_for_scene(
 			indices.extend(material_resident_texture_indices(material));
 		}
 	}
-	indices
+	sorted_unique_indices(indices)
 }
 
 fn initial_active_2d_texture_indices_for_scene(
@@ -2028,9 +2028,9 @@ fn initial_active_2d_texture_indices_for_scene(
 	effective_visibility: &[bool],
 	asset_residency: &SceneAssetResidencySets,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let default_material = UnaMaterialPbr::default();
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	for (node_index, node) in scene.nodes.iter().enumerate() {
 		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
 			continue;
@@ -2053,7 +2053,7 @@ fn initial_active_2d_texture_indices_for_scene(
 			indices.extend(material_texture_indices(material));
 		}
 	}
-	indices
+	sorted_unique_indices(indices)
 }
 
 fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
@@ -2436,14 +2436,16 @@ fn residency_unload_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 fn texture_residency_for_scene(
 	scene: &UnaSceneSnapshot,
 	asset_residency: &SceneAssetResidencySets,
-	active_image_texture_indices: &BTreeSet<usize>,
-	active_cube_texture_indices: &BTreeSet<usize>,
+	active_image_texture_indices: &[usize],
+	active_cube_texture_indices: &[usize],
 ) -> (Vec<bool>, Vec<bool>) {
 	let image_residency = scene
 		.images
 		.iter()
 		.enumerate()
-		.map(|(image_index, _)| asset_residency.image_resident(image_index) && active_image_texture_indices.contains(&image_index))
+		.map(|(image_index, _)| {
+			asset_residency.image_resident(image_index) && active_image_texture_indices.binary_search(&image_index).is_ok()
+		})
 		.collect();
 	let cube_residency = scene
 		.images
@@ -2451,7 +2453,7 @@ fn texture_residency_for_scene(
 		.enumerate()
 		.map(|(image_index, _)| {
 			asset_residency.image_resident(image_index)
-				&& active_cube_texture_indices.contains(&image_index)
+				&& active_cube_texture_indices.binary_search(&image_index).is_ok()
 				&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
 		})
 		.collect();
@@ -8854,7 +8856,7 @@ impl SceneMeshes {
 				scene,
 				&texture_roles,
 				texture_max_dimension,
-				Some(&initial_active_2d_texture_indices),
+				Some(initial_active_2d_texture_indices.as_slice()),
 			))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
@@ -9255,8 +9257,10 @@ impl SceneMeshes {
 			let image_prepare_start = Instant::now();
 			let mut image_prepare_timings = TextureImagePrepareTimings::default();
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			let image_resident = asset_residency.image_resident(image_index) && initial_active_2d_texture_indices.contains(&image_index);
-			let cube_resident = asset_residency.image_resident(image_index) && initial_active_texture_indices.contains(&image_index);
+			let image_resident =
+				asset_residency.image_resident(image_index) && initial_active_2d_texture_indices.binary_search(&image_index).is_ok();
+			let cube_resident =
+				asset_residency.image_resident(image_index) && initial_active_texture_indices.binary_search(&image_index).is_ok();
 			image_texture_residency.push(image_resident);
 			cube_texture_residency
 				.push(cube_resident && texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref)));
@@ -11645,9 +11649,9 @@ impl SceneMeshes {
 		promoted
 	}
 
-	fn active_draw_texture_indices(&self) -> (BTreeSet<usize>, BTreeSet<usize>) {
-		let mut image_indices = BTreeSet::new();
-		let mut cube_indices = BTreeSet::new();
+	fn active_draw_texture_indices(&self) -> (Vec<usize>, Vec<usize>) {
+		let mut image_indices = Vec::new();
+		let mut cube_indices = Vec::new();
 		for &draw_index in &self.active_draw_indices {
 			let Some(draw) = self.draws.get(draw_index) else {
 				continue;
@@ -11655,7 +11659,7 @@ impl SceneMeshes {
 			image_indices.extend(draw.texture_indices.iter().copied());
 			cube_indices.extend(draw.cube_texture_indices.iter().copied());
 		}
-		(image_indices, cube_indices)
+		(sorted_unique_indices(image_indices), sorted_unique_indices(cube_indices))
 	}
 
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
@@ -12601,7 +12605,7 @@ mod tests {
 
 		assert_eq!(
 			initial_active_texture_indices_for_scene(&scene, &effective_visibility, &residency, &SceneMeshLoadOpts::default()),
-			BTreeSet::from([0])
+			vec![0]
 		);
 	}
 
@@ -12626,8 +12630,8 @@ mod tests {
 			..Default::default()
 		};
 		let asset_residency = SceneAssetResidencySets::for_scene(&scene, &["outfit:coat".to_string()]);
-		let active_image_texture_indices = BTreeSet::from([0]);
-		let active_cube_texture_indices = BTreeSet::from([2]);
+		let active_image_texture_indices = vec![0];
+		let active_cube_texture_indices = vec![2];
 
 		let (image_residency, cube_residency) = texture_residency_for_scene(
 			&scene,
