@@ -870,28 +870,24 @@ fn runtime_action_ids_for_parameter(
 	name: &str,
 	value: f32,
 ) -> Vec<String> {
-	let condition_matches = actions
-		.actions
-		.iter()
-		.filter(|action| action.parameter_condition_state_in_scene(scene, name, value) == Some(true))
-		.map(|action| action.id.clone())
-		.collect::<Vec<_>>();
+	let mut condition_matches = Vec::new();
+	let mut trigger_matches = Vec::new();
+	let query = UnaRuntimeActionQuery {
+		parameter_name: Some(name),
+		parameter_value: Some(value),
+		..Default::default()
+	};
+	for action in &actions.actions {
+		match action.parameter_condition_state_in_scene(scene, name, value) {
+			Some(true) => condition_matches.push(action.id.clone()),
+			None if action.matches_query(query) => trigger_matches.push(action.id.clone()),
+			_ => {}
+		}
+	}
 	if !condition_matches.is_empty() {
 		return condition_matches;
 	}
-	actions
-		.actions
-		.iter()
-		.filter(|action| {
-			action.parameter_condition_state_in_scene(scene, name, value).is_none()
-				&& action.matches_query(UnaRuntimeActionQuery {
-					parameter_name: Some(name),
-					parameter_value: Some(value),
-					..Default::default()
-				})
-		})
-		.map(|action| action.id.clone())
-		.collect()
+	trigger_matches
 }
 
 fn runtime_action_ids_for_parameter_values(
