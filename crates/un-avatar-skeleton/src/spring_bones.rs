@@ -1968,12 +1968,14 @@ struct DynamicsMatchOverrideEvaluation {
 }
 
 impl DynamicsMatchOverrideEvaluation {
-	fn diagnostics(mut self) -> (Vec<String>, Vec<String>) {
-		self.matched_labels.sort();
-		self.matched_labels.dedup();
-		self.invalid_regexes.sort();
-		self.invalid_regexes.dedup();
-		(self.matched_labels, self.invalid_regexes)
+	fn diagnostics(&self) -> (Vec<String>, Vec<String>) {
+		let mut matched_labels = self.matched_labels.clone();
+		matched_labels.sort();
+		matched_labels.dedup();
+		let mut invalid_regexes = self.invalid_regexes.clone();
+		invalid_regexes.sort();
+		invalid_regexes.dedup();
+		(matched_labels, invalid_regexes)
 	}
 }
 
@@ -2422,7 +2424,7 @@ impl DynamicsSimulator {
 			let category_id = classify_group(scene, g, &physics.categories);
 			let match_text = dynamics_group_match_text(scene, g);
 			let match_evaluation = match_override_evaluation(g, &match_text, &compiled_match_overrides);
-			let (matched_overrides, invalid_match_regexes) = match_evaluation.clone().diagnostics();
+			let (matched_overrides, invalid_match_regexes) = match_evaluation.diagnostics();
 			let group_override_applied = override_params_by_source_id.contains_key(g.source_id);
 			let params = resolve_group_params(
 				&category_id,
