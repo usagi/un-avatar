@@ -1329,10 +1329,10 @@ struct ExpandedPrimitive {
 
 #[derive(Clone)]
 struct ExpandedMorphPayload {
-	morph_pos: Vec<Vec<[f32; 3]>>,
-	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
-	morph_source_indices: Vec<usize>,
-	default_morph_weights: Vec<f32>,
+	morph_pos: Box<[Vec<[f32; 3]>]>,
+	morph_nrm: Option<Box<[Vec<[f32; 3]>]>>,
+	morph_source_indices: Box<[usize]>,
+	default_morph_weights: Box<[f32]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -3360,7 +3360,7 @@ fn expand_primitive_with_cached_morph(
 				.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
 				.unwrap_or_else(|| (0..num_morph).collect())
 		},
-		|payload| payload.morph_source_indices.clone(),
+		|payload| payload.morph_source_indices.to_vec(),
 	);
 	let vertex_capacity = positions.len();
 	let mut morph_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() {
@@ -3468,23 +3468,33 @@ fn expand_primitive_with_cached_morph(
 	fill_missing_tangents(&mut verts, &indices);
 
 	let morph_payload = cached_morph_payload.cloned().unwrap_or_else(|| ExpandedMorphPayload {
-		morph_pos: morph_push.unwrap_or_default(),
-		morph_nrm: morph_nrm_push,
+		morph_pos: morph_push.unwrap_or_default().into_boxed_slice(),
+		morph_nrm: morph_nrm_push.map(Vec::into_boxed_slice),
 		default_morph_weights: morph_source_indices
 			.iter()
 			.map(|&target_index| default_morph_weight_for(buf, target_index))
-			.collect(),
-		morph_source_indices,
+			.collect::<Vec<_>>()
+			.into_boxed_slice(),
+		morph_source_indices: morph_source_indices.into_boxed_slice(),
 	});
 
 	Some(ExpandedPrimitive {
 		verts,
 		indices,
-		morph_pos: morph_payload.morph_pos,
-		morph_nrm: morph_payload.morph_nrm,
-		default_morph_weights: morph_payload.default_morph_weights,
-		morph_source_indices: morph_payload.morph_source_indices,
+		morph_pos: morph_payload.morph_pos.into_vec(),
+		morph_nrm: morph_payload.morph_nrm.map(|morph_nrm| morph_nrm.into_vec()),
+		default_morph_weights: morph_payload.default_morph_weights.into_vec(),
+		morph_source_indices: morph_payload.morph_source_indices.into_vec(),
 	})
+}
+
+fn expanded_morph_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedMorphPayload {
+	ExpandedMorphPayload {
+		morph_pos: exp.morph_pos.clone().into_boxed_slice(),
+		morph_nrm: exp.morph_nrm.clone().map(Vec::into_boxed_slice),
+		morph_source_indices: exp.morph_source_indices.clone().into_boxed_slice(),
+		default_morph_weights: exp.default_morph_weights.clone().into_boxed_slice(),
+	}
 }
 
 fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<(usize, usize), Vec<ExpressionBinding>> {
@@ -10219,12 +10229,7 @@ impl SceneMeshes {
 							if let Some(morph_cache_key) = morph_delta_cache_key.as_ref() {
 								expanded_morph_payload_cache
 									.entry(morph_cache_key.clone())
-									.or_insert_with(|| ExpandedMorphPayload {
-										morph_pos: exp.morph_pos.clone(),
-										morph_nrm: exp.morph_nrm.clone(),
-										morph_source_indices: exp.morph_source_indices.clone(),
-										default_morph_weights: exp.default_morph_weights.clone(),
-									});
+									.or_insert_with(|| expanded_morph_payload_from_primitive(exp));
 							}
 						}
 						exp
@@ -10241,12 +10246,7 @@ impl SceneMeshes {
 					if let (Some(cache_key), Some(exp)) = (morph_delta_cache_key.as_ref(), exp.as_ref()) {
 						expanded_morph_payload_cache
 							.entry(cache_key.clone())
-							.or_insert_with(|| ExpandedMorphPayload {
-								morph_pos: exp.morph_pos.clone(),
-								morph_nrm: exp.morph_nrm.clone(),
-								morph_source_indices: exp.morph_source_indices.clone(),
-								default_morph_weights: exp.default_morph_weights.clone(),
-							});
+							.or_insert_with(|| expanded_morph_payload_from_primitive(exp));
 					}
 					exp
 				};
