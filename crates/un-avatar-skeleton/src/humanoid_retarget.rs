@@ -1368,6 +1368,28 @@ fn scene_world_matrices(nodes: &[UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
 	world
 }
 
+fn update_world_subtree(nodes: &[UnaSceneNode], parents: &[usize], world: &mut [Mat4], node_index: usize) {
+	if node_index >= nodes.len() || node_index >= world.len() {
+		return;
+	}
+	let parent_world = parents
+		.get(node_index)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.unwrap_or(Mat4::IDENTITY);
+	fn visit(nodes: &[UnaSceneNode], idx: usize, parent: Mat4, world: &mut [Mat4]) {
+		if idx >= nodes.len() || idx >= world.len() {
+			return;
+		}
+		let current = parent * Mat4::from_cols_array(&nodes[idx].transform);
+		world[idx] = current;
+		for &child in &nodes[idx].children {
+			visit(nodes, child, current, world);
+		}
+	}
+	visit(nodes, node_index, parent_world, world);
+}
+
 fn compact_scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<usize> {
 	let mut parents = vec![NO_PARENT; nodes.len()];
 	for (parent, node) in nodes.iter().enumerate() {
@@ -1441,7 +1463,7 @@ fn apply_roll_constraint(nodes: &mut [UnaSceneNode], rest_nodes: &[UnaSceneNode]
 
 fn apply_aim_constraint(
 	nodes: &mut [UnaSceneNode],
-	roots: &[usize],
+	world: &mut [Mat4],
 	rest_nodes: &[UnaSceneNode],
 	parents: &[usize],
 	c: &UnaNodeConstraint,
@@ -1450,7 +1472,6 @@ fn apply_aim_constraint(
 	if c.source_node >= nodes.len() || c.target_node >= nodes.len() || c.target_node >= rest_nodes.len() {
 		return;
 	}
-	let world = scene_world_matrices(nodes, roots);
 	let src_pos = world[c.source_node].transform_point3(Vec3::ZERO);
 	let dst_pos = world[c.target_node].transform_point3(Vec3::ZERO);
 	let to_vec = (src_pos - dst_pos).normalize_or_zero();
@@ -1474,12 +1495,13 @@ fn apply_aim_constraint(
 	let result = dst_rest_rotation.slerp(target.normalize(), c.weight.clamp(0.0, 1.0));
 	if let Some(dst) = nodes.get_mut(c.target_node) {
 		set_node_rotation(dst, result);
+		update_world_subtree(nodes, parents, world, c.target_node);
 	}
 }
 
 fn apply_parent_constraint(
 	nodes: &mut [UnaSceneNode],
-	roots: &[usize],
+	world: &mut [Mat4],
 	rest_nodes: &[UnaSceneNode],
 	rest_world: &[Mat4],
 	parents: &[usize],
@@ -1498,7 +1520,6 @@ fn apply_parent_constraint(
 	if constraint_weight <= 0.0 {
 		return;
 	}
-	let world = scene_world_matrices(nodes, roots);
 	let current_parent_world = parents
 		.get(c.target_node)
 		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
@@ -1573,6 +1594,7 @@ fn apply_parent_constraint(
 	if local.to_cols_array().iter().all(|value| value.is_finite()) {
 		if let Some(target) = nodes.get_mut(c.target_node) {
 			target.transform = local.to_cols_array();
+			update_world_subtree(nodes, parents, world, c.target_node);
 		}
 	}
 }
@@ -1592,13 +1614,21 @@ pub fn apply_node_constraints_to_scene(
 	}
 	let mut parents = None;
 	let mut rest_world = None;
+	let mut current_world = None;
 	for c in constraints {
 		match c.kind {
-			UnaNodeConstraintKind::Rotation => apply_rotation_constraint(nodes, rest_nodes, c),
-			UnaNodeConstraintKind::Roll { axis } => apply_roll_constraint(nodes, rest_nodes, c, axis),
+			UnaNodeConstraintKind::Rotation => {
+				apply_rotation_constraint(nodes, rest_nodes, c);
+				current_world = None;
+			}
+			UnaNodeConstraintKind::Roll { axis } => {
+				apply_roll_constraint(nodes, rest_nodes, c, axis);
+				current_world = None;
+			}
 			UnaNodeConstraintKind::Aim { axis } => {
 				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
-				apply_aim_constraint(nodes, roots, rest_nodes, parents, c, axis);
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_aim_constraint(nodes, world, rest_nodes, parents, c, axis);
 			}
 			UnaNodeConstraintKind::Parent {
 				translate_x,
@@ -1611,9 +1641,10 @@ pub fn apply_node_constraints_to_scene(
 			} => {
 				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
 				let rest_world = rest_world.get_or_insert_with(|| scene_world_matrices(rest_nodes, roots));
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
 				apply_parent_constraint(
 					nodes,
-					roots,
+					world,
 					rest_nodes,
 					rest_world,
 					parents,
