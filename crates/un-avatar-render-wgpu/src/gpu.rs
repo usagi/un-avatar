@@ -5962,7 +5962,10 @@ fn apply_motion_signal_runtime_parameters_with_names(
 			.collect::<BTreeMap<_, _>>()
 	};
 	if !changed.is_empty() {
-		document.runtime_model_mut().set_runtime_parameter_values(changed.clone());
+		let mut runtime = document.runtime_model_mut();
+		for (name, value) in &changed {
+			runtime.set_runtime_parameter_value(name.clone(), *value);
+		}
 	}
 	changed
 }
