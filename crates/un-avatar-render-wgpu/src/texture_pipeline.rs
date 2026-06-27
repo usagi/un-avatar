@@ -887,6 +887,7 @@ const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV64_PRIME: u64 = 0x100000001b3;
 const PARALLEL_TEXTURE_MIN_ROWS_PER_WORKER: u32 = 64;
 const TEXTURE_CACHE_READ_BUFFER_BYTES: usize = 1024 * 1024;
+const TEXTURE_CACHE_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 
 fn fnv1a64_update(mut hash: u64, bytes: &[u8]) -> u64 {
 	for byte in bytes {
@@ -1024,7 +1025,7 @@ fn write_cache_file(path: &Path, write_contents: impl FnOnce(&mut BufWriter<fs::
 	}
 	let temp_path = cache_temp_path(path);
 	let write_result = (|| -> std::io::Result<()> {
-		let mut writer = BufWriter::new(fs::File::create(&temp_path)?);
+		let mut writer = BufWriter::with_capacity(TEXTURE_CACHE_WRITE_BUFFER_BYTES, fs::File::create(&temp_path)?);
 		write_contents(&mut writer)?;
 		writer.flush()
 	})();
