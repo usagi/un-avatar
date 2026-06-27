@@ -2944,20 +2944,37 @@ fn simple_1d_blend_child_weight(children: &[Value], index: usize, value: f32) ->
 	}
 }
 
+#[cfg(test)]
 fn dynamics_interaction_parameter_values_with_context(
 	doc: &UnaDocument,
 	rest_nodes: Option<&[UnaSceneNode]>,
 	node_paths_by_index: &[Option<String>],
 	center_peak_angle_parameters: &BTreeSet<String>,
 ) -> BTreeMap<String, f32> {
+	dynamics_interaction_parameter_updates_with_context(doc, rest_nodes, node_paths_by_index, center_peak_angle_parameters, None).values
+}
+
+struct DynamicsInteractionParameterUpdates {
+	values: BTreeMap<String, f32>,
+	changed: BTreeMap<String, f32>,
+}
+
+fn dynamics_interaction_parameter_updates_with_context(
+	doc: &UnaDocument,
+	rest_nodes: Option<&[UnaSceneNode]>,
+	node_paths_by_index: &[Option<String>],
+	center_peak_angle_parameters: &BTreeSet<String>,
+	before: Option<&BTreeMap<String, f32>>,
+) -> DynamicsInteractionParameterUpdates {
 	let mut values = BTreeMap::new();
+	let mut changed = BTreeMap::new();
 	let runtime = doc.runtime_model();
 	let Some(scene) = runtime.scene() else {
-		return values;
+		return DynamicsInteractionParameterUpdates { values, changed };
 	};
 	let dynamics = runtime.dynamics();
 	let active_dynamics_source_ids = active_dynamics_source_ids_for_scene(doc, scene);
-	let world = crate::scene_transform::scene_world_matrices(scene);
+	let mut world = None;
 	for group in dynamics.dynamics_groups() {
 		if !group.effective_enabled || !dynamics_source_id_resident(group.source_id, active_dynamics_source_ids.as_ref()) {
 			continue;
@@ -2969,7 +2986,8 @@ fn dynamics_interaction_parameter_values_with_context(
 			continue;
 		}
 		let shape_angle = dynamics_group_shape_angle(rest_nodes, &scene.nodes, group, &node_paths_by_index).unwrap_or(0.0);
-		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, &world, group, &node_paths_by_index).unwrap_or(0.0);
+		let world = world.get_or_insert_with(|| crate::scene_transform::scene_world_matrices(scene));
+		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, world, group, &node_paths_by_index).unwrap_or(0.0);
 		let angle = shape_angle.max(gravity_angle);
 		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
 		let angle_parameter = format!("{}_Angle", interaction.parameter);
@@ -2979,13 +2997,36 @@ fn dynamics_interaction_parameter_values_with_context(
 		} else {
 			angle_norm
 		};
-		values.insert(angle_parameter, angle_value);
-		values.insert(format!("{}_IsGrabbed", interaction.parameter), 0.0);
-		values.insert(format!("{}_IsPosed", interaction.parameter), 0.0);
-		values.insert(format!("{}_Stretch", interaction.parameter), 0.0);
-		values.insert(format!("{}_Squish", interaction.parameter), 0.0);
+		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, angle_parameter, angle_value);
+		insert_dynamics_interaction_parameter_value(
+			&mut values,
+			&mut changed,
+			before,
+			format!("{}_IsGrabbed", interaction.parameter),
+			0.0,
+		);
+		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_IsPosed", interaction.parameter), 0.0);
+		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_Stretch", interaction.parameter), 0.0);
+		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_Squish", interaction.parameter), 0.0);
 	}
-	values
+	DynamicsInteractionParameterUpdates { values, changed }
+}
+
+fn insert_dynamics_interaction_parameter_value(
+	values: &mut BTreeMap<String, f32>,
+	changed: &mut BTreeMap<String, f32>,
+	before: Option<&BTreeMap<String, f32>>,
+	name: String,
+	value: f32,
+) {
+	if let Some(before) = before {
+		if (before.get(&name).copied().unwrap_or(f32::NAN) - value).abs() > 0.0001 {
+			changed.insert(name.clone(), value);
+		} else {
+			changed.remove(&name);
+		}
+	}
+	values.insert(name, value);
 }
 
 #[cfg(test)]
@@ -8653,29 +8694,19 @@ impl GpuState {
 			return Ok(BTreeMap::new());
 		};
 		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
-		let values = dynamics_interaction_parameter_values_with_context(
+		let before = doc.runtime_model().runtime_parameter_values();
+		let updates = dynamics_interaction_parameter_updates_with_context(
 			&doc,
 			self.rest_nodes.as_deref().map(Vec::as_slice),
 			&self.runtime_scene_node_paths_by_index,
 			&self.runtime_center_peak_angle_parameters,
+			Some(before),
 		);
-		if values.is_empty() {
+		if updates.values.is_empty() {
 			return Ok(BTreeMap::new());
 		}
-		let changed = {
-			let before = doc.runtime_model().runtime_parameter_values();
-			values
-				.iter()
-				.filter_map(|(name, value)| {
-					(before.get(name).copied().unwrap_or(f32::NAN) - *value)
-						.abs()
-						.gt(&0.0001)
-						.then_some((name.clone(), *value))
-				})
-				.collect()
-		};
-		doc.runtime_model_mut().set_runtime_parameter_values(values);
-		Ok(changed)
+		doc.runtime_model_mut().set_runtime_parameter_values(updates.values);
+		Ok(updates.changed)
 	}
 
 	fn apply_restored_runtime_action_effects(&mut self, restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) {
