@@ -11621,6 +11621,7 @@ impl SceneMeshes {
 		let mut morph_weights_ms = 0.0;
 		if !self.active_morph_draw_indices.is_empty() {
 			let t_morph0 = Instant::now();
+			let static_default_morph_frame = expression_values.is_none() && morph_name_overrides.is_none() && !debug_zero_morphs;
 			for &draw_index in &self.active_morph_draw_indices {
 				let Some(d) = self.draws.get_mut(draw_index) else {
 					continue;
@@ -11628,17 +11629,21 @@ impl SceneMeshes {
 				let Some(morph_resources) = d.morph_resources.as_ref() else {
 					continue;
 				};
-				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
-				let draw_has_active_morph_name_override = morph_names_have_active_override(
-					&d.morph_target_names,
-					&d.morph_target_override_keys,
-					&d.morph_target_override_suffix_keys,
-					morph_name_overrides,
-				);
-				let skip_static_default_morph = !draw_has_active_expression
-					&& !draw_has_active_morph_name_override
-					&& !debug_zero_morphs
-					&& d.morph_weights_match_default;
+				let skip_static_default_morph = if static_default_morph_frame {
+					d.morph_weights_match_default
+				} else {
+					let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
+					let draw_has_active_morph_name_override = morph_names_have_active_override(
+						&d.morph_target_names,
+						&d.morph_target_override_keys,
+						&d.morph_target_override_suffix_keys,
+						morph_name_overrides,
+					);
+					!draw_has_active_expression
+						&& !draw_has_active_morph_name_override
+						&& !debug_zero_morphs
+						&& d.morph_weights_match_default
+				};
 				if !skip_static_default_morph {
 					d.morph_weight_scratch.clear();
 					if debug_zero_morphs {
