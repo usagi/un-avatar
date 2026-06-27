@@ -3523,10 +3523,13 @@ fn dynamic_morph_target_indices(
 	dynamic_morph_target_names: &[String],
 	include_all: bool,
 ) -> Vec<usize> {
+	if buf.morph_targets.is_empty() {
+		return Vec::new();
+	}
 	if include_all {
 		return (0..buf.morph_targets.len()).collect();
 	}
-	let mut indices = Vec::new();
+	let mut indices = Vec::with_capacity(buf.default_morph_weights.len().min(buf.morph_targets.len()) + bindings.len());
 	for (index, &weight) in buf.default_morph_weights.iter().enumerate() {
 		if index < buf.morph_targets.len() && weight.abs() > 0.000001 {
 			push_unique_index(&mut indices, index);
@@ -3537,13 +3540,15 @@ fn dynamic_morph_target_indices(
 			push_unique_index(&mut indices, binding.morph_target_index);
 		}
 	}
-	for (index, name) in buf.morph_target_names.iter().enumerate() {
-		if index < buf.morph_targets.len()
-			&& dynamic_morph_target_names
-				.binary_search_by(|candidate| candidate.as_str().cmp(name.as_str()))
-				.is_ok()
-		{
-			push_unique_index(&mut indices, index);
+	if !dynamic_morph_target_names.is_empty() {
+		for (index, name) in buf.morph_target_names.iter().enumerate() {
+			if index < buf.morph_targets.len()
+				&& dynamic_morph_target_names
+					.binary_search_by(|candidate| candidate.as_str().cmp(name.as_str()))
+					.is_ok()
+			{
+				push_unique_index(&mut indices, index);
+			}
 		}
 	}
 	sorted_unique_indices(indices)
@@ -13575,6 +13580,39 @@ mod tests {
 		let indices = dynamic_morph_target_indices(&buf, &[], &names, false);
 
 		assert_eq!(indices, vec![1]);
+	}
+
+	#[test]
+	fn dynamic_morph_targets_return_empty_without_morph_payload() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: vec!["Ignored".to_string()],
+			default_morph_weights: vec![1.0],
+		};
+		let bindings = [ExpressionBinding {
+			preset_index: 0,
+			morph_target_index: 0,
+			weight_scale: 1.0,
+		}];
+		let names = vec!["Ignored".to_string()];
+
+		let indices = dynamic_morph_target_indices(&buf, &bindings, &names, true);
+
+		assert!(indices.is_empty());
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
