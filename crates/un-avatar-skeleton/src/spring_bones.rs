@@ -1254,6 +1254,15 @@ fn build_runtime_surface_constraints(
 		.collect()
 }
 
+fn surface_constraint_runtime_indices(constraints: &[RuntimeSurfaceConstraint]) -> Vec<usize> {
+	let mut indices = BTreeSet::new();
+	for constraint in constraints {
+		indices.insert(constraint.a.runtime_index);
+		indices.insert(constraint.b.runtime_index);
+	}
+	indices.into_iter().collect()
+}
+
 /// 全グループのランタイム状態。
 pub struct DynamicsSimulator {
 	runtimes: Vec<Option<GroupRuntime>>,
@@ -1261,6 +1270,7 @@ pub struct DynamicsSimulator {
 	active_verlet_runtime_indices: Vec<usize>,
 	active_xpbd_runtime_indices: Vec<usize>,
 	surface_constraints: Vec<RuntimeSurfaceConstraint>,
+	surface_constraint_runtime_indices: Vec<usize>,
 	world_scratch: Vec<Mat4>,
 	/// 実時間 dt を蓄積し、`FIXED_DT` 単位の離散ステップに変換するアキュムレータ。
 	accumulator: f32,
@@ -1588,6 +1598,7 @@ impl Default for DynamicsSimulator {
 			active_verlet_runtime_indices: Vec::new(),
 			active_xpbd_runtime_indices: Vec::new(),
 			surface_constraints: Vec::new(),
+			surface_constraint_runtime_indices: Vec::new(),
 			world_scratch: Vec::new(),
 			accumulator: 0.0,
 			bone_colliders: Vec::new(),
@@ -2494,6 +2505,7 @@ impl DynamicsSimulator {
 			None
 		} else {
 			let surface_constraints = build_runtime_surface_constraints(surface_constraints, &runtime_joint_by_child_node);
+			let surface_constraint_runtime_indices = surface_constraint_runtime_indices(&surface_constraints);
 			let tuning_warnings = dynamics_tuning_warnings(
 				&compiled_match_overrides,
 				&matched_match_indices,
@@ -2521,6 +2533,7 @@ impl DynamicsSimulator {
 				active_verlet_runtime_indices,
 				active_xpbd_runtime_indices,
 				surface_constraints,
+				surface_constraint_runtime_indices,
 				world_scratch: Vec::new(),
 				accumulator: 0.0,
 				bone_colliders,
@@ -2670,7 +2683,7 @@ impl DynamicsSimulator {
 				apply_post_surface_collider_constraints(
 					scene,
 					&mut self.runtimes,
-					&self.active_runtime_indices,
+					&self.surface_constraint_runtime_indices,
 					dynamics,
 					&mut self.world_scratch,
 					&self.world_colliders,
@@ -3662,7 +3675,7 @@ fn apply_surface_constraints(
 fn apply_post_surface_collider_constraints(
 	scene: &mut UnaSceneSnapshot,
 	runtimes: &mut [Option<GroupRuntime>],
-	active_runtime_indices: &[usize],
+	surface_runtime_indices: &[usize],
 	dynamics: UnaRuntimeDynamics<'_>,
 	world_scratch: &mut [Mat4],
 	world_colliders: &[WorldBoneColliderPrimitive],
@@ -3675,7 +3688,7 @@ fn apply_post_surface_collider_constraints(
 		return;
 	}
 	for _ in 0..2 {
-		for &runtime_index in active_runtime_indices {
+		for &runtime_index in surface_runtime_indices {
 			let Some(runtime) = runtimes.get(runtime_index).and_then(Option::as_ref) else {
 				continue;
 			};
