@@ -2120,17 +2120,24 @@ enum SceneMeshIndexUpload {
 }
 
 impl SceneMeshIndexUpload {
-	fn from_indices(index_format: wgpu::IndexFormat, indices: Vec<u32>) -> Self {
-		match index_format {
-			wgpu::IndexFormat::Uint16 => Self::U16(indices.into_iter().map(|index| index as u16).collect::<Vec<_>>().into_boxed_slice()),
-			wgpu::IndexFormat::Uint32 => Self::U32(indices.into_boxed_slice()),
+	fn from_u32_indices_compact(indices: Vec<u32>) -> Self {
+		if indices.iter().any(|&index| index > u16::MAX as u32) {
+			return Self::U32(indices.into_boxed_slice());
 		}
+		Self::U16(indices.into_iter().map(|index| index as u16).collect::<Vec<_>>().into_boxed_slice())
 	}
 
 	fn len(&self) -> usize {
 		match self {
 			Self::U16(indices) => indices.len(),
 			Self::U32(indices) => indices.len(),
+		}
+	}
+
+	fn index_format(&self) -> wgpu::IndexFormat {
+		match self {
+			Self::U16(_) => wgpu::IndexFormat::Uint16,
+			Self::U32(_) => wgpu::IndexFormat::Uint32,
 		}
 	}
 
@@ -4132,14 +4139,6 @@ fn create_morph_resources_with_shared_deltas(
 		weight_buffer,
 		delta_buffer: shared.delta_buffer.clone(),
 		bind_group,
-	}
-}
-
-fn compact_index_format(indices: &[u32]) -> wgpu::IndexFormat {
-	if indices.iter().all(|&index| index <= u16::MAX as u32) {
-		wgpu::IndexFormat::Uint16
-	} else {
-		wgpu::IndexFormat::Uint32
 	}
 }
 
@@ -10334,14 +10333,15 @@ impl SceneMeshes {
 					skin,
 				);
 				let skin_palette_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let index_format = compact_index_format(&indices);
+				let index_upload = SceneMeshIndexUpload::from_u32_indices_compact(indices);
+				let index_format = index_upload.index_format();
+				let index_count = index_upload.len() as u32;
 				let buffer_upload = SceneMeshBufferUpload {
 					vertices: verts.into_boxed_slice(),
-					indices: SceneMeshIndexUpload::from_indices(index_format, indices),
+					indices: index_upload,
 				};
 				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
 				let index_buffer_bytes = buffer_upload.index_buffer_bytes();
-				let index_count = buffer_upload.indices.len() as u32;
 				let asset_resident = asset_residency.mesh_primitive_resident(mesh_i, prim_i);
 				mesh_prepare_summary.prepared_primitives += 1;
 				mesh_prepare_summary.vertices += buffer_upload.vertices.len() as u64;
@@ -14288,6 +14288,18 @@ mod tests {
 		};
 
 		assert_eq!(scene_node_paths(&scene), vec!["root", "root", "root/leaf", "loose"]);
+	}
+
+	#[test]
+	fn scene_mesh_index_upload_compacts_only_when_all_indices_fit_u16() {
+		match SceneMeshIndexUpload::from_u32_indices_compact(vec![0, 7, u16::MAX as u32]) {
+			SceneMeshIndexUpload::U16(indices) => assert_eq!(&*indices, &[0, 7, u16::MAX]),
+			SceneMeshIndexUpload::U32(_) => panic!("expected u16 compact index payload"),
+		}
+		match SceneMeshIndexUpload::from_u32_indices_compact(vec![1, u16::MAX as u32 + 1, 3]) {
+			SceneMeshIndexUpload::U16(_) => panic!("expected u32 index payload"),
+			SceneMeshIndexUpload::U32(indices) => assert_eq!(&*indices, &[1, u16::MAX as u32 + 1, 3]),
+		}
 	}
 
 	#[test]
