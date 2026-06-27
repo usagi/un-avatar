@@ -2414,11 +2414,11 @@ fn active_residency_gaps_from_draws<'a>(
 	}
 }
 
-fn residency_load_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+fn residency_load_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 	residency_transition_indices(old, next, false, true)
 }
 
-fn residency_unload_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+fn residency_unload_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 	residency_transition_indices(old, next, true, false)
 }
 
@@ -2447,14 +2447,7 @@ fn texture_residency_for_scene(
 	(image_residency, cube_residency)
 }
 
-fn residency_transition_indices(
-	old: impl IntoIterator<Item = bool>,
-	next: impl IntoIterator<Item = bool>,
-	from: bool,
-	to: bool,
-) -> Vec<usize> {
-	let old = old.into_iter().collect::<Vec<_>>();
-	let next = next.into_iter().collect::<Vec<_>>();
+fn residency_transition_indices(old: &[bool], next: &[bool], from: bool, to: bool) -> Vec<usize> {
 	let mut indices = Vec::new();
 	for index in 0..old.len().max(next.len()) {
 		let old_value = old.get(index).copied().unwrap_or(false);
@@ -11665,46 +11658,21 @@ impl SceneMeshes {
 		let (active_image_texture_indices, active_cube_texture_indices) = self.active_draw_texture_indices();
 		let (next_image_texture_residency, next_cube_texture_residency) =
 			texture_residency_for_scene(scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
-		refresh.image_texture_load_indices = residency_load_indices(
-			self.image_texture_residency.iter().copied(),
-			next_image_texture_residency.iter().copied(),
-		);
-		refresh.image_texture_unload_indices = residency_unload_indices(
-			self.image_texture_residency.iter().copied(),
-			next_image_texture_residency.iter().copied(),
-		);
-		refresh.cube_texture_load_indices = residency_load_indices(
-			self.cube_texture_residency.iter().copied(),
-			next_cube_texture_residency.iter().copied(),
-		);
-		refresh.cube_texture_unload_indices = residency_unload_indices(
-			self.cube_texture_residency.iter().copied(),
-			next_cube_texture_residency.iter().copied(),
-		);
+		refresh.image_texture_load_indices = residency_load_indices(&self.image_texture_residency, &next_image_texture_residency);
+		refresh.image_texture_unload_indices = residency_unload_indices(&self.image_texture_residency, &next_image_texture_residency);
+		refresh.cube_texture_load_indices = residency_load_indices(&self.cube_texture_residency, &next_cube_texture_residency);
+		refresh.cube_texture_unload_indices = residency_unload_indices(&self.cube_texture_residency, &next_cube_texture_residency);
 		self.image_texture_residency = next_image_texture_residency;
 		self.cube_texture_residency = next_cube_texture_residency;
-		refresh.material_slot_load_indices = residency_load_indices(
-			self.material_slot_residency.iter().copied(),
-			scene
-				.materials
-				.iter()
-				.enumerate()
-				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
-		);
-		refresh.material_slot_unload_indices = residency_unload_indices(
-			self.material_slot_residency.iter().copied(),
-			scene
-				.materials
-				.iter()
-				.enumerate()
-				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
-		);
-		self.material_slot_residency = scene
+		let next_material_slot_residency: Vec<bool> = scene
 			.materials
 			.iter()
 			.enumerate()
 			.map(|(material_index, _)| asset_residency.material_resident(material_index))
 			.collect();
+		refresh.material_slot_load_indices = residency_load_indices(&self.material_slot_residency, &next_material_slot_residency);
+		refresh.material_slot_unload_indices = residency_unload_indices(&self.material_slot_residency, &next_material_slot_residency);
+		self.material_slot_residency = next_material_slot_residency;
 		if refresh.active_draw_state_changed_count > 0 {
 			self.rebuild_draw_order();
 		}
@@ -12266,15 +12234,15 @@ mod tests {
 	#[test]
 	fn residency_transition_indices_report_loads_and_unloads() {
 		assert_eq!(
-			residency_load_indices([true, false, false, true], [false, true, false, true]),
+			residency_load_indices(&[true, false, false, true], &[false, true, false, true]),
 			vec![1]
 		);
 		assert_eq!(
-			residency_unload_indices([true, false, false, true], [false, true, false, true]),
+			residency_unload_indices(&[true, false, false, true], &[false, true, false, true]),
 			vec![0]
 		);
-		assert_eq!(residency_load_indices([], [true, false, true]), vec![0, 2]);
-		assert_eq!(residency_unload_indices([true, false, true], []), vec![0, 2]);
+		assert_eq!(residency_load_indices(&[], &[true, false, true]), vec![0, 2]);
+		assert_eq!(residency_unload_indices(&[true, false, true], &[]), vec![0, 2]);
 	}
 
 	#[test]
@@ -12640,7 +12608,7 @@ mod tests {
 
 		assert_eq!(image_residency, vec![true, false, false]);
 		assert_eq!(cube_residency, vec![false, false, true]);
-		assert_eq!(residency_load_indices([false, false, false], image_residency), vec![0]);
+		assert_eq!(residency_load_indices(&[false, false, false], &image_residency), vec![0]);
 	}
 
 	#[test]
