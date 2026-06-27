@@ -2299,14 +2299,17 @@ fn segment_segment_distance(a0: [f32; 3], a1: [f32; 3], b0: [f32; 3], b1: [f32; 
 }
 
 fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
-	let sender = sender_tags.iter().collect::<BTreeSet<_>>();
-	receiver_tags
+	let mut sender = sender_tags.iter().map(String::as_str).collect::<Vec<_>>();
+	sender.sort_unstable();
+	sender.dedup();
+	let mut matched = receiver_tags
 		.iter()
-		.filter(|tag| sender.contains(tag))
+		.filter(|tag| sender.binary_search(&tag.as_str()).is_ok())
 		.cloned()
-		.collect::<BTreeSet<_>>()
-		.into_iter()
-		.collect()
+		.collect::<Vec<_>>();
+	matched.sort_unstable();
+	matched.dedup();
+	matched
 }
 
 fn contact_tags_match(receiver_tags: &[String], sender_tags: &[String]) -> bool {
@@ -2874,7 +2877,7 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 					return None;
 				}
 				let receiver_shape = contact_probe_shape(receiver, &world);
-				let mut sender_source_ids = BTreeSet::new();
+				let mut sender_source_ids = Vec::new();
 				if let Some(receiver_shape) = receiver_shape {
 					for (sender, sender_shape) in &senders {
 						if !contact_tags_match(&receiver.collision_tags, &sender.collision_tags) {
@@ -2882,11 +2885,12 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 						}
 						let (overlap, _, _, _, _, _) = contact_probe_overlap(receiver_shape, *sender_shape);
 						if overlap {
-							sender_source_ids.insert(sender.source_id.clone());
+							sender_source_ids.push(sender.source_id.clone());
 						}
 					}
 				}
-				let sender_source_ids = sender_source_ids.into_iter().collect::<Vec<_>>();
+				sender_source_ids.sort_unstable();
+				sender_source_ids.dedup();
 				let emitted = !sender_source_ids.is_empty();
 				Some(UnaEvaluationContactParameterEmission {
 					owner_key: contact_owner_key(&receiver.source_id, receiver_index),
