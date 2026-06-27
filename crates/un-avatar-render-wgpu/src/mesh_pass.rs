@@ -4209,6 +4209,12 @@ fn write_palette_matrix_slot(raw: &mut [f32], matrices: &mut Vec<Mat4>, matrix_i
 	matrices.push(matrix);
 }
 
+fn resize_f32_zeroed_if_needed(values: &mut Vec<f32>, len: usize) {
+	if values.len() != len {
+		values.resize(len, 0.0);
+	}
+}
+
 fn identity_matrix_raw() -> Vec<f32> {
 	let mut raw = Vec::with_capacity(matrix_raw_capacity(1));
 	write_matrix_to_raw(&mut raw, Mat4::IDENTITY);
@@ -11025,11 +11031,10 @@ impl SceneMeshes {
 			let inv_mesh = safe_inverse_mesh_world(mesh_world);
 			let joint_count = skin.joint_nodes.len().min(palette.matrix_capacity).min(MAX_BONES);
 			if joint_count == 0 {
-				palette.raw.resize(matrix_raw_capacity(1), 0.0);
+				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
 				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
 			} else {
-				palette.raw.resize(matrix_raw_capacity(joint_count), 0.0);
-				palette.computed_matrices.reserve(joint_count);
+				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(joint_count));
 			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
@@ -11038,7 +11043,7 @@ impl SceneMeshes {
 				write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, j, matrix);
 			}
 		} else {
-			palette.raw.resize(matrix_raw_capacity(1), 0.0);
+			resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
 			write_palette_matrix_slot(&mut palette.raw, &mut palette.computed_matrices, 0, Mat4::IDENTITY);
 		}
 		if palette.uploaded_matrices != palette.computed_matrices {
