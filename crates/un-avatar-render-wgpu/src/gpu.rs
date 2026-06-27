@@ -3632,7 +3632,7 @@ pub(crate) struct PreparedDocumentScene {
 	bone_collider_count: u32,
 	bone_collider_source: BoneColliderSource,
 	runtime_requirements: SceneMeshRuntimeRequirements,
-	expression_presets: Vec<String>,
+	expression_presets: Box<[String]>,
 	timings: PreparedDocumentSceneTimings,
 }
 
@@ -6657,13 +6657,13 @@ pub(crate) struct GpuState {
 	expression_overrides_revision: u64,
 	applied_expression_overrides_revision: u64,
 	animator_morph_override_cache: AnimatorMorphOverrideCache,
-	expression_presets: Vec<String>,
+	expression_presets: Box<[String]>,
 	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
-	motion_runtime_parameter_names: Vec<String>,
-	runtime_scene_node_paths_by_index: Vec<Option<String>>,
-	runtime_center_peak_angle_parameters: Vec<String>,
+	motion_runtime_parameter_names: Box<[String]>,
+	runtime_scene_node_paths_by_index: Box<[Option<String>]>,
+	runtime_center_peak_angle_parameters: Box<[String]>,
 	motion_retarget_runtime: Option<MotionRetargetRuntime>,
 	rest_nodes: Option<Arc<Vec<UnaSceneNode>>>,
 	/// 旧 IPC / status 互換の primary source 値。現在の姿勢適用は key 単位の後着優先。
@@ -7037,13 +7037,13 @@ impl GpuState {
 			expression_overrides_revision: 0,
 			applied_expression_overrides_revision: 0,
 			animator_morph_override_cache: AnimatorMorphOverrideCache::default(),
-			expression_presets: Vec::new(),
+			expression_presets: Box::default(),
 			motion_apply_opts,
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
-			motion_runtime_parameter_names: Vec::new(),
-			runtime_scene_node_paths_by_index: Vec::new(),
-			runtime_center_peak_angle_parameters: Vec::new(),
+			motion_runtime_parameter_names: Box::default(),
+			runtime_scene_node_paths_by_index: Box::default(),
+			runtime_center_peak_angle_parameters: Box::default(),
 			motion_retarget_runtime: None,
 			rest_nodes: None,
 			primary_motion_source,
@@ -7181,7 +7181,7 @@ impl GpuState {
 		self.last_scene_world_ms = t_world0.elapsed().as_secs_f32() * 1000.0;
 		let document_changed = document_revision_to_apply.is_some_and(|revision| revision != self.applied_document_revision);
 		if document_changed && !expression_presets_match_catalog(&self.expression_presets, runtime.expression_catalog) {
-			self.expression_presets = expression_preset_names(runtime.expression_catalog);
+			self.expression_presets = expression_preset_names(runtime.expression_catalog).into_boxed_slice();
 		}
 		let refresh_scene_morph_defaults = document_changed;
 		let t_expr0 = Instant::now();
@@ -9455,9 +9455,9 @@ impl GpuState {
 		let state_assign_start = Instant::now();
 		self.document = Some(prepared.document);
 		self.invalidate_applied_document_state();
-		self.motion_runtime_parameter_names = motion_runtime_parameter_names;
-		self.runtime_scene_node_paths_by_index = runtime_scene_node_paths_by_index;
-		self.runtime_center_peak_angle_parameters = runtime_center_peak_angle_parameters;
+		self.motion_runtime_parameter_names = motion_runtime_parameter_names.into_boxed_slice();
+		self.runtime_scene_node_paths_by_index = runtime_scene_node_paths_by_index.into_boxed_slice();
+		self.runtime_center_peak_angle_parameters = runtime_center_peak_angle_parameters.into_boxed_slice();
 		self.scene_meshes = prepared.scene_meshes;
 		self.texture_summary = prepared.texture_summary;
 		self.dynamics_sim = prepared.dynamics_sim;
@@ -9611,7 +9611,7 @@ impl GpuSceneBuildContext {
 			bone_collider_count: physics.stats.count,
 			bone_collider_source: physics.stats.source,
 			runtime_requirements,
-			expression_presets,
+			expression_presets: expression_presets.into_boxed_slice(),
 			timings,
 		})
 	}
