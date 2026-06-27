@@ -4,7 +4,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::{debug_log::WindowDebugOptions, mesh_pass::SceneMeshLoadOpts};
-use un_avatar_skeleton::{BoneColliderConfig, SpringBonePhysicsConfig};
+use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 
 /// 旧プロファイル互換の primary motion source。
 ///
@@ -608,7 +608,7 @@ pub struct AvatarWindowOptions {
 	pub bone_colliders: BoneColliderConfig,
 	/// UNDynamics solver backend / time model / category override 設定。
 	/// Type name is kept for the current skeleton crate API; runtime input is normalized UNDynamics.
-	pub spring_bone_physics: SpringBonePhysicsConfig,
+	pub dynamics_physics: DynamicsPhysicsConfig,
 	/// 調査用ログ（`run_cli` の `--debug-*` と対応）。
 	pub debug: WindowDebugOptions,
 	/// 式プリセット（VMC Blend 等）をモーフ合成に使わない（目まわりの切り分け用）。
@@ -778,7 +778,7 @@ impl Default for AvatarWindowOptions {
 			runtime_bus_key: None,
 			dynamics_enabled: true,
 			bone_colliders: BoneColliderConfig::default(),
-			spring_bone_physics: SpringBonePhysicsConfig::default(),
+			dynamics_physics: DynamicsPhysicsConfig::default(),
 			debug: WindowDebugOptions::default(),
 			disable_expression_morphs: false,
 			disable_vmc_eye_look: false,

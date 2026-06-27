@@ -93,27 +93,118 @@ export type RendererRuntimeDynamicsGroupStatus = {
 	comment?: string;
 	category?: string;
 	bone_count: number;
+	visual_target?: boolean;
+	skinned_joint_count?: number;
+	mesh_subtree_node_count?: number;
 	root_node?: number;
 	root_path?: string;
 	tip_node?: number;
 	tip_path?: string;
 	stiffness: number;
+	pull: number;
+	spring: number;
+	integration_type?: string;
 	drag_force: number;
 	gravity_power: number;
+	gravity_falloff?: number;
+	immobile?: number;
+	immobile_type?: string;
 	gravity_dir: [number, number, number];
 	hit_radius: number;
 	center_node?: number;
 	center_path?: string;
 	limit_type?: string;
+	limit_rotation?: [number, number, number];
 	max_angle_x?: number;
 	max_angle_z?: number;
 	max_stretch?: number;
+	max_squish?: number;
+	stretch_motion?: number;
 	writeback_mode?: string;
 	translation_writeback_candidate_count?: number;
 	translation_writeback_target_count?: number;
 	allow_grabbing?: boolean;
 	allow_posing?: boolean;
 	interaction_parameter?: string;
+};
+
+export type RendererRuntimeDynamicsResponseCategoryStatus = {
+	category: string;
+	group_count: number;
+	joint_count: number;
+	visual_target_group_count?: number;
+	nonvisual_group_count?: number;
+	visible_skinned_joint_count?: number;
+	visible_mesh_subtree_node_count?: number;
+	matched_override_group_count?: number;
+	group_override_group_count?: number;
+	xpbd_group_count: number;
+	average_rest_response?: number;
+	min_rest_response?: number;
+	max_rest_response?: number;
+	average_pull: number;
+	average_stiffness: number;
+	average_shape_preservation: number;
+	min_shape_preservation?: number;
+	max_shape_preservation?: number;
+	average_bounce_response?: number;
+	min_bounce_response?: number;
+	max_bounce_response?: number;
+	average_max_stretch_response?: number;
+	min_max_stretch_response?: number;
+	max_max_stretch_response?: number;
+	average_max_squish_response?: number;
+	min_max_squish_response?: number;
+	max_max_squish_response?: number;
+	average_stretch_motion_response?: number;
+	min_stretch_motion_response?: number;
+	max_stretch_motion_response?: number;
+	average_spring: number;
+	average_drag_force: number;
+	average_damping_half_life_ms?: number;
+	average_parent_motion_follow: number;
+	min_parent_motion_follow?: number;
+	max_parent_motion_follow?: number;
+	average_orientation_follow: number;
+	average_xpbd_compliance: number;
+};
+
+export type RendererRuntimeDynamicsResponseGroupStatus = {
+	source_id: string;
+	category: string;
+	matched_overrides?: string[];
+	group_override_applied?: boolean;
+	invalid_match_regexes?: string[];
+	joint_count: number;
+	solver: string;
+	average_rest_response?: number;
+	min_rest_response?: number;
+	max_rest_response?: number;
+	average_pull: number;
+	average_stiffness: number;
+	average_shape_preservation: number;
+	min_shape_preservation?: number;
+	max_shape_preservation?: number;
+	average_bounce_response?: number;
+	min_bounce_response?: number;
+	max_bounce_response?: number;
+	average_max_stretch_response?: number;
+	min_max_stretch_response?: number;
+	max_max_stretch_response?: number;
+	average_max_squish_response?: number;
+	min_max_squish_response?: number;
+	max_max_squish_response?: number;
+	average_stretch_motion_response?: number;
+	min_stretch_motion_response?: number;
+	max_stretch_motion_response?: number;
+	average_spring: number;
+	average_drag_force: number;
+	average_damping_half_life_ms?: number;
+	average_parent_motion_follow: number;
+	min_parent_motion_follow?: number;
+	max_parent_motion_follow?: number;
+	average_orientation_follow: number;
+	xpbd_compliance: number;
 };
 
 export type RendererRuntimeDynamicsInteractionHookStatus = {
@@ -133,6 +224,8 @@ export type RendererRuntimeDynamicsInteractionHookStatus = {
 export type RendererRuntimeDynamicsColliderStatus = {
 	index: number;
 	source_kind: string;
+	source_id?: string;
+	collider_path?: string;
 	node: number;
 	node_path?: string;
 	shape: string;
@@ -420,6 +513,11 @@ export type RendererWardrobeAssetUploadPlan = {
 	reason?: string;
 };
 
+export type RendererRuntimeCountEntry = {
+	key: string;
+	count: number;
+};
+
 export type RendererRuntimeStatus = {
 	id: number;
 	state: RendererState;
@@ -516,6 +614,13 @@ export type RendererRuntimeStatus = {
 	dynamics_vrm_spring_bone_collider_count: number;
 	dynamics_vrc_physbone_collider_count: number;
 	dynamics_unknown_collider_count: number;
+	dynamics_surface_constraint_count: number;
+	dynamics_collision_projection_count: number;
+	dynamics_collision_projection_source_ids: string[];
+	dynamics_collision_projection_collider_paths: string[];
+	dynamics_collision_projection_collider_path_counts: RendererRuntimeCountEntry[];
+	dynamics_collision_projection_top_collider_path: string | null;
+	dynamics_collision_projection_top_collider_count: number | null;
 	dynamics_contact_count: number;
 	dynamics_vrc_contact_sender_count: number;
 	dynamics_vrc_contact_receiver_count: number;
@@ -527,6 +632,10 @@ export type RendererRuntimeStatus = {
 	dynamics_contact_parameter_reset_to_zero_count: number;
 	dynamics_constraint_ref_count: number;
 	dynamics_vrc_constraint_ref_count: number;
+	scene_node_constraint_count: number;
+	scene_parent_constraint_count: number;
+	scene_parent_constraint_source_count: number;
+	scene_parent_constraint_multi_source_count: number;
 	runtime_actions: RendererRuntimeActionStatus[];
 	runtime_action_target_write_collisions: RendererRuntimeActionTargetWriteCollision[];
 	runtime_action_restore_readiness: RendererRuntimeActionRestoreReadiness[];
@@ -542,6 +651,8 @@ export type RendererRuntimeStatus = {
 	contact_parameter_emission_enabled: boolean;
 	contact_parameter_emissions: RendererRuntimeContactParameterEmissionStatus[];
 	contact_probes: RendererRuntimeContactProbeStatus[];
+	dynamics_response_categories: RendererRuntimeDynamicsResponseCategoryStatus[];
+	dynamics_response_groups: RendererRuntimeDynamicsResponseGroupStatus[];
 	dynamics_groups: RendererRuntimeDynamicsGroupStatus[];
 	dynamics_interaction_hooks: RendererRuntimeDynamicsInteractionHookStatus[];
 	dynamics_colliders: RendererRuntimeDynamicsColliderStatus[];
@@ -589,6 +700,13 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "dynamics_source_enabled_group_count"
 	| "dynamics_enabled_override_count"
 	| "dynamics_collider_count"
+	| "dynamics_surface_constraint_count"
+	| "dynamics_collision_projection_count"
+	| "dynamics_collision_projection_source_ids"
+	| "dynamics_collision_projection_collider_paths"
+	| "dynamics_collision_projection_collider_path_counts"
+	| "dynamics_collision_projection_top_collider_path"
+	| "dynamics_collision_projection_top_collider_count"
 	| "dynamics_contact_count"
 	| "dynamics_contact_parameter_declaration_count"
 	| "dynamics_contact_probe_count"
@@ -597,12 +715,18 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "dynamics_contact_parameter_emitted_count"
 	| "dynamics_contact_parameter_reset_to_zero_count"
 	| "dynamics_constraint_ref_count"
+	| "scene_node_constraint_count"
+	| "scene_parent_constraint_count"
+	| "scene_parent_constraint_source_count"
+	| "scene_parent_constraint_multi_source_count"
 	| "dynamics_rotation_translation_writeback_group_count"
 	| "dynamics_translation_writeback_candidate_count"
 	| "dynamics_translation_writeback_target_count"
 	| "dynamics_stretch_translation_writeback_group_count"
 	| "dynamics_stretch_translation_writeback_target_group_count"
 	| "dynamics_warnings"
+	| "dynamics_response_categories"
+	| "dynamics_response_groups"
 	| "runtime_actions"
 	| "runtime_action_target_write_collisions"
 	| "runtime_action_restore_readiness"

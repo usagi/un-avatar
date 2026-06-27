@@ -7091,6 +7091,7 @@ name = "un-avatar-cli"
 version = "2.0.0"
 dependencies = [
  "clap",
+ "glam",
  "serde",
  "serde_json",
  "un-avatar-core",
@@ -7236,6 +7237,7 @@ name = "un-avatar-skeleton"
 version = "2.0.0"
 dependencies = [
  "glam",
+ "regex",
  "serde",
  "serde_json",
  "un-avatar-core",
@@ -7254,6 +7256,7 @@ dependencies = [
  "jiff",
  "midir",
  "pollster",
+ "regex",
  "rfd",
  "rust-i18n",
  "serde",
@@ -7265,7 +7268,10 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "tracing",
  "un-avatar-core",
+ "un-avatar-io",
+ "un-avatar-io-gltf",
  "un-avatar-io-vrm",
+ "un-avatar-skeleton",
  "un-i18n",
  "wgpu",
  "windows 0.61.3",

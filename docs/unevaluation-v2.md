@@ -22,7 +22,7 @@ UNEvaluation が扱わないもの:
 - bone dynamics solver integration
 - VRC / VRM / Modular Avatar source-specific component semantics の直接実行
 - mesh / material upload residency
-- VRChat client 完全互換
+- VRChat client 完全互換を目標にした評価
 
 UNDynamics、UNInteraction、UNConstraints は UNEvaluation の評価結果を読む側であり、source package を直接読んで優先順位を決めない。
 
@@ -138,7 +138,7 @@ solver integration は transform evaluation layer が安定してから行う。
 - VRC / MA source kind ごとの条件分岐を renderer frame loop へ散らさず、将来は source-neutral `UNConstraints` evaluation result を scene transform evaluator が読む。
 
 grabbing / posing は `UNInteraction` の capability metadata とする。
-VRC PhysBone `parameter` は Modular Avatar 本家の `PhysBoneSuffixes` と同じ `_IsGrabbed` / `_Angle` / `_Stretch` / `_IsPosed` / `_Squish` / `_Hit` / `_Ratio` / `_Distance` を runtime parameter definition として宣言するが、direct interaction evaluator が入るまでは値を書かない。これらの suffix parameter が action/menu parameter と同名になる場合は、将来の continuous interaction emission と latched action/menu ownership が衝突し得るため conflict diagnostics として扱う。
+VRC PhysBone `parameter` は authored suffix convention として `_IsGrabbed` / `_Angle` / `_Stretch` / `_IsPosed` / `_Squish` / `_Hit` / `_Ratio` / `_Distance` を runtime parameter definition として宣言するが、direct interaction evaluator が入るまでは値を書かない。これらの suffix parameter が action/menu parameter と同名になる場合は、将来の continuous interaction emission と latched action/menu ownership が衝突し得るため conflict diagnostics として扱う。
 v2 初期では UI / diagnostics / future hook 用であり、物理的な操作挙動は持たせない。
 
 `UNInteraction` の実装境界:

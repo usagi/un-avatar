@@ -12,7 +12,7 @@ use crate::{
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
 };
-use un_avatar_skeleton::SpringBonePhysicsConfig;
+use un_avatar_skeleton::DynamicsPhysicsConfig;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
@@ -408,14 +408,34 @@ pub(crate) struct PhysicsManifest {
 	pub dynamics: Option<DynamicsPhysicsManifest>,
 	/// v1/v2 development-era compatibility. v2 canonical profile schema uses
 	/// `[physics.dynamics.solver]`.
-	pub spring_bone: Option<SpringBonePhysicsConfig>,
+	pub spring_bone: Option<RendererDynamicsPhysicsConfigManifest>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct DynamicsPhysicsManifest {
 	pub enabled: Option<bool>,
-	pub solver: Option<SpringBonePhysicsConfig>,
+	pub solver: Option<RendererDynamicsPhysicsConfigManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct RendererDynamicsPhysicsConfigManifest {
+	#[serde(flatten)]
+	pub config: DynamicsPhysicsConfig,
+	pub surface_constraints: Option<SurfaceConstraintsPhysicsManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct SurfaceConstraintsPhysicsManifest {
+	pub enabled: Option<bool>,
+	pub topology_max_edge_distance_m: Option<f32>,
+	pub topology_max_mean_edge_distance_m: Option<f32>,
+	pub spatial_max_distance_m: Option<f32>,
+	pub topology_stiffness: Option<f32>,
+	pub spatial_stiffness: Option<f32>,
+	pub min_edge_count: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -615,9 +635,7 @@ impl RendererManifest {
 		if let Some(audio_link) = self.audio_link {
 			audio_link.apply_to(opts);
 		}
-		if let Some(spring_bones) = self.spring_bones {
-			opts.dynamics_enabled = spring_bones;
-		}
+		let _legacy_spring_bones = self.spring_bones;
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
 		}
@@ -1241,7 +1259,7 @@ impl PhysicsManifest {
 			contacts.apply_to(opts);
 		}
 		if let Some(spring_bone) = self.spring_bone {
-			opts.spring_bone_physics = spring_bone.normalized();
+			opts.dynamics_physics = spring_bone.into_config();
 		}
 		if let Some(dynamics) = self.dynamics {
 			dynamics.apply_to(opts);
@@ -1255,7 +1273,43 @@ impl DynamicsPhysicsManifest {
 			opts.dynamics_enabled = enabled;
 		}
 		if let Some(solver) = self.solver {
-			opts.spring_bone_physics = solver.normalized();
+			opts.dynamics_physics = solver.into_config();
+		}
+	}
+}
+
+impl RendererDynamicsPhysicsConfigManifest {
+	fn into_config(self) -> DynamicsPhysicsConfig {
+		let mut config = self.config;
+		if let Some(surface) = self.surface_constraints {
+			surface.apply_to(&mut config);
+		}
+		config.normalized()
+	}
+}
+
+impl SurfaceConstraintsPhysicsManifest {
+	fn apply_to(self, config: &mut DynamicsPhysicsConfig) {
+		if let Some(enabled) = self.enabled {
+			config.surface_constraints_enabled = enabled;
+		}
+		if let Some(value) = self.topology_max_edge_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_max_edge_distance_m = value;
+		}
+		if let Some(value) = self.topology_max_mean_edge_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_max_mean_edge_distance_m = value;
+		}
+		if let Some(value) = self.spatial_max_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_spatial_max_distance_m = value;
+		}
+		if let Some(value) = self.topology_stiffness.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_stiffness = value;
+		}
+		if let Some(value) = self.spatial_stiffness.filter(|value| value.is_finite()) {
+			config.surface_constraint_spatial_stiffness = value;
+		}
+		if let Some(value) = self.min_edge_count {
+			config.surface_constraint_min_edge_count = value;
 		}
 	}
 }
@@ -1638,6 +1692,28 @@ parameter_emission = true
 simulation_hz = 240
 substeps = 2
 
+[physics.dynamics.solver.surface_constraints]
+enabled = false
+topology_max_edge_distance_m = 0.04
+topology_max_mean_edge_distance_m = 0.02
+spatial_max_distance_m = 0.01
+topology_stiffness = 0.25
+spatial_stiffness = 0.8
+min_edge_count = 4
+
+[physics.dynamics.solver.mesh_cloth_assist]
+enabled = true
+body_dominance_threshold = 0.6
+min_existing_dynamic_weight = 0.04
+seed_missing_dynamic_influence = true
+max_assist_weight = 0.3
+mesh_path_contains = []
+
+[[physics.dynamics.solver.categories]]
+id = "cloth"
+name = "Cloth"
+matches = ["cloth", "skirt"]
+
 [[physics.dynamics.solver.categories]]
 id = "ears"
 name = "Ears"
@@ -1647,8 +1723,43 @@ matches = ["ears", "耳", "ミミ"]
 category = "ears"
 solver = "xpbd"
 damping_half_life_ms = 90
+rest_response = 0.12
+shape_preservation = 0.08
+bounce_scale = 0.45
+stretch_range_scale = 1.5
+stretch_motion = 0.8
+motion_coupling = 0.35
 xpbd_compliance = 0.02
 constraint_iterations = 6
+
+[[physics.dynamics.solver.match_overrides]]
+name = "soft cloth panels"
+source_id_contains = ["cloth", "skirt"]
+source_id_regex = ["(?i)(ribbon|tie)"]
+solver = "verlet"
+rest_response = 0.06
+shape_preservation = 0.025
+bounce_scale = 0.7
+stretch_range_scale = 0.6
+stretch_motion = 0.4
+motion_coupling = 0.28
+drag_scale = 0.6
+
+[[physics.dynamics.solver.collider_augment_overrides]]
+name = "cloth chest colliders"
+source_id_contains = ["cloth panel"]
+collider_path_contains = ["chest collider"]
+
+[[physics.dynamics.solver.group_overrides]]
+source_id = "physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+solver = "verlet"
+rest_response = 0.04
+shape_preservation = 0.03
+bounce_scale = 0.8
+stretch_range_scale = 1.2
+stretch_motion = 1.0
+motion_coupling = 0.25
+drag_scale = 1.4
 "#,
 		)
 		.unwrap();
@@ -1774,18 +1885,77 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
 		assert!(opts.dynamics_enabled);
-		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
-		assert_eq!(opts.spring_bone_physics.substeps, 2);
-		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");
-		assert_eq!(opts.spring_bone_physics.categories[0].matches, vec!["ears", "耳", "ミミ"]);
-		assert_eq!(opts.spring_bone_physics.overrides[0].category, "ears");
+		assert_eq!(opts.dynamics_physics.simulation_hz, 240.0);
+		assert_eq!(opts.dynamics_physics.substeps, 2);
+		assert!(!opts.dynamics_physics.surface_constraints_enabled);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_max_edge_distance_m, 0.04);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_max_mean_edge_distance_m, 0.02);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_max_distance_m, 0.01);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_stiffness, 0.25);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_stiffness, 0.8);
+		assert_eq!(opts.dynamics_physics.surface_constraint_min_edge_count, 4);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.enabled);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.body_dominance_threshold, 0.6);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.min_existing_dynamic_weight, 0.04);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.seed_missing_dynamic_influence);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.max_assist_weight, 0.3);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.mesh_path_contains.is_empty());
+		assert_eq!(opts.dynamics_physics.categories[0].id, "cloth");
+		assert_eq!(opts.dynamics_physics.categories[0].matches, vec!["cloth", "skirt"]);
+		assert_eq!(opts.dynamics_physics.categories[1].id, "ears");
+		assert_eq!(opts.dynamics_physics.categories[1].matches, vec!["ears", "耳", "ミミ"]);
+		assert_eq!(opts.dynamics_physics.overrides[0].category, "ears");
 		assert_eq!(
-			opts.spring_bone_physics.overrides[0].params.solver,
-			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+			opts.dynamics_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Xpbd)
 		);
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.xpbd_compliance, Some(0.02));
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.constraint_iterations, Some(6));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.rest_response, Some(0.12));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.shape_preservation, Some(0.08));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.bounce_scale, Some(0.45));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.stretch_range_scale, Some(1.5));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.stretch_motion, Some(0.8));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.motion_coupling, Some(0.35));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.xpbd_compliance, Some(0.02));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.constraint_iterations, Some(6));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].name, "soft cloth panels");
+		assert_eq!(opts.dynamics_physics.match_overrides[0].source_id_contains, vec!["cloth", "skirt"]);
+		assert_eq!(opts.dynamics_physics.match_overrides[0].source_id_regex, vec!["(?i)(ribbon|tie)"]);
+		assert_eq!(
+			opts.dynamics_physics.match_overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Verlet)
+		);
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.rest_response, Some(0.06));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.shape_preservation, Some(0.025));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.bounce_scale, Some(0.7));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.stretch_range_scale, Some(0.6));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.stretch_motion, Some(0.4));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.motion_coupling, Some(0.28));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.drag_scale, Some(0.6));
+		assert_eq!(opts.dynamics_physics.collider_augment_overrides[0].name, "cloth chest colliders");
+		assert_eq!(
+			opts.dynamics_physics.collider_augment_overrides[0].source_id_contains,
+			vec!["cloth_panel"]
+		);
+		assert_eq!(
+			opts.dynamics_physics.collider_augment_overrides[0].collider_path_contains,
+			vec!["chest_collider"]
+		);
+		assert_eq!(
+			opts.dynamics_physics.group_overrides[0].source_id,
+			"physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+		);
+		assert_eq!(
+			opts.dynamics_physics.group_overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Verlet)
+		);
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.rest_response, Some(0.04));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.shape_preservation, Some(0.03));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.bounce_scale, Some(0.8));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.stretch_range_scale, Some(1.2));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.stretch_motion, Some(1.0));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.motion_coupling, Some(0.25));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.drag_scale, Some(1.4));
 	}
 
 	#[test]
@@ -1805,13 +1975,30 @@ xpbd_compliance = 0.03
 		.unwrap();
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert_eq!(opts.spring_bone_physics.simulation_hz, 120.0);
-		assert_eq!(opts.spring_bone_physics.substeps, 3);
-		assert_eq!(opts.spring_bone_physics.overrides[0].category, "hair");
+		assert_eq!(opts.dynamics_physics.simulation_hz, 120.0);
+		assert_eq!(opts.dynamics_physics.substeps, 3);
+		assert_eq!(opts.dynamics_physics.overrides[0].category, "hair");
 		assert_eq!(
-			opts.spring_bone_physics.overrides[0].params.solver,
-			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+			opts.dynamics_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Xpbd)
 		);
+	}
+
+	#[test]
+	fn toml_manifest_keeps_flat_surface_constraint_compatibility() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[physics.dynamics.solver]
+surface_constraints_enabled = false
+surface_constraint_spatial_max_distance_m = 0.02
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert!(!opts.dynamics_physics.surface_constraints_enabled);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_max_distance_m, 0.02);
 	}
 
 	#[test]
@@ -1832,7 +2019,7 @@ enabled = true
 	}
 
 	#[test]
-	fn toml_manifest_reads_legacy_spring_bones_for_unphysics_enabled() {
+	fn toml_manifest_ignores_legacy_spring_bones_without_v2_unphysics_enabled() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
 spring_bones = false
@@ -1842,7 +2029,7 @@ spring_bones = false
 
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert!(!opts.dynamics_enabled);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]
@@ -1882,7 +2069,7 @@ height = 720
 		assert_eq!(opts.spout.name, "Legacy Spout");
 		assert_eq!(opts.spout.width, Some(1280));
 		assert_eq!(opts.spout.height, Some(720));
-		assert!(!opts.dynamics_enabled);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]

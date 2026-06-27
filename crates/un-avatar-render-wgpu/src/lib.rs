@@ -140,6 +140,8 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_ssao",
 	"set_contact_shadow",
 	"scene_state",
+	"dump_scene_nodes",
+	"dump_runtime_state",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -422,6 +424,15 @@ enum RendererControlEvent {
 	},
 	SceneState {
 		result: SceneStateResultSlot,
+	},
+	DumpSceneNodes {
+		path: std::path::PathBuf,
+		filter: Option<String>,
+		result: CommandResultSlot,
+	},
+	DumpRuntimeState {
+		path: std::path::PathBuf,
+		result: CommandResultSlot,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -798,6 +809,14 @@ enum RendererControlCommand {
 		#[serde(default)]
 		height: Option<f32>,
 	},
+	DumpSceneNodes {
+		path: String,
+		#[serde(default)]
+		filter: Option<String>,
+	},
+	DumpRuntimeState {
+		path: String,
+	},
 }
 
 impl RendererControlCommand {
@@ -856,6 +875,8 @@ impl RendererControlCommand {
 			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
 			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
 			Self::SetWardrobeTransition { .. } => unreachable!("SetWardrobeTransition は runtime_control_response で個別に処理する"),
+			Self::DumpSceneNodes { .. } => unreachable!("DumpSceneNodes は runtime_control_response で個別に処理する"),
+			Self::DumpRuntimeState { .. } => unreachable!("DumpRuntimeState は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -2958,6 +2979,16 @@ impl AvatarApp {
 			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
 			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
+			status.dynamics_collision_projection_count = timings.dynamics_profile.collision_projection_count;
+			status.dynamics_collision_projection_source_ids =
+				runtime_sample_strings(&timings.dynamics_profile.collision_projection_source_ids, 16);
+			status.dynamics_collision_projection_collider_paths =
+				runtime_sample_strings(&timings.dynamics_profile.collision_projection_collider_paths, 16);
+			status.dynamics_collision_projection_collider_path_counts =
+				runtime_count_entries(&timings.dynamics_profile.collision_projection_collider_path_counts, 16);
+			let top_collider_path = runtime_top_count_entry(&timings.dynamics_profile.collision_projection_collider_path_counts);
+			status.dynamics_collision_projection_top_collider_path = top_collider_path.as_ref().map(|entry| entry.key.clone());
+			status.dynamics_collision_projection_top_collider_count = top_collider_path.map(|entry| entry.count);
 			let refresh_runtime_metadata =
 				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
@@ -3021,13 +3052,13 @@ impl AvatarApp {
 				status.dynamics_unknown_group_count = dynamics.unknown_groups;
 				status.dynamics_limit_group_count = dynamics.limit_groups;
 				status.dynamics_angle_limit_group_count = dynamics.angle_limit_groups;
-				status.dynamics_stretch_limit_group_count = dynamics.stretch_limit_groups;
 				status.dynamics_grabbing_enabled_group_count = dynamics.grabbing_enabled_groups;
 				status.dynamics_posing_enabled_group_count = dynamics.posing_enabled_groups;
 				status.dynamics_collider_count = dynamics.colliders;
 				status.dynamics_vrm_spring_bone_collider_count = dynamics.vrm_spring_bone_colliders;
 				status.dynamics_vrc_physbone_collider_count = dynamics.vrc_physbone_colliders;
 				status.dynamics_unknown_collider_count = dynamics.unknown_colliders;
+				status.dynamics_surface_constraint_count = dynamics.surface_constraints;
 				status.dynamics_contact_count = dynamics.contacts;
 				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
 				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
@@ -3043,7 +3074,19 @@ impl AvatarApp {
 				status.dynamics_contact_parameter_reset_to_zero_count = contact_emission_status.reset_to_zero_count;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
+				let scene_constraints = gpu.map(|g| g.scene_node_constraint_counts()).unwrap_or_default();
+				status.scene_node_constraint_count = scene_constraints.total;
+				status.scene_parent_constraint_count = scene_constraints.parent;
+				status.scene_parent_constraint_source_count = scene_constraints.parent_sources;
+				status.scene_parent_constraint_multi_source_count = scene_constraints.parent_multi_source;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_stretch_limit_group_count = status
+					.dynamics_groups
+					.iter()
+					.filter(|group| runtime_dynamics_group_has_length_limit(group))
+					.count() as u32;
+				status.dynamics_response_categories = gpu.map(|g| g.dynamics_response_categories()).unwrap_or_default();
+				status.dynamics_response_groups = gpu.map(|g| g.dynamics_response_groups()).unwrap_or_default();
 				status.dynamics_rotation_translation_writeback_group_count =
 					runtime_dynamics_rotation_translation_writeback_group_count(&status) as u32;
 				status.dynamics_translation_writeback_candidate_count =
@@ -3058,6 +3101,9 @@ impl AvatarApp {
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 				status.dynamics_warnings = runtime_dynamics_warnings(&status);
+				if let Some(gpu) = gpu {
+					status.dynamics_warnings.extend(gpu.dynamics_tuning_warnings());
+				}
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
@@ -3524,7 +3570,7 @@ impl AvatarApp {
 			processed_texture_cache: self.opts.processed_texture_cache,
 			dynamics_enabled: self.opts.dynamics_enabled,
 			bone_colliders: self.opts.bone_colliders,
-			spring_bone_physics: self.opts.spring_bone_physics.clone(),
+			dynamics_physics: self.opts.dynamics_physics.clone(),
 			debug_material_dump: self.opts.debug_material_dump,
 			vmc_address: self.opts.vmc_address,
 			unmotion_zenoh: self.opts.unmotion_zenoh.clone(),
@@ -3727,6 +3773,13 @@ impl AvatarApp {
 							BTreeMap::new()
 						}
 					};
+					let mut parameter_updates = parameter_updates;
+					match gpu.apply_dynamics_interaction_parameter_emissions() {
+						Ok(updates) => parameter_updates.extend(updates),
+						Err(err) => {
+							eprintln!("un-avatar-renderer: dynamics interaction parameter emission failed: {err}");
+						}
+					}
 					timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
 					let t_action0 = Instant::now();
 					let activations = match gpu.evaluate_runtime_parameter_actions() {
@@ -4382,6 +4435,24 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(state.to_string());
 				}
 			}
+			RendererControlEvent::DumpSceneNodes { path, filter, result } => {
+				let outcome = match self.gpu.as_ref() {
+					Some(gpu) => gpu.dump_scene_nodes(&path, filter.as_deref()),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::DumpRuntimeState { path, result } => {
+				let outcome = match self.gpu.as_ref() {
+					Some(gpu) => gpu.dump_runtime_state(&path),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
 			RendererControlEvent::SetExpressionOverride { name, weight } => {
 				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.set_expression_override(&name, weight);
@@ -4521,9 +4592,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			} => {
 				self.opts.dynamics_enabled = enabled;
 				self.opts.bone_colliders = bone_colliders;
-				self.opts.spring_bone_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
+				self.opts.dynamics_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
 				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
+					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.dynamics_physics.clone());
 				}
 				self.request_redraw();
 			}
@@ -5388,7 +5459,7 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	if status.dynamics_stretch_limit_group_count > 0 {
 		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
-			"dynamics stretch limits are partially supported by rotation_translation target writeback; targetless stretch groups remain metadata-only; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
+			"dynamics stretch limits are supported as simulation stretch; safe targets also use translation writeback while targetless groups keep node translations unchanged; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
 			status.dynamics_stretch_limit_group_count,
 			status.dynamics_stretch_translation_writeback_target_group_count,
 			format_runtime_warning_samples(&samples)
@@ -5407,12 +5478,12 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			format_runtime_warning_samples(&samples)
 		));
 	}
-	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
+	let metadata_only_interaction_hook_count = status.dynamics_interaction_hooks.iter().filter(|hook| hook.metadata_only).count();
+	if metadata_only_interaction_hook_count > 0 {
 		let samples = runtime_dynamics_interaction_hook_samples(status);
 		warnings.push(format!(
-			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}{}",
-			status.dynamics_grabbing_enabled_group_count,
-			status.dynamics_posing_enabled_group_count,
+			"dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver; hooks={}{}",
+			metadata_only_interaction_hook_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -5432,6 +5503,13 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			format_runtime_warning_samples(&samples)
 		));
 	}
+	let invalid_match_regexes = runtime_dynamics_invalid_match_regex_samples(status);
+	if !invalid_match_regexes.is_empty() {
+		warnings.push(format!(
+			"dynamics match override contains invalid regular expression(s){}",
+			format_runtime_warning_samples(&invalid_match_regexes)
+		));
+	}
 	warnings
 }
 
@@ -5444,18 +5522,47 @@ fn runtime_dynamics_group_samples(status: &RendererRuntimeSnapshot) -> Vec<Strin
 		.collect()
 }
 
+fn runtime_dynamics_invalid_match_regex_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	let mut samples = Vec::new();
+	for group in &status.dynamics_response_groups {
+		for message in &group.invalid_match_regexes {
+			if !message.is_empty() && !samples.contains(message) {
+				samples.push(message.clone());
+				if samples.len() >= 4 {
+					return samples;
+				}
+			}
+		}
+	}
+	samples
+}
+
 fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-		})
+		.filter(|group| runtime_dynamics_group_has_length_limit(group))
 		.take(4)
 		.map(runtime_dynamics_group_sample_label)
 		.collect()
+}
+
+fn runtime_dynamics_group_has_length_limit(group: &crate::gpu::RuntimeDynamicsGroupStatus) -> bool {
+	let stretch_motion = group
+		.stretch_motion
+		.filter(|value| value.is_finite())
+		.unwrap_or(1.0)
+		.clamp(0.0, 1.0);
+	let has_length_range = group
+		.max_stretch
+		.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch > 0.0)
+		|| group
+			.max_squish
+			.is_some_and(|max_squish| max_squish.is_finite() && max_squish > 0.0)
+		|| group.max_stretch_sample_has_positive
+		|| group.max_squish_sample_has_positive;
+	let has_motion = stretch_motion > 0.0 || group.stretch_motion_sample_has_positive;
+	has_motion && has_length_range
 }
 
 fn runtime_dynamics_rotation_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
@@ -5537,9 +5644,7 @@ fn runtime_dynamics_stretch_translation_writeback_group_count(status: &RendererR
 		.dynamics_groups
 		.iter()
 		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+			runtime_dynamics_group_has_length_limit(group)
 				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
 				&& group.translation_writeback_candidate_count > 0
 		})
@@ -5550,12 +5655,7 @@ fn runtime_dynamics_stretch_translation_writeback_target_group_count(status: &Re
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-				&& group.translation_writeback_target_count > 0
-		})
+		.filter(|group| runtime_dynamics_group_has_length_limit(group) && group.translation_writeback_target_count > 0)
 		.count()
 }
 
@@ -5575,6 +5675,7 @@ fn runtime_dynamics_interaction_hook_samples(status: &RendererRuntimeSnapshot) -
 	status
 		.dynamics_interaction_hooks
 		.iter()
+		.filter(|hook| hook.metadata_only)
 		.take(4)
 		.map(|hook| {
 			let id = if hook.source_id.is_empty() {
@@ -5641,6 +5742,48 @@ fn format_runtime_warning_samples(samples: &[String]) -> String {
 	} else {
 		format!(" samples=[{}]", samples.join(", "))
 	}
+}
+
+#[derive(Clone, Serialize)]
+struct RuntimeCountEntry {
+	key: String,
+	count: u32,
+}
+
+fn runtime_count_entries(counts: &BTreeMap<String, u32>, limit: usize) -> Vec<RuntimeCountEntry> {
+	let mut entries = counts
+		.iter()
+		.map(|(key, count)| RuntimeCountEntry {
+			key: key.clone(),
+			count: *count,
+		})
+		.collect::<Vec<_>>();
+	entries.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
+	entries.truncate(limit);
+	entries
+}
+
+fn runtime_sample_strings(samples: &[String], limit: usize) -> Vec<String> {
+	let mut out = Vec::new();
+	for sample in samples {
+		if out.len() >= limit {
+			break;
+		}
+		if !out.iter().any(|item| item == sample) {
+			out.push(sample.clone());
+		}
+	}
+	out
+}
+
+fn runtime_top_count_entry(counts: &BTreeMap<String, u32>) -> Option<RuntimeCountEntry> {
+	counts
+		.iter()
+		.max_by(|(left_key, left_count), (right_key, right_count)| left_count.cmp(right_count).then_with(|| right_key.cmp(left_key)))
+		.map(|(key, count)| RuntimeCountEntry {
+			key: key.clone(),
+			count: *count,
+		})
 }
 
 #[derive(Clone, Serialize)]
@@ -5743,6 +5886,10 @@ struct RendererRuntimeSnapshot {
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_categories: Vec<un_avatar_skeleton::DynamicsResponseCategorySummary>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_groups: Vec<un_avatar_skeleton::DynamicsResponseGroupSummary>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_interaction_hooks: Vec<gpu::RuntimeDynamicsInteractionHookStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -5851,6 +5998,20 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_unknown_collider_count: u32,
 	#[serde(default)]
+	dynamics_surface_constraint_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_count: u32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_source_ids: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_collider_paths: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_collider_path_counts: Vec<RuntimeCountEntry>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	dynamics_collision_projection_top_collider_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	dynamics_collision_projection_top_collider_count: Option<u32>,
+	#[serde(default)]
 	dynamics_contact_count: u32,
 	#[serde(default)]
 	dynamics_vrc_contact_sender_count: u32,
@@ -5872,6 +6033,14 @@ struct RendererRuntimeSnapshot {
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default)]
+	scene_node_constraint_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_source_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_multi_source_count: u32,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -5979,6 +6148,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		contact_parameter_emissions: Vec::new(),
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
+		dynamics_response_categories: Vec::new(),
+		dynamics_response_groups: Vec::new(),
 		dynamics_interaction_hooks: Vec::new(),
 		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
@@ -6037,6 +6208,13 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrm_spring_bone_collider_count: 0,
 		dynamics_vrc_physbone_collider_count: 0,
 		dynamics_unknown_collider_count: 0,
+		dynamics_surface_constraint_count: 0,
+		dynamics_collision_projection_count: 0,
+		dynamics_collision_projection_source_ids: Vec::new(),
+		dynamics_collision_projection_collider_paths: Vec::new(),
+		dynamics_collision_projection_collider_path_counts: Vec::new(),
+		dynamics_collision_projection_top_collider_path: None,
+		dynamics_collision_projection_top_collider_count: None,
 		dynamics_contact_count: 0,
 		dynamics_vrc_contact_sender_count: 0,
 		dynamics_vrc_contact_receiver_count: 0,
@@ -6048,6 +6226,10 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_contact_parameter_reset_to_zero_count: 0,
 		dynamics_constraint_ref_count: 0,
 		dynamics_vrc_constraint_ref_count: 0,
+		scene_node_constraint_count: 0,
+		scene_parent_constraint_count: 0,
+		scene_parent_constraint_source_count: 0,
+		scene_parent_constraint_multi_source_count: 0,
 		camera_locked: opts.camera_locked,
 		window_focused: false,
 		window_activation_seq: 0,
@@ -6300,6 +6482,8 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	}
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
+		Ok(RendererControlCommand::DumpSceneNodes { path, filter }) => dispatch_dump_scene_nodes_command(proxy, path, filter),
+		Ok(RendererControlCommand::DumpRuntimeState { path }) => dispatch_dump_runtime_state_command(proxy, path),
 		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
 		Ok(RendererControlCommand::ActivateAction {
 			action_id,
@@ -6536,6 +6720,37 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 	wait_command_result(result, Duration::from_secs(10), "screenshot")
 }
 
+fn dispatch_dump_scene_nodes_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String, filter: Option<String>) -> String {
+	if path.trim().is_empty() {
+		return "err dump_scene_nodes path required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::DumpSceneNodes {
+		path: std::path::PathBuf::from(path),
+		filter,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(5), "dump_scene_nodes")
+}
+
+fn dispatch_dump_runtime_state_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String) -> String {
+	if path.trim().is_empty() {
+		return "err dump_runtime_state path required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::DumpRuntimeState {
+		path: std::path::PathBuf::from(path),
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(5), "dump_runtime_state")
+}
+
 fn wait_command_result(result: CommandResultSlot, timeout: Duration, command_name: &str) -> String {
 	let deadline = Instant::now() + timeout;
 	loop {
@@ -6636,10 +6851,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
 	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
 	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
-	if opts.runtime_bus_key.is_none() {
-		if let Some(address) = opts.runtime_control_address {
-			start_runtime_control_server(address, event_proxy.clone());
-		}
+	if let Some(address) = opts.runtime_control_address {
+		start_runtime_control_server(address, event_proxy.clone());
 	}
 
 	let mut app = AvatarApp::new(opts, event_proxy);
@@ -6992,7 +7205,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		},
 		dynamics_enabled: !cli.no_dynamics,
 		bone_colliders: Default::default(),
-		spring_bone_physics: DynamicsPhysicsConfig::default(),
+		dynamics_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {
 			log_path: cli.debug_log.clone(),
 			mirror_stderr: cli.debug_stderr,
@@ -7038,6 +7251,9 @@ pub fn run_cli() -> Result<(), RunError> {
 			disable_fur: cli.debug_disable_fur,
 			avatar_outline: Default::default(),
 			skin_tone_matching: cli.skin_tone_matching,
+			mesh_cloth_assist: Default::default(),
+			mesh_cloth_assist_categories: un_avatar_skeleton::DynamicsPhysicsConfig::default().normalized().categories,
+			dynamic_deforming_node_indices: Default::default(),
 		},
 		contact_shadow: Default::default(),
 		ssao: Default::default(),
@@ -7416,6 +7632,7 @@ fn load_default_window_icon() -> Option<Icon> {
 #[cfg(test)]
 mod tests {
 	use std::{
+		collections::BTreeMap,
 		io::{BufRead, BufReader, Read, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
 		path::Path,
@@ -7474,6 +7691,38 @@ mod tests {
 			billboard_view_proj: [[0.0; 4]; 4],
 			billboard_camera_pos: [0.0, 0.0, 2.0],
 		}
+	}
+
+	#[test]
+	fn runtime_count_entries_are_bounded_and_sorted() {
+		let counts = BTreeMap::from([
+			("Body/Back".to_string(), 2),
+			("Body/Chest".to_string(), 5),
+			("Body/Arm".to_string(), 5),
+		]);
+		let entries = super::runtime_count_entries(&counts, 2);
+		assert_eq!(entries.len(), 2);
+		assert_eq!(entries[0].key, "Body/Arm");
+		assert_eq!(entries[0].count, 5);
+		assert_eq!(entries[1].key, "Body/Chest");
+		assert_eq!(entries[1].count, 5);
+		let top = super::runtime_top_count_entry(&counts).unwrap();
+		assert_eq!(top.key, "Body/Arm");
+		assert_eq!(top.count, 5);
+	}
+
+	#[test]
+	fn runtime_sample_strings_are_bounded_and_unique() {
+		let samples = vec![
+			"physbone:a".to_string(),
+			"physbone:a".to_string(),
+			"physbone:b".to_string(),
+			"physbone:c".to_string(),
+		];
+
+		let out = super::runtime_sample_strings(&samples, 2);
+
+		assert_eq!(out, vec!["physbone:a".to_string(), "physbone:b".to_string()]);
 	}
 
 	#[test]
@@ -7584,18 +7833,29 @@ mod tests {
 			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 			authored_enabled: true,
 			effective_enabled: true,
+			resident_in_active_assets: true,
+			solver_enabled: true,
 			runtime_enabled_override: None,
 			source_id: "physbone:hair".to_string(),
 			comment: String::new(),
 			category: String::new(),
 			bone_count: 2,
+			visual_target: true,
+			skinned_joint_count: 2,
+			mesh_subtree_node_count: 0,
 			root_node: Some(1),
 			root_path: Some("root/hair".to_string()),
 			tip_node: Some(2),
 			tip_path: Some("root/hair/tip".to_string()),
 			stiffness: 0.0,
+			pull: 0.0,
+			spring: 0.0,
+			integration_type: Default::default(),
 			drag_force: 0.0,
 			gravity_power: 0.0,
+			gravity_falloff: 0.0,
+			immobile: 0.0,
+			immobile_type: Default::default(),
 			gravity_dir: [0.0, -1.0, 0.0],
 			hit_radius: 0.0,
 			hit_radius_sample_count: 0,
@@ -7604,9 +7864,15 @@ mod tests {
 			center_node: None,
 			center_path: None,
 			limit_type: Some("Angle".to_string()),
+			limit_rotation: Some([0.0, 0.0, 0.0]),
 			max_angle_x: Some(45.0),
 			max_angle_z: Some(45.0),
 			max_stretch: Some(0.25),
+			max_squish: Some(0.0),
+			stretch_motion: None,
+			max_stretch_sample_has_positive: false,
+			max_squish_sample_has_positive: false,
+			stretch_motion_sample_has_positive: false,
 			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 			translation_writeback_candidate_count: 1,
 			translation_writeback_target_count: 1,
@@ -7666,23 +7932,61 @@ mod tests {
 			approximation: "sphere".to_string(),
 		}];
 		status.contact_parameter_emission_enabled = false;
+		status.dynamics_response_groups = vec![un_avatar_skeleton::DynamicsResponseGroupSummary {
+			source_id: "physbone:hair".to_string(),
+			category: "hair".to_string(),
+			matched_overrides: Vec::new(),
+			group_override_applied: false,
+			invalid_match_regexes: vec!["broken regex: regex parse error".to_string()],
+			joint_count: 1,
+			solver: un_avatar_skeleton::DynamicsSolver::Verlet,
+			average_rest_response: 0.0,
+			min_rest_response: 0.0,
+			max_rest_response: 0.0,
+			average_pull: 0.0,
+			average_stiffness: 0.0,
+			average_shape_preservation: 0.0,
+			min_shape_preservation: 0.0,
+			max_shape_preservation: 0.0,
+			average_bounce_response: 0.0,
+			min_bounce_response: 0.0,
+			max_bounce_response: 0.0,
+			average_max_stretch_response: 0.0,
+			min_max_stretch_response: 0.0,
+			max_max_stretch_response: 0.0,
+			average_max_squish_response: 0.0,
+			min_max_squish_response: 0.0,
+			max_max_squish_response: 0.0,
+			average_stretch_motion_response: 0.0,
+			min_stretch_motion_response: 0.0,
+			max_stretch_motion_response: 0.0,
+			average_spring: 0.0,
+			average_drag_force: 0.0,
+			average_damping_half_life_ms: None,
+			average_parent_motion_follow: 0.0,
+			min_parent_motion_follow: 0.0,
+			max_parent_motion_follow: 0.0,
+			average_orientation_follow: 0.0,
+			xpbd_compliance: 0.0,
+			..Default::default()
+		}];
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 5);
+		assert_eq!(warnings.len(), 6);
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics groups are present but none are currently enabled")
 				&& warning.contains("samples=[physbone:hair@root/hair]")
 		));
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics stretch limits are partially supported")
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics stretch limits are supported as simulation stretch")
 				&& warning.contains("writeback_target_groups=1")
-				&& warning.contains("physbone:hair@root/hair")));
+				&& warning.contains("physbone:hair@root/hair")
+		));
 		assert!(!warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target")));
 		assert!(warnings.iter().any(|warning| warning
-			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
 			&& warning.contains("samples=[physbone:hair@root/hair]")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
@@ -7693,6 +7997,10 @@ mod tests {
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")
 				&& warning.contains("samples=[contact:hand@root/hand<=contact:sender:ContactHand]")
+		));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics match override contains invalid regular expression")
+				&& warning.contains("broken regex: regex parse error")
 		));
 	}
 
@@ -7982,18 +8290,29 @@ mod tests {
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 				authored_enabled: false,
 				effective_enabled: true,
+				resident_in_active_assets: true,
+				solver_enabled: true,
 				runtime_enabled_override: Some(true),
 				source_id: "physbone:hair".to_string(),
 				comment: "Hair".to_string(),
 				category: "secondary".to_string(),
 				bone_count: 3,
+				visual_target: true,
+				skinned_joint_count: 3,
+				mesh_subtree_node_count: 1,
 				root_node: Some(1),
 				root_path: Some("root/hair".to_string()),
 				tip_node: Some(3),
 				tip_path: Some("root/hair/tip".to_string()),
 				stiffness: 0.35,
+				pull: 0.35,
+				spring: 0.0,
+				integration_type: Default::default(),
 				drag_force: 0.2,
 				gravity_power: 0.1,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: Default::default(),
 				gravity_dir: [0.0, -1.0, 0.0],
 				hit_radius: 0.04,
 				hit_radius_sample_count: 2,
@@ -8002,15 +8321,100 @@ mod tests {
 				center_node: Some(0),
 				center_path: Some("root".to_string()),
 				limit_type: Some("Angle".to_string()),
+				limit_rotation: Some([0.0, 0.0, 0.0]),
 				max_angle_x: Some(45.0),
 				max_angle_z: Some(30.0),
 				max_stretch: Some(0.0),
+				max_squish: Some(0.0),
+				stretch_motion: None,
+				max_stretch_sample_has_positive: false,
+				max_squish_sample_has_positive: false,
+				stretch_motion_sample_has_positive: false,
 				writeback_mode: Default::default(),
 				translation_writeback_candidate_count: 0,
 				translation_writeback_target_count: 0,
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
 				interaction_parameter: "HairPB".to_string(),
+			}];
+			status.dynamics_response_categories = vec![un_avatar_skeleton::DynamicsResponseCategorySummary {
+				category: "hair".to_string(),
+				group_count: 1,
+				joint_count: 3,
+				visual_target_group_count: 1,
+				nonvisual_group_count: 0,
+				visible_skinned_joint_count: 3,
+				visible_mesh_subtree_node_count: 1,
+				matched_override_group_count: 1,
+				group_override_group_count: 1,
+				xpbd_group_count: 1,
+				average_rest_response: 0.35,
+				min_rest_response: 0.20,
+				max_rest_response: 0.45,
+				average_pull: 0.35,
+				average_stiffness: 0.35,
+				average_shape_preservation: 0.34,
+				min_shape_preservation: 0.18,
+				max_shape_preservation: 0.42,
+				average_bounce_response: 0.2,
+				min_bounce_response: 0.1,
+				max_bounce_response: 0.3,
+				average_max_stretch_response: 0.25,
+				min_max_stretch_response: 0.1,
+				max_max_stretch_response: 0.4,
+				average_max_squish_response: 0.05,
+				min_max_squish_response: 0.0,
+				max_max_squish_response: 0.1,
+				average_stretch_motion_response: 0.6,
+				min_stretch_motion_response: 0.4,
+				max_stretch_motion_response: 0.8,
+				average_spring: 0.2,
+				average_drag_force: 0.2,
+				average_damping_half_life_ms: Some(120.0),
+				average_parent_motion_follow: 0.5,
+				min_parent_motion_follow: 0.3,
+				max_parent_motion_follow: 0.7,
+				average_orientation_follow: 0.17,
+				average_xpbd_compliance: 0.01,
+				..Default::default()
+			}];
+			status.dynamics_response_groups = vec![un_avatar_skeleton::DynamicsResponseGroupSummary {
+				source_id: "physbone:hair".to_string(),
+				category: "hair".to_string(),
+				matched_overrides: vec!["soft hair".to_string()],
+				group_override_applied: true,
+				invalid_match_regexes: vec!["broken regex: regex parse error".to_string()],
+				joint_count: 3,
+				solver: un_avatar_skeleton::DynamicsSolver::Xpbd,
+				average_rest_response: 0.35,
+				min_rest_response: 0.20,
+				max_rest_response: 0.45,
+				average_pull: 0.35,
+				average_stiffness: 0.35,
+				average_shape_preservation: 0.34,
+				min_shape_preservation: 0.18,
+				max_shape_preservation: 0.42,
+				average_bounce_response: 0.2,
+				min_bounce_response: 0.1,
+				max_bounce_response: 0.3,
+				average_max_stretch_response: 0.25,
+				min_max_stretch_response: 0.1,
+				max_max_stretch_response: 0.4,
+				average_max_squish_response: 0.05,
+				min_max_squish_response: 0.0,
+				max_max_squish_response: 0.1,
+				average_stretch_motion_response: 0.6,
+				min_stretch_motion_response: 0.4,
+				max_stretch_motion_response: 0.8,
+				average_spring: 0.2,
+				average_drag_force: 0.2,
+				average_damping_half_life_ms: Some(120.0),
+				average_parent_motion_follow: 0.5,
+				min_parent_motion_follow: 0.3,
+				max_parent_motion_follow: 0.7,
+				average_orientation_follow: 0.17,
+				xpbd_compliance: 0.01,
+				..Default::default()
 			}];
 			status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
 				group_index: 0,
@@ -8031,6 +8435,8 @@ mod tests {
 			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
 				index: 0,
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "physbone:hair".to_string(),
+				collider_path: "root/collider".to_string(),
 				node: 5,
 				node_path: Some("root/collider".to_string()),
 				shape: un_avatar_core::UnaDynamicsColliderShape::Capsule,
@@ -8053,6 +8459,10 @@ mod tests {
 			}];
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
+			status.scene_node_constraint_count = 5;
+			status.scene_parent_constraint_count = 4;
+			status.scene_parent_constraint_source_count = 7;
+			status.scene_parent_constraint_multi_source_count = 2;
 			status.dynamics_limit_group_count = 4;
 			status.dynamics_angle_limit_group_count = 3;
 			status.dynamics_stretch_limit_group_count = 1;
@@ -8159,8 +8569,24 @@ mod tests {
 			Some("root/hair/tip")
 		);
 		assert_eq!(
+			dynamics_groups[0].get("category").and_then(|value| value.as_str()),
+			Some("secondary")
+		);
+		assert_eq!(
 			dynamics_groups[0].get("effective_enabled").and_then(|value| value.as_bool()),
 			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("visual_target").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("skinned_joint_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("mesh_subtree_node_count").and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert_eq!(
 			dynamics_groups[0].get("runtime_enabled_override").and_then(|value| value.as_bool()),
@@ -8198,6 +8624,145 @@ mod tests {
 			dynamics_groups[0].get("hit_radius_sample_max").and_then(|value| value.as_f64()),
 			Some(0.04)
 		);
+		let response_categories = snapshot
+			.get("dynamics_response_categories")
+			.and_then(|value| value.as_array())
+			.expect("dynamics response categories");
+		assert_eq!(response_categories.len(), 1);
+		assert_eq!(
+			response_categories[0].get("category").and_then(|value| value.as_str()),
+			Some("hair")
+		);
+		assert_eq!(
+			response_categories[0].get("average_rest_response").and_then(|value| value.as_f64()),
+			Some(0.35)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visual_target_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visible_skinned_joint_count")
+				.and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visible_mesh_subtree_node_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("matched_override_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("group_override_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0].get("min_rest_response").and_then(|value| value.as_f64()),
+			Some(0.20)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_parent_motion_follow")
+				.and_then(|value| value.as_f64()),
+			Some(0.5)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_max_stretch_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.25)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_stretch_motion_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.6)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_damping_half_life_ms")
+				.and_then(|value| value.as_f64()),
+			Some(120.0)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_orientation_follow")
+				.and_then(|value| value.as_f64()),
+			Some(0.17)
+		);
+		let response_groups = snapshot
+			.get("dynamics_response_groups")
+			.and_then(|value| value.as_array())
+			.expect("dynamics response groups");
+		assert_eq!(response_groups.len(), 1);
+		assert_eq!(
+			response_groups[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
+		assert_eq!(response_groups[0].get("solver").and_then(|value| value.as_str()), Some("xpbd"));
+		assert_eq!(
+			response_groups[0]
+				.get("matched_overrides")
+				.and_then(|value| value.as_array())
+				.and_then(|items| items.first())
+				.and_then(|value| value.as_str()),
+			Some("soft hair")
+		);
+		assert_eq!(
+			response_groups[0].get("group_override_applied").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("invalid_match_regexes")
+				.and_then(|value| value.as_array())
+				.and_then(|items| items.first())
+				.and_then(|value| value.as_str()),
+			Some("broken regex: regex parse error")
+		);
+		assert_eq!(
+			response_groups[0].get("average_bounce_response").and_then(|value| value.as_f64()),
+			Some(0.2)
+		);
+		assert_eq!(
+			response_groups[0].get("max_bounce_response").and_then(|value| value.as_f64()),
+			Some(0.3)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_max_stretch_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.25)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_stretch_motion_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.6)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_shape_preservation")
+				.and_then(|value| value.as_f64()),
+			Some(0.34)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_damping_half_life_ms")
+				.and_then(|value| value.as_f64()),
+			Some(120.0)
+		);
 		let interaction_hooks = snapshot
 			.get("dynamics_interaction_hooks")
 			.and_then(|value| value.as_array())
@@ -8221,6 +8786,10 @@ mod tests {
 			.and_then(|value| value.as_array())
 			.expect("dynamics colliders");
 		assert_eq!(dynamics_colliders.len(), 1);
+		assert_eq!(
+			dynamics_colliders[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
 		assert_eq!(
 			dynamics_colliders[0].get("node_path").and_then(|value| value.as_str()),
 			Some("root/collider")
@@ -8270,6 +8839,26 @@ mod tests {
 			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
 			Some(2)
 		);
+		assert_eq!(
+			snapshot.get("scene_node_constraint_count").and_then(|value| value.as_u64()),
+			Some(5)
+		);
+		assert_eq!(
+			snapshot.get("scene_parent_constraint_count").and_then(|value| value.as_u64()),
+			Some(4)
+		);
+		assert_eq!(
+			snapshot
+				.get("scene_parent_constraint_source_count")
+				.and_then(|value| value.as_u64()),
+			Some(7)
+		);
+		assert_eq!(
+			snapshot
+				.get("scene_parent_constraint_multi_source_count")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
 		assert_eq!(snapshot.get("dynamics_limit_group_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(
 			snapshot.get("dynamics_angle_limit_group_count").and_then(|value| value.as_u64()),
@@ -8313,16 +8902,20 @@ mod tests {
 			.get("dynamics_warnings")
 			.and_then(|value| value.as_array())
 			.expect("dynamics warnings");
-		assert_eq!(dynamics_warnings.len(), 3);
+		assert_eq!(dynamics_warnings.len(), 4);
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics stretch limits are partially supported"))));
-		assert!(dynamics_warnings.iter().any(|warning| warning
-			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver"))));
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are supported as simulation stretch"))));
+		assert!(dynamics_warnings
+			.iter()
+			.any(|warning| warning.as_str().is_some_and(|warning| warning
+				.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver"))));
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
 			.is_some_and(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))));
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics match override contains invalid regular expression"))));
 		assert_eq!(
 			snapshot
 				.get("dynamics_grabbing_enabled_group_count")
@@ -8707,8 +9300,8 @@ mod tests {
 
 	#[test]
 	fn standalone_runtime_bus_key_is_stable_for_manifest_path() {
-		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\Mizuki.toml"));
-		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/mizuki.toml"));
+		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\AvatarProfile.toml"));
+		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/avatarprofile.toml"));
 
 		assert!(first.starts_with("un-avatar/runtime/standalone/"));
 		assert_eq!(first, second);
@@ -9031,7 +9624,7 @@ mod tests {
 	#[test]
 	fn parses_json_set_dynamics_control_command() {
 		let command = parse_renderer_control_command(
-			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0}}"#,
+			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0,"surface_constraints_enabled":false,"surface_constraint_topology_max_edge_distance_m":0.04,"surface_constraint_topology_max_mean_edge_distance_m":0.02,"surface_constraint_spatial_max_distance_m":0.01,"surface_constraint_topology_stiffness":0.25,"surface_constraint_spatial_stiffness":0.8,"surface_constraint_min_edge_count":4,"overrides":[{"category":"ears","solver":"xpbd","damping_half_life_ms":90.0,"rest_response":0.08,"shape_preservation":0.05,"bounce_scale":0.4,"motion_coupling":0.35}],"match_overrides":[{"name":"soft named parts","source_id_contains":["cape"],"source_id_regex":["(?i)ribbon"],"damping_half_life_ms":160.0,"rest_response":0.05,"shape_preservation":0.025,"bounce_scale":0.65,"motion_coupling":0.3,"drag_scale":0.6}],"group_overrides":[{"sourceId":"physbone:ear-tip","solver":"verlet","damping_half_life_ms":120.0,"rest_response":0.03,"shape_preservation":0.02,"bounce_scale":0.8,"drag_scale":1.4}]}}"#,
 		)
 		.unwrap();
 		let RendererControlCommand::SetDynamics {
@@ -9044,7 +9637,38 @@ mod tests {
 		};
 		assert!(!enabled);
 		assert!(!bone_colliders.enabled);
-		assert_eq!(physics_config.unwrap().simulation_hz, 120.0);
+		let physics_config = physics_config.unwrap();
+		assert_eq!(physics_config.simulation_hz, 120.0);
+		assert!(!physics_config.surface_constraints_enabled);
+		assert_eq!(physics_config.surface_constraint_topology_max_edge_distance_m, 0.04);
+		assert_eq!(physics_config.surface_constraint_topology_max_mean_edge_distance_m, 0.02);
+		assert_eq!(physics_config.surface_constraint_spatial_max_distance_m, 0.01);
+		assert_eq!(physics_config.surface_constraint_topology_stiffness, 0.25);
+		assert_eq!(physics_config.surface_constraint_spatial_stiffness, 0.8);
+		assert_eq!(physics_config.surface_constraint_min_edge_count, 4);
+		assert_eq!(physics_config.overrides[0].category, "ears");
+		assert_eq!(physics_config.overrides[0].params.damping_half_life_ms, Some(90.0));
+		assert_eq!(physics_config.overrides[0].params.rest_response, Some(0.08));
+		assert_eq!(physics_config.overrides[0].params.shape_preservation, Some(0.05));
+		assert_eq!(physics_config.overrides[0].params.bounce_scale, Some(0.4));
+		assert_eq!(physics_config.overrides[0].params.motion_coupling, Some(0.35));
+		assert_eq!(physics_config.match_overrides.len(), 1);
+		assert_eq!(physics_config.match_overrides[0].name, "soft named parts");
+		assert_eq!(physics_config.match_overrides[0].source_id_contains, vec!["cape"]);
+		assert_eq!(physics_config.match_overrides[0].source_id_regex, vec!["(?i)ribbon"]);
+		assert_eq!(physics_config.match_overrides[0].params.damping_half_life_ms, Some(160.0));
+		assert_eq!(physics_config.match_overrides[0].params.rest_response, Some(0.05));
+		assert_eq!(physics_config.match_overrides[0].params.shape_preservation, Some(0.025));
+		assert_eq!(physics_config.match_overrides[0].params.bounce_scale, Some(0.65));
+		assert_eq!(physics_config.match_overrides[0].params.motion_coupling, Some(0.3));
+		assert_eq!(physics_config.match_overrides[0].params.drag_scale, Some(0.6));
+		assert_eq!(physics_config.group_overrides.len(), 1);
+		assert_eq!(physics_config.group_overrides[0].source_id, "physbone:ear-tip");
+		assert_eq!(physics_config.group_overrides[0].params.damping_half_life_ms, Some(120.0));
+		assert_eq!(physics_config.group_overrides[0].params.rest_response, Some(0.03));
+		assert_eq!(physics_config.group_overrides[0].params.shape_preservation, Some(0.02));
+		assert_eq!(physics_config.group_overrides[0].params.bounce_scale, Some(0.8));
+		assert_eq!(physics_config.group_overrides[0].params.drag_scale, Some(1.4));
 	}
 
 	#[test]

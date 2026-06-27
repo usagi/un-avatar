@@ -1461,6 +1461,1571 @@ fn renderer_validate_startup(mut command: Command, manifest: &Path, wardrobe_set
 	ok
 }
 
+const UNPHYSICS_AUDIT_DEFAULT_AVATARS: [&str; 3] = ["usagi.unavatar", "blanca.unavatar", "mizuki.unavatar"];
+
+fn resolve_unphysics_audit_paths(repo: &Path, paths: Vec<PathBuf>, label: &str) -> (Vec<PathBuf>, bool) {
+	let paths = if paths.is_empty() {
+		UNPHYSICS_AUDIT_DEFAULT_AVATARS
+			.into_iter()
+			.map(|name| repo.join("target").join("tmp").join(name))
+			.collect()
+	} else {
+		paths
+	};
+	let mut ok = true;
+	let mut resolved = Vec::with_capacity(paths.len());
+	for path in paths {
+		let path = if path.is_absolute() { path } else { repo.join(path) };
+		if path.exists() {
+			resolved.push(path);
+		} else {
+			eprintln!("{label}: missing .unavatar: {}", path.display());
+			ok = false;
+		}
+	}
+	(resolved, ok)
+}
+
+fn un_avatar_cli_bin(repo: &Path) -> PathBuf {
+	let bin_name = if cfg!(windows) { "un-avatar.exe" } else { "un-avatar" };
+	repo.join("target").join("debug").join(bin_name)
+}
+
+fn ensure_un_avatar_cli_built(repo: &Path, label: &str) -> bool {
+	let status = Command::new("cargo")
+		.args(["build", "--locked", "-q", "-p", "un-avatar-cli", "--bin", "un-avatar"])
+		.current_dir(repo)
+		.status();
+	match status {
+		Ok(status) if status.success() => true,
+		Ok(status) => {
+			eprintln!("{label}: failed to build un-avatar CLI: {status}");
+			false
+		}
+		Err(err) => {
+			eprintln!("{label}: failed to launch cargo build for un-avatar CLI: {err}");
+			false
+		}
+	}
+}
+
+fn run_un_avatar_json(cli_bin: &Path, path: &Path, label: &str, args: &[&str]) -> Option<(process::Output, serde_json::Value)> {
+	let output = match Command::new(cli_bin).args(args).output() {
+		Ok(output) => output,
+		Err(err) => {
+			eprintln!("{label}: failed to run un-avatar for {}: {err}", path.display());
+			return None;
+		}
+	};
+	let report = match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+		Ok(report) => report,
+		Err(err) => {
+			eprintln!("{label}: invalid JSON from {}: {err}", path.display());
+			print_child_stderr(&output);
+			return None;
+		}
+	};
+	Some((output, report))
+}
+
+fn print_child_stderr(output: &process::Output) {
+	if !output.stderr.is_empty() {
+		eprint!("{}", String::from_utf8_lossy(&output.stderr));
+	}
+}
+
+fn run_unphysics_exporter_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths: Vec<PathBuf> = Vec::new();
+	for arg in args {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_exporter_audit_usage();
+				return true;
+			}
+			other if other.starts_with('-') => {
+				eprintln!("unphysics-exporter-audit: unknown option: {other}");
+				return false;
+			}
+			_ => paths.push(PathBuf::from(arg)),
+		}
+	}
+
+	let (paths, mut ok) = resolve_unphysics_audit_paths(repo, paths, "unphysics-exporter-audit");
+	if !ensure_un_avatar_cli_built(repo, "unphysics-exporter-audit") {
+		return false;
+	}
+	let cli_bin = un_avatar_cli_bin(repo);
+	for path in paths {
+		ok &= run_unphysics_exporter_audit_one(&cli_bin, &path);
+	}
+	if ok {
+		println!("unphysics-exporter-audit: ok");
+	}
+	ok
+}
+
+fn run_unphysics_exporter_audit_one(cli_bin: &Path, path: &Path) -> bool {
+	let Some((output, report)) = run_un_avatar_json(
+		cli_bin,
+		path,
+		"unphysics-exporter-audit",
+		&["dynamics-scan", path_str(path), "--require-current-exporter", "--json"],
+	) else {
+		return false;
+	};
+	let source_params = report.get("source_params_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let missing = json_array(&report, "missing_required_source_params");
+	let file_mb = report
+		.get("file_bytes")
+		.and_then(serde_json::Value::as_u64)
+		.map(|bytes| bytes as f64 / 1024.0 / 1024.0)
+		.unwrap_or(0.0);
+	println!(
+		"unphysics-exporter-audit: {} sourceParams={} missing={} file={file_mb:.1}MiB",
+		path.display(),
+		source_params,
+		missing.len()
+	);
+	if !output.status.success() {
+		if !missing.is_empty() {
+			let labels = missing.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", ");
+			eprintln!("unphysics-exporter-audit: missing required sourceParams: {labels}");
+		}
+		print_child_stderr(&output);
+		return false;
+	}
+	true
+}
+
+fn run_unphysics_importer_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths: Vec<PathBuf> = Vec::new();
+	let mut wardrobe_set: Option<String> = None;
+	let mut require_node_constraints = false;
+	let mut require_parent_node_constraints = false;
+	let mut require_mesh_cloth_assist_candidates = false;
+	let mut args = args.peekable();
+	while let Some(arg) = args.next() {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_importer_audit_usage();
+				return true;
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-importer-audit: --wardrobe-set requires a value");
+					return false;
+				};
+				wardrobe_set = Some(value);
+			}
+			other if other.starts_with("--wardrobe-set=") => {
+				wardrobe_set = Some(other.trim_start_matches("--wardrobe-set=").to_string());
+			}
+			"--require-node-constraints" => {
+				require_node_constraints = true;
+			}
+			"--require-parent-node-constraints" => {
+				require_parent_node_constraints = true;
+			}
+			"--require-mesh-cloth-assist-candidates" => {
+				require_mesh_cloth_assist_candidates = true;
+			}
+			"--require-runtime-evidence" => {
+				// Kept for CLI parity. xtask always forwards this gate to `dynamics-import-audit`.
+			}
+			other if other.starts_with('-') => {
+				eprintln!("unphysics-importer-audit: unknown option: {other}");
+				return false;
+			}
+			_ => paths.push(PathBuf::from(arg)),
+		}
+	}
+
+	if wardrobe_set_requires_explicit_paths(wardrobe_set.as_deref(), &paths, "unphysics-importer-audit") {
+		return false;
+	}
+	let (paths, mut ok) = resolve_unphysics_audit_paths(repo, paths, "unphysics-importer-audit");
+	if !ensure_un_avatar_cli_built(repo, "unphysics-importer-audit") {
+		return false;
+	}
+	let cli_bin = un_avatar_cli_bin(repo);
+	for path in paths {
+		ok &= run_unphysics_importer_audit_one(
+			&cli_bin,
+			&path,
+			wardrobe_set.as_deref(),
+			require_node_constraints,
+			require_parent_node_constraints,
+			require_mesh_cloth_assist_candidates,
+		);
+	}
+	if ok {
+		println!("unphysics-importer-audit: ok");
+	}
+	ok
+}
+
+fn run_unphysics_importer_audit_one(
+	cli_bin: &Path,
+	path: &Path,
+	wardrobe_set: Option<&str>,
+	require_node_constraints: bool,
+	require_parent_node_constraints: bool,
+	require_mesh_cloth_assist_candidates: bool,
+) -> bool {
+	let mut args = vec!["dynamics-import-audit", path_str(path), "--require-runtime-evidence", "--json"];
+	if let Some(wardrobe_set) = wardrobe_set {
+		args.push("--wardrobe-set");
+		args.push(wardrobe_set);
+	}
+	let Some((output, report)) = run_un_avatar_json(cli_bin, path, "unphysics-importer-audit", &args) else {
+		return false;
+	};
+	let source_params = report.get("source_params_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let groups = report.get("group_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let enabled = report.get("enabled_group_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let joints = report.get("chain_joint_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let response_groups = report.get("response_group_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let source_angle_groups = report
+		.get("source_angle_limit_group_count")
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or(0);
+	let active_angle_groups = report
+		.get("active_angle_limit_group_count")
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or(0);
+	let hard_angle_constraints = report
+		.get("hard_angle_constraint_group_count")
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or(0);
+	let cloth_angle_metadata_only = report
+		.get("cloth_angle_limit_metadata_only_count")
+		.and_then(serde_json::Value::as_u64)
+		.unwrap_or(0);
+	let missing = json_array(&report, "missing_runtime_evidence");
+	let node_constraint_count = json_u64(&report, "node_constraint_count");
+	let parent_constraint_count = json_u64(&report, "parent_node_constraint_count");
+	let parent_constraint_sources = json_u64(&report, "parent_node_constraint_source_count");
+	let parent_constraint_multi_source = json_u64(&report, "parent_node_constraint_multi_source_count");
+	let mesh_cloth_assist_samples = json_array(&report, "mesh_cloth_assist_samples");
+	let mesh_cloth_assist_candidates = sum_json_u64(mesh_cloth_assist_samples, "candidate_count");
+	let mesh_cloth_assist_seed_candidates = sum_json_u64(mesh_cloth_assist_samples, "seed_candidate_count");
+	let top_mesh_cloth_assist = top_mesh_cloth_assist_sample_label(mesh_cloth_assist_samples);
+	println!(
+		"unphysics-importer-audit: {} wardrobeSet={} sourceParams={} groups={} enabled={} joints={} responseGroups={} sourceAngleGroups={} activeAngleGroups={} hardAngleConstraints={} clothAngleMetadataOnly={} nodeConstraints={} parentConstraints={} parentSources={} parentMultiSource={} meshAssistSamples={} meshAssistCandidates={} meshAssistSeedCandidates={} topMeshAssist={} missing={}",
+		path.display(),
+		wardrobe_set.unwrap_or("-"),
+		source_params,
+		groups,
+		enabled,
+		joints,
+		response_groups,
+		source_angle_groups,
+		active_angle_groups,
+		hard_angle_constraints,
+		cloth_angle_metadata_only,
+		node_constraint_count,
+		parent_constraint_count,
+		parent_constraint_sources,
+		parent_constraint_multi_source,
+		mesh_cloth_assist_samples.len(),
+		mesh_cloth_assist_candidates,
+		mesh_cloth_assist_seed_candidates,
+		top_mesh_cloth_assist,
+		missing.len()
+	);
+	if !output.status.success() {
+		if !missing.is_empty() {
+			let labels = missing.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", ");
+			eprintln!("unphysics-importer-audit: missing runtime evidence: {labels}");
+		}
+		print_child_stderr(&output);
+		return false;
+	}
+	if importer_constraint_gate_failed(require_node_constraints, node_constraint_count) {
+		eprintln!(
+			"unphysics-importer-audit: no node constraints were observed for {} wardrobeSet={}",
+			path.display(),
+			wardrobe_set.unwrap_or("-")
+		);
+		return false;
+	}
+	if importer_constraint_gate_failed(require_parent_node_constraints, parent_constraint_count) {
+		eprintln!(
+			"unphysics-importer-audit: no parent node constraints were observed for {} wardrobeSet={}",
+			path.display(),
+			wardrobe_set.unwrap_or("-")
+		);
+		return false;
+	}
+	if importer_mesh_cloth_assist_candidate_gate_failed(require_mesh_cloth_assist_candidates, mesh_cloth_assist_candidates) {
+		eprintln!(
+			"unphysics-importer-audit: no mesh cloth assist candidates were observed for {} wardrobeSet={}",
+			path.display(),
+			wardrobe_set.unwrap_or("-")
+		);
+		return false;
+	}
+	true
+}
+
+fn importer_constraint_gate_failed(require_constraints: bool, constraint_count: u64) -> bool {
+	gate_required_count_missing(require_constraints, constraint_count)
+}
+
+fn importer_mesh_cloth_assist_candidate_gate_failed(require_candidates: bool, candidate_count: u64) -> bool {
+	gate_required_count_missing(require_candidates, candidate_count)
+}
+
+fn wardrobe_set_requires_explicit_paths(wardrobe_set: Option<&str>, paths: &[PathBuf], command: &str) -> bool {
+	if wardrobe_set.is_none() || !paths.is_empty() {
+		return false;
+	}
+	eprintln!("{command}: --wardrobe-set requires explicit avatar path(s); default regression avatars do not share wardrobe ids");
+	true
+}
+
+fn run_unphysics_response_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths: Vec<PathBuf> = Vec::new();
+	let mut wardrobe_set: Option<String> = None;
+	let mut require_visual_response_evidence = false;
+	let mut args = args.peekable();
+	while let Some(arg) = args.next() {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_response_audit_usage();
+				return true;
+			}
+			"--require-visual-response-evidence" => {
+				require_visual_response_evidence = true;
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-response-audit: --wardrobe-set requires a value");
+					return false;
+				};
+				wardrobe_set = Some(value);
+			}
+			other if other.starts_with("--wardrobe-set=") => {
+				wardrobe_set = Some(other.trim_start_matches("--wardrobe-set=").to_string());
+			}
+			other if other.starts_with('-') => {
+				eprintln!("unphysics-response-audit: unknown option: {other}");
+				return false;
+			}
+			_ => paths.push(PathBuf::from(arg)),
+		}
+	}
+
+	if wardrobe_set_requires_explicit_paths(wardrobe_set.as_deref(), &paths, "unphysics-response-audit") {
+		return false;
+	}
+	let (paths, mut ok) = resolve_unphysics_audit_paths(repo, paths, "unphysics-response-audit");
+	if !ensure_un_avatar_cli_built(repo, "unphysics-response-audit") {
+		return false;
+	}
+	let cli_bin = un_avatar_cli_bin(repo);
+	for path in paths {
+		ok &= run_unphysics_response_audit_one(&cli_bin, &path, wardrobe_set.as_deref(), require_visual_response_evidence);
+	}
+	if ok {
+		println!("unphysics-response-audit: ok");
+	}
+	ok
+}
+
+fn run_unphysics_response_audit_one(
+	cli_bin: &Path,
+	path: &Path,
+	wardrobe_set: Option<&str>,
+	require_visual_response_evidence: bool,
+) -> bool {
+	let mut args = vec!["dynamics-response-audit", path_str(path), "--require-override-effect", "--json"];
+	if let Some(wardrobe_set) = wardrobe_set {
+		args.push("--wardrobe-set");
+		args.push(wardrobe_set);
+	}
+	let Some((output, report)) = run_un_avatar_json(cli_bin, path, "unphysics-response-audit", &args) else {
+		return false;
+	};
+	let groups = report.get("group_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let joints = report.get("joint_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let missing = json_array(&report, "missing_response_evidence");
+	let modes = json_array(&report, "modes");
+	let visual_response_evidence = response_audit_visual_response_evidence_count(&modes);
+	let mode_label = |name: &str| {
+		report
+			.get("modes")
+			.and_then(serde_json::Value::as_array)
+			.and_then(|modes| {
+				modes.iter().find(|mode| {
+					mode.get("name")
+						.and_then(serde_json::Value::as_str)
+						.is_some_and(|value| value == name)
+				})
+			})
+			.map(|mode| {
+				let rest = mode.get("average_rest_response").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+				let shape = mode
+					.get("average_shape_preservation")
+					.and_then(serde_json::Value::as_f64)
+					.unwrap_or(0.0);
+				let motion = mode
+					.get("average_parent_motion_follow")
+					.and_then(serde_json::Value::as_f64)
+					.unwrap_or(0.0);
+				let bounce = mode
+					.get("average_bounce_response")
+					.and_then(serde_json::Value::as_f64)
+					.unwrap_or(0.0);
+				let damping = mode
+					.get("average_damping_half_life_ms")
+					.and_then(serde_json::Value::as_f64)
+					.map(|value| format!("{value:.1}"))
+					.unwrap_or_else(|| "-".to_string());
+				let categories = json_array(mode, "categories");
+				let groups = json_array(mode, "groups");
+				let category_count = mode.get("category_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+				let top_category = response_audit_top_category_label(&categories);
+				let top_visual_category = response_audit_top_visual_category_label(&categories);
+				let top_nonvisual_category = response_audit_top_nonvisual_category_label(&categories);
+				let top_group = response_audit_top_group_label(groups);
+				let top_visual_group = response_audit_top_visual_group_label(groups);
+				let top_nonvisual_group = response_audit_top_nonvisual_group_label(groups);
+				format!("{name}:categories={category_count},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},damp={damping},motion={motion:.3},top={top_category},top_visual={top_visual_category},top_nonvisual={top_nonvisual_category},top_group={top_group},top_visual_group={top_visual_group},top_nonvisual_group={top_nonvisual_group}")
+			})
+			.unwrap_or_else(|| format!("{name}:missing"))
+	};
+	println!(
+		"unphysics-response-audit: {} wardrobeSet={} groups={} joints={} visualResponseEvidence={} {} {} missing={}",
+		path.display(),
+		wardrobe_set.unwrap_or("-"),
+		groups,
+		joints,
+		visual_response_evidence,
+		mode_label("soft_override"),
+		mode_label("firm_override"),
+		missing.len()
+	);
+	if !output.status.success() {
+		if !missing.is_empty() {
+			let labels = missing.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", ");
+			eprintln!("unphysics-response-audit: missing response evidence: {labels}");
+		}
+		print_child_stderr(&output);
+		return false;
+	}
+	if response_audit_visual_response_evidence_gate_failed(require_visual_response_evidence, groups, visual_response_evidence) {
+		eprintln!(
+			"unphysics-response-audit: missing visual response evidence: groups={groups} visualResponseEvidence={visual_response_evidence}"
+		);
+		return false;
+	}
+	true
+}
+
+fn response_audit_top_category_label(categories: &[serde_json::Value]) -> String {
+	categories
+		.iter()
+		.max_by(|left, right| {
+			json_u64(left, "joint_count")
+				.cmp(&json_u64(right, "joint_count"))
+				.then_with(|| json_str(right, "category", "").cmp(json_str(left, "category", "")))
+		})
+		.map(response_audit_category_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_top_visual_category_label(categories: &[serde_json::Value]) -> String {
+	categories
+		.iter()
+		.filter(|category| response_audit_category_visual_response_evidence_count(category) > 0)
+		.max_by(|left, right| {
+			json_u64(left, "visible_skinned_joint_count")
+				.cmp(&json_u64(right, "visible_skinned_joint_count"))
+				.then_with(|| json_u64(left, "visible_mesh_subtree_node_count").cmp(&json_u64(right, "visible_mesh_subtree_node_count")))
+				.then_with(|| json_u64(left, "visual_target_group_count").cmp(&json_u64(right, "visual_target_group_count")))
+				.then_with(|| json_u64(left, "joint_count").cmp(&json_u64(right, "joint_count")))
+				.then_with(|| json_str(right, "category", "").cmp(json_str(left, "category", "")))
+		})
+		.map(response_audit_category_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_top_nonvisual_category_label(categories: &[serde_json::Value]) -> String {
+	categories
+		.iter()
+		.filter(|category| json_u64(category, "nonvisual_group_count") > 0)
+		.max_by(|left, right| {
+			json_u64(left, "nonvisual_group_count")
+				.cmp(&json_u64(right, "nonvisual_group_count"))
+				.then_with(|| json_u64(left, "joint_count").cmp(&json_u64(right, "joint_count")))
+				.then_with(|| json_str(right, "category", "").cmp(json_str(left, "category", "")))
+		})
+		.map(response_audit_category_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_group_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_u64(left, "joint_count")
+		.cmp(&json_u64(right, "joint_count"))
+		.then_with(|| json_str(right, "source_id", "").cmp(json_str(left, "source_id", "")))
+}
+
+fn response_audit_group_label(group: &serde_json::Value) -> String {
+	let source_id = json_str(group, "source_id", "unknown");
+	let category = json_str(group, "category", "unknown");
+	let visual = motion_trace_bool_label(group, "visual_target");
+	let joints = json_u64(group, "joint_count");
+	let visible_joints = json_u64(group, "skinned_joint_count");
+	let visible_mesh_subtrees = json_u64(group, "mesh_subtree_node_count");
+	let rest = json_f64(group, "average_rest_response");
+	let shape = json_f64(group, "average_shape_preservation");
+	let bounce = json_f64(group, "average_bounce_response");
+	let follow = json_f64(group, "average_parent_motion_follow");
+	let orient = json_f64(group, "average_orientation_follow");
+	let stretch = json_f64(group, "average_max_stretch_response");
+	let stretch_motion = json_f64(group, "average_stretch_motion_response");
+	format!("{source_id}:category={category},visual={visual},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}")
+}
+
+fn response_audit_top_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.max_by(|left, right| response_audit_group_order(left, right))
+		.map(response_audit_group_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_top_visual_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(true))
+		.max_by(|left, right| response_audit_group_order(left, right))
+		.map(response_audit_group_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_top_nonvisual_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(false))
+		.max_by(|left, right| response_audit_group_order(left, right))
+		.map(response_audit_group_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn response_audit_category_label(category: &serde_json::Value) -> String {
+	let name = json_str(category, "category", "unknown");
+	let groups = json_u64(category, "group_count");
+	let visual_groups = json_u64(category, "visual_target_group_count");
+	let nonvisual_groups = json_u64(category, "nonvisual_group_count");
+	let joints = json_u64(category, "joint_count");
+	let visible_joints = json_u64(category, "visible_skinned_joint_count");
+	let visible_mesh_subtrees = json_u64(category, "visible_mesh_subtree_node_count");
+	let rest = json_f64(category, "average_rest_response");
+	let shape = json_f64(category, "average_shape_preservation");
+	let bounce = json_f64(category, "average_bounce_response");
+	let follow = json_f64(category, "average_parent_motion_follow");
+	let orient = json_f64(category, "average_orientation_follow");
+	let stretch = json_f64(category, "average_max_stretch_response");
+	let stretch_motion = json_f64(category, "average_stretch_motion_response");
+	format!("{name}:groups={groups},visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}")
+}
+
+fn response_audit_visual_response_evidence_count(modes: &[serde_json::Value]) -> u64 {
+	modes
+		.iter()
+		.map(|mode| {
+			json_array(mode, "categories")
+				.iter()
+				.map(response_audit_category_visual_response_evidence_count)
+				.sum::<u64>()
+		})
+		.max()
+		.unwrap_or(0)
+}
+
+fn response_audit_category_visual_response_evidence_count(category: &serde_json::Value) -> u64 {
+	json_u64(category, "visual_target_group_count")
+		+ json_u64(category, "visible_skinned_joint_count")
+		+ json_u64(category, "visible_mesh_subtree_node_count")
+}
+
+fn response_audit_visual_response_evidence_gate_failed(
+	require_visual_response_evidence: bool,
+	groups: u64,
+	visual_response_evidence: u64,
+) -> bool {
+	require_visual_response_evidence && groups > 0 && visual_response_evidence == 0
+}
+
+fn json_f64(value: &serde_json::Value, key: &str) -> f64 {
+	value.get(key).and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+}
+
+fn json_u64(value: &serde_json::Value, key: &str) -> u64 {
+	value.get(key).and_then(serde_json::Value::as_u64).unwrap_or(0)
+}
+
+fn sum_json_u64(values: &[serde_json::Value], key: &str) -> u64 {
+	values.iter().map(|value| json_u64(value, key)).sum()
+}
+
+fn json_str<'a>(value: &'a serde_json::Value, key: &str, fallback: &'a str) -> &'a str {
+	value.get(key).and_then(serde_json::Value::as_str).unwrap_or(fallback)
+}
+
+fn json_array<'a>(value: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+	value
+		.get(key)
+		.and_then(serde_json::Value::as_array)
+		.map(Vec::as_slice)
+		.unwrap_or(&[])
+}
+
+fn top_mesh_cloth_assist_sample_label(samples: &[serde_json::Value]) -> String {
+	samples
+		.iter()
+		.max_by(|left, right| mesh_cloth_assist_sample_order(left, right))
+		.map(|sample| {
+			let path = json_str(sample, "node_path", "");
+			let path = if path.is_empty() { "<unknown>" } else { path };
+			let region = json_str(sample, "region", "unknown");
+			let vertices = json_u64(sample, "vertex_count");
+			let candidates = json_u64(sample, "candidate_count");
+			let existing = json_u64(sample, "existing_dynamic_candidate_count");
+			let bridge = json_u64(sample, "static_cloth_bridge_candidate_count");
+			let seed = json_u64(sample, "seed_candidate_count");
+			let assist = json_f64(sample, "suggested_assist_weight_sum");
+			let seeded_assist = json_f64(sample, "seeded_assist_weight_sum");
+			format!("{path}:region={region},vertices={vertices},candidates={candidates},existing={existing},bridge={bridge},seed={seed},assist={assist:.3},seedAssist={seeded_assist:.3}")
+		})
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn mesh_cloth_assist_sample_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_u64(left, "candidate_count")
+		.cmp(&json_u64(right, "candidate_count"))
+		.then_with(|| json_u64(left, "seed_candidate_count").cmp(&json_u64(right, "seed_candidate_count")))
+		.then_with(|| json_str(right, "node_path", "").cmp(json_str(left, "node_path", "")))
+		.then_with(|| json_str(right, "region", "").cmp(json_str(left, "region", "")))
+}
+
+fn collider_summaries_with_projection_count(collider_summaries: &[serde_json::Value]) -> usize {
+	collider_summaries
+		.iter()
+		.filter(|summary| json_u64(summary, "projection_count") > 0)
+		.count()
+}
+
+fn collider_summaries_with_penetration_count(collider_summaries: &[serde_json::Value]) -> usize {
+	collider_summaries
+		.iter()
+		.filter(|summary| json_u64(summary, "penetrating_count") > 0)
+		.count()
+}
+
+fn top_projecting_collider_summary_label(collider_summaries: &[serde_json::Value]) -> String {
+	collider_summaries
+		.iter()
+		.filter(|summary| json_u64(summary, "projection_count") > 0)
+		.max_by(|left, right| projecting_collider_summary_order(left, right))
+		.map(collider_summary_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn top_candidate_collider_summary_label(collider_summaries: &[serde_json::Value]) -> String {
+	collider_summaries
+		.iter()
+		.filter(|summary| json_u64(summary, "candidate_count") > 0)
+		.min_by(|left, right| candidate_collider_summary_order(left, right))
+		.map(collider_summary_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn projecting_collider_summary_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_u64(left, "projection_count")
+		.cmp(&json_u64(right, "projection_count"))
+		.then_with(|| json_str(right, "collider_path", "").cmp(json_str(left, "collider_path", "")))
+}
+
+fn candidate_collider_summary_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_f64(left, "min_margin")
+		.total_cmp(&json_f64(right, "min_margin"))
+		.then_with(|| json_u64(right, "penetrating_count").cmp(&json_u64(left, "penetrating_count")))
+		.then_with(|| json_u64(right, "candidate_count").cmp(&json_u64(left, "candidate_count")))
+		.then_with(|| json_str(left, "collider_path", "").cmp(json_str(right, "collider_path", "")))
+}
+
+fn collider_summary_label(summary: &serde_json::Value) -> String {
+	let path = json_str(summary, "collider_path", "");
+	let path = if path.is_empty() { "<unscoped>" } else { path };
+	let shape = json_str(summary, "collider_shape", "unknown");
+	let inside_bounds = summary
+		.get("inside_bounds")
+		.and_then(serde_json::Value::as_bool)
+		.map(|value| if value { "true" } else { "false" })
+		.unwrap_or("unknown");
+	let candidates = json_u64(summary, "candidate_count");
+	let penetrating = json_u64(summary, "penetrating_count");
+	let projections = json_u64(summary, "projection_count");
+	let sources = json_u64(summary, "source_count");
+	let min_margin = json_f64(summary, "min_margin");
+	format!("{path}:shape={shape},inside={inside_bounds},candidates={candidates},penetrating={penetrating},projections={projections},sources={sources},minMargin={min_margin:.5}")
+}
+
+fn json_stable_offset(value: &serde_json::Value) -> f64 {
+	value
+		.get("stable_offset")
+		.or_else(|| value.get("settled_recovery_lag"))
+		.and_then(serde_json::Value::as_f64)
+		.unwrap_or(0.0)
+}
+
+fn json_half_life_label(value: &serde_json::Value) -> String {
+	value
+		.get("recovery_half_life_frames")
+		.and_then(serde_json::Value::as_f64)
+		.map(|value| format!("{value:.1}"))
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn motion_trace_response_label(value: &serde_json::Value) -> String {
+	let rest = json_f64(value, "average_rest_response");
+	let shape = json_f64(value, "average_shape_preservation");
+	let bounce = json_f64(value, "average_bounce_response");
+	let follow = json_f64(value, "average_parent_motion_follow");
+	let orient = json_f64(value, "average_orientation_follow");
+	let stretch = json_f64(value, "average_max_stretch_response");
+	let stretch_motion = json_f64(value, "average_stretch_motion_response");
+	format!("resp=rest:{rest:.3},shape:{shape:.3},bounce:{bounce:.3},follow:{follow:.3},orient:{orient:.3},stretch:{stretch:.3},stretchMotion:{stretch_motion:.3}")
+}
+
+fn motion_trace_bool_label(value: &serde_json::Value, key: &str) -> &'static str {
+	value
+		.get(key)
+		.and_then(serde_json::Value::as_bool)
+		.map(|value| if value { "true" } else { "false" })
+		.unwrap_or("unknown")
+}
+
+fn motion_trace_category_summary_label(category: &serde_json::Value) -> String {
+	let name = json_str(category, "category", "unknown");
+	let visual_groups = json_u64(category, "visual_target_group_count");
+	let nonvisual_groups = json_u64(category, "nonvisual_group_count");
+	let max_lag = json_f64(category, "max_lag");
+	let chain_length = json_f64(category, "average_chain_rest_length");
+	let max_lag_chain_ratio = json_f64(category, "max_lag_chain_ratio");
+	let avg_lag = json_f64(category, "average_lag");
+	let recovery = json_f64(category, "recovery_final_lag");
+	let initial_stable = json_f64(category, "initial_stable_offset");
+	let settled = json_stable_offset(category);
+	let stable_ratio = json_f64(category, "stable_offset_ratio");
+	let stable_chain_ratio = json_f64(category, "stable_offset_chain_ratio");
+	let recovery_state = json_str(category, "recovery_state", "unknown");
+	let residual = json_f64(category, "residual_motion");
+	let residual_chain_ratio = json_f64(category, "residual_motion_chain_ratio");
+	let half_life = json_half_life_label(category);
+	let response = motion_trace_response_label(category);
+	format!("{name}:visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},avg={avg_lag:.3},rec={recovery:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}")
+}
+
+fn motion_trace_top_visual_category_label(categories: &[serde_json::Value], groups: &[serde_json::Value]) -> String {
+	let Some(top_group) = groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(true))
+		.max_by(|left, right| motion_trace_group_order(left, right))
+	else {
+		return "none".to_string();
+	};
+	let group_category = json_str(top_group, "category", "");
+	categories
+		.iter()
+		.find(|category| json_str(category, "category", "") == group_category)
+		.map(motion_trace_category_summary_label)
+		.unwrap_or_else(|| motion_trace_group_summary_label(top_group))
+}
+
+fn motion_trace_top_nonvisual_category_label(categories: &[serde_json::Value], groups: &[serde_json::Value]) -> String {
+	let Some(top_group) = groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(false))
+		.max_by(|left, right| motion_trace_group_order(left, right))
+	else {
+		return "none".to_string();
+	};
+	let group_category = json_str(top_group, "category", "");
+	categories
+		.iter()
+		.find(|category| json_str(category, "category", "") == group_category)
+		.map(motion_trace_category_summary_label)
+		.unwrap_or_else(|| motion_trace_group_summary_label(top_group))
+}
+
+fn motion_trace_category_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_stable_offset(left)
+		.total_cmp(&json_stable_offset(right))
+		.then_with(|| json_f64(left, "max_lag").total_cmp(&json_f64(right, "max_lag")))
+		.then_with(|| json_str(right, "category", "").cmp(json_str(left, "category", "")))
+}
+
+fn motion_trace_finding_top_label(findings: &[serde_json::Value]) -> String {
+	motion_trace_finding_top_label_where(findings, |_| true)
+}
+
+fn motion_trace_finding_top_label_where(findings: &[serde_json::Value], predicate: impl Fn(&serde_json::Value) -> bool) -> String {
+	let labels = findings
+		.iter()
+		.filter(|finding| predicate(finding))
+		.take(3)
+		.map(|finding| {
+			let kind = json_str(finding, "kind", "unknown");
+			let source_id = json_str(finding, "source_id", "");
+			if source_id.is_empty() {
+				let category = json_str(finding, "category", "");
+				if category.is_empty() {
+					kind.to_string()
+				} else {
+					format!("{kind}:{category}")
+				}
+			} else {
+				format!("{kind}:{source_id}")
+			}
+		})
+		.collect::<Vec<_>>();
+	if labels.is_empty() {
+		"-".to_string()
+	} else {
+		labels.join(",")
+	}
+}
+
+fn motion_trace_visual_finding_top_label(findings: &[serde_json::Value]) -> String {
+	motion_trace_finding_top_label_where(findings, |finding| {
+		finding.get("visual_target").and_then(serde_json::Value::as_bool) == Some(true)
+	})
+}
+
+fn motion_trace_group_summary_label(group: &serde_json::Value) -> String {
+	let source_id = json_str(group, "source_id", "unknown");
+	let visual_target = motion_trace_bool_label(group, "visual_target");
+	let max_lag = json_f64(group, "max_lag");
+	let initial_stable = json_f64(group, "initial_stable_offset");
+	let chain_length = json_f64(group, "chain_rest_length");
+	let max_lag_chain_ratio = json_f64(group, "max_lag_chain_ratio");
+	let settled = json_stable_offset(group);
+	let stable_ratio = json_f64(group, "stable_offset_ratio");
+	let stable_chain_ratio = json_f64(group, "stable_offset_chain_ratio");
+	let recovery_state = json_str(group, "recovery_state", "unknown");
+	let residual = json_f64(group, "residual_motion");
+	let residual_chain_ratio = json_f64(group, "residual_motion_chain_ratio");
+	let half_life = json_half_life_label(group);
+	let response = motion_trace_response_label(group);
+	format!("{source_id}:visual={visual_target},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}")
+}
+
+fn motion_trace_top_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.max_by(|left, right| motion_trace_group_order(left, right))
+		.map(motion_trace_group_summary_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn motion_trace_top_visual_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(true))
+		.max_by(|left, right| motion_trace_group_order(left, right))
+		.map(motion_trace_group_summary_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn motion_trace_top_nonvisual_group_label(groups: &[serde_json::Value]) -> String {
+	groups
+		.iter()
+		.filter(|group| group.get("visual_target").and_then(serde_json::Value::as_bool) == Some(false))
+		.max_by(|left, right| motion_trace_group_order(left, right))
+		.map(motion_trace_group_summary_label)
+		.unwrap_or_else(|| "none".to_string())
+}
+
+fn motion_trace_group_order(left: &serde_json::Value, right: &serde_json::Value) -> std::cmp::Ordering {
+	json_stable_offset(left)
+		.total_cmp(&json_stable_offset(right))
+		.then_with(|| json_f64(left, "max_lag").total_cmp(&json_f64(right, "max_lag")))
+		.then_with(|| json_str(right, "source_id", "").cmp(json_str(left, "source_id", "")))
+}
+
+fn motion_trace_finding_visibility_counts(findings: &[serde_json::Value]) -> (usize, usize, usize) {
+	let mut visual = 0;
+	let mut nonvisual = 0;
+	let mut unknown = 0;
+	for finding in findings {
+		match finding.get("visual_target").and_then(serde_json::Value::as_bool) {
+			Some(true) => visual += 1,
+			Some(false) => nonvisual += 1,
+			None => unknown += 1,
+		}
+	}
+	(visual, nonvisual, unknown)
+}
+
+fn motion_trace_visible_findings_gate_failed(require_no_visible_findings: bool, visual_findings: usize) -> bool {
+	require_no_visible_findings && visual_findings > 0
+}
+
+fn motion_trace_unknown_visibility_gate_failed(require_known_finding_visibility: bool, unknown_visibility_findings: usize) -> bool {
+	require_known_finding_visibility && unknown_visibility_findings > 0
+}
+
+fn motion_trace_recovery_frames_to_run(requested: &str, include_short_recovery: bool) -> Vec<String> {
+	let mut frames = vec![requested.to_string()];
+	if include_short_recovery {
+		for short in ["24", "96"] {
+			if !frames.iter().any(|value| value == short) {
+				frames.push(short.to_string());
+			}
+		}
+	}
+	frames
+}
+
+#[derive(Clone, Debug)]
+struct UnphysicsVertexProbeAuditOptions {
+	wardrobe_set: Option<String>,
+	node_contains: String,
+	settle_frames: String,
+	tuning: String,
+	apply_mesh_cloth_assist: bool,
+	ignore_authored_colliders: bool,
+	require_mesh_cloth_assist_changes: bool,
+	require_collision_projections: bool,
+	require_probe_collision_projections: bool,
+	require_collision_projection_sources: bool,
+	require_collision_projection_paths: bool,
+	require_collider_summaries: bool,
+	require_probe_collider_candidates: bool,
+	require_projecting_collider_summaries: bool,
+}
+
+impl Default for UnphysicsVertexProbeAuditOptions {
+	fn default() -> Self {
+		Self {
+			wardrobe_set: None,
+			node_contains: String::new(),
+			settle_frames: "240".to_string(),
+			tuning: "authored".to_string(),
+			apply_mesh_cloth_assist: false,
+			ignore_authored_colliders: false,
+			require_mesh_cloth_assist_changes: false,
+			require_collision_projections: false,
+			require_probe_collision_projections: false,
+			require_collision_projection_sources: false,
+			require_collision_projection_paths: false,
+			require_collider_summaries: false,
+			require_probe_collider_candidates: false,
+			require_projecting_collider_summaries: false,
+		}
+	}
+}
+
+fn vertex_probe_mesh_cloth_assist_gate_failed(
+	require_mesh_cloth_assist_changes: bool,
+	apply_mesh_cloth_assist: bool,
+	changed_vertices: u64,
+) -> bool {
+	require_mesh_cloth_assist_changes && (!apply_mesh_cloth_assist || changed_vertices == 0)
+}
+
+fn vertex_probe_collision_projection_gate_failed(require_collision_projections: bool, collision_projections: u64) -> bool {
+	gate_required_count_missing(require_collision_projections, collision_projections)
+}
+
+fn vertex_probe_probe_collision_projection_gate_failed(
+	require_probe_collision_projections: bool,
+	probe_collision_projections: u64,
+) -> bool {
+	gate_required_count_missing(require_probe_collision_projections, probe_collision_projections)
+}
+
+fn vertex_probe_collision_projection_source_gate_failed(require_collision_projection_sources: bool, projection_source_ids: usize) -> bool {
+	gate_required_count_missing(require_collision_projection_sources, projection_source_ids as u64)
+}
+
+fn vertex_probe_collision_projection_path_gate_failed(require_collision_projection_paths: bool, projection_collider_paths: usize) -> bool {
+	gate_required_count_missing(require_collision_projection_paths, projection_collider_paths as u64)
+}
+
+fn vertex_probe_collider_summary_gate_failed(require_collider_summaries: bool, collider_summary_count: usize) -> bool {
+	gate_required_count_missing(require_collider_summaries, collider_summary_count as u64)
+}
+
+fn vertex_probe_probe_collider_candidate_gate_failed(
+	require_probe_collider_candidates: bool,
+	probe_collider_summaries: &[serde_json::Value],
+) -> bool {
+	require_probe_collider_candidates
+		&& !probe_collider_summaries
+			.iter()
+			.any(|summary| json_u64(summary, "candidate_count") > 0)
+}
+
+fn vertex_probe_projecting_collider_summary_gate_failed(
+	require_projecting_collider_summaries: bool,
+	projecting_collider_summary_count: usize,
+) -> bool {
+	gate_required_count_missing(require_projecting_collider_summaries, projecting_collider_summary_count as u64)
+}
+
+fn gate_required_count_missing(require_count: bool, count: u64) -> bool {
+	require_count && count == 0
+}
+
+fn run_unphysics_motion_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	for arg in args {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_motion_audit_usage();
+				return true;
+			}
+			other => {
+				eprintln!("unphysics-motion-audit: unknown argument: {other}");
+				return false;
+			}
+		}
+	}
+	let tests: &[(&str, &str)] = &[
+		(
+			"motion coupling changes head-motion lag",
+			"unphysics_motion_coupling_override_changes_head_motion_lag",
+		),
+		(
+			"rest response changes recovery speed",
+			"unphysics_rest_response_override_changes_recovery_speed",
+		),
+		(
+			"cloth softness changes solver output",
+			"unphysics_cloth_profile_softness_changes_solver_output",
+		),
+		(
+			"ears preset intent changes lag/recovery/residual motion",
+			"unphysics_ears_preset_intent_changes_lag_recovery_and_residual_motion",
+		),
+		("bounce scale changes solver output", "unphysics_bounce_scale_changes_solver_output"),
+		(
+			"source-authored shape intent does not bypass soft tuning",
+			"unphysics_source_stiffness_does_not_bypass_soft_pull_and_motion_coupling",
+		),
+	];
+	for (label, test_name) in tests {
+		eprintln!("unphysics-motion-audit: {label}");
+		if !run_cargo(repo, &["test", "-p", "un-avatar-skeleton", "--lib", test_name, "--", "--nocapture"]).success() {
+			eprintln!("unphysics-motion-audit: failed at {label}");
+			return false;
+		}
+	}
+	println!("unphysics-motion-audit: ok");
+	true
+}
+
+fn run_unphysics_motion_trace_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths: Vec<PathBuf> = Vec::new();
+	let mut frames = "24".to_string();
+	let mut recovery_frames = "240".to_string();
+	let mut tuning = "authored".to_string();
+	let mut wardrobe_set: Option<String> = None;
+	let mut include_short_recovery = false;
+	let mut require_no_visible_findings = false;
+	let mut require_known_finding_visibility = false;
+	let mut args = args.peekable();
+	while let Some(arg) = args.next() {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_motion_trace_audit_usage();
+				return true;
+			}
+			"--frames" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-motion-trace-audit: --frames requires a value");
+					return false;
+				};
+				frames = value;
+			}
+			other if other.starts_with("--frames=") => {
+				frames = other.trim_start_matches("--frames=").to_string();
+			}
+			"--recovery-frames" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-motion-trace-audit: --recovery-frames requires a value");
+					return false;
+				};
+				recovery_frames = value;
+			}
+			other if other.starts_with("--recovery-frames=") => {
+				recovery_frames = other.trim_start_matches("--recovery-frames=").to_string();
+			}
+			"--tuning" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-motion-trace-audit: --tuning requires a value");
+					return false;
+				};
+				tuning = value;
+			}
+			other if other.starts_with("--tuning=") => {
+				tuning = other.trim_start_matches("--tuning=").to_string();
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-motion-trace-audit: --wardrobe-set requires a value");
+					return false;
+				};
+				wardrobe_set = Some(value);
+			}
+			other if other.starts_with("--wardrobe-set=") => {
+				wardrobe_set = Some(other.trim_start_matches("--wardrobe-set=").to_string());
+			}
+			"--include-short-recovery" => {
+				include_short_recovery = true;
+			}
+			"--require-no-visible-findings" => {
+				require_no_visible_findings = true;
+			}
+			"--require-known-finding-visibility" => {
+				require_known_finding_visibility = true;
+			}
+			other if other.starts_with('-') => {
+				eprintln!("unphysics-motion-trace-audit: unknown option: {other}");
+				return false;
+			}
+			_ => paths.push(PathBuf::from(arg)),
+		}
+	}
+
+	if wardrobe_set_requires_explicit_paths(wardrobe_set.as_deref(), &paths, "unphysics-motion-trace-audit") {
+		return false;
+	}
+	let (paths, mut ok) = resolve_unphysics_audit_paths(repo, paths, "unphysics-motion-trace-audit");
+	if !ensure_un_avatar_cli_built(repo, "unphysics-motion-trace-audit") {
+		return false;
+	}
+	let cli_bin = un_avatar_cli_bin(repo);
+	for path in paths {
+		for recovery_frames in motion_trace_recovery_frames_to_run(&recovery_frames, include_short_recovery) {
+			ok &= run_unphysics_motion_trace_audit_one(
+				&cli_bin,
+				&path,
+				&frames,
+				&recovery_frames,
+				&tuning,
+				wardrobe_set.as_deref(),
+				require_no_visible_findings,
+				require_known_finding_visibility,
+			);
+		}
+	}
+	if ok {
+		println!("unphysics-motion-trace-audit: ok");
+	}
+	ok
+}
+
+fn run_unphysics_motion_trace_audit_one(
+	cli_bin: &Path,
+	path: &Path,
+	frames: &str,
+	recovery_frames: &str,
+	tuning: &str,
+	wardrobe_set: Option<&str>,
+	require_no_visible_findings: bool,
+	require_known_finding_visibility: bool,
+) -> bool {
+	let mut args = vec![
+		"dynamics-motion-trace-audit",
+		path_str(path),
+		"--require-motion-evidence",
+		"--frames",
+		frames,
+	];
+	args.push("--recovery-frames");
+	args.push(recovery_frames);
+	args.push("--tuning");
+	args.push(tuning);
+	if let Some(wardrobe_set) = wardrobe_set {
+		args.push("--wardrobe-set");
+		args.push(wardrobe_set);
+	}
+	args.push("--json");
+	let Some((output, report)) = run_un_avatar_json(cli_bin, path, "unphysics-motion-trace-audit", &args) else {
+		return false;
+	};
+	let groups = report.get("group_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let joints = report.get("joint_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let tuning = report.get("tuning").and_then(serde_json::Value::as_str).unwrap_or("unknown");
+	let frame_count = report.get("frame_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let recovery_frame_count = report.get("recovery_frame_count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+	let categories = json_array(&report, "categories");
+	let groups_json = json_array(&report, "groups");
+	let missing = json_array(&report, "missing_motion_evidence");
+	let findings = json_array(&report, "findings");
+	let finding_details = json_array(&report, "finding_details");
+	let finding_top = motion_trace_finding_top_label(&finding_details);
+	let visual_finding_top = motion_trace_visual_finding_top_label(&finding_details);
+	let (visual_findings, nonvisual_findings, unknown_visibility_findings) = motion_trace_finding_visibility_counts(&finding_details);
+	let finding_kind_counts = report
+		.get("finding_kind_counts")
+		.and_then(serde_json::Value::as_object)
+		.map(|counts| {
+			counts
+				.iter()
+				.map(|(kind, value)| format!("{kind}:{}", value.as_u64().unwrap_or(0)))
+				.collect::<Vec<_>>()
+				.join(",")
+		})
+		.filter(|counts| !counts.is_empty())
+		.unwrap_or_else(|| "-".to_string());
+	let top = categories
+		.iter()
+		.max_by(|left, right| motion_trace_category_order(left, right))
+		.map(motion_trace_category_summary_label)
+		.unwrap_or_else(|| "none".to_string());
+	let top_visual = motion_trace_top_visual_category_label(categories, groups_json);
+	let top_nonvisual = motion_trace_top_nonvisual_category_label(categories, groups_json);
+	let top_group = motion_trace_top_group_label(groups_json);
+	let top_visual_group = motion_trace_top_visual_group_label(&groups_json);
+	let top_nonvisual_group = motion_trace_top_nonvisual_group_label(&groups_json);
+	println!(
+		"unphysics-motion-trace-audit: {} wardrobeSet={} tuning={} frames={} recoveryFrames={} groups={} joints={} categories={} findings={} visualFindings={} nonvisualFindings={} unknownVisibilityFindings={} findingKinds={} findingTop={} visualFindingTop={} top={} top_visual={} top_nonvisual={} top_group={} top_visual_group={} top_nonvisual_group={} missing={}",
+		path.display(),
+		wardrobe_set.unwrap_or("-"),
+		tuning,
+		frame_count,
+		recovery_frame_count,
+		groups,
+		joints,
+		categories.len(),
+		findings.len(),
+		visual_findings,
+		nonvisual_findings,
+		unknown_visibility_findings,
+		finding_kind_counts,
+		finding_top,
+		visual_finding_top,
+		top,
+		top_visual,
+		top_nonvisual,
+		top_group,
+		top_visual_group,
+		top_nonvisual_group,
+		missing.len()
+	);
+	if !output.status.success() {
+		if !missing.is_empty() {
+			let labels = missing.iter().filter_map(serde_json::Value::as_str).collect::<Vec<_>>().join(", ");
+			eprintln!("unphysics-motion-trace-audit: missing motion evidence: {labels}");
+		}
+		print_child_stderr(&output);
+		return false;
+	}
+	if motion_trace_visible_findings_gate_failed(require_no_visible_findings, visual_findings) {
+		eprintln!(
+			"unphysics-motion-trace-audit: visible motion findings are present: visualFindings={} visualFindingTop={}",
+			visual_findings, visual_finding_top
+		);
+		return false;
+	}
+	if motion_trace_unknown_visibility_gate_failed(require_known_finding_visibility, unknown_visibility_findings) {
+		eprintln!(
+			"unphysics-motion-trace-audit: motion findings with unknown visibility are present: unknownVisibilityFindings={} findingTop={}",
+			unknown_visibility_findings, finding_top
+		);
+		return false;
+	}
+	true
+}
+
+fn run_unphysics_vertex_probe_audit(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let mut paths: Vec<PathBuf> = Vec::new();
+	let mut opts = UnphysicsVertexProbeAuditOptions::default();
+	let mut args = args.peekable();
+	while let Some(arg) = args.next() {
+		match arg.as_str() {
+			"--help" | "-h" => {
+				print_unphysics_vertex_probe_audit_usage();
+				return true;
+			}
+			"--wardrobe-set" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-vertex-probe-audit: --wardrobe-set requires a value");
+					return false;
+				};
+				opts.wardrobe_set = Some(value);
+			}
+			other if other.starts_with("--wardrobe-set=") => {
+				opts.wardrobe_set = Some(other.trim_start_matches("--wardrobe-set=").to_string());
+			}
+			"--node-contains" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-vertex-probe-audit: --node-contains requires a value");
+					return false;
+				};
+				opts.node_contains = value;
+			}
+			other if other.starts_with("--node-contains=") => {
+				opts.node_contains = other.trim_start_matches("--node-contains=").to_string();
+			}
+			"--settle-frames" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-vertex-probe-audit: --settle-frames requires a value");
+					return false;
+				};
+				opts.settle_frames = value;
+			}
+			other if other.starts_with("--settle-frames=") => {
+				opts.settle_frames = other.trim_start_matches("--settle-frames=").to_string();
+			}
+			"--tuning" => {
+				let Some(value) = args.next() else {
+					eprintln!("unphysics-vertex-probe-audit: --tuning requires a value");
+					return false;
+				};
+				opts.tuning = value;
+			}
+			other if other.starts_with("--tuning=") => {
+				opts.tuning = other.trim_start_matches("--tuning=").to_string();
+			}
+			"--apply-mesh-cloth-assist" => {
+				opts.apply_mesh_cloth_assist = true;
+			}
+			"--ignore-authored-colliders" => {
+				opts.ignore_authored_colliders = true;
+			}
+			"--require-mesh-cloth-assist-changes" => {
+				opts.require_mesh_cloth_assist_changes = true;
+			}
+			"--require-collision-projections" => {
+				opts.require_collision_projections = true;
+			}
+			"--require-probe-collision-projections" => {
+				opts.require_probe_collision_projections = true;
+			}
+			"--require-collision-projection-sources" => {
+				opts.require_collision_projection_sources = true;
+			}
+			"--require-collision-projection-paths" => {
+				opts.require_collision_projection_paths = true;
+			}
+			"--require-collider-summaries" => {
+				opts.require_collider_summaries = true;
+			}
+			"--require-probe-collider-candidates" => {
+				opts.require_probe_collider_candidates = true;
+			}
+			"--require-projecting-collider-summaries" => {
+				opts.require_projecting_collider_summaries = true;
+			}
+			other if other.starts_with('-') => {
+				eprintln!("unphysics-vertex-probe-audit: unknown option: {other}");
+				return false;
+			}
+			_ => paths.push(PathBuf::from(arg)),
+		}
+	}
+
+	if wardrobe_set_requires_explicit_paths(opts.wardrobe_set.as_deref(), &paths, "unphysics-vertex-probe-audit") {
+		return false;
+	}
+	let (paths, mut ok) = resolve_unphysics_audit_paths(repo, paths, "unphysics-vertex-probe-audit");
+	if !ensure_un_avatar_cli_built(repo, "unphysics-vertex-probe-audit") {
+		return false;
+	}
+	let cli_bin = un_avatar_cli_bin(repo);
+	for path in paths {
+		ok &= run_unphysics_vertex_probe_audit_one(&cli_bin, &path, &opts);
+	}
+	if ok {
+		println!("unphysics-vertex-probe-audit: ok");
+	}
+	ok
+}
+
+fn run_unphysics_vertex_probe_audit_one(cli_bin: &Path, path: &Path, opts: &UnphysicsVertexProbeAuditOptions) -> bool {
+	let mut args = vec![
+		"dynamics-vertex-probe",
+		path_str(path),
+		"--settle-frames",
+		opts.settle_frames.as_str(),
+		"--tuning",
+		opts.tuning.as_str(),
+	];
+	if let Some(wardrobe_set) = opts.wardrobe_set.as_deref() {
+		args.push("--wardrobe-set");
+		args.push(wardrobe_set);
+	}
+	if !opts.node_contains.is_empty() {
+		args.push("--node-contains");
+		args.push(opts.node_contains.as_str());
+	}
+	if opts.apply_mesh_cloth_assist {
+		args.push("--apply-mesh-cloth-assist");
+	}
+	if opts.ignore_authored_colliders {
+		args.push("--ignore-authored-colliders");
+	}
+	args.push("--json");
+	let Some((output, report)) = run_un_avatar_json(cli_bin, path, "unphysics-vertex-probe-audit", &args) else {
+		return false;
+	};
+	let node_path = json_str(&report, "node_path", "unknown");
+	let runtime_colliders = json_u64(&report, "runtime_collider_count");
+	let changed_vertices = json_u64(&report, "mesh_cloth_assist_changed_vertices");
+	let collision_projections = json_u64(&report, "solve_collision_projection_count");
+	let probe_collision_projections = json_u64(&report, "probe_collision_projection_count");
+	let probe_dynamic_source_count = report
+		.get("probe_dynamic_source_weight_sums")
+		.and_then(serde_json::Value::as_object)
+		.map(serde_json::Map::len)
+		.unwrap_or(0);
+	let probe_projection_source_count = report
+		.get("probe_collision_projection_source_counts")
+		.and_then(serde_json::Value::as_object)
+		.map(serde_json::Map::len)
+		.unwrap_or(0);
+	let probe_projection_collider_paths = report
+		.get("probe_collision_projection_collider_path_counts")
+		.and_then(serde_json::Value::as_object)
+		.map(serde_json::Map::len)
+		.unwrap_or(0);
+	let projection_source_count = report
+		.get("solve_collision_projection_source_counts")
+		.and_then(serde_json::Value::as_object)
+		.map(serde_json::Map::len)
+		.unwrap_or(0);
+	let projection_collider_paths = report
+		.get("solve_collision_projection_collider_path_counts")
+		.and_then(serde_json::Value::as_object)
+		.map(serde_json::Map::len)
+		.unwrap_or(0);
+	let collider_summaries = json_array(&report, "collider_path_summaries");
+	let projecting_collider_summaries = collider_summaries_with_projection_count(collider_summaries);
+	let top_projecting_collider = top_projecting_collider_summary_label(collider_summaries);
+	let probe_collider_summaries = json_array(&report, "probe_collider_path_summaries");
+	let probe_penetrating_collider_summaries = collider_summaries_with_penetration_count(probe_collider_summaries);
+	let probe_projecting_collider_summaries = collider_summaries_with_projection_count(probe_collider_summaries);
+	let top_probe_collider = top_projecting_collider_summary_label(probe_collider_summaries);
+	let top_probe_candidate_collider = top_candidate_collider_summary_label(probe_collider_summaries);
+	println!(
+		"unphysics-vertex-probe-audit: {} wardrobeSet={} node={} tuning={} meshClothAssist={} changedVertices={} runtimeColliders={} collisionProjections={} probeCollisionProjections={} probeDynamicSources={} probeProjectionSources={} probeProjectionColliderPaths={} projectionSources={} projectionColliderPaths={} colliderSummaries={} projectingColliderSummaries={} probeColliderSummaries={} probePenetratingColliderSummaries={} probeProjectingColliderSummaries={} topProjectingCollider={} topProbeCollider={} topProbeCandidateCollider={}",
+		path.display(),
+		opts.wardrobe_set.as_deref().unwrap_or("-"),
+		node_path,
+		opts.tuning,
+		opts.apply_mesh_cloth_assist,
+		changed_vertices,
+		runtime_colliders,
+		collision_projections,
+		probe_collision_projections,
+		probe_dynamic_source_count,
+		probe_projection_source_count,
+		probe_projection_collider_paths,
+		projection_source_count,
+		projection_collider_paths,
+		collider_summaries.len(),
+		projecting_collider_summaries,
+		probe_collider_summaries.len(),
+		probe_penetrating_collider_summaries,
+		probe_projecting_collider_summaries,
+		top_projecting_collider,
+		top_probe_collider,
+		top_probe_candidate_collider
+	);
+	if !output.status.success() {
+		print_child_stderr(&output);
+		return false;
+	}
+	if vertex_probe_mesh_cloth_assist_gate_failed(
+		opts.require_mesh_cloth_assist_changes,
+		opts.apply_mesh_cloth_assist,
+		changed_vertices,
+	) {
+		if !opts.apply_mesh_cloth_assist {
+			eprintln!(
+				"unphysics-vertex-probe-audit: mesh cloth assist changes were required for {} node={} but --apply-mesh-cloth-assist was not enabled",
+				path.display(),
+				node_path
+			);
+		} else {
+			eprintln!(
+				"unphysics-vertex-probe-audit: no mesh cloth assist vertex changes were observed for {} node={}",
+				path.display(),
+				node_path
+			);
+		}
+		return false;
+	}
+	if vertex_probe_collision_projection_gate_failed(opts.require_collision_projections, collision_projections) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no collision projections were observed for {} node={}",
+			path.display(),
+			node_path
+		);
+		return false;
+	}
+	if vertex_probe_probe_collision_projection_gate_failed(opts.require_probe_collision_projections, probe_collision_projections) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no probe-source collision projections were observed for {} node={} probeDynamicSources={} globalCollisionProjections={}",
+			path.display(),
+			node_path,
+			probe_dynamic_source_count,
+			collision_projections
+		);
+		return false;
+	}
+	if vertex_probe_collision_projection_source_gate_failed(opts.require_collision_projection_sources, projection_source_count) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no collision projection source ids were observed for {} node={}",
+			path.display(),
+			node_path
+		);
+		return false;
+	}
+	if vertex_probe_collision_projection_path_gate_failed(opts.require_collision_projection_paths, projection_collider_paths) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no collision projection collider paths were observed for {} node={}",
+			path.display(),
+			node_path
+		);
+		return false;
+	}
+	if vertex_probe_collider_summary_gate_failed(opts.require_collider_summaries, collider_summaries.len()) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no collider path summaries were observed for {} node={}",
+			path.display(),
+			node_path
+		);
+		return false;
+	}
+	if vertex_probe_probe_collider_candidate_gate_failed(opts.require_probe_collider_candidates, probe_collider_summaries) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no probe-source collider candidates were observed for {} node={} probeDynamicSources={} globalColliderSummaries={}",
+			path.display(),
+			node_path,
+			probe_dynamic_source_count,
+			collider_summaries.len()
+		);
+		return false;
+	}
+	if vertex_probe_projecting_collider_summary_gate_failed(opts.require_projecting_collider_summaries, projecting_collider_summaries) {
+		eprintln!(
+			"unphysics-vertex-probe-audit: no projecting collider path summaries were observed for {} node={}",
+			path.display(),
+			node_path
+		);
+		return false;
+	}
+	true
+}
+
 fn run_render_smoke(repo: &Path) -> bool {
 	let mut dir = env::temp_dir();
 	dir.push(format!("un-avatar-xtask-render-smoke-{}", process::id()));
@@ -3604,6 +5169,89 @@ fn print_package_render_smoke_usage() {
 	);
 }
 
+fn print_unphysics_exporter_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-exporter-audit [avatar.unavatar ...]\n\
+	\n\
+	current Unity Exporter で出力した .unavatar の UNPhysics / UNDynamics sourceParams を高速検査する。\n\
+	引数なしでは target/tmp/usagi.unavatar、target/tmp/blanca.unavatar、target/tmp/mizuki.unavatar を検査する。\n\
+	内部では un-avatar dynamics-scan --require-current-exporter --json を実行し、必須 term 欠落時は失敗する。"
+	);
+}
+
+fn print_unphysics_importer_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-importer-audit [--wardrobe-set <SET_ID>] [--require-runtime-evidence] [--require-node-constraints] [--require-parent-node-constraints] [--require-mesh-cloth-assist-candidates] [avatar.unavatar ...]\n\
+	\n\
+	current Unity Exporter で出力した .unavatar を Importer/lowering まで通し、UNPhysics / UNDynamics runtime evidence を検査する。\n\
+	引数なしでは target/tmp/usagi.unavatar、target/tmp/blanca.unavatar、target/tmp/mizuki.unavatar を検査する。\n\
+	--wardrobe-set 指定時は wardrobe id が代表モデル間で共有されるとは限らないため、対象 avatar path を明示する。\n\
+	内部では un-avatar dynamics-import-audit --require-runtime-evidence --json を実行し、sourceParams が runtime group / response group へ落ちない場合は失敗する。同じ import report から scene nodeConstraints 件数も表示する。\n\
+	--require-node-constraints / --require-parent-node-constraints は constraint metadata が必要な regression profile で 0 件を失敗にする opt-in gate。\n\
+	--require-mesh-cloth-assist-candidates は cloth assist が必要な wardrobe/profile で candidate 0 件を失敗にする opt-in gate。"
+	);
+}
+
+fn print_unphysics_response_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-response-audit [--wardrobe-set <SET_ID>] [--require-visual-response-evidence] [avatar.unavatar ...]\n\
+	\n\
+	UNPhysics / UNDynamics runtime response が soft/firm profile override で実際に変化するか検査する。\n\
+	引数なしでは target/tmp/usagi.unavatar、target/tmp/blanca.unavatar、target/tmp/mizuki.unavatar を検査する。\n\
+	--wardrobe-set 指定時は wardrobe id が代表モデル間で共有されるとは限らないため、対象 avatar path を明示する。\n\
+	内部では un-avatar dynamics-response-audit --require-override-effect --json を実行し、rest_response / shape_preservation / bounce_response / damping_half_life_ms / motion_coupling が分離しない場合は失敗する。\n\
+	summary は mode ごとの category count と joint_count 最大 category を top として出し、wardrobe scope 後の response 偏りを読む。\n\
+	--require-visual-response-evidence は active response group があるのに weighted visible skin joint / visible mesh subtree evidence が 0 の場合を失敗にする opt-in gate。"
+	);
+}
+
+fn print_unphysics_motion_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-motion-audit\n\
+	\n\
+	UNPhysics / UNDynamics の solver motion trace テストをまとめて実行する。\n\
+	soft/firm tuning、cloth、ears preset、bounce、source-authored shape intent と soft response の分離が実際の step 出力を変えることを検査する。"
+	);
+}
+
+fn print_unphysics_motion_trace_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-motion-trace-audit [--wardrobe-set <SET_ID>] [--include-short-recovery] [--require-no-visible-findings] [--require-known-finding-visibility] [--frames <n>] [--recovery-frames <n>] [--tuning authored|soft|firm|rest-low|rest-high|shape-low|shape-high|bounce-low|bounce-high|follow-low|follow-high|gravity-off|gravity-low|gravity-high|stretch-off|stretch-low|stretch-high|damping-long|damping-short] [avatar.unavatar ...]\n\
+	\n\
+	current Unity Exporter で出力した .unavatar に簡易root rotation motionを流し、カテゴリ別/group別 lag と回復を検査する。\n\
+	--wardrobe-set 指定時は wardrobe id が代表モデル間で共有されるとは限らないため、対象 avatar path を明示する。\n\
+	summary は findingKinds / findingTop / visualFindingTop に加え、visualFindings / nonvisualFindings / unknownVisibilityFindings で可視 target ありの候補と制御・interaction 系候補と未分類候補を分けて表示する。\n\
+	top / top_group は全体の監査候補、top_visual / top_visual_group は可視 target あり group、top_nonvisual / top_nonvisual_group は可視 target なし group の監査順を基準にした候補を表示する。\n\
+	xtask は CLI を --require-motion-evidence 付きで呼び、missing_motion_evidence が空でない場合は visual finding の有無に関係なく失敗する。\n\
+	--require-no-visible-findings は visualFindings > 0 を失敗にし、非可視制御 finding は失敗扱いにしない。\n\
+	--require-known-finding-visibility は unknownVisibilityFindings > 0 を失敗にし、finding の可視性分類漏れを gate する。\n\
+	default は --frames 24 --recovery-frames 240。短期回復を見る場合は --recovery-frames 24 または 96 を明示する。\n\
+	--include-short-recovery は指定 recovery に加えて 24 / 96 frame recovery も同じ入力で検査する。\n\
+	--tuning は既定 authored。soft / firm と単一term tuning は全カテゴリoverrideを監査時だけ適用する。\n\
+	引数なしでは target/tmp/usagi.unavatar、target/tmp/blanca.unavatar、target/tmp/mizuki.unavatar を検査する。"
+	);
+}
+
+fn print_unphysics_vertex_probe_audit_usage() {
+	eprintln!(
+		"cargo xtask unphysics-vertex-probe-audit [--wardrobe-set <SET_ID>] [--node-contains <TEXT>] [--settle-frames <n>] [--tuning authored|soft|firm|rest-low|rest-high|shape-low|shape-high|bounce-low|bounce-high|follow-low|follow-high|gravity-off|gravity-low|gravity-high|stretch-off|stretch-low|stretch-high|damping-long|damping-short] [--apply-mesh-cloth-assist] [--ignore-authored-colliders] [--require-mesh-cloth-assist-changes] [--require-collision-projections] [--require-probe-collision-projections] [--require-collision-projection-sources] [--require-collision-projection-paths] [--require-collider-summaries] [--require-probe-collider-candidates] [--require-projecting-collider-summaries] [avatar.unavatar ...]\n\
+	\n\
+	dynamics-vertex-probe を JSON で実行し、runtime collider count、mesh cloth assist 変更頂点数、collision projection 件数、probe 対象 mesh の dynamic source に限定した projection 件数、probe source 限定 collider summary / penetrating summary / projecting summary 件数、projection source 種類数、projection collider path 数、collider summary 件数、projection 付き collider summary 件数、projection_count 最大 collider path、probe source 限定の最近接 candidate collider path を一行に要約する。\n\
+	--wardrobe-set 指定時は wardrobe id が代表モデル間で共有されるとは限らないため、対象 avatar path を明示する。\n\
+	--require-mesh-cloth-assist-changes は --apply-mesh-cloth-assist が実際に changedVertices>0 を出すことを失敗条件として確認する。cloth assist が必要な wardrobe/profile 向けの opt-in gate。\n\
+	--require-collision-projections は collisionProjections=0 を失敗にする。collider が効いたかを見る opt-in gate であり、通常の幾何変位監査そのものは失敗扱いにしない。\n\
+	--require-probe-collision-projections は probeCollisionProjections=0 を失敗にする。全体 simulation ではなく、選択 mesh の weighted dynamic source が実 projection まで届いたかを見る opt-in gate。\n\
+	--require-collision-projection-sources は projectionSources=0 を失敗にする。どの dynamics source が実 projection まで届いたかを見る opt-in gate。\n\
+	--require-collision-projection-paths は projectionColliderPaths=0 を失敗にする。どの authored/runtime collider path が実 projection まで届いたかを見る opt-in gate。\n\
+	--require-collider-summaries は colliderSummaries=0 を失敗にする。candidate/contact/projection summary が JSON に届いたかを見る opt-in gate。\n\
+	--require-probe-collider-candidates は probe source 限定 collider summary に candidate_count>0 が無い場合を失敗にする。対象 mesh の weighted dynamic source が collider 距離評価まで届いたかを見る opt-in gate。\n\
+	--require-projecting-collider-summaries は projectingColliderSummaries=0 を失敗にする。summary が実 projection count まで持つことを見る opt-in gate。\n\
+	topProjectingCollider は projection_count 最大の collider path を表示し、authored collider がどの path で実押し出しへ届いたかを読む。\n\
+	topProbeCandidateCollider は probe source 限定 candidate の min_margin 最小 collider path を表示し、probeCollisionProjections=0 の時に候補なしと候補あり非貫通を分ける。\n\
+	引数なしでは target/tmp/usagi.unavatar、target/tmp/blanca.unavatar、target/tmp/mizuki.unavatar を検査する。"
+	);
+}
+
 fn print_build_usage() {
 	eprintln!(
 		"cargo xtask build [--release]\n\
@@ -4631,6 +6279,12 @@ commands:\n\
   test         cargo test --workspace\n\
   release-guard v2 release-prep の unit/static regression guard を実行（GUI/package rebuildなし）\n\
   smoke        CLI formats list / sample plugin / convert を確認\n\
+  unphysics-exporter-audit current exporter のUNPhysics sourceParams必須termを検査\n\
+  unphysics-importer-audit current exporter 出力をImporter/lowering後のruntime evidenceまで検査\n\
+  unphysics-response-audit UNPhysics response がsoft/firm overrideで変化することを検査\n\
+  unphysics-motion-audit UNPhysics solver motion trace がtuningで変化することを検査\n\
+  unphysics-motion-trace-audit current exporter 出力でカテゴリ別motion lagを検査\n\
+  unphysics-vertex-probe-audit current exporter 出力でcollider projectionを検査\n\
   render-smoke renderer manifestを生成し、fixture glTFを起動前検証でimportできることを確認（windowは開かない）\n\
   package-render-smoke target/package/un-avatar の renderer で render-smoke と同じ検証を実行（--manifest / --wardrobe-set対応）\n\
   run-renderer  profile名またはmanifest pathからrenderer windowを起動\n\
@@ -4666,6 +6320,12 @@ fn main() {
 		"test" => run_cargo(repo, &["test", "--workspace"]).success(),
 		"release-guard" => run_release_guard(repo),
 		"smoke" => run_smoke(repo),
+		"unphysics-exporter-audit" => run_unphysics_exporter_audit(repo, args),
+		"unphysics-importer-audit" => run_unphysics_importer_audit(repo, args),
+		"unphysics-response-audit" => run_unphysics_response_audit(repo, args),
+		"unphysics-motion-audit" => run_unphysics_motion_audit(repo, args),
+		"unphysics-motion-trace-audit" => run_unphysics_motion_trace_audit(repo, args),
+		"unphysics-vertex-probe-audit" => run_unphysics_vertex_probe_audit(repo, args),
 		"render-smoke" => run_render_smoke(repo),
 		"package-render-smoke" => run_package_render_smoke(repo, args),
 		"run-renderer" => run_renderer(repo, args),
@@ -4706,6 +6366,588 @@ fn main() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn unphysics_audit_paths_resolve_defaults_and_relative_paths() {
+		let repo = env::temp_dir().join(format!("un-avatar-xtask-audit-paths-{}", process::id()));
+		let target_tmp = repo.join("target").join("tmp");
+		fs::create_dir_all(&target_tmp).expect("target tmp");
+		for name in UNPHYSICS_AUDIT_DEFAULT_AVATARS {
+			fs::write(target_tmp.join(name), b"fixture").expect("default avatar fixture");
+		}
+
+		let (default_paths, default_ok) = resolve_unphysics_audit_paths(&repo, Vec::new(), "test-audit");
+		assert!(default_ok);
+		assert_eq!(
+			default_paths,
+			UNPHYSICS_AUDIT_DEFAULT_AVATARS
+				.into_iter()
+				.map(|name| target_tmp.join(name))
+				.collect::<Vec<_>>()
+		);
+
+		let custom = repo.join("custom.unavatar");
+		fs::write(&custom, b"fixture").expect("custom avatar fixture");
+		let (custom_paths, custom_ok) = resolve_unphysics_audit_paths(
+			&repo,
+			vec![PathBuf::from("custom.unavatar"), PathBuf::from("missing.unavatar")],
+			"test-audit",
+		);
+		assert!(!custom_ok);
+		assert_eq!(custom_paths, vec![custom]);
+
+		let _ = fs::remove_dir_all(repo);
+	}
+
+	#[test]
+	fn motion_trace_visible_findings_gate_ignores_nonvisual_findings() {
+		assert!(!motion_trace_visible_findings_gate_failed(false, 1));
+		assert!(!motion_trace_visible_findings_gate_failed(true, 0));
+		assert!(motion_trace_visible_findings_gate_failed(true, 1));
+		assert!(!motion_trace_unknown_visibility_gate_failed(false, 1));
+		assert!(!motion_trace_unknown_visibility_gate_failed(true, 0));
+		assert!(motion_trace_unknown_visibility_gate_failed(true, 1));
+
+		let findings = vec![
+			serde_json::json!({"kind": "nonvisual_control_motion", "visual_target": false}),
+			serde_json::json!({"kind": "high_chain_lag", "source_id": "physbone:cloth", "visual_target": true}),
+			serde_json::json!({"kind": "category_recovery_state"}),
+		];
+		assert_eq!(motion_trace_finding_visibility_counts(&findings), (1, 1, 1));
+		assert_eq!(motion_trace_visual_finding_top_label(&findings), "high_chain_lag:physbone:cloth");
+	}
+
+	#[test]
+	fn motion_trace_top_visual_group_skips_nonvisual_groups() {
+		let groups = vec![
+			serde_json::json!({
+				"source_id": "physbone:control",
+				"visual_target": false,
+				"chain_rest_length": 0.1,
+				"max_lag": 0.9,
+				"max_lag_chain_ratio": 9.0,
+				"initial_stable_offset": 0.2,
+				"stable_offset": 0.3,
+				"stable_offset_ratio": 0.0,
+				"stable_offset_chain_ratio": 0.0,
+				"recovery_state": "settled",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"source_id": "physbone:cloth",
+				"visual_target": true,
+				"chain_rest_length": 0.5,
+				"max_lag": 0.2,
+				"max_lag_chain_ratio": 1.5,
+				"initial_stable_offset": 0.2,
+				"stable_offset": 0.0,
+				"stable_offset_ratio": 0.0,
+				"stable_offset_chain_ratio": 0.0,
+				"recovery_state": "settled",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"source_id": "physbone:ribbon",
+				"visual_target": true,
+				"chain_rest_length": 0.3,
+				"max_lag": 0.4,
+				"max_lag_chain_ratio": 2.5,
+				"initial_stable_offset": 0.4,
+				"stable_offset": 0.1,
+				"stable_offset_ratio": 0.25,
+				"stable_offset_chain_ratio": 0.3,
+				"recovery_state": "settled_offset",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+		];
+
+		let top = motion_trace_top_group_label(&groups);
+		let label = motion_trace_top_visual_group_label(&groups);
+		let nonvisual_label = motion_trace_top_nonvisual_group_label(&groups);
+
+		assert!(top.starts_with("physbone:control:visual=false"));
+		assert!(label.starts_with("physbone:ribbon:visual=true"));
+		assert!(nonvisual_label.starts_with("physbone:control:visual=false"));
+	}
+
+	#[test]
+	fn response_audit_top_category_prefers_largest_joint_count() {
+		let categories = vec![
+			serde_json::json!({
+				"category": "control",
+				"group_count": 3,
+				"visual_target_group_count": 0,
+				"nonvisual_group_count": 3,
+				"joint_count": 18,
+				"visible_skinned_joint_count": 0,
+				"visible_mesh_subtree_node_count": 0,
+				"average_rest_response": 0.1,
+				"average_shape_preservation": 0.2,
+				"average_bounce_response": 0.3,
+				"average_parent_motion_follow": 0.4,
+				"average_orientation_follow": 0.5,
+				"average_max_stretch_response": 0.6,
+				"average_stretch_motion_response": 0.7
+			}),
+			serde_json::json!({
+				"category": "cloth",
+				"group_count": 5,
+				"visual_target_group_count": 4,
+				"nonvisual_group_count": 1,
+				"joint_count": 12,
+				"visible_skinned_joint_count": 10,
+				"visible_mesh_subtree_node_count": 2,
+				"average_rest_response": 0.11,
+				"average_shape_preservation": 0.22,
+				"average_bounce_response": 0.33,
+				"average_parent_motion_follow": 0.44,
+				"average_orientation_follow": 0.55,
+				"average_max_stretch_response": 0.66,
+				"average_stretch_motion_response": 0.77
+			}),
+		];
+
+		let label = response_audit_top_category_label(&categories);
+		let visual_label = response_audit_top_visual_category_label(&categories);
+		let nonvisual_label = response_audit_top_nonvisual_category_label(&categories);
+
+		assert!(label.starts_with("control:groups=3,visualGroups=0,nonvisualGroups=3,joints=18,visibleJoints=0,visibleMeshSubtrees=0"));
+		assert!(
+			visual_label.starts_with("cloth:groups=5,visualGroups=4,nonvisualGroups=1,joints=12,visibleJoints=10,visibleMeshSubtrees=2")
+		);
+		assert!(nonvisual_label
+			.starts_with("control:groups=3,visualGroups=0,nonvisualGroups=3,joints=18,visibleJoints=0,visibleMeshSubtrees=0"));
+		assert!(visual_label.contains("stretchMotion=0.770"));
+	}
+
+	#[test]
+	fn response_audit_top_groups_split_visual_and_nonvisual_targets() {
+		let groups = vec![
+			serde_json::json!({
+				"source_id": "physbone:control",
+				"category": "other",
+				"visual_target": false,
+				"joint_count": 12,
+				"skinned_joint_count": 0,
+				"mesh_subtree_node_count": 0,
+				"average_rest_response": 0.1,
+				"average_shape_preservation": 0.2,
+				"average_bounce_response": 0.3,
+				"average_parent_motion_follow": 0.4,
+				"average_orientation_follow": 0.5,
+				"average_max_stretch_response": 0.6,
+				"average_stretch_motion_response": 0.7
+			}),
+			serde_json::json!({
+				"source_id": "physbone:cloth",
+				"category": "cloth",
+				"visual_target": true,
+				"joint_count": 8,
+				"skinned_joint_count": 6,
+				"mesh_subtree_node_count": 1,
+				"average_rest_response": 0.11,
+				"average_shape_preservation": 0.22,
+				"average_bounce_response": 0.33,
+				"average_parent_motion_follow": 0.44,
+				"average_orientation_follow": 0.55,
+				"average_max_stretch_response": 0.66,
+				"average_stretch_motion_response": 0.77
+			}),
+		];
+
+		let top = response_audit_top_group_label(&groups);
+		let visual = response_audit_top_visual_group_label(&groups);
+		let nonvisual = response_audit_top_nonvisual_group_label(&groups);
+
+		assert!(top.starts_with("physbone:control:category=other,visual=false,joints=12"));
+		assert!(visual.starts_with("physbone:cloth:category=cloth,visual=true,joints=8,visibleJoints=6"));
+		assert!(nonvisual.starts_with("physbone:control:category=other,visual=false,joints=12"));
+	}
+
+	#[test]
+	fn response_audit_visual_response_evidence_counts_weighted_visibility_fields() {
+		let modes = vec![
+			serde_json::json!({
+				"categories": [
+					{
+						"category": "control",
+						"visual_target_group_count": 0,
+						"visible_skinned_joint_count": 0,
+						"visible_mesh_subtree_node_count": 0
+					}
+				]
+			}),
+			serde_json::json!({
+				"categories": [
+					{
+						"category": "cloth",
+						"visual_target_group_count": 0,
+						"visible_skinned_joint_count": 2,
+						"visible_mesh_subtree_node_count": 0
+					},
+					{
+						"category": "accessory",
+						"visual_target_group_count": 0,
+						"visible_skinned_joint_count": 0,
+						"visible_mesh_subtree_node_count": 3
+					}
+				]
+			}),
+		];
+
+		assert_eq!(response_audit_visual_response_evidence_count(&modes), 5);
+		assert!(!response_audit_visual_response_evidence_gate_failed(false, 7, 0));
+		assert!(!response_audit_visual_response_evidence_gate_failed(true, 0, 0));
+		assert!(!response_audit_visual_response_evidence_gate_failed(true, 7, 5));
+		assert!(response_audit_visual_response_evidence_gate_failed(true, 7, 0));
+	}
+
+	#[test]
+	fn importer_constraint_gates_are_opt_in() {
+		assert!(!importer_constraint_gate_failed(false, 0));
+		assert!(!importer_constraint_gate_failed(false, 4));
+		assert!(!importer_constraint_gate_failed(true, 4));
+		assert!(importer_constraint_gate_failed(true, 0));
+		assert!(!importer_mesh_cloth_assist_candidate_gate_failed(false, 0));
+		assert!(!importer_mesh_cloth_assist_candidate_gate_failed(false, 12));
+		assert!(!importer_mesh_cloth_assist_candidate_gate_failed(true, 12));
+		assert!(importer_mesh_cloth_assist_candidate_gate_failed(true, 0));
+	}
+
+	#[test]
+	fn wardrobe_scoped_unphysics_audits_require_explicit_paths() {
+		assert!(!wardrobe_set_requires_explicit_paths(None, &[], "test-audit"));
+		assert!(!wardrobe_set_requires_explicit_paths(
+			Some("StarMemoryBG"),
+			&[PathBuf::from("target/tmp/usagi.unavatar")],
+			"test-audit"
+		));
+		assert!(wardrobe_set_requires_explicit_paths(Some("StarMemoryBG"), &[], "test-audit"));
+	}
+
+	#[test]
+	fn importer_audit_summarizes_top_mesh_cloth_assist_sample() {
+		let samples = vec![
+			serde_json::json!({
+				"node_path": "Avatar/ClothA",
+				"region": "all",
+				"vertex_count": 10,
+				"candidate_count": 3,
+				"existing_dynamic_candidate_count": 2,
+				"static_cloth_bridge_candidate_count": 1,
+				"seed_candidate_count": 1,
+				"suggested_assist_weight_sum": 0.25,
+				"seeded_assist_weight_sum": 0.05
+			}),
+			serde_json::json!({
+				"node_path": "Avatar/ClothB",
+				"region": "front",
+				"vertex_count": 8,
+				"candidate_count": 5,
+				"existing_dynamic_candidate_count": 2,
+				"static_cloth_bridge_candidate_count": 4,
+				"seed_candidate_count": 2,
+				"suggested_assist_weight_sum": 0.5,
+				"seeded_assist_weight_sum": 0.2
+			}),
+		];
+
+		assert_eq!(sum_json_u64(&samples, "candidate_count"), 8);
+		assert_eq!(sum_json_u64(&samples, "seed_candidate_count"), 3);
+		let label = top_mesh_cloth_assist_sample_label(&samples);
+		assert!(label.starts_with("Avatar/ClothB:region=front,vertices=8,candidates=5"));
+		assert!(label.contains("bridge=4,seed=2"));
+		assert!(label.contains("assist=0.500,seedAssist=0.200"));
+	}
+
+	#[test]
+	fn importer_audit_top_mesh_cloth_assist_sample_uses_stable_tie_breakers() {
+		let samples = vec![
+			serde_json::json!({
+				"node_path": "Avatar/ClothB",
+				"region": "front",
+				"candidate_count": 5,
+				"seed_candidate_count": 2
+			}),
+			serde_json::json!({
+				"node_path": "Avatar/ClothA",
+				"region": "front",
+				"candidate_count": 5,
+				"seed_candidate_count": 2
+			}),
+		];
+
+		let label = top_mesh_cloth_assist_sample_label(&samples);
+		assert!(label.starts_with("Avatar/ClothA:region=front"));
+	}
+
+	#[test]
+	fn motion_trace_short_recovery_expands_without_duplicates() {
+		assert_eq!(motion_trace_recovery_frames_to_run("240", false), vec!["240".to_string()]);
+		assert_eq!(
+			motion_trace_recovery_frames_to_run("240", true),
+			vec!["240".to_string(), "24".to_string(), "96".to_string()]
+		);
+		assert_eq!(
+			motion_trace_recovery_frames_to_run("24", true),
+			vec!["24".to_string(), "96".to_string()]
+		);
+		assert_eq!(
+			motion_trace_recovery_frames_to_run("96", true),
+			vec!["96".to_string(), "24".to_string()]
+		);
+	}
+
+	#[test]
+	fn motion_trace_top_categories_use_explicit_ordering() {
+		let categories = vec![
+			serde_json::json!({
+				"category": "control",
+				"visual_target_group_count": 0,
+				"nonvisual_group_count": 2,
+				"average_chain_rest_length": 0.1,
+				"max_lag": 0.9,
+				"max_lag_chain_ratio": 9.0,
+				"average_lag": 0.2,
+				"recovery_final_lag": 0.0,
+				"initial_stable_offset": 0.1,
+				"stable_offset": 0.0,
+				"stable_offset_ratio": 0.0,
+				"stable_offset_chain_ratio": 0.0,
+				"recovery_state": "settled",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"category": "cloth",
+				"visual_target_group_count": 4,
+				"nonvisual_group_count": 0,
+				"average_chain_rest_length": 0.3,
+				"max_lag": 0.4,
+				"max_lag_chain_ratio": 1.3,
+				"average_lag": 0.1,
+				"recovery_final_lag": 0.02,
+				"initial_stable_offset": 0.12,
+				"stable_offset": 0.05,
+				"stable_offset_ratio": 0.08,
+				"stable_offset_chain_ratio": 0.03,
+				"recovery_state": "settled_offset",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"category": "hair",
+				"visual_target_group_count": 2,
+				"nonvisual_group_count": 0,
+				"average_chain_rest_length": 0.2,
+				"max_lag": 0.6,
+				"max_lag_chain_ratio": 3.0,
+				"average_lag": 0.2,
+				"recovery_final_lag": 0.04,
+				"initial_stable_offset": 0.18,
+				"stable_offset": 0.02,
+				"stable_offset_ratio": 0.11,
+				"stable_offset_chain_ratio": 0.1,
+				"recovery_state": "moving",
+				"residual_motion": 0.01,
+				"residual_motion_chain_ratio": 0.05
+			}),
+		];
+		let groups = vec![
+			serde_json::json!({
+				"source_id": "physbone:control",
+				"category": "control",
+				"visual_target": false,
+				"chain_rest_length": 0.1,
+				"max_lag": 0.9,
+				"max_lag_chain_ratio": 9.0,
+				"initial_stable_offset": 0.2,
+				"stable_offset": 0.3,
+				"stable_offset_ratio": 0.0,
+				"stable_offset_chain_ratio": 0.0,
+				"recovery_state": "settled",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"source_id": "physbone:cloth",
+				"category": "cloth",
+				"visual_target": true,
+				"chain_rest_length": 0.3,
+				"max_lag": 0.4,
+				"max_lag_chain_ratio": 1.3,
+				"initial_stable_offset": 0.12,
+				"stable_offset": 0.01,
+				"stable_offset_ratio": 0.08,
+				"stable_offset_chain_ratio": 0.03,
+				"recovery_state": "settled_offset",
+				"residual_motion": 0.0,
+				"residual_motion_chain_ratio": 0.0
+			}),
+			serde_json::json!({
+				"source_id": "physbone:hair",
+				"category": "hair",
+				"visual_target": true,
+				"chain_rest_length": 0.2,
+				"max_lag": 0.6,
+				"max_lag_chain_ratio": 3.0,
+				"initial_stable_offset": 0.18,
+				"stable_offset": 0.02,
+				"stable_offset_ratio": 0.11,
+				"stable_offset_chain_ratio": 0.1,
+				"recovery_state": "moving",
+				"residual_motion": 0.01,
+				"residual_motion_chain_ratio": 0.05
+			}),
+		];
+
+		let top = categories
+			.iter()
+			.max_by(|left, right| motion_trace_category_order(left, right))
+			.map(motion_trace_category_summary_label)
+			.unwrap();
+		let label = motion_trace_top_visual_category_label(&categories, &groups);
+		let nonvisual_label = motion_trace_top_nonvisual_category_label(&categories, &groups);
+
+		assert!(top.starts_with("cloth:visualGroups=4,nonvisualGroups=0"));
+		assert!(label.starts_with("hair:visualGroups=2,nonvisualGroups=0"));
+		assert!(nonvisual_label.starts_with("control:visualGroups=0,nonvisualGroups=2"));
+		assert!(label.contains("state=moving"));
+	}
+
+	#[test]
+	fn vertex_probe_collision_projection_gate_is_opt_in() {
+		assert!(!vertex_probe_collision_projection_gate_failed(false, 0));
+		assert!(!vertex_probe_collision_projection_gate_failed(false, 12));
+		assert!(!vertex_probe_collision_projection_gate_failed(true, 12));
+		assert!(vertex_probe_collision_projection_gate_failed(true, 0));
+		assert!(!vertex_probe_probe_collision_projection_gate_failed(false, 0));
+		assert!(!vertex_probe_probe_collision_projection_gate_failed(false, 12));
+		assert!(!vertex_probe_probe_collision_projection_gate_failed(true, 12));
+		assert!(vertex_probe_probe_collision_projection_gate_failed(true, 0));
+		assert!(!vertex_probe_collision_projection_source_gate_failed(false, 0));
+		assert!(!vertex_probe_collision_projection_source_gate_failed(true, 1));
+		assert!(vertex_probe_collision_projection_source_gate_failed(true, 0));
+		assert!(!vertex_probe_collision_projection_path_gate_failed(false, 0));
+		assert!(!vertex_probe_collision_projection_path_gate_failed(true, 3));
+		assert!(vertex_probe_collision_projection_path_gate_failed(true, 0));
+		assert!(!vertex_probe_collider_summary_gate_failed(false, 0));
+		assert!(!vertex_probe_collider_summary_gate_failed(true, 2));
+		assert!(vertex_probe_collider_summary_gate_failed(true, 0));
+		assert!(!vertex_probe_probe_collider_candidate_gate_failed(false, &[]));
+		assert!(!vertex_probe_probe_collider_candidate_gate_failed(
+			true,
+			&[serde_json::json!({"candidate_count": 1})]
+		));
+		assert!(vertex_probe_probe_collider_candidate_gate_failed(
+			true,
+			&[serde_json::json!({"candidate_count": 0})]
+		));
+		assert!(!vertex_probe_projecting_collider_summary_gate_failed(false, 0));
+		assert!(!vertex_probe_projecting_collider_summary_gate_failed(true, 1));
+		assert!(vertex_probe_projecting_collider_summary_gate_failed(true, 0));
+	}
+
+	#[test]
+	fn vertex_probe_counts_only_projecting_collider_summaries() {
+		let summaries = vec![
+			serde_json::json!({
+				"collider_path": "A",
+				"collider_shape": "sphere",
+				"inside_bounds": false,
+				"candidate_count": 4,
+				"penetrating_count": 2,
+				"projection_count": 2,
+				"source_count": 1,
+				"min_margin": -0.01
+			}),
+			serde_json::json!({
+				"collider_path": "B",
+				"collider_shape": "capsule",
+				"inside_bounds": true,
+				"candidate_count": 8,
+				"penetrating_count": 4,
+				"projection_count": 5,
+				"source_count": 2,
+				"min_margin": -0.02
+			}),
+			serde_json::json!({"collider_path": "C"}),
+		];
+
+		assert_eq!(collider_summaries_with_projection_count(&summaries), 2);
+		assert_eq!(collider_summaries_with_penetration_count(&summaries), 2);
+		let top = top_projecting_collider_summary_label(&summaries);
+		assert!(top.starts_with("B:shape=capsule,inside=true"));
+		assert!(top.contains("projections=5"));
+	}
+
+	#[test]
+	fn vertex_probe_top_projecting_collider_uses_stable_tie_breaker() {
+		let summaries = vec![
+			serde_json::json!({
+				"collider_path": "B",
+				"collider_shape": "sphere",
+				"projection_count": 5
+			}),
+			serde_json::json!({
+				"collider_path": "A",
+				"collider_shape": "capsule",
+				"projection_count": 5
+			}),
+		];
+
+		let top = top_projecting_collider_summary_label(&summaries);
+		assert!(top.starts_with("A:shape=capsule"));
+	}
+
+	#[test]
+	fn vertex_probe_top_candidate_collider_reports_non_projecting_probe_candidates() {
+		let summaries = vec![
+			serde_json::json!({
+				"collider_path": "Chest",
+				"collider_shape": "capsule",
+				"inside_bounds": false,
+				"candidate_count": 57,
+				"penetrating_count": 0,
+				"projection_count": 0,
+				"source_count": 19,
+				"min_margin": 0.006
+			}),
+			serde_json::json!({
+				"collider_path": "Spine",
+				"collider_shape": "capsule",
+				"inside_bounds": false,
+				"candidate_count": 57,
+				"penetrating_count": 0,
+				"projection_count": 0,
+				"source_count": 19,
+				"min_margin": 0.008
+			}),
+			serde_json::json!({
+				"collider_path": "Other",
+				"candidate_count": 0,
+				"min_margin": -1.0
+			}),
+		];
+
+		assert_eq!(top_projecting_collider_summary_label(&summaries), "none");
+		let top = top_candidate_collider_summary_label(&summaries);
+		assert!(top.starts_with("Chest:shape=capsule,inside=false"));
+		assert!(top.contains("candidates=57"));
+		assert!(top.contains("projections=0"));
+	}
+
+	#[test]
+	fn vertex_probe_mesh_cloth_assist_gate_requires_actual_changes() {
+		assert!(!vertex_probe_mesh_cloth_assist_gate_failed(false, false, 0));
+		assert!(!vertex_probe_mesh_cloth_assist_gate_failed(false, true, 0));
+		assert!(!vertex_probe_mesh_cloth_assist_gate_failed(true, true, 19));
+		assert!(vertex_probe_mesh_cloth_assist_gate_failed(true, false, 19));
+		assert!(vertex_probe_mesh_cloth_assist_gate_failed(true, true, 0));
+	}
 
 	#[test]
 	fn renderer_log_summary_parses_benchmark_and_texture_lines() {

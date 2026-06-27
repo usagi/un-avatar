@@ -570,6 +570,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarBlendshapeSync"
 		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
 		| "ModularAvatarScaleAdjuster"
@@ -579,7 +580,6 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		"ModularAvatarConvertConstraints"
 		| "ModularAvatarFloorAdjuster"
 		| "ModularAvatarMMDLayerControl"
-		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMergeBlendTree"
 		| "ModularAvatarPlatformFilter"
 		| "ModularAvatarRenameVRChatCollisionTags"
@@ -921,8 +921,25 @@ fn scene_material_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 	Some(stable_json_hash(&Value::Array(materials)))
 }
 
+pub fn unavatar_modular_avatar_value(source: &Value) -> Option<&Value> {
+	source
+		.get("modularAvatar")
+		.or_else(|| source.get("source").and_then(|source| source.get("modularAvatar")))
+}
+
+pub fn unavatar_modular_avatar_components_value(source: &Value) -> Option<&Value> {
+	unavatar_modular_avatar_value(source)?.get("components")
+}
+
+pub fn unavatar_modular_avatar_components_slice(source: &Value) -> &[Value] {
+	unavatar_modular_avatar_components_value(source)
+		.and_then(Value::as_array)
+		.map(Vec::as_slice)
+		.unwrap_or(&[])
+}
+
 fn unavatar_modular_avatar_components_hash(unavatar: &UnaUnavatarExtension) -> Option<u64> {
-	let components = unavatar.source.get("modularAvatar")?.get("components")?;
+	let components = unavatar_modular_avatar_components_value(&unavatar.source)?;
 	Some(stable_json_hash(components))
 }
 
@@ -1214,7 +1231,7 @@ pub struct UnaRuntimeMaterialSlotTarget {
 ///
 /// The historical Rust type name is retained for serde/API compatibility while
 /// new code should use [`UnaDynamicsSourceGroup`].
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct UnaSpringBoneGroup {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1225,17 +1242,47 @@ pub struct UnaSpringBoneGroup {
 	pub source_id: String,
 	#[serde(default)]
 	pub comment: String,
-	/// UN Avatar 側で推定・編集する SpringBone 物理カテゴリ。
+	/// UN Avatar 側で推定・編集する UNDynamics カテゴリ。
 	///
 	/// 永続 schema では固定 enum にしない。GUI の表示名変更やユーザー定義カテゴリ追加で
 	/// 既存ファイルを壊さないため、文字列 ID を正本にする。
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub category: String,
-	/// VRM 0 の `stiffiness` / 1 の関節剛性に相当（大きいほど理想姿勢に引く）。
+	/// UNDynamics normalized local shape-preservation intent.
+	///
+	/// VRC PhysBone inputs lower authored Stiffness here. VRM SpringBone inputs
+	/// usually lower authored stiffness into `pull` instead and leave this at 0,
+	/// because VRM stiffness is a rest-pose pull term rather than a separate
+	/// shape-preservation response.
 	#[serde(default = "one_f32")]
 	pub stiffness: f32,
+	/// UNDynamics normalized pull toward the authored/rest pose.
+	///
+	/// VRM SpringBone inputs historically only provided `stiffness`; importers should mirror
+	/// that value into `pull` when they want the v2 solver to treat it as a source-neutral
+	/// rest-pose pull term. VRC PhysBone inputs lower the authored Pull field here.
+	#[serde(default)]
+	pub pull: f32,
+	/// UNDynamics normalized spring acceleration term. VRC PhysBone inputs lower the authored
+	/// Spring field here; legacy VRM inputs leave it at zero.
+	#[serde(default)]
+	pub spring: f32,
+	/// UNDynamics integration semantics selected after source lowering.
+	#[serde(default, skip_serializing_if = "UnaDynamicsIntegrationType::is_default")]
+	pub integration_type: UnaDynamicsIntegrationType,
 	#[serde(default)]
 	pub gravity_power: f32,
+	/// UNDynamics normalized gravity falloff. `0` means full authored gravity, `1` means gravity
+	/// fades out when the chain points along the authored gravity direction.
+	#[serde(default)]
+	pub gravity_falloff: f32,
+	/// UNDynamics normalized immobile factor. `0` follows parent motion normally, `1` damps out
+	/// inertia from parent/world motion as much as the current solver backend can represent.
+	#[serde(default)]
+	pub immobile: f32,
+	/// How `immobile` interprets parent/root motion.
+	#[serde(default, skip_serializing_if = "UnaDynamicsImmobileType::is_default")]
+	pub immobile_type: UnaDynamicsImmobileType,
 	#[serde(default = "default_spring_gravity_dir")]
 	pub gravity_dir: [f32; 3],
 	#[serde(default = "default_spring_drag")]
@@ -1247,22 +1294,170 @@ pub struct UnaSpringBoneGroup {
 	pub hit_radius: f32,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub hit_radius_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub stiffness_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub pull_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub spring_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub gravity_power_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub gravity_falloff_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub immobile_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_angle_x_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_angle_z_samples: Vec<f32>,
 	#[serde(default, skip_serializing_if = "UnaDynamicsWritebackMode::is_default")]
 	pub writeback_mode: UnaDynamicsWritebackMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub limit: Option<UnaDynamicsLimit>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub interaction: Option<UnaDynamicsInteraction>,
+	/// First chain node index used by interaction/animator parameter measurement.
+	///
+	/// Solver/writeback may need an extra parent anchor before the authored
+	/// dynamics root. That anchor must stay in `bone_node_indices`, but sensor
+	/// parameters such as `*_Angle` should measure the authored chain.
+	#[serde(default, skip_serializing_if = "usize_is_zero")]
+	pub interaction_chain_start_index: usize,
 	/// glTF ノードインデックスのチェーン（親→子）。
 	pub bone_node_indices: Vec<usize>,
 }
 
 pub type UnaDynamicsSourceGroup = UnaSpringBoneGroup;
 
+impl<'de> Deserialize<'de> for UnaSpringBoneGroup {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		#[derive(Deserialize)]
+		struct SerdeGroup {
+			#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+			source_kind: UnaDynamicsSourceKind,
+			#[serde(default = "default_true")]
+			enabled: bool,
+			#[serde(default, skip_serializing_if = "String::is_empty")]
+			source_id: String,
+			#[serde(default)]
+			comment: String,
+			#[serde(default, skip_serializing_if = "String::is_empty")]
+			category: String,
+			#[serde(default = "one_f32")]
+			stiffness: f32,
+			#[serde(default)]
+			pull: Option<f32>,
+			#[serde(default)]
+			spring: f32,
+			#[serde(default, skip_serializing_if = "UnaDynamicsIntegrationType::is_default")]
+			integration_type: UnaDynamicsIntegrationType,
+			#[serde(default)]
+			gravity_power: f32,
+			#[serde(default)]
+			gravity_falloff: f32,
+			#[serde(default)]
+			immobile: f32,
+			#[serde(default, skip_serializing_if = "UnaDynamicsImmobileType::is_default")]
+			immobile_type: UnaDynamicsImmobileType,
+			#[serde(default = "default_spring_gravity_dir")]
+			gravity_dir: [f32; 3],
+			#[serde(default = "default_spring_drag")]
+			drag_force: f32,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			center_node: Option<usize>,
+			#[serde(default)]
+			hit_radius: f32,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			hit_radius_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			stiffness_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			pull_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			spring_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			gravity_power_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			gravity_falloff_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			immobile_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			max_angle_x_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			max_angle_z_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "UnaDynamicsWritebackMode::is_default")]
+			writeback_mode: UnaDynamicsWritebackMode,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			limit: Option<UnaDynamicsLimit>,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			interaction: Option<UnaDynamicsInteraction>,
+			#[serde(default, skip_serializing_if = "usize_is_zero")]
+			interaction_chain_start_index: usize,
+			bone_node_indices: Vec<usize>,
+		}
+
+		let mut group = SerdeGroup::deserialize(deserializer)?;
+		let pull_was_missing = group.pull.is_none();
+		let mut pull = group.pull.unwrap_or_default();
+		let mut stiffness = group.stiffness;
+		if pull_was_missing && group.source_kind == UnaDynamicsSourceKind::VrmSpringBone {
+			pull = stiffness;
+			stiffness = 0.0;
+			if group.pull_samples.is_empty() && !group.stiffness_samples.is_empty() {
+				group.pull_samples = group.stiffness_samples.clone();
+				group.stiffness_samples.clear();
+			}
+		}
+
+		Ok(Self {
+			source_kind: group.source_kind,
+			enabled: group.enabled,
+			source_id: group.source_id,
+			comment: group.comment,
+			category: group.category,
+			stiffness,
+			pull,
+			spring: group.spring,
+			integration_type: group.integration_type,
+			gravity_power: group.gravity_power,
+			gravity_falloff: group.gravity_falloff,
+			immobile: group.immobile,
+			immobile_type: group.immobile_type,
+			gravity_dir: group.gravity_dir,
+			drag_force: group.drag_force,
+			center_node: group.center_node,
+			hit_radius: group.hit_radius,
+			hit_radius_samples: group.hit_radius_samples,
+			stiffness_samples: group.stiffness_samples,
+			pull_samples: group.pull_samples,
+			spring_samples: group.spring_samples,
+			gravity_power_samples: group.gravity_power_samples,
+			gravity_falloff_samples: group.gravity_falloff_samples,
+			immobile_samples: group.immobile_samples,
+			max_angle_x_samples: group.max_angle_x_samples,
+			max_angle_z_samples: group.max_angle_z_samples,
+			writeback_mode: group.writeback_mode,
+			limit: group.limit,
+			interaction: group.interaction,
+			interaction_chain_start_index: group.interaction_chain_start_index.min(group.bone_node_indices.len()),
+			bone_node_indices: group.bone_node_indices,
+		})
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsParameters {
 	pub stiffness: f32,
+	pub pull: f32,
+	pub spring: f32,
+	pub integration_type: UnaDynamicsIntegrationType,
 	pub gravity_power: f32,
+	pub gravity_falloff: f32,
+	pub immobile: f32,
+	pub immobile_type: UnaDynamicsImmobileType,
 	pub gravity_dir: [f32; 3],
 	pub drag_force: f32,
 	pub center_node: Option<usize>,
@@ -1272,7 +1467,16 @@ pub struct UnaDynamicsParameters {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsChain<'a> {
 	pub bone_node_indices: &'a [usize],
+	pub interaction_start_index: usize,
 	pub hit_radius_samples: &'a [f32],
+	pub stiffness_samples: &'a [f32],
+	pub pull_samples: &'a [f32],
+	pub spring_samples: &'a [f32],
+	pub gravity_power_samples: &'a [f32],
+	pub gravity_falloff_samples: &'a [f32],
+	pub immobile_samples: &'a [f32],
+	pub max_angle_x_samples: &'a [f32],
+	pub max_angle_z_samples: &'a [f32],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1281,6 +1485,35 @@ pub enum UnaDynamicsWritebackMode {
 	#[default]
 	RotationOnly,
 	RotationTranslation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsImmobileType {
+	#[default]
+	AllMotion,
+	World,
+}
+
+impl UnaDynamicsImmobileType {
+	pub fn is_default(&self) -> bool {
+		matches!(self, Self::AllMotion)
+	}
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsIntegrationType {
+	#[default]
+	Standard,
+	VrcSimplified,
+	VrcAdvanced,
+}
+
+impl UnaDynamicsIntegrationType {
+	pub fn is_default(&self) -> bool {
+		matches!(self, Self::Standard)
+	}
 }
 
 impl UnaDynamicsWritebackMode {
@@ -1323,6 +1556,10 @@ pub fn una_dynamics_translation_writeback_target_count(
 			let anchor = bone_node_indices[joint_index + 1];
 			let target = bone_node_indices[joint_index + 2];
 			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+		} else if bone_node_indices.len() == 2 {
+			let anchor = bone_node_indices[joint_index];
+			let target = bone_node_indices[joint_index + 1];
+			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
 		}
 	}
 	count
@@ -1344,7 +1581,7 @@ pub struct UnaDynamicsGroup<'a> {
 }
 
 impl<'a> UnaDynamicsGroup<'a> {
-	fn from_spring_bone_group(group: &'a UnaSpringBoneGroup, effective_enabled: bool) -> Self {
+	fn from_source_group(group: &'a UnaDynamicsSourceGroup, effective_enabled: bool) -> Self {
 		Self {
 			source_kind: group.source_kind,
 			authored_enabled: group.enabled,
@@ -1354,7 +1591,13 @@ impl<'a> UnaDynamicsGroup<'a> {
 			category: &group.category,
 			parameters: UnaDynamicsParameters {
 				stiffness: group.stiffness,
+				pull: group.pull,
+				spring: group.spring,
+				integration_type: group.integration_type,
 				gravity_power: group.gravity_power,
+				gravity_falloff: group.gravity_falloff,
+				immobile: group.immobile,
+				immobile_type: group.immobile_type,
 				gravity_dir: group.gravity_dir,
 				drag_force: group.drag_force,
 				center_node: group.center_node,
@@ -1362,7 +1605,16 @@ impl<'a> UnaDynamicsGroup<'a> {
 			},
 			chain: UnaDynamicsChain {
 				bone_node_indices: &group.bone_node_indices,
+				interaction_start_index: group.interaction_chain_start_index.min(group.bone_node_indices.len()),
 				hit_radius_samples: &group.hit_radius_samples,
+				stiffness_samples: &group.stiffness_samples,
+				pull_samples: &group.pull_samples,
+				spring_samples: &group.spring_samples,
+				gravity_power_samples: &group.gravity_power_samples,
+				gravity_falloff_samples: &group.gravity_falloff_samples,
+				immobile_samples: &group.immobile_samples,
+				max_angle_x_samples: &group.max_angle_x_samples,
+				max_angle_z_samples: &group.max_angle_z_samples,
 			},
 			writeback_mode: group.writeback_mode,
 			limit: group.limit.as_ref(),
@@ -1376,11 +1628,23 @@ pub struct UnaDynamicsLimit {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub limit_type: String,
 	#[serde(default)]
+	pub limit_rotation: [f32; 3],
+	#[serde(default)]
 	pub max_angle_x: f32,
 	#[serde(default)]
 	pub max_angle_z: f32,
 	#[serde(default)]
 	pub max_stretch: f32,
+	#[serde(default)]
+	pub max_squish: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub stretch_motion: Option<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_stretch_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_squish_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub stretch_motion_samples: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1407,6 +1671,7 @@ pub enum UnaDynamicsContactKind {
 pub enum UnaDynamicsColliderShape {
 	Sphere,
 	Capsule,
+	Plane,
 	#[default]
 	Unknown,
 }
@@ -1417,6 +1682,8 @@ pub struct UnaDynamicsCollider {
 	pub source_kind: UnaDynamicsSourceKind,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub collider_path: String,
 	pub node: usize,
 	#[serde(default)]
 	pub shape: UnaDynamicsColliderShape,
@@ -1618,13 +1885,13 @@ impl<'a> UnaRuntimeDynamics<'a> {
 
 	pub fn dynamics_group(self, index: usize) -> Option<UnaDynamicsGroup<'a>> {
 		self.group(index)
-			.map(|group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
+			.map(|group| UnaDynamicsGroup::from_source_group(group, self.group_enabled(group)))
 	}
 
 	pub fn dynamics_groups(self) -> impl Iterator<Item = UnaDynamicsGroup<'a>> + 'a {
 		self.groups()
 			.iter()
-			.map(move |group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
+			.map(move |group| UnaDynamicsGroup::from_source_group(group, self.group_enabled(group)))
 	}
 
 	pub fn has_groups(self) -> bool {
@@ -1653,6 +1920,26 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		self.runtime_state
 			.and_then(|state| state.dynamics_enabled_overrides.get(&group.source_id))
 			.copied()
+	}
+
+	pub fn source_id_resident_in_scene(self, scene: &UnaSceneSnapshot, source_id: &str) -> bool {
+		let Some(runtime_state) = self.runtime_state else {
+			return true;
+		};
+		if runtime_state.active_asset_groups.is_empty() || scene.asset_group_ownership.is_empty() || source_id.is_empty() {
+			return true;
+		}
+		let mut owned_by_asset_group = false;
+		for group in &scene.asset_group_ownership {
+			if !group.dynamics_source_ids.iter().any(|owned| owned == source_id) {
+				continue;
+			}
+			owned_by_asset_group = true;
+			if runtime_state.active_asset_groups.iter().any(|active| active == &group.group_id) {
+				return true;
+			}
+		}
+		!owned_by_asset_group
 	}
 
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
@@ -1757,7 +2044,7 @@ impl<'a> UnaRuntimeDynamics<'a> {
 				if !limit.limit_type.is_empty() || limit.max_angle_x.abs() > 0.0 || limit.max_angle_z.abs() > 0.0 {
 					counts.angle_limit_groups += 1;
 				}
-				if limit.max_stretch.abs() > 0.0 {
+				if dynamics_limit_has_stretch_range(limit) {
 					counts.stretch_limit_groups += 1;
 				}
 			}
@@ -1802,6 +2089,17 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		}
 		counts
 	}
+}
+
+fn dynamics_limit_has_positive_sample(samples: &[f32]) -> bool {
+	samples.iter().any(|value| value.is_finite() && *value > 0.0)
+}
+
+fn dynamics_limit_has_stretch_range(limit: &UnaDynamicsLimit) -> bool {
+	(limit.max_stretch.is_finite() && limit.max_stretch > 0.0)
+		|| (limit.max_squish.is_finite() && limit.max_squish > 0.0)
+		|| dynamics_limit_has_positive_sample(&limit.max_stretch_samples)
+		|| dynamics_limit_has_positive_sample(&limit.max_squish_samples)
 }
 
 fn contact_owner_key(source_id: &str, fallback_index: usize) -> String {
@@ -1856,6 +2154,10 @@ fn contact_probe_shape(contact: &UnaDynamicsContact, world: &[[f32; 16]]) -> Opt
 				radius,
 			})
 		}
+		UnaDynamicsColliderShape::Plane => Some(ContactProbeShape::BoundingSphere {
+			center,
+			radius: contact_probe_local_radius(contact) * scale,
+		}),
 		UnaDynamicsColliderShape::Unknown => Some(ContactProbeShape::BoundingSphere {
 			center,
 			radius: contact_probe_local_radius(contact) * scale,
@@ -1867,6 +2169,7 @@ fn contact_probe_local_radius(contact: &UnaDynamicsContact) -> f32 {
 	let radius = contact.radius.max(0.0);
 	match contact.shape {
 		UnaDynamicsColliderShape::Capsule => radius + contact.height.max(0.0) * 0.5,
+		UnaDynamicsColliderShape::Plane => radius.max(contact.height.max(0.0) * 0.5),
 		UnaDynamicsColliderShape::Sphere | UnaDynamicsColliderShape::Unknown => radius,
 	}
 }
@@ -2247,6 +2550,18 @@ impl UnaRuntimeState {
 }
 
 impl UnaDocument {
+	pub fn dynamics(&self) -> Option<&UnaDynamicsSettings> {
+		self.spring_bones.as_ref()
+	}
+
+	pub fn dynamics_mut(&mut self) -> Option<&mut UnaDynamicsSettings> {
+		self.spring_bones.as_mut()
+	}
+
+	pub fn set_dynamics(&mut self, dynamics: Option<UnaDynamicsSettings>) {
+		self.spring_bones = dynamics;
+	}
+
 	pub fn runtime_model(&self) -> UnaRuntimeModel<'_> {
 		UnaRuntimeModel { document: self }
 	}
@@ -2715,14 +3030,8 @@ impl<'a> UnaRuntimeModel<'a> {
 				}
 			}
 		}
-		if let Some(components) = self
-			.document
-			.unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
-			.and_then(|modular_avatar| modular_avatar.get("components"))
-			.and_then(Value::as_array)
-		{
+		if let Some(unavatar) = self.document.unavatar.as_ref() {
+			let components = unavatar_modular_avatar_components_slice(&unavatar.source);
 			for (component_index, component) in components.iter().enumerate() {
 				let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
 				if short_type != "ModularAvatarParameters" {
@@ -2830,16 +3139,10 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	fn modular_avatar_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
 		let mut parameters = BTreeMap::<String, Vec<(String, String, Option<f32>)>>::new();
-		let Some(components) = self
-			.document
-			.unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
-			.and_then(|modular_avatar| modular_avatar.get("components"))
-			.and_then(Value::as_array)
-		else {
+		let Some(unavatar) = self.document.unavatar.as_ref() else {
 			return Vec::new();
 		};
+		let components = unavatar_modular_avatar_components_slice(&unavatar.source);
 		for (component_index, component) in components.iter().enumerate() {
 			let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
 			if short_type != "ModularAvatarParameters" {
@@ -3169,7 +3472,7 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
 		UnaRuntimeDynamics {
-			dynamics: self.document.spring_bones.as_ref(),
+			dynamics: self.document.dynamics(),
 			runtime_state: Some(&self.document.runtime_state),
 		}
 	}
@@ -3179,14 +3482,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 	pub fn scene_and_dynamics_mut(self) -> Option<UnaRuntimeSceneDynamicsMut<'a>> {
 		let UnaDocument {
 			scene,
-			spring_bones,
+			spring_bones: dynamics,
 			runtime_state,
 			..
 		} = self.document;
 		Some(UnaRuntimeSceneDynamicsMut {
 			scene: scene.as_mut()?,
 			dynamics: UnaRuntimeDynamicsMut {
-				dynamics: spring_bones.as_mut(),
+				dynamics: dynamics.as_mut(),
 				runtime_state: Some(runtime_state),
 			},
 		})
@@ -3464,8 +3767,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 					.ok_or_else(|| format!("restore baseline is not a bool for dynamics enabled: {value}"))?;
 				let matches = self
 					.document
-					.spring_bones
-					.as_ref()
+					.dynamics()
 					.is_some_and(|settings| settings.groups.iter().any(|group| group.source_id == *source_id));
 				if matches {
 					self.document
@@ -3749,9 +4051,42 @@ pub enum UnaNodeConstraintAimAxis {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaNodeConstraintKind {
-	Roll { axis: UnaNodeConstraintAxis },
-	Aim { axis: UnaNodeConstraintAimAxis },
+	Roll {
+		axis: UnaNodeConstraintAxis,
+	},
+	Aim {
+		axis: UnaNodeConstraintAimAxis,
+	},
 	Rotation,
+	Parent {
+		#[serde(default = "true_bool")]
+		translate_x: bool,
+		#[serde(default = "true_bool")]
+		translate_y: bool,
+		#[serde(default = "true_bool")]
+		translate_z: bool,
+		#[serde(default = "true_bool")]
+		rotate_x: bool,
+		#[serde(default = "true_bool")]
+		rotate_y: bool,
+		#[serde(default = "true_bool")]
+		rotate_z: bool,
+		#[serde(default)]
+		translation_at_rest: [f32; 3],
+		#[serde(default)]
+		rotation_at_rest: [f32; 3],
+	},
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaNodeConstraintSource {
+	pub source_node: usize,
+	#[serde(default = "one_f32")]
+	pub weight: f32,
+	#[serde(default)]
+	pub translation_offset: [f32; 3],
+	#[serde(default)]
+	pub rotation_offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -3761,6 +4096,8 @@ pub struct UnaNodeConstraint {
 	#[serde(default = "one_f32")]
 	pub weight: f32,
 	pub kind: UnaNodeConstraintKind,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub sources: Vec<UnaNodeConstraintSource>,
 }
 
 /// VRM 固有メタ／Humanoid／MToon ヒントと、拡張 JSON 正本（ブレンドシェイプ・表情・SpringBone 等は `source` に完全保持）。
@@ -4091,6 +4428,10 @@ pub struct UnaSceneNode {
 
 fn default_true() -> bool {
 	true
+}
+
+fn usize_is_zero(value: &usize) -> bool {
+	*value == 0
 }
 
 fn is_false(value: &bool) -> bool {
@@ -5747,6 +6088,10 @@ fn one_f32() -> f32 {
 	1.0
 }
 
+fn true_bool() -> bool {
+	true
+}
+
 fn one_vec3() -> [f32; 3] {
 	[1.0, 1.0, 1.0]
 }
@@ -7202,18 +7547,38 @@ mod tests {
 					category: "hair".to_string(),
 					enabled: false,
 					stiffness: 0.7,
+					pull: 0.7,
+					spring: 0.0,
+					integration_type: Default::default(),
 					gravity_power: 0.2,
+					gravity_falloff: 0.0,
+					immobile: 0.0,
+					immobile_type: Default::default(),
 					gravity_dir: [0.0, -1.0, 0.0],
 					drag_force: 0.3,
 					center_node: Some(10),
 					hit_radius: 0.04,
 					hit_radius_samples: Vec::new(),
+					stiffness_samples: Vec::new(),
+					pull_samples: Vec::new(),
+					spring_samples: Vec::new(),
+					gravity_power_samples: Vec::new(),
+					gravity_falloff_samples: Vec::new(),
+					immobile_samples: Vec::new(),
+					max_angle_x_samples: Vec::new(),
+					max_angle_z_samples: Vec::new(),
 					writeback_mode: Default::default(),
 					limit: Some(UnaDynamicsLimit {
 						limit_type: "angle".to_string(),
+						limit_rotation: [0.0, 0.0, 0.0],
 						max_angle_x: 45.0,
 						max_angle_z: 25.0,
 						max_stretch: 0.1,
+						max_squish: 0.0,
+						stretch_motion: None,
+						max_stretch_samples: Vec::new(),
+						max_squish_samples: Vec::new(),
+						stretch_motion_samples: Vec::new(),
 					}),
 					interaction: Some(UnaDynamicsInteraction {
 						allow_grabbing: Some(true),
@@ -8812,7 +9177,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarFloorAdjuster"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarGlobalCollider"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMMDLayerControl"), "unsupported");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "approximate");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeBlendTree"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPBBlocker"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPlatformFilter"), "unsupported");
@@ -8905,7 +9270,7 @@ mod tests {
 	}
 
 	#[test]
-	fn runtime_dynamics_reports_spring_bone_groups() {
+	fn runtime_dynamics_reports_source_group_counts() {
 		let document = UnaDocument {
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![
@@ -8961,6 +9326,29 @@ mod tests {
 		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
 		assert_eq!(dynamics.reset_node_indices(), vec![0, 1, 2, 3, 6, 7]);
 		assert_eq!(dynamics.colliders().map(|collider| collider.node).collect::<Vec<_>>(), vec![4, 5]);
+	}
+
+	#[test]
+	fn legacy_vrm_spring_bone_stiffness_deserializes_to_runtime_pull() {
+		let document: UnaDocument = serde_json::from_str(
+			r#"{
+				"spring_bones": {
+					"groups": [{
+						"source_kind": "vrm_spring_bone",
+						"enabled": true,
+						"stiffness": 0.75,
+						"stiffness_samples": [0.25, 0.5, 0.75],
+						"bone_node_indices": [0, 1]
+					}]
+				}
+			}"#,
+		)
+		.expect("legacy document");
+		let group = document.runtime_model().dynamics().dynamics_group(0).expect("dynamics group");
+		assert_eq!(group.parameters.stiffness, 0.0);
+		assert!((group.parameters.pull - 0.75).abs() < 1e-6);
+		assert!(group.chain.stiffness_samples.is_empty());
+		assert_eq!(group.chain.pull_samples, &[0.25, 0.5, 0.75]);
 	}
 
 	#[test]
@@ -9069,7 +9457,7 @@ mod tests {
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1],),
-			0
+			1
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 1, 2]),
@@ -9089,6 +9477,10 @@ mod tests {
 				UnaDynamicsWritebackMode::RotationTranslation,
 				&[0, 1, 2],
 			),
+			0
+		);
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(&skinned_target_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 2],),
 			0
 		);
 	}

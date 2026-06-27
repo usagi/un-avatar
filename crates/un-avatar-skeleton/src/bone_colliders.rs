@@ -6,6 +6,7 @@ use un_avatar_core::{UnaDynamicsColliderShape, UnaRuntimeDynamics, UnaSceneSnaps
 use un_avatar_types::HumanoidProfile;
 
 const OFF_EPSILON: f32 = 0.001;
+const COLLISION_CONTACT_SLOP: f32 = 0.0001;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,12 +94,19 @@ pub enum BoneColliderPrimitive {
 		radius: f32,
 		inside_bounds: bool,
 	},
+	LocalPlane {
+		node: usize,
+		center: [f32; 3],
+		normal: [f32; 3],
+		inside_bounds: bool,
+	},
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeBoneColliderPrimitive {
 	pub primitive: BoneColliderPrimitive,
 	pub source_id: String,
+	pub collider_path: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,6 +120,11 @@ pub(crate) enum WorldBoneColliderPrimitive {
 		a: Vec3,
 		b: Vec3,
 		radius: f32,
+		inside_bounds: bool,
+	},
+	Plane {
+		point: Vec3,
+		normal: Vec3,
 		inside_bounds: bool,
 	},
 }
@@ -212,6 +225,7 @@ pub fn build_dynamics_bone_colliders_with_sources(
 		.map(|primitive| RuntimeBoneColliderPrimitive {
 			primitive,
 			source_id: String::new(),
+			collider_path: String::new(),
 		})
 		.collect::<Vec<_>>();
 	for collider in dynamics.colliders() {
@@ -219,7 +233,7 @@ pub fn build_dynamics_bone_colliders_with_sources(
 			continue;
 		}
 		let radius = collider.radius.max(0.0);
-		if !radius.is_finite() || radius <= OFF_EPSILON {
+		if collider.shape != UnaDynamicsColliderShape::Plane && (!radius.is_finite() || radius <= OFF_EPSILON) {
 			continue;
 		}
 		let center = collider.position;
@@ -248,12 +262,28 @@ pub fn build_dynamics_bone_colliders_with_sources(
 					inside_bounds: collider.inside_bounds,
 				})
 			}
+			UnaDynamicsColliderShape::Plane => {
+				let normal = Quat::from_xyzw(
+					collider.rotation[0],
+					collider.rotation[1],
+					collider.rotation[2],
+					collider.rotation[3],
+				) * Vec3::Y;
+				let normal = normal.try_normalize().unwrap_or(Vec3::Y).to_array();
+				Some(BoneColliderPrimitive::LocalPlane {
+					node: collider.node,
+					center,
+					normal,
+					inside_bounds: collider.inside_bounds,
+				})
+			}
 			UnaDynamicsColliderShape::Unknown => None,
 		};
 		if let Some(primitive) = primitive {
 			out.push(RuntimeBoneColliderPrimitive {
 				primitive,
 				source_id: collider.source_id.clone(),
+				collider_path: collider.collider_path.clone(),
 			});
 		}
 	}
@@ -354,6 +384,20 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 					});
 				}
 			}
+			BoneColliderPrimitive::LocalPlane {
+				node,
+				center,
+				normal,
+				inside_bounds,
+			} => {
+				if let Some((point, normal)) = local_plane_world(world, node, center, normal) {
+					out.push(WorldBoneColliderPrimitive::Plane {
+						point,
+						normal,
+						inside_bounds,
+					});
+				}
+			}
 		}
 	}
 }
@@ -387,9 +431,54 @@ pub(crate) fn push_out_of_world_colliders(point: Vec3, colliders: &[WorldBoneCol
 					push_out_sphere(p, center, radius + extra)
 				};
 			}
+			WorldBoneColliderPrimitive::Plane {
+				point,
+				normal,
+				inside_bounds,
+			} => {
+				p = push_plane_half_space(p, point, normal, extra, inside_bounds);
+			}
 		}
 	}
 	p
+}
+
+#[cfg(test)]
+pub(crate) fn push_segment_tail_out_of_world_colliders(
+	anchor: Vec3,
+	tail: Vec3,
+	colliders: &[WorldBoneColliderPrimitive],
+	extra_radius: f32,
+) -> Vec3 {
+	let mut tail = push_out_of_world_colliders(tail, colliders, extra_radius);
+	let extra = extra_radius.max(0.0);
+	for _ in 0..3 {
+		let before = tail;
+		for collider in colliders {
+			match *collider {
+				WorldBoneColliderPrimitive::Sphere {
+					center,
+					radius,
+					inside_bounds: false,
+				} => {
+					tail = push_segment_tail_out_of_sphere(anchor, tail, center, radius + extra);
+				}
+				WorldBoneColliderPrimitive::Capsule {
+					a,
+					b,
+					radius,
+					inside_bounds: false,
+				} => {
+					tail = push_segment_tail_out_of_capsule(anchor, tail, a, b, radius + extra);
+				}
+				_ => {}
+			}
+		}
+		if (tail - before).length_squared() <= 1e-12 {
+			break;
+		}
+	}
+	tail
 }
 
 fn part_enabled(value: f32) -> bool {
@@ -459,6 +548,23 @@ pub fn local_capsule_world(
 	Some((a, b, radius * conservative_world_scale(*m)))
 }
 
+pub fn local_plane_world(world: &[Mat4], node: usize, center: [f32; 3], normal: [f32; 3]) -> Option<(Vec3, Vec3)> {
+	let m = world.get(node)?;
+	let point = m.transform_point3(Vec3::from(center));
+	let normal = m.transform_vector3(Vec3::from(normal)).try_normalize().unwrap_or(Vec3::Y);
+	Some((point, normal))
+}
+
+pub fn distance_point_segment(point: Vec3, a: Vec3, b: Vec3) -> f32 {
+	let ab = b - a;
+	let denom = ab.length_squared();
+	if denom <= 1.0e-12 {
+		return point.distance(a);
+	}
+	let t = ((point - a).dot(ab) / denom).clamp(0.0, 1.0);
+	point.distance(a + ab * t)
+}
+
 fn conservative_world_scale(m: Mat4) -> f32 {
 	let sx = m.x_axis.truncate().length();
 	let sy = m.y_axis.truncate().length();
@@ -490,6 +596,118 @@ fn closest_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
 	a + ab * t
 }
 
+#[cfg(test)]
+fn closest_on_segment_with_t(p: Vec3, a: Vec3, b: Vec3) -> (Vec3, f32) {
+	let ab = b - a;
+	let denom = ab.length_squared();
+	if denom <= 1e-12 {
+		return (a, 0.0);
+	}
+	let t = ((p - a).dot(ab) / denom).clamp(0.0, 1.0);
+	(a + ab * t, t)
+}
+
+#[cfg(test)]
+fn closest_segment_segment(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> (Vec3, Vec3, f32, f32) {
+	let d1 = a1 - a0;
+	let d2 = b1 - b0;
+	let r = a0 - b0;
+	let a = d1.length_squared();
+	let e = d2.length_squared();
+	let f = d2.dot(r);
+	let (mut s, t);
+	if a <= 1e-12 && e <= 1e-12 {
+		return (a0, b0, 0.0, 0.0);
+	}
+	if a <= 1e-12 {
+		s = 0.0;
+		t = (f / e).clamp(0.0, 1.0);
+	} else {
+		let c = d1.dot(r);
+		if e <= 1e-12 {
+			t = 0.0;
+			s = (-c / a).clamp(0.0, 1.0);
+		} else {
+			let b = d1.dot(d2);
+			let denom = a * e - b * b;
+			s = if denom.abs() > 1e-12 {
+				((b * f - c * e) / denom).clamp(0.0, 1.0)
+			} else {
+				0.0
+			};
+			let t_nom = b * s + f;
+			if t_nom < 0.0 {
+				t = 0.0;
+				s = (-c / a).clamp(0.0, 1.0);
+			} else if t_nom > e {
+				t = 1.0;
+				s = ((b - c) / a).clamp(0.0, 1.0);
+			} else {
+				t = t_nom / e;
+			}
+		}
+	}
+	(a0 + d1 * s, b0 + d2 * t, s, t)
+}
+
+#[cfg(test)]
+fn segment_push_direction(anchor: Vec3, tail: Vec3, delta: Vec3) -> Vec3 {
+	if delta.length_squared() > 1e-12 {
+		return delta.normalize();
+	}
+	let axis = (tail - anchor).normalize_or_zero();
+	let cross_y = axis.cross(Vec3::Y);
+	if cross_y.length_squared() > 1e-12 {
+		cross_y.normalize()
+	} else {
+		axis.cross(Vec3::X).normalize_or_zero()
+	}
+}
+
+#[cfg(test)]
+fn push_segment_tail_by_closest_delta(tail: Vec3, closest: Vec3, target: Vec3, segment_t: f32) -> Vec3 {
+	if !(0.0001..=1.0).contains(&segment_t) {
+		return tail;
+	}
+	let delta = target - closest;
+	if delta.length_squared() <= 1e-12 {
+		return tail;
+	}
+	tail + delta / segment_t
+}
+
+#[cfg(test)]
+fn push_segment_tail_out_of_sphere(anchor: Vec3, tail: Vec3, center: Vec3, radius: f32) -> Vec3 {
+	if !radius.is_finite() || radius <= OFF_EPSILON {
+		return tail;
+	}
+	let (closest, segment_t) = closest_on_segment_with_t(center, anchor, tail);
+	let delta = closest - center;
+	let dist = delta.length();
+	if dist >= radius || radius - dist <= COLLISION_CONTACT_SLOP || !dist.is_finite() {
+		return tail;
+	}
+	let dir = segment_push_direction(anchor, tail, delta);
+	let target = center + dir * radius;
+	push_segment_tail_by_closest_delta(tail, closest, target, segment_t)
+}
+
+#[cfg(test)]
+fn push_segment_tail_out_of_capsule(anchor: Vec3, tail: Vec3, a: Vec3, b: Vec3, radius: f32) -> Vec3 {
+	if !radius.is_finite() || radius <= OFF_EPSILON {
+		return tail;
+	}
+	let (closest_bone, closest_collider, segment_t, _) = closest_segment_segment(anchor, tail, a, b);
+	let delta = closest_bone - closest_collider;
+	let dist = delta.length();
+	if dist >= radius || radius - dist <= COLLISION_CONTACT_SLOP || !dist.is_finite() {
+		return tail;
+	}
+	let dir = segment_push_direction(anchor, tail, delta);
+	let target = closest_collider + dir * radius;
+	push_segment_tail_by_closest_delta(tail, closest_bone, target, segment_t)
+}
+
 fn push_out_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 	if !radius.is_finite() || radius <= OFF_EPSILON {
 		return point;
@@ -501,6 +719,9 @@ fn push_out_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 		return point;
 	}
 	let dist = dist_sq.sqrt();
+	if radius - dist <= COLLISION_CONTACT_SLOP {
+		return point;
+	}
 	if dist <= 1e-6 {
 		center + Vec3::Y * radius
 	} else {
@@ -524,6 +745,23 @@ fn push_into_sphere(point: Vec3, center: Vec3, radius: f32) -> Vec3 {
 		center
 	} else {
 		center + delta / dist * radius
+	}
+}
+
+fn push_plane_half_space(point: Vec3, plane_point: Vec3, normal: Vec3, extra_radius: f32, inside_bounds: bool) -> Vec3 {
+	let normal = normal.try_normalize().unwrap_or(Vec3::Y);
+	let signed = (point - plane_point).dot(normal);
+	let margin = extra_radius.max(0.0);
+	if inside_bounds {
+		if signed > -margin {
+			point + normal * (-margin - signed)
+		} else {
+			point
+		}
+	} else if signed < margin {
+		point + normal * (margin - signed)
+	} else {
+		point
 	}
 }
 
@@ -808,6 +1046,38 @@ mod tests {
 	}
 
 	#[test]
+	fn segment_tail_collision_pushes_when_endpoint_is_outside() {
+		let colliders = vec![WorldBoneColliderPrimitive::Sphere {
+			center: Vec3::ZERO,
+			radius: 0.25,
+			inside_bounds: false,
+		}];
+		let anchor = Vec3::new(-1.0, 0.0, 0.0);
+		let tail = Vec3::new(1.0, 0.0, 0.0);
+		assert_eq!(push_out_of_world_colliders(tail, &colliders, 0.0), tail);
+		let pushed = push_segment_tail_out_of_world_colliders(anchor, tail, &colliders, 0.0);
+		let (closest, _) = closest_on_segment_with_t(Vec3::ZERO, anchor, pushed);
+		assert!(closest.length() >= 0.25 - 1e-5, "pushed={pushed:?} closest={closest:?}");
+	}
+
+	#[test]
+	fn collision_ignores_submillimeter_contact_slop() {
+		let point = Vec3::new(0.24995, 0.0, 0.0);
+		let pushed = push_out_sphere(point, Vec3::ZERO, 0.25);
+		assert_eq!(pushed, point);
+
+		let anchor = Vec3::new(-1.0, 0.0, 0.0);
+		let tail = Vec3::new(1.0, 0.0, 0.0);
+		let collider = WorldBoneColliderPrimitive::Sphere {
+			center: Vec3::new(0.0, 0.24995, 0.0),
+			radius: 0.25,
+			inside_bounds: false,
+		};
+		let pushed = push_segment_tail_out_of_world_colliders(anchor, tail, &[collider], 0.0);
+		assert_eq!(pushed, tail);
+	}
+
+	#[test]
 	fn local_source_capsule_collider_uses_node_scale_at_runtime() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![node_with_transform(
@@ -884,5 +1154,82 @@ mod tests {
 		let world = scene_world(&scene);
 		let pushed = push_out_of_colliders(Vec3::new(0.5, 0.0, 0.0), &world, &colliders, 0.02);
 		assert!((pushed.x - 0.08).abs() < 1e-5, "pushed={pushed:?}");
+	}
+
+	#[test]
+	fn plane_source_collider_pushes_points_to_positive_half_space() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Floor", Vec3::ZERO, Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 0,
+				shape: UnaDynamicsColliderShape::Plane,
+				position: [0.0, 0.0, 0.0],
+				rotation: Quat::IDENTITY.to_array(),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let colliders = build_dynamics_bone_colliders(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		assert_eq!(
+			colliders,
+			vec![BoneColliderPrimitive::LocalPlane {
+				node: 0,
+				center: [0.0, 0.0, 0.0],
+				normal: [0.0, 1.0, 0.0],
+				inside_bounds: false,
+			}]
+		);
+		let world = scene_world(&scene);
+		let pushed = push_out_of_colliders(Vec3::new(0.0, -0.2, 0.0), &world, &colliders, 0.05);
+		assert!((pushed.y - 0.05).abs() < 1e-5, "pushed={pushed:?}");
+	}
+
+	#[test]
+	fn inside_bounds_plane_source_collider_keeps_points_on_negative_side() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Ceiling", Vec3::ZERO, Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: Vec::new(),
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 0,
+				shape: UnaDynamicsColliderShape::Plane,
+				inside_bounds: true,
+				rotation: Quat::IDENTITY.to_array(),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let colliders = build_dynamics_bone_colliders(
+			&scene,
+			None,
+			BoneColliderConfig {
+				enabled: false,
+				..Default::default()
+			},
+			settings.runtime_dynamics(),
+		);
+		let world = scene_world(&scene);
+		let pushed = push_out_of_colliders(Vec3::new(0.0, -0.2, 0.0), &world, &colliders, 0.05);
+		assert!((pushed.y + 0.2).abs() < 1e-5, "pushed={pushed:?}");
+		let clamped = push_out_of_colliders(Vec3::new(0.0, 0.2, 0.0), &world, &colliders, 0.05);
+		assert!((clamped.y + 0.05).abs() < 1e-5, "clamped={clamped:?}");
 	}
 }

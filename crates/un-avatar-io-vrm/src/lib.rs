@@ -15,10 +15,10 @@ use std::{
 use glam::Mat4;
 use serde_json::Value;
 use un_avatar_core::{
-	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset,
-	UnaExpressionWeights, UnaImageRgba, UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
-	UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
+	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsSourceKind,
+	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba, UnaMorphTargetBind, UnaMtoonMaterial,
+	UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneSnapshot,
+	UnaShadingModel, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -282,6 +282,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Roll { axis },
+				sources: Vec::new(),
 			});
 		} else if let Some(v) = c.get("aim") {
 			let Some(source_node) = v.get("source").and_then(|x| x.as_u64()).map(|x| x as usize) else {
@@ -295,6 +296,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Aim { axis },
+				sources: Vec::new(),
 			});
 		} else if let Some(v) = c.get("rotation") {
 			let Some(source_node) = v.get("source").and_then(|x| x.as_u64()).map(|x| x as usize) else {
@@ -305,6 +307,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Rotation,
+				sources: Vec::new(),
 			});
 		}
 	}
@@ -1064,16 +1067,31 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				source_id: String::new(),
 				comment: comment.clone(),
 				category: String::new(),
-				stiffness,
+				stiffness: 0.0,
+				pull: stiffness,
+				spring: 0.0,
+				integration_type: UnaDynamicsIntegrationType::Standard,
 				gravity_power,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: UnaDynamicsImmobileType::AllMotion,
 				gravity_dir: gd,
 				drag_force: drag,
 				center_node,
 				hit_radius,
 				hit_radius_samples: Vec::new(),
+				stiffness_samples: Vec::new(),
+				pull_samples: Vec::new(),
+				spring_samples: Vec::new(),
+				gravity_power_samples: Vec::new(),
+				gravity_falloff_samples: Vec::new(),
+				immobile_samples: Vec::new(),
+				max_angle_x_samples: Vec::new(),
+				max_angle_z_samples: Vec::new(),
 				writeback_mode: Default::default(),
 				limit: None,
 				interaction: None,
+				interaction_chain_start_index: 0,
 				bone_node_indices: chain,
 			});
 		}
@@ -1128,16 +1146,31 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 			source_id: String::new(),
 			comment,
 			category: String::new(),
-			stiffness,
+			stiffness: 0.0,
+			pull: stiffness,
+			spring: 0.0,
+			integration_type: UnaDynamicsIntegrationType::Standard,
 			gravity_power,
+			gravity_falloff: 0.0,
+			immobile: 0.0,
+			immobile_type: UnaDynamicsImmobileType::AllMotion,
 			gravity_dir: gd,
 			drag_force: drag,
 			center_node: None,
 			hit_radius,
 			hit_radius_samples: Vec::new(),
+			stiffness_samples: Vec::new(),
+			pull_samples: Vec::new(),
+			spring_samples: Vec::new(),
+			gravity_power_samples: Vec::new(),
+			gravity_falloff_samples: Vec::new(),
+			immobile_samples: Vec::new(),
+			max_angle_x_samples: Vec::new(),
+			max_angle_z_samples: Vec::new(),
 			writeback_mode: Default::default(),
 			limit: None,
 			interaction: None,
+			interaction_chain_start_index: 0,
 			bone_node_indices: bones,
 		});
 	}
@@ -2196,8 +2229,10 @@ mod tests {
 		assert_eq!(sb.groups.len(), 2, "each root expands to its own chain");
 		assert_eq!(sb.groups[0].bone_node_indices, vec![10, 11, 12]);
 		assert_eq!(sb.groups[1].bone_node_indices, vec![20, 21, 22]);
-		assert!((sb.groups[0].stiffness - 1.2).abs() < 1e-5);
-		assert!((sb.groups[1].stiffness - 1.2).abs() < 1e-5);
+		assert_eq!(sb.groups[0].stiffness, 0.0);
+		assert_eq!(sb.groups[1].stiffness, 0.0);
+		assert!((sb.groups[0].pull - 1.2).abs() < 1e-5);
+		assert!((sb.groups[1].pull - 1.2).abs() < 1e-5);
 	}
 
 	#[test]

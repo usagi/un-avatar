@@ -2,7 +2,7 @@ import type { SettingSummaryLabelData } from "./profileLabels";
 import type { LightingDiagramSource } from "./profileDiagrams";
 import type { CameraDiagramSource } from "./profileDiagrams";
 import type { PrimaryMotionSource } from "./rendererTypes";
-import type { DynamicsCategoryOverrideSetting } from "./dynamicsPresets";
+import type { DynamicsCategoryOverrideSetting, DynamicsGroupOverrideSetting, DynamicsMatchOverrideSetting } from "./dynamicsPresets";
 
 export type ProfileSettingValue = boolean | string | number | string[] | number[] | Record<string, unknown>[] | null;
 
@@ -122,6 +122,10 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	dynamics_simulation_hz: number;
 	dynamics_substeps: number;
 	dynamics_category_overrides: DynamicsCategoryOverrideSetting[];
+	dynamics_match_overrides: DynamicsMatchOverrideSetting[];
+	dynamics_collider_augment_overrides: DynamicsColliderAugmentOverrideSetting[];
+	dynamics_group_overrides: DynamicsGroupOverrideSetting[];
+	dynamics_mesh_cloth_assist: DynamicsMeshClothAssistSetting | null;
 	apply_vmc_root_translation: boolean;
 	camera_target: [number, number, number] | null;
 	camera_longitude_deg: number | null;
@@ -212,6 +216,21 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	scene_cache_fingerprint: string;
 	scene_cache_prewarmed_fingerprint: string | null;
 	scene_cache_prewarmed_at: string | null;
+};
+
+export type DynamicsMeshClothAssistSetting = {
+	enabled: boolean;
+	body_dominance_threshold: number;
+	min_existing_dynamic_weight: number;
+	seed_missing_dynamic_influence: boolean;
+	max_assist_weight: number;
+	mesh_path_contains: string[];
+};
+
+export type DynamicsColliderAugmentOverrideSetting = {
+	name: string;
+	source_id_contains: string[];
+	collider_path_contains: string[];
 };
 
 export type AnimatorActionMode = "off" | "toggle" | "one_shot";
@@ -346,6 +365,10 @@ export type MotionSetting = Pick<
 	| "dynamics_enabled"
 	| "contact_parameter_emission"
 	| "dynamics_category_overrides"
+	| "dynamics_match_overrides"
+	| "dynamics_collider_augment_overrides"
+	| "dynamics_group_overrides"
+	| "dynamics_mesh_cloth_assist"
 	| "apply_vmc_root_translation"
 	| "bone_colliders_enabled"
 	| "bone_collider_head"

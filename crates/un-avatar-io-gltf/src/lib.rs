@@ -3,6 +3,7 @@
 //! 設計正本: `docs/development-plan.md` Commit 1.3〜1.4
 
 #![forbid(unsafe_code)]
+#![recursion_limit = "256"]
 
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
@@ -19,15 +20,18 @@ use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind, Approximation, ReportStatus,
-	UnaAlphaMode, UnaBounds, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
-	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSourceKind, UnaDynamicsWritebackMode,
-	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata,
-	UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey,
-	UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaRuntimeAction, UnaRuntimeActionCondition,
-	UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget,
-	UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin,
-	UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
+	unavatar_modular_avatar_components_slice, unavatar_modular_avatar_value, Approximation, ReportStatus, UnaAlphaMode, UnaBounds,
+	UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef, UnaDynamicsContact,
+	UnaDynamicsContactKind, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsInteraction, UnaDynamicsLimit,
+	UnaDynamicsSettings, UnaDynamicsSourceKind, UnaDynamicsWritebackMode, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
+	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
+	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas,
+	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaRuntimeAction,
+	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
+	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode,
+	UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler,
+	UnaTextureWrapMode, UnaUnavatarExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2086,13 +2090,7 @@ fn unavatar_dynamics_node_index_set(
 }
 
 fn unavatar_modular_avatar_components(unavatar: &UnaUnavatarExtension) -> &[Value] {
-	unavatar
-		.source
-		.get("modularAvatar")
-		.and_then(|value| value.get("components"))
-		.and_then(Value::as_array)
-		.map(Vec::as_slice)
-		.unwrap_or(&[])
+	unavatar_modular_avatar_components_slice(&unavatar.source)
 }
 
 fn modular_avatar_pb_blocker_ignores(
@@ -2166,6 +2164,7 @@ fn modular_avatar_global_colliders(
 		colliders.push(UnaDynamicsCollider {
 			source_kind: UnaDynamicsSourceKind::VrcPhysBone,
 			source_id: String::new(),
+			collider_path: String::new(),
 			node,
 			shape: UnaDynamicsColliderShape::Capsule,
 			radius,
@@ -2234,6 +2233,8 @@ fn unavatar_dynamics_collider_shape(value: &Value) -> UnaDynamicsColliderShape {
 		UnaDynamicsColliderShape::Sphere
 	} else if shape.eq_ignore_ascii_case("capsule") {
 		UnaDynamicsColliderShape::Capsule
+	} else if shape.eq_ignore_ascii_case("plane") {
+		UnaDynamicsColliderShape::Plane
 	} else {
 		UnaDynamicsColliderShape::Unknown
 	}
@@ -2309,17 +2310,24 @@ fn unavatar_dynamics_collider_array(
 				.get("root")
 				.or_else(|| collider.get("node"))
 				.or_else(|| collider.get("component"))?;
+			let collider_path = collider
+				.get("component")
+				.map(|component| operation_target_registry_path(registry_paths, component))
+				.unwrap_or_else(|| operation_target_registry_path(registry_paths, root))
+				.to_string();
 			let node = unavatar_node_ref_index(root, node_ids, registry_paths, paths, normalized_paths)?;
+			let shape = unavatar_dynamics_collider_shape(collider);
 			let radius = json_f32(collider.get("radius")).unwrap_or(0.0);
-			if !radius.is_finite() || radius <= 0.0 {
+			if shape != UnaDynamicsColliderShape::Plane && (!radius.is_finite() || radius <= 0.0) {
 				return None;
 			}
 			Some(UnaDynamicsCollider {
 				source_kind,
 				source_id: source_id.to_string(),
+				collider_path,
 				node,
-				shape: unavatar_dynamics_collider_shape(collider),
-				radius,
+				shape,
+				radius: radius.max(0.0),
 				height: json_f32(collider.get("height")).unwrap_or(0.0).max(0.0),
 				position: unity_vec3_to_unavatar_runtime(
 					json_vec3(collider.get("position").or_else(|| collider.get("offset"))).unwrap_or([0.0; 3]),
@@ -2478,6 +2486,133 @@ fn unavatar_dynamics_constraint_refs(
 		.collect()
 }
 
+fn json_bool_or(value: Option<&Value>, fallback: bool) -> bool {
+	value.and_then(Value::as_bool).unwrap_or(fallback)
+}
+
+fn unavatar_node_constraint_source(
+	value: &Value,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Option<UnaNodeConstraintSource> {
+	let node_ref = value
+		.get("node")
+		.or_else(|| value.get("sourceNode"))
+		.or_else(|| value.get("source_node"))
+		.unwrap_or(value);
+	let source_node = unavatar_node_ref_index(node_ref, node_ids, registry_paths, paths, normalized_paths)?;
+	Some(UnaNodeConstraintSource {
+		source_node,
+		weight: json_f32(value.get("weight")).unwrap_or(1.0).max(0.0),
+		translation_offset: json_vec3(value.get("translationOffset").or_else(|| value.get("translation_offset"))).unwrap_or([0.0; 3]),
+		rotation_offset: json_vec3(value.get("rotationOffset").or_else(|| value.get("rotation_offset"))).unwrap_or([0.0; 3]),
+	})
+}
+
+fn unavatar_node_constraints(
+	unavatar: &UnaUnavatarExtension,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	report: &mut ImportReport,
+) -> Vec<UnaNodeConstraint> {
+	let Some(constraints) = unavatar
+		.source
+		.get("nodeConstraints")
+		.or_else(|| unavatar.source.get("node_constraints"))
+		.and_then(Value::as_array)
+	else {
+		return Vec::new();
+	};
+	let mut out = Vec::new();
+	let mut missing = 0usize;
+	let mut unsupported = 0usize;
+	for constraint in constraints {
+		let kind_text = constraint
+			.get("kind")
+			.or_else(|| constraint.get("type"))
+			.and_then(Value::as_str)
+			.unwrap_or("");
+		if kind_text != "parent" {
+			unsupported += 1;
+			continue;
+		}
+		let Some(target_ref) = constraint
+			.get("target")
+			.or_else(|| constraint.get("targetNode"))
+			.or_else(|| constraint.get("target_node"))
+		else {
+			missing += 1;
+			continue;
+		};
+		let Some(target_node) = unavatar_node_ref_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+			missing += 1;
+			continue;
+		};
+		let mut sources = constraint
+			.get("sources")
+			.or_else(|| constraint.get("sourceNodes"))
+			.or_else(|| constraint.get("source_nodes"))
+			.and_then(Value::as_array)
+			.map(|values| {
+				values
+					.iter()
+					.filter_map(|source| unavatar_node_constraint_source(source, node_ids, registry_paths, paths, normalized_paths))
+					.collect::<Vec<_>>()
+			})
+			.unwrap_or_default();
+		if sources.is_empty() {
+			if let Some(source_ref) = constraint
+				.get("source")
+				.or_else(|| constraint.get("sourceNode"))
+				.or_else(|| constraint.get("source_node"))
+			{
+				if let Some(source) = unavatar_node_constraint_source(source_ref, node_ids, registry_paths, paths, normalized_paths) {
+					sources.push(source);
+				}
+			}
+		}
+		let Some(primary_source) = sources.first().map(|source| source.source_node) else {
+			missing += 1;
+			continue;
+		};
+		out.push(UnaNodeConstraint {
+			target_node,
+			source_node: primary_source,
+			weight: json_f32(constraint.get("weight")).unwrap_or(1.0).clamp(0.0, 1.0),
+			kind: UnaNodeConstraintKind::Parent {
+				translate_x: json_bool_or(constraint.get("translateX").or_else(|| constraint.get("translate_x")), true),
+				translate_y: json_bool_or(constraint.get("translateY").or_else(|| constraint.get("translate_y")), true),
+				translate_z: json_bool_or(constraint.get("translateZ").or_else(|| constraint.get("translate_z")), true),
+				rotate_x: json_bool_or(constraint.get("rotateX").or_else(|| constraint.get("rotate_x")), true),
+				rotate_y: json_bool_or(constraint.get("rotateY").or_else(|| constraint.get("rotate_y")), true),
+				rotate_z: json_bool_or(constraint.get("rotateZ").or_else(|| constraint.get("rotate_z")), true),
+				translation_at_rest: json_vec3(
+					constraint
+						.get("translationAtRest")
+						.or_else(|| constraint.get("translation_at_rest")),
+				)
+				.unwrap_or([0.0; 3]),
+				rotation_at_rest: json_vec3(constraint.get("rotationAtRest").or_else(|| constraint.get("rotation_at_rest")))
+					.unwrap_or([0.0; 3]),
+			},
+			sources,
+		});
+	}
+	if !out.is_empty() || missing > 0 || unsupported > 0 {
+		report.push_info(format!(
+			".unavatar node_constraints: parent={}, missing={}, unsupported={}",
+			out.len(),
+			missing,
+			unsupported
+		));
+	}
+	out
+}
+
 fn unavatar_dynamics_endpoint_position(value: &Value) -> Option<[f32; 3]> {
 	let source_params = unavatar_dynamics_source_params(value);
 	let endpoint = unavatar_dynamics_source_value(value, source_params, "endpointPosition", "endpoint_position");
@@ -2519,12 +2654,56 @@ fn ensure_unavatar_dynamics_endpoint_child(
 	true
 }
 
-fn collect_scene_child_chains(
-	scene: &UnaSceneSnapshot,
+fn append_unavatar_dynamics_endpoint_tail_children(
+	scene: &mut UnaSceneSnapshot,
 	root_idx: usize,
-	ignored_nodes: &BTreeSet<usize>,
-	multi_child_ignore: bool,
-) -> Vec<Vec<usize>> {
+	item: &Value,
+	chains: &[Vec<usize>],
+) -> usize {
+	if root_idx >= scene.nodes.len() {
+		return 0;
+	}
+	let Some(endpoint) = unavatar_dynamics_endpoint_position(item) else {
+		return 0;
+	};
+	let world = scene_world_matrices(scene);
+	if root_idx >= world.len() {
+		return 0;
+	}
+	let endpoint_world = world[root_idx].transform_point3(Vec3::from(endpoint));
+	let mut added = 0usize;
+	for chain in chains {
+		let Some(&leaf_idx) = chain.last() else {
+			continue;
+		};
+		if leaf_idx >= scene.nodes.len() || leaf_idx >= world.len() {
+			continue;
+		}
+		let endpoint_local = world[leaf_idx].inverse().transform_point3(endpoint_world);
+		if endpoint_local.length_squared() <= 1e-12 {
+			continue;
+		}
+		let endpoint_idx = scene.nodes.len();
+		let leaf_name = scene.nodes.get(leaf_idx).and_then(|node| node.name.as_deref()).unwrap_or("Leaf");
+		scene.nodes.push(UnaSceneNode {
+			name: Some(format!("{leaf_name} Endpoint")),
+			source_node_id: None,
+			resolved_node_id: None,
+			visible: true,
+			transform: Mat4::from_translation(endpoint_local).to_cols_array(),
+			children: Vec::new(),
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		});
+		scene.nodes[leaf_idx].children.push(endpoint_idx);
+		added += 1;
+	}
+	added
+}
+
+fn collect_scene_child_chains(scene: &UnaSceneSnapshot, root_idx: usize, ignored_nodes: &BTreeSet<usize>) -> Vec<Vec<usize>> {
 	if root_idx >= scene.nodes.len() {
 		return Vec::new();
 	}
@@ -2550,9 +2729,6 @@ fn collect_scene_child_chains(
 			} else {
 				stack.push((child, next_chain));
 			}
-			if multi_child_ignore {
-				break;
-			}
 		}
 		if child_count == 0 {
 			chains.push(chain);
@@ -2562,16 +2738,14 @@ fn collect_scene_child_chains(
 }
 
 fn unavatar_dynamics_gravity(value: &Value) -> (f32, [f32; 3]) {
-	let gravity = json_vec3(
-		value
-			.get("gravity")
-			.or_else(|| value.get("gravityVector"))
-			.or_else(|| value.get("gravity_vector")),
-	)
-	.unwrap_or([0.0, -1.0, 0.0]);
+	let source_params = unavatar_dynamics_source_params(value);
+	let gravity =
+		json_vec3(unavatar_dynamics_source_value(value, source_params, "gravityVector", "gravity_vector").or_else(|| value.get("gravity")))
+			.unwrap_or([0.0, -1.0, 0.0]);
 	let gravity_vec = Vec3::from(gravity);
 	let vector_power = gravity_vec.length();
-	let explicit_power = json_f32(value.get("gravityPower").or_else(|| value.get("gravity_power")));
+	let explicit_power =
+		unavatar_dynamics_source_value(value, source_params, "gravityPower", "gravity_power").and_then(|value| json_f32(Some(value)));
 	let power = explicit_power.unwrap_or(vector_power);
 	let dir = if gravity_vec.length_squared() > 1e-12 {
 		gravity_vec.normalize().to_array()
@@ -2594,6 +2768,36 @@ fn unavatar_dynamics_source_value<'a>(
 	source_params
 		.and_then(|params| params.get(camel_key).or_else(|| params.get(snake_key)))
 		.or_else(|| value.get(camel_key).or_else(|| value.get(snake_key)))
+}
+
+fn unavatar_dynamics_immobile_type(value: &Value, source_params: Option<&Value>) -> UnaDynamicsImmobileType {
+	let raw_value = unavatar_dynamics_source_value(value, source_params, "immobileType", "immobile_type");
+	if let Some(number) = raw_value.and_then(Value::as_i64) {
+		return match number {
+			1 => UnaDynamicsImmobileType::World,
+			_ => UnaDynamicsImmobileType::AllMotion,
+		};
+	}
+	let raw = raw_value.and_then(Value::as_str).unwrap_or_default();
+	let normalized = raw
+		.chars()
+		.filter(|ch| ch.is_ascii_alphanumeric())
+		.flat_map(|ch| ch.to_lowercase())
+		.collect::<String>();
+	match normalized.as_str() {
+		"1" | "world" | "worldmotion" | "worldexperimental" => UnaDynamicsImmobileType::World,
+		_ => UnaDynamicsImmobileType::AllMotion,
+	}
+}
+
+fn unavatar_dynamics_source_text(value: &Value, source_params: Option<&Value>, camel_key: &str, snake_key: &str) -> String {
+	unavatar_dynamics_source_value(value, source_params, camel_key, snake_key)
+		.and_then(Value::as_str)
+		.unwrap_or_default()
+		.chars()
+		.filter(|ch| ch.is_ascii_alphanumeric())
+		.flat_map(|ch| ch.to_lowercase())
+		.collect()
 }
 
 fn unavatar_dynamics_writeback_mode(value: &Value) -> (UnaDynamicsWritebackMode, Option<String>) {
@@ -2655,17 +2859,39 @@ fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 	let max_angle_z = unavatar_dynamics_source_value(value, source_params, "maxAngleZ", "max_angle_z")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
+	let limit_rotation = unavatar_dynamics_source_value(value, source_params, "limitRotation", "limit_rotation")
+		.and_then(|value| json_vec3(Some(value)))
+		.unwrap_or([0.0, 0.0, 0.0]);
 	let max_stretch = unavatar_dynamics_source_value(value, source_params, "maxStretch", "max_stretch")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
-	if limit_type.is_empty() && max_angle_x == 0.0 && max_angle_z == 0.0 && max_stretch == 0.0 {
+	let max_squish = unavatar_dynamics_source_value(value, source_params, "maxSquish", "max_squish")
+		.and_then(|value| json_f32(Some(value)))
+		.unwrap_or(0.0);
+	let stretch_motion = unavatar_dynamics_source_value(value, source_params, "stretchMotion", "stretch_motion")
+		.and_then(|value| json_f32(Some(value)))
+		.filter(|value| value.is_finite());
+	if limit_type.is_empty()
+		&& max_angle_x == 0.0
+		&& max_angle_z == 0.0
+		&& max_stretch == 0.0
+		&& max_squish == 0.0
+		&& stretch_motion.is_none()
+		&& limit_rotation.iter().all(|value| *value == 0.0)
+	{
 		None
 	} else {
 		Some(UnaDynamicsLimit {
 			limit_type,
+			limit_rotation,
 			max_angle_x,
 			max_angle_z,
 			max_stretch,
+			max_squish,
+			stretch_motion,
+			max_stretch_samples: Vec::new(),
+			max_squish_samples: Vec::new(),
+			stretch_motion_samples: Vec::new(),
 		})
 	}
 }
@@ -2689,26 +2915,30 @@ fn unavatar_dynamics_interaction(value: &Value) -> Option<UnaDynamicsInteraction
 	}
 }
 
-fn unavatar_dynamics_radius_samples(value: &Value, hit_radius: f32, joint_count: usize) -> Vec<f32> {
+fn unavatar_dynamics_curve_samples(value: &Value, base_value: f32, joint_count: usize, camel_key: &str, snake_key: &str) -> Vec<f32> {
 	if joint_count == 0 {
 		return Vec::new();
 	}
 	let source_params = unavatar_dynamics_source_params(value);
-	let curve = unavatar_dynamics_source_value(value, source_params, "radiusCurve", "radius_curve");
+	let curve = unavatar_dynamics_source_value(value, source_params, camel_key, snake_key);
 	let Some(_) = animation_curve_evaluate(curve, 1.0) else {
 		return Vec::new();
 	};
-	let base_radius = hit_radius.max(0.0);
+	let base_value = base_value.max(0.0);
 	(0..joint_count)
 		.map(|index| {
 			let input = (index + 1) as f32 / joint_count as f32;
 			animation_curve_evaluate(curve, input)
-				.map(|scale| base_radius * scale)
-				.filter(|radius| radius.is_finite())
-				.unwrap_or(base_radius)
+				.map(|scale| base_value * scale)
+				.filter(|value| value.is_finite())
+				.unwrap_or(base_value)
 				.max(0.0)
 		})
 		.collect()
+}
+
+fn unavatar_dynamics_radius_samples(value: &Value, hit_radius: f32, joint_count: usize) -> Vec<f32> {
+	unavatar_dynamics_curve_samples(value, hit_radius, joint_count, "radiusCurve", "radius_curve")
 }
 
 fn unavatar_dynamics_settings(
@@ -2735,8 +2965,8 @@ fn unavatar_dynamics_settings(
 	let mut pb_blocker_ignore_count = 0usize;
 	let mut multi_child_ignore_count = 0usize;
 	let mut endpoint_child_count = 0usize;
-	let mut endpoint_ignored_non_leaf_count = 0usize;
-	let mut endpoint_ignored_non_leaf_samples = Vec::new();
+	let mut endpoint_tail_synthesis_failed_count = 0usize;
+	let mut endpoint_tail_synthesis_failed_samples = Vec::new();
 	let mut colliders = unavatar_dynamics_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_colliders = modular_avatar_global_colliders(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths);
 	let ma_global_collider_count = ma_global_colliders.len();
@@ -2764,7 +2994,46 @@ fn unavatar_dynamics_settings(
 			.to_string();
 		let source_id = item.get("id").and_then(Value::as_str).unwrap_or("").to_string();
 		let comment = item.get("name").and_then(Value::as_str).unwrap_or(source_id.as_str()).to_string();
-		let stiffness = json_f32(item.get("stiffness").or_else(|| item.get("spring")).or_else(|| item.get("pull"))).unwrap_or(1.0);
+		let source_params = unavatar_dynamics_source_params(item);
+		let integration_type = unavatar_dynamics_source_text(item, source_params, "integrationType", "integration_type");
+		let pull = unavatar_dynamics_source_value(item, source_params, "pull", "pull")
+			.and_then(|value| json_f32(Some(value)))
+			.unwrap_or_else(|| json_f32(item.get("stiffness").or_else(|| item.get("spring"))).unwrap_or(1.0));
+		let raw_spring = unavatar_dynamics_source_value(item, source_params, "spring", "spring")
+			.and_then(|value| json_f32(Some(value)))
+			.unwrap_or(0.0);
+		let raw_stiffness = unavatar_dynamics_source_value(item, source_params, "stiffness", "stiffness")
+			.and_then(|value| json_f32(Some(value)))
+			.unwrap_or(pull);
+		let raw_momentum = unavatar_dynamics_source_value(item, source_params, "momentum", "momentum")
+			.and_then(|value| json_f32(Some(value)))
+			.filter(|value| value.is_finite() && *value > 0.0)
+			.unwrap_or(raw_spring);
+		let is_advanced_physbone = source_kind == UnaDynamicsSourceKind::VrcPhysBone && integration_type.eq_ignore_ascii_case("advanced");
+		let integration_type = if source_kind == UnaDynamicsSourceKind::VrcPhysBone {
+			if is_advanced_physbone {
+				UnaDynamicsIntegrationType::VrcAdvanced
+			} else {
+				UnaDynamicsIntegrationType::VrcSimplified
+			}
+		} else {
+			UnaDynamicsIntegrationType::Standard
+		};
+		let spring = if is_advanced_physbone { raw_momentum } else { raw_spring };
+		let stiffness = if source_kind == UnaDynamicsSourceKind::VrmSpringBone
+			|| (source_kind == UnaDynamicsSourceKind::VrcPhysBone && !is_advanced_physbone)
+		{
+			0.0
+		} else {
+			raw_stiffness
+		};
+		let gravity_falloff = unavatar_dynamics_source_value(item, source_params, "gravityFalloff", "gravity_falloff")
+			.and_then(|value| json_f32(Some(value)))
+			.unwrap_or(0.0);
+		let immobile = unavatar_dynamics_source_value(item, source_params, "immobile", "immobile")
+			.and_then(|value| json_f32(Some(value)))
+			.unwrap_or(0.0);
+		let immobile_type = unavatar_dynamics_immobile_type(item, source_params);
 		let drag_force = json_f32(
 			item.get("drag")
 				.or_else(|| item.get("dragForce"))
@@ -2786,7 +3055,6 @@ fn unavatar_dynamics_settings(
 				".unavatar dynamics: unknown writebackMode {unknown_writeback_mode:?} for {source_id:?}; defaulting to rotation_only"
 			));
 		}
-		let source_params = unavatar_dynamics_source_params(item);
 		let ignored_nodes = unavatar_dynamics_node_index_set(
 			unavatar_dynamics_source_value(item, source_params, "ignoreTransforms", "ignore_transforms")
 				.or_else(|| unavatar_dynamics_source_value(item, source_params, "ignoredTransforms", "ignored_transforms")),
@@ -2828,23 +3096,85 @@ fn unavatar_dynamics_settings(
 			if ensure_unavatar_dynamics_endpoint_child(scene, root_idx, item, &root_ignored_nodes) {
 				endpoint_child_count += 1;
 			} else if endpoint_requested && has_non_ignored_child {
-				endpoint_ignored_non_leaf_count += 1;
-				if endpoint_ignored_non_leaf_samples.len() < 8 {
-					let label = if source_id.is_empty() {
-						comment.as_str()
-					} else {
-						source_id.as_str()
-					};
-					let path = unavatar_node_ref_display_path(scene, &registry_paths, &paths, root, root_idx);
-					endpoint_ignored_non_leaf_samples.push(format!("{label}@{path}"));
+				let chains = collect_scene_child_chains(scene, root_idx, &root_ignored_nodes);
+				let appended = append_unavatar_dynamics_endpoint_tail_children(scene, root_idx, item, &chains);
+				if appended > 0 {
+					endpoint_child_count += appended;
+				} else {
+					endpoint_tail_synthesis_failed_count += 1;
+					if endpoint_tail_synthesis_failed_samples.len() < 8 {
+						let label = if source_id.is_empty() {
+							comment.as_str()
+						} else {
+							source_id.as_str()
+						};
+						let path = unavatar_node_ref_display_path(scene, &registry_paths, &paths, root, root_idx);
+						endpoint_tail_synthesis_failed_samples.push(format!("{label}@{path}"));
+					}
 				}
 			}
-			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes, multi_child_ignore) {
+			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes) {
+				let prepended_parent_anchor = false;
 				if chain.len() < 2 {
 					short_chains += 1;
 					continue;
 				}
-				let hit_radius_samples = unavatar_dynamics_radius_samples(item, hit_radius, chain.len() - 1);
+				let joint_count = chain.len() - 1;
+				let hit_radius_samples = unavatar_dynamics_radius_samples(item, hit_radius, joint_count);
+				let stiffness_samples = unavatar_dynamics_curve_samples(item, stiffness, joint_count, "stiffnessCurve", "stiffness_curve");
+				let pull_samples = unavatar_dynamics_curve_samples(item, pull, joint_count, "pullCurve", "pull_curve");
+				let spring_samples = if is_advanced_physbone {
+					unavatar_dynamics_curve_samples(item, spring, joint_count, "momentumCurve", "momentum_curve")
+				} else {
+					unavatar_dynamics_curve_samples(item, spring, joint_count, "springCurve", "spring_curve")
+				};
+				let gravity_power_samples =
+					unavatar_dynamics_curve_samples(item, gravity_power, joint_count, "gravityCurve", "gravity_curve");
+				let gravity_falloff_samples =
+					unavatar_dynamics_curve_samples(item, gravity_falloff, joint_count, "gravityFalloffCurve", "gravity_falloff_curve");
+				let immobile_samples = unavatar_dynamics_curve_samples(item, immobile, joint_count, "immobileCurve", "immobile_curve");
+				let max_angle_x_samples = unavatar_dynamics_curve_samples(
+					item,
+					limit.as_ref().map(|limit| limit.max_angle_x).unwrap_or(0.0),
+					joint_count,
+					"maxAngleXCurve",
+					"max_angle_x_curve",
+				);
+				let max_angle_z_samples = unavatar_dynamics_curve_samples(
+					item,
+					limit.as_ref().map(|limit| limit.max_angle_z).unwrap_or(0.0),
+					joint_count,
+					"maxAngleZCurve",
+					"max_angle_z_curve",
+				);
+				let max_stretch_samples = unavatar_dynamics_curve_samples(
+					item,
+					limit.as_ref().map(|limit| limit.max_stretch).unwrap_or(0.0),
+					joint_count,
+					"maxStretchCurve",
+					"max_stretch_curve",
+				);
+				let max_squish_samples = unavatar_dynamics_curve_samples(
+					item,
+					limit.as_ref().map(|limit| limit.max_squish).unwrap_or(0.0),
+					joint_count,
+					"maxSquishCurve",
+					"max_squish_curve",
+				);
+				let stretch_motion_samples = unavatar_dynamics_curve_samples(
+					item,
+					limit.as_ref().and_then(|limit| limit.stretch_motion).unwrap_or(1.0),
+					joint_count,
+					"stretchMotionCurve",
+					"stretch_motion_curve",
+				);
+				let mut chain_limit = limit.clone();
+				if !max_stretch_samples.is_empty() || !max_squish_samples.is_empty() || !stretch_motion_samples.is_empty() {
+					let limit = chain_limit.get_or_insert_with(UnaDynamicsLimit::default);
+					limit.max_stretch_samples = max_stretch_samples;
+					limit.max_squish_samples = max_squish_samples;
+					limit.stretch_motion_samples = stretch_motion_samples;
+				}
 				groups.push(UnaSpringBoneGroup {
 					source_kind,
 					enabled: authored_enabled,
@@ -2852,15 +3182,30 @@ fn unavatar_dynamics_settings(
 					comment: comment.clone(),
 					category: category.clone(),
 					stiffness,
+					pull,
+					spring,
+					integration_type,
 					gravity_power,
+					gravity_falloff,
+					immobile,
+					immobile_type,
 					gravity_dir,
 					drag_force,
 					center_node: None,
 					hit_radius,
 					hit_radius_samples,
+					stiffness_samples,
+					pull_samples,
+					spring_samples,
+					gravity_power_samples,
+					gravity_falloff_samples,
+					immobile_samples,
+					max_angle_x_samples,
+					max_angle_z_samples,
 					writeback_mode,
-					limit: limit.clone(),
+					limit: chain_limit,
 					interaction: interaction.clone(),
+					interaction_chain_start_index: usize::from(prepended_parent_anchor && interaction.is_some()),
 					bone_node_indices: chain,
 				});
 			}
@@ -2890,14 +3235,14 @@ fn unavatar_dynamics_settings(
 	if endpoint_child_count > 0 {
 		report.push_info(format!(".unavatar dynamics: synthesized_endpoint_children={endpoint_child_count}"));
 	}
-	if endpoint_ignored_non_leaf_count > 0 {
-		let samples = if endpoint_ignored_non_leaf_samples.is_empty() {
+	if endpoint_tail_synthesis_failed_count > 0 {
+		let samples = if endpoint_tail_synthesis_failed_samples.is_empty() {
 			String::new()
 		} else {
-			format!(" samples=[{}]", endpoint_ignored_non_leaf_samples.join(", "))
+			format!(" samples=[{}]", endpoint_tail_synthesis_failed_samples.join(", "))
 		};
 		report.push_warning(format!(
-			".unavatar dynamics: ignored endpointPosition on {endpoint_ignored_non_leaf_count} non-leaf PhysBone root(s){samples}"
+			".unavatar dynamics: could not synthesize endpoint tail for {endpoint_tail_synthesis_failed_count} non-leaf dynamics root(s){samples}"
 		));
 	}
 	if groups.is_empty() && colliders.is_empty() && contacts.is_empty() && constraint_refs.is_empty() {
@@ -3861,21 +4206,14 @@ fn unavatar_runtime_action_set(
 			actions.push(action);
 		}
 	}
-	if let Some(components) = unavatar
-		.source
-		.get("modularAvatar")
-		.and_then(|v| v.get("components"))
-		.and_then(Value::as_array)
-	{
-		for (component_index, component) in components.iter().enumerate() {
-			let Some(action) = unavatar_modular_avatar_component_runtime_action(component, component_index, scene, unavatar) else {
-				continue;
-			};
-			if actions.iter().any(|existing| existing.id == action.id) {
-				continue;
-			}
-			actions.push(action);
+	for (component_index, component) in unavatar_modular_avatar_components(unavatar).iter().enumerate() {
+		let Some(action) = unavatar_modular_avatar_component_runtime_action(component, component_index, scene, unavatar) else {
+			continue;
+		};
+		if actions.iter().any(|existing| existing.id == action.id) {
+			continue;
 		}
+		actions.push(action);
 	}
 	if let Some(animator_actions) = unavatar_animator_runtime_actions(unavatar, scene, enabled_animator_action_ids, animator_action_values)
 	{
@@ -3903,6 +4241,11 @@ fn unavatar_animator_runtime_actions(
 	let controllers = animator.get("controllers").and_then(Value::as_array)?;
 	let mut actions = Vec::new();
 	for (controller_index, controller) in controllers.iter().enumerate() {
+		let motion_base_path = controller
+			.get("motionBasePath")
+			.or_else(|| controller.get("motion_base_path"))
+			.and_then(Value::as_str)
+			.unwrap_or("");
 		let layers = controller.get("layers").and_then(Value::as_array);
 		let Some(layers) = layers else {
 			continue;
@@ -3935,7 +4278,7 @@ fn unavatar_animator_runtime_actions(
 				let Some(transitions) = transitions_by_destination.get(state_name) else {
 					continue;
 				};
-				let effects = unavatar_animator_state_effects(state, scene);
+				let effects = unavatar_animator_state_effects(state, scene, motion_base_path);
 				if effects.is_empty() {
 					continue;
 				}
@@ -4041,15 +4384,20 @@ fn unavatar_animator_transition_parameter_trigger(transition: &Value) -> Option<
 	Some((name, value, out))
 }
 
-fn unavatar_animator_state_effects(state: &Value, scene: Option<&UnaSceneSnapshot>) -> Vec<UnaRuntimeActionEffect> {
+fn unavatar_animator_state_effects(state: &Value, scene: Option<&UnaSceneSnapshot>, motion_base_path: &str) -> Vec<UnaRuntimeActionEffect> {
 	let mut effects = Vec::new();
 	if let Some(motion) = state.get("motion") {
-		unavatar_animator_motion_effects(motion, scene, &mut effects);
+		unavatar_animator_motion_effects(motion, scene, motion_base_path, &mut effects);
 	}
 	effects
 }
 
-fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnapshot>, effects: &mut Vec<UnaRuntimeActionEffect>) {
+fn unavatar_animator_motion_effects(
+	motion: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	motion_base_path: &str,
+	effects: &mut Vec<UnaRuntimeActionEffect>,
+) {
 	if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
 		return;
 	}
@@ -4058,7 +4406,7 @@ fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnaps
 			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
 				break;
 			}
-			if let Some(effect) = unavatar_animator_curve_binding_effect(binding, scene) {
+			if let Some(effect) = unavatar_animator_curve_binding_effect(binding, scene, motion_base_path) {
 				effects.push(effect);
 			}
 		}
@@ -4068,17 +4416,21 @@ fn unavatar_animator_motion_effects(motion: &Value, scene: Option<&UnaSceneSnaps
 			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
 				break;
 			}
-			unavatar_animator_motion_effects(child, scene, effects);
+			unavatar_animator_motion_effects(child, scene, motion_base_path, effects);
 		}
 	}
 }
 
-fn unavatar_animator_curve_binding_effect(binding: &Value, scene: Option<&UnaSceneSnapshot>) -> Option<UnaRuntimeActionEffect> {
+fn unavatar_animator_curve_binding_effect(
+	binding: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	motion_base_path: &str,
+) -> Option<UnaRuntimeActionEffect> {
 	let property = binding.get("propertyName").and_then(Value::as_str)?;
 	let value = unavatar_animator_binding_value(binding)?;
 	match property {
 		"m_IsActive" | "m_Enabled" => {
-			let target = unavatar_animator_binding_node_target(binding, scene)?;
+			let target = unavatar_animator_binding_node_target(binding, scene, motion_base_path)?;
 			Some(UnaRuntimeActionEffect::NodeVisibility {
 				target,
 				visible: value > 0.5,
@@ -4108,12 +4460,16 @@ fn unavatar_animator_binding_value(binding: &Value) -> Option<f32> {
 		.map(|value| value as f32)
 }
 
-fn unavatar_animator_binding_node_target(binding: &Value, scene: Option<&UnaSceneSnapshot>) -> Option<UnaRuntimeNodeTarget> {
+fn unavatar_animator_binding_node_target(
+	binding: &Value,
+	scene: Option<&UnaSceneSnapshot>,
+	motion_base_path: &str,
+) -> Option<UnaRuntimeNodeTarget> {
 	let path = binding
 		.get("path")
 		.and_then(Value::as_str)
 		.filter(|value| !value.is_empty())
-		.map(str::to_string);
+		.map(|value| unavatar_animator_resolve_binding_path(motion_base_path, value));
 	if let (Some(scene), Some(path)) = (scene, path.as_deref()) {
 		if let Some((_, node)) = scene.nodes.iter().enumerate().find(|(index, _)| {
 			scene_node_path_for_index(scene, *index)
@@ -4134,6 +4490,19 @@ fn unavatar_animator_binding_node_target(binding: &Value, scene: Option<&UnaScen
 		resolved_node_id: None,
 		path: Some(path),
 	})
+}
+
+fn unavatar_animator_resolve_binding_path(motion_base_path: &str, binding_path: &str) -> String {
+	let binding_path = binding_path.trim_matches('/');
+	if binding_path.is_empty() {
+		return motion_base_path.trim_matches('/').to_string();
+	}
+	let motion_base_path = motion_base_path.trim_matches('/');
+	if motion_base_path.is_empty() || binding_path.starts_with(motion_base_path) {
+		binding_path.to_string()
+	} else {
+		format!("{motion_base_path}/{binding_path}")
+	}
 }
 
 fn unavatar_animator_action_label(label: &str) -> String {
@@ -5571,6 +5940,11 @@ fn remap_scene_node_references(scene: &mut UnaSceneSnapshot, old_node: usize, ne
 		if constraint.source_node == old_node {
 			constraint.source_node = new_node;
 		}
+		for source in &mut constraint.sources {
+			if source.source_node == old_node {
+				source.source_node = new_node;
+			}
+		}
 		if constraint.target_node == old_node {
 			constraint.target_node = new_node;
 		}
@@ -5869,6 +6243,91 @@ fn retarget_merge_armature_skins(scene: &mut UnaSceneSnapshot, mappings: &[(usiz
 	retargeted
 }
 
+fn retarget_merge_armature_dynamics(settings: &mut UnaDynamicsSettings, mappings: &[(usize, usize)]) -> usize {
+	if mappings.is_empty() {
+		return 0;
+	}
+	let mut resolved = BTreeMap::new();
+	for &(source_node, target_node) in mappings {
+		if source_node != target_node {
+			resolved.insert(source_node, target_node);
+		}
+	}
+	if resolved.is_empty() {
+		return 0;
+	}
+	let mut retargeted = 0usize;
+	for group in &mut settings.groups {
+		if let Some(center_node) = group.center_node {
+			if let Some(&target_node) = resolved.get(&center_node) {
+				group.center_node = Some(target_node);
+				retargeted += 1;
+			}
+		}
+		for node in &mut group.bone_node_indices {
+			if let Some(&target_node) = resolved.get(node) {
+				*node = target_node;
+				retargeted += 1;
+			}
+		}
+		group.interaction_chain_start_index = group.interaction_chain_start_index.min(group.bone_node_indices.len());
+	}
+	for collider in &mut settings.colliders {
+		if let Some(&target_node) = resolved.get(&collider.node) {
+			collider.node = target_node;
+			retargeted += 1;
+		}
+	}
+	for contact in &mut settings.contacts {
+		if let Some(&target_node) = resolved.get(&contact.node) {
+			contact.node = target_node;
+			retargeted += 1;
+		}
+	}
+	for constraint in &mut settings.constraint_refs {
+		if let Some(&target_node) = resolved.get(&constraint.target_node) {
+			constraint.target_node = target_node;
+			retargeted += 1;
+		}
+		for source_node in &mut constraint.source_nodes {
+			if let Some(&target_node) = resolved.get(source_node) {
+				*source_node = target_node;
+				retargeted += 1;
+			}
+		}
+	}
+	retargeted
+}
+
+fn retarget_merge_armature_node_constraint_sources(scene: &mut UnaSceneSnapshot, mappings: &[(usize, usize)]) -> usize {
+	if mappings.is_empty() {
+		return 0;
+	}
+	let mut resolved = BTreeMap::new();
+	for &(source_node, target_node) in mappings {
+		if source_node != target_node {
+			resolved.insert(source_node, target_node);
+		}
+	}
+	if resolved.is_empty() {
+		return 0;
+	}
+	let mut retargeted = 0usize;
+	for constraint in &mut scene.node_constraints {
+		if let Some(&target_node) = resolved.get(&constraint.source_node) {
+			constraint.source_node = target_node;
+			retargeted += 1;
+		}
+		for source in &mut constraint.sources {
+			if let Some(&target_node) = resolved.get(&source.source_node) {
+				source.source_node = target_node;
+				retargeted += 1;
+			}
+		}
+	}
+	retargeted
+}
+
 fn collect_primary_humanoid_name_targets(scene: &UnaSceneSnapshot, humanoid: &HumanoidProfile) -> BTreeMap<String, usize> {
 	let mut targets = BTreeMap::new();
 	for &node_index in humanoid.bone_node_indices.values() {
@@ -5987,7 +6446,6 @@ fn collect_merge_armature_retain_nodes(
 		}
 	}
 	for constraint in &scene.node_constraints {
-		retained_nodes.insert(constraint.source_node);
 		retained_nodes.insert(constraint.target_node);
 	}
 	for component in components {
@@ -6737,14 +7195,10 @@ fn apply_unavatar_blendshape_sync_expression_binds(
 	unavatar: &UnaUnavatarExtension,
 	report: &mut ImportReport,
 ) {
-	let Some(components) = unavatar
-		.source
-		.get("modularAvatar")
-		.and_then(|value| value.get("components"))
-		.and_then(Value::as_array)
-	else {
+	let components = unavatar_modular_avatar_components(unavatar);
+	if components.is_empty() {
 		return;
-	};
+	}
 	let node_ids = scene_node_ids(scene);
 	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
 	let paths = scene_node_paths(scene);
@@ -6937,6 +7391,43 @@ fn modular_avatar_shape_object_ref(shape: &Value) -> Option<&Value> {
 		.or_else(|| shape.get("resolvedTarget"))
 }
 
+fn modular_avatar_component_target_ref(component: &Value) -> Option<&Value> {
+	component.get("target").or_else(|| component.get("resolvedTarget"))
+}
+
+fn modular_avatar_shape_string_payload(shape: &Value) -> Option<(&str, &str, f32)> {
+	let value = shape.as_str()?.trim();
+	if value.is_empty() {
+		return None;
+	}
+	let (head, raw_value) = value.rsplit_once(' ')?;
+	let value = raw_value.parse::<f32>().ok()?;
+	let (target_and_shape, change_type) = head.rsplit_once(' ')?;
+	Some((target_and_shape.trim(), change_type.trim(), value))
+}
+
+fn modular_avatar_shape_string_target_and_name(
+	target_and_shape: &str,
+	node_ids: &BTreeMap<String, usize>,
+	registry_paths: &BTreeMap<String, String>,
+	paths: &BTreeMap<String, usize>,
+	normalized_paths: &BTreeMap<String, Vec<usize>>,
+) -> Option<(usize, String)> {
+	let mut best = None;
+	for (split, _) in target_and_shape.match_indices(' ') {
+		let target_path = target_and_shape[..split].trim();
+		let shape_name = target_and_shape[split + 1..].trim();
+		if target_path.is_empty() || shape_name.is_empty() {
+			continue;
+		}
+		let target_ref = serde_json::json!({ "path": target_path });
+		if let Some(target) = modular_avatar_reference_index(&target_ref, node_ids, registry_paths, paths, normalized_paths) {
+			best = Some((target, shape_name.to_string()));
+		}
+	}
+	best
+}
+
 fn apply_unavatar_shape_changer_sets(
 	scene: &mut UnaSceneSnapshot,
 	components: &[Value],
@@ -6944,6 +7435,7 @@ fn apply_unavatar_shape_changer_sets(
 	registry_paths: &BTreeMap<String, String>,
 	paths: &BTreeMap<String, usize>,
 	normalized_paths: &BTreeMap<String, Vec<usize>>,
+	visible_components_only: bool,
 ) -> (usize, usize, usize) {
 	let mut applied = 0usize;
 	let mut missing = 0usize;
@@ -6956,28 +7448,56 @@ fn apply_unavatar_shape_changer_sets(
 			skipped += 1;
 			continue;
 		}
+		if visible_components_only {
+			let Some(target_ref) = modular_avatar_component_target_ref(component) else {
+				missing += 1;
+				continue;
+			};
+			let Some(component_target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths)
+			else {
+				missing += 1;
+				continue;
+			};
+			if !scene.effective_node_visible(component_target) {
+				skipped += 1;
+				continue;
+			}
+		}
 		let Some(shapes) = unavatar_modular_avatar_component_array(component, &["Shapes", "shapes", "m_shapes"]) else {
 			continue;
 		};
 		for shape in shapes {
-			if !matches!(modular_avatar_shape_change_type(shape), Some("Set" | "set" | "1")) {
-				continue;
-			}
-			let Some(shape_name) = modular_avatar_shape_name(shape) else {
-				missing += 1;
-				continue;
-			};
-			let Some(target_ref) = modular_avatar_shape_object_ref(shape) else {
-				missing += 1;
-				continue;
-			};
-			let Some(target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
-				missing += 1;
-				continue;
-			};
-			if ensure_unique_mesh_for_node(scene, target).is_some()
-				&& apply_blend_shape_weight(scene, target, &shape_name, modular_avatar_shape_value(shape))
-			{
+			let (target, shape_name, value) =
+				if let Some((target_and_shape, change_type, value)) = modular_avatar_shape_string_payload(shape) {
+					if !matches!(change_type, "Set" | "set" | "1") {
+						continue;
+					}
+					let Some((target, shape_name)) =
+						modular_avatar_shape_string_target_and_name(target_and_shape, node_ids, registry_paths, paths, normalized_paths)
+					else {
+						missing += 1;
+						continue;
+					};
+					(target, shape_name, value)
+				} else {
+					if !matches!(modular_avatar_shape_change_type(shape), Some("Set" | "set" | "1")) {
+						continue;
+					}
+					let Some(shape_name) = modular_avatar_shape_name(shape) else {
+						missing += 1;
+						continue;
+					};
+					let Some(target_ref) = modular_avatar_shape_object_ref(shape) else {
+						missing += 1;
+						continue;
+					};
+					let Some(target) = modular_avatar_reference_index(target_ref, node_ids, registry_paths, paths, normalized_paths) else {
+						missing += 1;
+						continue;
+					};
+					(target, shape_name, modular_avatar_shape_value(shape))
+				};
+			if ensure_unique_mesh_for_node(scene, target).is_some() && apply_blend_shape_weight(scene, target, &shape_name, value) {
 				applied += 1;
 			} else {
 				missing += 1;
@@ -7101,6 +7621,13 @@ fn collect_modular_avatar_vertex_filter_delete_groups(
 				continue;
 			};
 			for shape in shapes {
+				if let Some((_target_and_shape, change_type, _value)) = modular_avatar_shape_string_payload(shape) {
+					if !matches!(change_type, "Delete" | "delete" | "0") {
+						continue;
+					}
+					unsupported += 1;
+					continue;
+				}
 				if !matches!(modular_avatar_shape_change_type(shape), None | Some("Delete" | "delete" | "0")) {
 					continue;
 				}
@@ -7792,7 +8319,7 @@ fn apply_unavatar_modular_avatar_with_context(
 	humanoid_profile: Option<&HumanoidProfile>,
 	report: &mut ImportReport,
 ) {
-	let Some(modular_avatar) = unavatar.source.get("modularAvatar").and_then(|v| v.as_object()) else {
+	let Some(modular_avatar) = unavatar_modular_avatar_value(&unavatar.source).and_then(|v| v.as_object()) else {
 		return;
 	};
 	let Some(components) = modular_avatar.get("components").and_then(|v| v.as_array()) else {
@@ -7814,7 +8341,7 @@ fn apply_unavatar_modular_avatar_with_context(
 	}
 	let step_started = Instant::now();
 	let (shape_changer_set_applied, shape_changer_set_missing, shape_changer_set_skipped) =
-		apply_unavatar_shape_changer_sets(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths);
+		apply_unavatar_shape_changer_sets(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths, false);
 	record_modular_avatar_profile_step(report, "shape_changer_sets", step_started);
 	if shape_changer_set_applied > 0 || shape_changer_set_missing > 0 || shape_changer_set_skipped > 0 {
 		report.push_info(format!(
@@ -7903,6 +8430,7 @@ fn apply_unavatar_modular_avatar_with_context(
 		.flat_map(|component| component.mappings.iter().copied())
 		.collect::<Vec<_>>();
 	let merge_cycle_nodes = count_merge_armature_cycle_nodes(&merge_mapping_pairs);
+	let merge_constraint_sources = retarget_merge_armature_node_constraint_sources(scene, &merge_mapping_pairs);
 	let parents = scene_parent_indices(scene);
 	let (ordered_merge_indices, merge_component_cycles) = order_merge_armature_components(&merge_mappings, &parents);
 	let mut merge_auxiliary_reparented = 0usize;
@@ -7913,12 +8441,13 @@ fn apply_unavatar_modular_avatar_with_context(
 		merge_retargeted += retarget_merge_armature_skins(scene, component_mappings);
 	}
 	record_modular_avatar_profile_step(report, "merge_armature", step_started);
-	if merge_retargeted > 0 || merge_auxiliary_reparented > 0 || merge_missing > 0 || merge_skipped > 0 {
+	if merge_retargeted > 0 || merge_auxiliary_reparented > 0 || merge_constraint_sources > 0 || merge_missing > 0 || merge_skipped > 0 {
 		report.push_info(format!(
-			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_auxiliary_bones={}, merge_armature_missing={}, merge_armature_skipped={}, merge_armature_cycles={}, merge_armature_component_cycles={}",
+			".unavatar Modular Avatar: merge_armature_mappings={}, mesh_retargeter_joints={}, merge_armature_auxiliary_bones={}, merge_armature_constraint_sources={}, merge_armature_missing={}, merge_armature_skipped={}, merge_armature_cycles={}, merge_armature_component_cycles={}",
 			merge_mapping_pairs.len(),
 			merge_retargeted,
 			merge_auxiliary_reparented,
+			merge_constraint_sources,
 			merge_missing,
 			merge_skipped,
 			merge_cycle_nodes,
@@ -8061,7 +8590,7 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 		let step_started = Instant::now();
 		reset_runtime_dynamics_enabled(Some(&mut runtime.dynamics));
 		log_wardrobe_profile_step("reset_runtime_dynamics_enabled", step_started);
-		if base_id.as_deref() == Some(set_id) {
+		let mut report = if base_id.as_deref() == Some(set_id) {
 			let step_started = Instant::now();
 			match filtered_unavatar_base_wardrobe_operations_with_lookup(runtime.scene, &unavatar, &lookup) {
 				Some((base_operations, _skipped, reset_operations)) => {
@@ -8126,7 +8655,14 @@ pub fn apply_unavatar_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> 
 			let report = apply_unavatar_wardrobe_operations_with_lookup(runtime.scene, Some(&mut runtime.dynamics), operations, &lookup);
 			log_wardrobe_profile_step("apply_selected_operations", step_started);
 			report
-		}
+		};
+		let step_started = Instant::now();
+		let (shape_changer_set_applied, shape_changer_set_missing, _shape_changer_set_skipped) =
+			apply_visible_unavatar_shape_changer_sets_after_wardrobe(runtime.scene, &unavatar);
+		log_wardrobe_profile_step("apply_visible_shape_changer_sets", step_started);
+		report.blendshape_applied += shape_changer_set_applied;
+		report.blendshape_missing += shape_changer_set_missing;
+		report
 	};
 	document.runtime_model_mut().set_active_wardrobe_set(Some(set_id.to_string()));
 	document.runtime_model_mut().set_active_asset_groups(active_asset_groups);
@@ -8173,6 +8709,30 @@ fn apply_unavatar_base_wardrobe(scene: &mut UnaSceneSnapshot, unavatar: &UnaUnav
 			skipped
 		));
 	}
+	let (shape_changer_set_applied, shape_changer_set_missing, shape_changer_set_skipped) =
+		apply_visible_unavatar_shape_changer_sets_after_wardrobe(scene, unavatar);
+	if shape_changer_set_applied > 0 || shape_changer_set_missing > 0 || shape_changer_set_skipped > 0 {
+		report.push_info(format!(
+			".unavatar wardrobe Modular Avatar: visible_shape_changer_set_applied={shape_changer_set_applied}, visible_shape_changer_set_missing={shape_changer_set_missing}, visible_shape_changer_set_skipped={shape_changer_set_skipped}"
+		));
+	}
+}
+
+fn apply_visible_unavatar_shape_changer_sets_after_wardrobe(
+	scene: &mut UnaSceneSnapshot,
+	unavatar: &UnaUnavatarExtension,
+) -> (usize, usize, usize) {
+	let Some(modular_avatar) = unavatar_modular_avatar_value(&unavatar.source).and_then(|v| v.as_object()) else {
+		return (0, 0, 0);
+	};
+	let Some(components) = modular_avatar.get("components").and_then(|v| v.as_array()) else {
+		return (0, 0, 0);
+	};
+	let node_ids = scene_node_ids(scene);
+	let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+	let paths = scene_node_paths(scene);
+	let normalized_paths = scene_node_normalized_paths(scene);
+	apply_unavatar_shape_changer_sets(scene, components, &node_ids, &registry_paths, &paths, &normalized_paths, true)
 }
 
 fn reset_scene_visibility(scene: &mut UnaSceneSnapshot) {
@@ -11453,6 +12013,7 @@ impl AvatarImporter for GltfImporter {
 			.as_ref()
 			.and_then(|unavatar| unavatar_humanoid_profile(&scene, unavatar, &mut report));
 		record_gltf_import_profile_step(&mut report, "unavatar_humanoid_profile", step_started);
+		let mut modular_avatar_merge_mapping_pairs = Vec::new();
 		if let Some(unavatar) = &unavatar {
 			let step_started = Instant::now();
 			report_unavatar_path_diagnostics(&scene, unavatar, &mut report);
@@ -11461,6 +12022,23 @@ impl AvatarImporter for GltfImporter {
 			apply_unavatar_asset_group_ownership(&mut scene, unavatar, &mut report);
 			record_gltf_import_profile_step(&mut report, "asset_group_ownership", step_started);
 			let step_started = Instant::now();
+			let node_ids = scene_node_ids(&scene);
+			let registry_paths = unavatar_node_registry_paths(Some(unavatar));
+			let paths = scene_node_paths(&scene);
+			let normalized_paths = scene_node_normalized_paths(&scene);
+			scene.node_constraints =
+				unavatar_node_constraints(unavatar, &node_ids, &registry_paths, &paths, &normalized_paths, &mut report);
+			record_gltf_import_profile_step(&mut report, "node_constraints", step_started);
+			let step_started = Instant::now();
+			modular_avatar_merge_mapping_pairs = {
+				let components = unavatar_modular_avatar_components(unavatar);
+				let (merge_mappings, _, _) =
+					collect_merge_armature_bone_mappings(components, &node_ids, &registry_paths, &paths, &normalized_paths);
+				merge_mappings
+					.iter()
+					.flat_map(|component| component.mappings.iter().copied())
+					.collect::<Vec<_>>()
+			};
 			apply_unavatar_modular_avatar_with_texture_assets(
 				&mut scene,
 				unavatar,
@@ -11517,9 +12095,15 @@ impl AvatarImporter for GltfImporter {
 			record_gltf_import_profile_step(&mut report, "blendshape_sync_expression_binds", step_started);
 		}
 		let step_started = Instant::now();
-		let spring_bones = unavatar
+		let mut spring_bones = unavatar
 			.as_ref()
 			.and_then(|unavatar| unavatar_dynamics_settings(&mut scene, unavatar, &mut report));
+		if let Some(settings) = spring_bones.as_mut() {
+			let retargeted = retarget_merge_armature_dynamics(settings, &modular_avatar_merge_mapping_pairs);
+			if retargeted > 0 {
+				report.push_info(format!(".unavatar Modular Avatar: merge_armature_dynamics_nodes={retargeted}"));
+			}
+		}
 		record_gltf_import_profile_step(&mut report, "dynamics_settings", step_started);
 		if let Some(catalog) = &expression_catalog {
 			report.push_info(format!(".unavatar expressions: morph_target_presets={}", catalog.presets.len()));
@@ -11584,7 +12168,7 @@ mod tests {
 	use image::ImageEncoder;
 	use std::io::Write;
 	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
-	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind};
+	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource};
 
 	fn triangle_bin_bytes() -> Vec<u8> {
 		let mut v = Vec::with_capacity(48);
@@ -11684,15 +12268,100 @@ mod tests {
 					"gravity": [0.0, -0.4, 0.0],
 					"radius": 0.03,
 					"sourceParams": {
+						"integrationType": "Advanced",
+						"pull": 0.25,
+						"spring": 0.15,
+						"momentum": 0.35,
+						"stiffness": 0.45,
+						"gravityPower": 0.8,
+						"gravityVector": [0.0, -0.5, 0.0],
+						"gravityFalloff": 0.6,
+						"immobile": 0.35,
+						"immobileType": 1,
+						"pullCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
+						"springCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 2.0}
+							]
+						},
+						"momentumCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
+						"stiffnessCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.25}
+							]
+						},
+						"gravityCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.25}
+							]
+						},
+						"gravityFalloffCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
+						"immobileCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
 						"allowCollision": true,
 						"writebackMode": "rotation_translation",
 						"allowGrabbing": true,
 						"allowPosing": false,
 						"parameter": "HairPB",
 						"limitType": "Angle",
+						"limitRotation": [10.0, 20.0, 30.0],
 						"maxAngleX": 45.0,
 						"maxAngleZ": 30.0,
+						"maxAngleXCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
+						"maxAngleZCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.25}
+							]
+						},
 						"maxStretch": 0.2,
+						"maxSquish": 0.15,
+						"stretchMotion": 0.5,
+						"maxStretchCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
+						"maxSquishCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.25}
+							]
+						},
+						"stretchMotionCurve": {
+							"keys": [
+								{"time": 0.0, "value": 1.0},
+								{"time": 1.0, "value": 0.5}
+							]
+						},
 						"radiusCurve": {
 							"keys": [
 								{"time": 0.0, "value": 1.0},
@@ -11717,6 +12386,11 @@ mod tests {
 							"shapeType": "1",
 							"radius": 0.06,
 							"height": 0.4
+						}, {
+							"root": {"nodeId": "node_root", "path": "Root"},
+							"shapeType": "Plane",
+							"position": [0.0, 0.0, 0.1],
+							"rotation": [0.0, 0.0, 0.0, 1.0]
 						}]
 					}
 				}, {
@@ -11748,21 +12422,43 @@ mod tests {
 		assert_eq!(settings.groups[0].source_id, "hair_front");
 		assert_eq!(settings.groups[0].comment, "hair_front");
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
+		assert_eq!(settings.groups[0].integration_type, UnaDynamicsIntegrationType::VrcAdvanced);
+		assert_eq!(settings.groups[0].pull, 0.25);
+		assert_eq!(settings.groups[0].spring, 0.35);
+		assert_eq!(settings.groups[0].stiffness, 0.45);
+		assert_eq!(settings.groups[0].gravity_falloff, 0.6);
+		assert_eq!(settings.groups[0].immobile, 0.35);
+		assert_eq!(settings.groups[0].immobile_type, UnaDynamicsImmobileType::World);
+		assert_eq!(settings.groups[0].stiffness_samples, vec![0.1125]);
+		assert_eq!(settings.groups[0].pull_samples, vec![0.125]);
+		assert_eq!(settings.groups[0].spring_samples, vec![0.175]);
+		assert_eq!(settings.groups[0].gravity_power_samples, vec![0.2]);
+		assert_eq!(settings.groups[0].gravity_falloff_samples, vec![0.3]);
+		assert_eq!(settings.groups[0].immobile_samples, vec![0.175]);
+		assert_eq!(settings.groups[0].max_angle_x_samples, vec![22.5]);
+		assert_eq!(settings.groups[0].max_angle_z_samples, vec![7.5]);
 		assert_eq!(settings.groups[0].hit_radius, 0.03);
 		assert_eq!(settings.groups[0].hit_radius_samples.len(), 1);
 		assert!((settings.groups[0].hit_radius_samples[0] - 0.015).abs() < 1e-6);
 		assert_eq!(settings.groups[0].writeback_mode, UnaDynamicsWritebackMode::RotationTranslation);
-		assert!((settings.groups[0].gravity_power - 0.4).abs() < 1e-6);
+		assert!((settings.groups[0].gravity_power - 0.8).abs() < 1e-6);
+		assert_eq!(settings.groups[0].gravity_dir, [0.0, -1.0, 0.0]);
 		let limit = settings.groups[0].limit.as_ref().expect("limit");
 		assert_eq!(limit.limit_type, "Angle");
+		assert_eq!(limit.limit_rotation, [10.0, 20.0, 30.0]);
 		assert_eq!(limit.max_angle_x, 45.0);
 		assert_eq!(limit.max_angle_z, 30.0);
 		assert_eq!(limit.max_stretch, 0.2);
+		assert_eq!(limit.max_squish, 0.15);
+		assert_eq!(limit.stretch_motion, Some(0.5));
+		assert_eq!(limit.max_stretch_samples, vec![0.1]);
+		assert!((limit.max_squish_samples[0] - 0.0375).abs() < 1e-6);
+		assert_eq!(limit.stretch_motion_samples, vec![0.25]);
 		let interaction = settings.groups[0].interaction.as_ref().expect("interaction");
 		assert_eq!(interaction.allow_grabbing, Some(true));
 		assert_eq!(interaction.allow_posing, Some(false));
 		assert_eq!(interaction.parameter, "HairPB");
-		assert_eq!(settings.colliders.len(), 4);
+		assert_eq!(settings.colliders.len(), 5);
 		assert_eq!(settings.colliders[0].source_kind, UnaDynamicsSourceKind::Unknown);
 		assert_eq!(settings.colliders[0].node, 0);
 		assert_eq!(settings.colliders[0].shape, UnaDynamicsColliderShape::Sphere);
@@ -11780,6 +12476,8 @@ mod tests {
 		assert_eq!(settings.colliders[3].shape, UnaDynamicsColliderShape::Capsule);
 		assert_eq!(settings.colliders[3].radius, 0.06);
 		assert_eq!(settings.colliders[3].height, 0.4);
+		assert_eq!(settings.colliders[4].shape, UnaDynamicsColliderShape::Plane);
+		assert_eq!(settings.colliders[4].position, [-0.0, 0.0, 0.1]);
 		assert_eq!(settings.contacts.len(), 1);
 		assert_eq!(settings.contacts[0].source_kind, UnaDynamicsSourceKind::VrcPhysBone);
 		assert_eq!(settings.contacts[0].kind, UnaDynamicsContactKind::Receiver);
@@ -11797,6 +12495,87 @@ mod tests {
 		assert!(settings.groups[1].enabled);
 		assert_eq!(settings.groups[2].source_id, "disabled_tail");
 		assert!(!settings.groups[2].enabled);
+	}
+
+	#[test]
+	fn unavatar_node_constraints_lowers_parent_constraint_sources() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 2, 3]),
+				test_scene_node("node_target", Vec::new()),
+				test_scene_node("node_source_a", Vec::new()),
+				test_scene_node("node_source_b", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_target", "path": "node_root/node_target"},
+					{"nodeId": "node_source_a", "path": "node_root/node_source_a"},
+					{"nodeId": "node_source_b", "path": "node_root/node_source_b"}
+				],
+				"nodeConstraints": [{
+					"kind": "parent",
+					"target": {"nodeId": "node_target"},
+					"weight": 0.75,
+					"sources": [
+						{"node": {"nodeId": "node_source_a"}, "weight": 0.25},
+						{"node": {"nodeId": "node_source_b"}, "weight": 0.75}
+					]
+				}]
+			}),
+		};
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = unavatar_node_registry_paths(Some(&unavatar));
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+		let mut report = ImportReport::default();
+
+		let constraints = unavatar_node_constraints(&unavatar, &node_ids, &registry_paths, &paths, &normalized_paths, &mut report);
+
+		assert_eq!(constraints.len(), 1);
+		assert_eq!(constraints[0].target_node, 1);
+		assert_eq!(constraints[0].source_node, 2);
+		assert_eq!(constraints[0].sources.len(), 2);
+		assert_eq!(constraints[0].sources[1].source_node, 3);
+		assert!((constraints[0].weight - 0.75).abs() < f32::EPSILON);
+		assert!(matches!(constraints[0].kind, UnaNodeConstraintKind::Parent { .. }));
+	}
+
+	#[test]
+	fn unavatar_vrc_physbone_chain_prepends_parent_anchor_for_root_writeback() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_anchor", vec![1]),
+				test_scene_node("node_root", vec![2]),
+				test_scene_node("node_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_anchor", "path": "Anchor"},
+					{"nodeId": "node_root", "path": "Anchor/Root"},
+					{"nodeId": "node_tip", "path": "Anchor/Root/Tip"}
+				],
+				"dynamics": [{
+					"id": "physbone:cloth",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Anchor/Root"}]
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 2]);
 	}
 
 	#[test]
@@ -11886,7 +12665,7 @@ mod tests {
 			.collect();
 		counts.sort_by(|a, b| a.0.cmp(&b.0));
 
-		assert_eq!(counts, vec![(vec![0, 1, 2], 2, 1), (vec![0, 3], 1, 0)]);
+		assert_eq!(counts, vec![(vec![0, 1, 2], 2, 1), (vec![0, 3], 1, 1)]);
 	}
 
 	#[test]
@@ -12032,10 +12811,102 @@ mod tests {
 		let mut report = ImportReport::default();
 		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
-		assert_eq!(settings.groups.len(), 1);
-		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
+		let mut chains = settings
+			.groups
+			.iter()
+			.map(|group| group.bone_node_indices.clone())
+			.collect::<Vec<_>>();
+		chains.sort();
+		assert_eq!(chains, vec![vec![0, 3], vec![0, 4]]);
 		assert!(report.messages.iter().any(|message| message.contains("ignored_transforms=1")));
 		assert!(report.messages.iter().any(|message| message.contains("multi_child_ignore=1")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_does_not_prepend_parent_anchor_for_multi_child_vrc_physbone_root() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_parent", vec![1]),
+				test_scene_node("node_root", vec![2, 4]),
+				test_scene_node("node_left", vec![3]),
+				test_scene_node("node_left_tip", Vec::new()),
+				test_scene_node("node_right", vec![5]),
+				test_scene_node("node_right_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_parent", "path": "Parent"},
+					{"nodeId": "node_root", "path": "Parent/Root"},
+					{"nodeId": "node_left", "path": "Parent/Root/Left"},
+					{"nodeId": "node_left_tip", "path": "Parent/Root/Left/Tip"},
+					{"nodeId": "node_right", "path": "Parent/Root/Right"},
+					{"nodeId": "node_right_tip", "path": "Parent/Root/Right/Tip"}
+				],
+				"dynamics": [{
+					"id": "multi_child",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Parent/Root"}],
+					"multiChildType": "First"
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		let mut chains = settings
+			.groups
+			.iter()
+			.map(|group| group.bone_node_indices.clone())
+			.collect::<Vec<_>>();
+		chains.sort();
+		assert_eq!(chains, vec![vec![1, 2, 3], vec![1, 4, 5]]);
+		assert!(chains.iter().all(|chain| !chain.starts_with(&[0, 1])));
+	}
+
+	#[test]
+	fn unavatar_dynamics_does_not_prepend_parent_anchor_for_single_child_vrc_physbone_root() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_parent", vec![1]),
+				test_scene_node("node_root", vec![2]),
+				test_scene_node("node_mid", vec![3]),
+				test_scene_node("node_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_parent", "path": "Parent"},
+					{"nodeId": "node_root", "path": "Parent/Root"},
+					{"nodeId": "node_mid", "path": "Parent/Root/Mid"},
+					{"nodeId": "node_tip", "path": "Parent/Root/Mid/Tip"}
+				],
+				"dynamics": [{
+					"id": "single_child",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Parent/Root"}],
+					"multiChildType": "Ignore"
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		let chains = settings
+			.groups
+			.iter()
+			.map(|group| group.bone_node_indices.clone())
+			.collect::<Vec<_>>();
+		assert_eq!(chains, vec![vec![1, 2, 3]]);
+		assert!(chains.iter().all(|chain| !chain.starts_with(&[0, 1])));
 	}
 
 	#[test]
@@ -12171,12 +13042,13 @@ mod tests {
 	}
 
 	#[test]
-	fn unavatar_dynamics_warns_when_endpoint_position_is_ignored_on_non_leaf_root() {
+	fn unavatar_dynamics_synthesizes_endpoint_tail_for_non_leaf_root() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_child", Vec::new())],
 			roots: vec![0],
 			..Default::default()
 		};
+		scene.nodes[1].transform = Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array();
 		let unavatar = UnaUnavatarExtension {
 			spec_version: "0.1-preview".to_string(),
 			source: serde_json::json!({
@@ -12197,14 +13069,59 @@ mod tests {
 		let mut report = ImportReport::default();
 		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
+		assert_eq!(scene.nodes.len(), 3);
+		assert_eq!(scene.nodes[1].children, vec![2]);
+		let (_, _, endpoint_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		let expected_endpoint = Vec3::new(-0.1, -0.8, 0.3);
+		assert!(
+			(endpoint_translation - expected_endpoint).length() < 1e-6,
+			"endpoint_translation={endpoint_translation:?}"
+		);
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 2]);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
+	}
+
+	#[test]
+	fn unavatar_dynamics_warns_when_non_leaf_endpoint_tail_is_degenerate() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_child", Vec::new())],
+			roots: vec![0],
+			..Default::default()
+		};
+		scene.nodes[1].transform = Mat4::from_translation(Vec3::new(-0.1, 0.2, 0.3)).to_cols_array();
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_root", "path": "Root"},
+					{"nodeId": "node_child", "path": "Root/Child"}
+				],
+				"dynamics": [{
+					"id": "degenerate_endpoint_tail",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"endpointPosition": [0.1, 0.2, 0.3]
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
 		assert_eq!(scene.nodes.len(), 2);
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
 		assert!(report
 			.messages
 			.iter()
-			.any(|warning| warning.contains("ignored endpointPosition on 1 non-leaf PhysBone root")));
-		assert!(report.messages.iter().any(|warning| warning.contains("non_leaf_tail@Root")));
+			.any(|message| message.contains("could not synthesize endpoint tail for 1 non-leaf dynamics root")));
+		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
 	#[test]
@@ -12327,7 +13244,6 @@ mod tests {
 			"ModularAvatarConvertConstraints",
 			"ModularAvatarFloorAdjuster",
 			"ModularAvatarMMDLayerControl",
-			"ModularAvatarMergeAnimator",
 			"ModularAvatarMergeBlendTree",
 			"ModularAvatarPlatformFilter",
 			"ModularAvatarRenameVRChatCollisionTags",
@@ -16863,13 +17779,82 @@ mod tests {
 		let paths = scene_node_paths(&scene);
 		let normalized_paths = scene_node_normalized_paths(&scene);
 
-		let result = apply_unavatar_shape_changer_sets(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths);
+		let result = apply_unavatar_shape_changer_sets(
+			&mut scene,
+			&components,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+			false,
+		);
 
 		assert_eq!(result, (1, 0, 0));
 		assert_eq!(scene.nodes[1].mesh, Some(1));
 		assert_eq!(scene.nodes[2].mesh, Some(0));
 		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.75]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.0]);
+	}
+
+	#[test]
+	fn modular_avatar_shape_changer_set_applies_string_payloads() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					children: vec![1, 2],
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("Body_b".to_string()),
+					source_node_id: Some("node_body".to_string()),
+					resolved_node_id: None,
+					mesh: Some(0),
+					..test_node(Vec::new())
+				},
+				UnaSceneNode {
+					name: Some("UV2_Shirts".to_string()),
+					source_node_id: Some("node_shirts".to_string()),
+					resolved_node_id: None,
+					mesh: Some(1),
+					..test_node(Vec::new())
+				},
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![test_morph_primitive("Spine1_____腰_上部", 0.0)],
+				vec![test_morph_primitive("Skirt_ON", 0.0)],
+			],
+			..Default::default()
+		};
+		let components = vec![serde_json::json!({
+			"shortType": "ModularAvatarShapeChanger",
+			"enabled": true,
+			"fields": {
+				"m_shapes": [
+					"Body_b Spine1_____腰_上部 Set 100",
+					"UV2_Shirts Skirt_ON Set 75"
+				]
+			}
+		})];
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = BTreeMap::new();
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+
+		let result = apply_unavatar_shape_changer_sets(
+			&mut scene,
+			&components,
+			&node_ids,
+			&registry_paths,
+			&paths,
+			&normalized_paths,
+			false,
+		);
+
+		assert_eq!(result, (2, 0, 0));
+		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![1.0]);
+		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.75]);
 	}
 
 	#[test]
@@ -16942,7 +17927,15 @@ mod tests {
 		let normalized_paths = scene_node_normalized_paths(&scene);
 
 		assert_eq!(
-			apply_unavatar_shape_changer_sets(&mut scene, &components, &node_ids, &registry_paths, &paths, &normalized_paths),
+			apply_unavatar_shape_changer_sets(
+				&mut scene,
+				&components,
+				&node_ids,
+				&registry_paths,
+				&paths,
+				&normalized_paths,
+				false,
+			),
 			(1, 0, 0)
 		);
 		assert_eq!(
@@ -17936,6 +18929,47 @@ mod tests {
 	}
 
 	#[test]
+	fn modular_avatar_merge_armature_retargets_dynamics_nodes() {
+		let mut settings = UnaDynamicsSettings {
+			groups: vec![UnaSpringBoneGroup {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				center_node: Some(2),
+				bone_node_indices: vec![0, 2, 3],
+				interaction_chain_start_index: 2,
+				..Default::default()
+			}],
+			colliders: vec![UnaDynamicsCollider {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 2,
+				..Default::default()
+			}],
+			contacts: vec![UnaDynamicsContact {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				node: 2,
+				..Default::default()
+			}],
+			constraint_refs: vec![UnaDynamicsConstraintRef {
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				target_node: 2,
+				source_nodes: vec![2, 3],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		let retargeted = retarget_merge_armature_dynamics(&mut settings, &[(2, 1)]);
+
+		assert_eq!(retargeted, 6);
+		assert_eq!(settings.groups[0].center_node, Some(1));
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 3]);
+		assert_eq!(settings.groups[0].interaction_chain_start_index, 2);
+		assert_eq!(settings.colliders[0].node, 1);
+		assert_eq!(settings.contacts[0].node, 1);
+		assert_eq!(settings.constraint_refs[0].target_node, 1);
+		assert_eq!(settings.constraint_refs[0].source_nodes, vec![1, 3]);
+	}
+
+	#[test]
 	fn modular_avatar_merge_armature_reparents_auxiliary_bones() {
 		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
 		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
@@ -18030,7 +19064,7 @@ mod tests {
 	}
 
 	#[test]
-	fn modular_avatar_merge_armature_reparents_auxiliary_bones_keeps_constraint_reference() {
+	fn modular_avatar_merge_armature_reparents_constraint_source_auxiliary_bones() {
 		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
 		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
 		let aux_local = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
@@ -18090,6 +19124,7 @@ mod tests {
 				source_node: 3,
 				weight: 1.0,
 				kind: UnaNodeConstraintKind::Rotation,
+				sources: Vec::new(),
 			}],
 			roots: vec![0],
 			..Default::default()
@@ -18118,9 +19153,158 @@ mod tests {
 		let mut report = ImportReport::default();
 		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
 		let after = scene_world_matrices(&scene);
-		assert_eq!(scene.nodes[1].children, Vec::<usize>::new());
-		assert_eq!(scene.nodes[2].children, vec![3]);
+		assert_eq!(scene.nodes[1].children, vec![3]);
+		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
 		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_reparents_multi_source_constraint_auxiliary_bones() {
+		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
+		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+		let aux_local = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					name: Some("Root".to_string()),
+					source_node_id: None,
+					resolved_node_id: None,
+					visible: true,
+					transform: Mat4::IDENTITY.to_cols_array(),
+					children: vec![1, 2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Chest".to_string()),
+					source_node_id: Some("node_target_chest".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: target_world.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("Chest".to_string()),
+					source_node_id: Some("node_source_chest".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: source_world.to_cols_array(),
+					children: vec![3],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					name: Some("CapeSource".to_string()),
+					source_node_id: Some("node_cape_source".to_string()),
+					resolved_node_id: None,
+					visible: true,
+					transform: aux_local.to_cols_array(),
+					children: Vec::new(),
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			node_constraints: vec![UnaNodeConstraint {
+				target_node: 1,
+				source_node: 1,
+				weight: 1.0,
+				kind: UnaNodeConstraintKind::Parent {
+					translate_x: true,
+					translate_y: true,
+					translate_z: true,
+					rotate_x: true,
+					rotate_y: true,
+					rotate_z: true,
+					translation_at_rest: [0.0; 3],
+					rotation_at_rest: [0.0; 3],
+				},
+				sources: vec![UnaNodeConstraintSource {
+					source_node: 3,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source_chest", "path": "Outfit/Armature/Chest"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source_chest", "path": "Outfit/Armature/Chest"},
+							"targetBone": {"nodeId": "node_target_chest", "path": "Armature/Chest"}
+						}]
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+
+		assert_eq!(scene.nodes[1].children, vec![3]);
+		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
+		assert_eq!(scene.node_constraints[0].sources[0].source_node, 3);
+		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+	}
+
+	#[test]
+	fn remap_scene_node_references_updates_multi_source_constraints() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Root", vec![1, 2, 3]),
+				test_scene_node("Target", Vec::new()),
+				test_scene_node("OldSource", Vec::new()),
+				test_scene_node("NewSource", Vec::new()),
+			],
+			node_constraints: vec![UnaNodeConstraint {
+				target_node: 1,
+				source_node: 2,
+				weight: 1.0,
+				kind: UnaNodeConstraintKind::Parent {
+					translate_x: true,
+					translate_y: true,
+					translate_z: true,
+					rotate_x: true,
+					rotate_y: true,
+					rotate_z: true,
+					translation_at_rest: [0.0; 3],
+					rotation_at_rest: [0.0; 3],
+				},
+				sources: vec![UnaNodeConstraintSource {
+					source_node: 2,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+
+		remap_scene_node_references(&mut scene, 2, 3);
+
+		assert_eq!(scene.node_constraints[0].source_node, 3);
+		assert_eq!(scene.node_constraints[0].sources[0].source_node, 3);
 	}
 
 	#[test]
@@ -19207,6 +20391,86 @@ mod tests {
 		assert_eq!(coat.scoped_active_asset_group_count, 2);
 		assert!(coat.scoped_missing_active_asset_groups.is_empty());
 		assert_eq!(coat.scoped_resident_mesh_primitive_count, 1);
+	}
+
+	#[test]
+	fn wardrobe_reapplies_visible_shape_changer_sets_after_base_blendshape_reset() {
+		let mut doc = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					UnaSceneNode {
+						name: Some("Root".to_string()),
+						children: vec![1, 2],
+						..test_node(Vec::new())
+					},
+					UnaSceneNode {
+						name: Some("Shirts".to_string()),
+						source_node_id: Some("node_shirts".to_string()),
+						resolved_node_id: None,
+						mesh: Some(0),
+						..test_node(Vec::new())
+					},
+					UnaSceneNode {
+						name: Some("Skirt".to_string()),
+						source_node_id: Some("node_skirt".to_string()),
+						resolved_node_id: None,
+						..test_node(Vec::new())
+					},
+				],
+				roots: vec![0],
+				meshes: vec![vec![test_morph_primitive("Skirt_ON", 0.0)]],
+				..Default::default()
+			}),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({
+					"modularAvatar": {
+						"components": [{
+							"shortType": "ModularAvatarShapeChanger",
+							"enabled": true,
+							"target": {"nodeId": "node_skirt", "path": "Root/Skirt"},
+							"fields": {
+								"m_shapes": ["Root/Shirts Skirt_ON Set 100"]
+							}
+						}]
+					},
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [{
+							"id": "base",
+							"assetGroups": [""],
+							"operations": [{
+								"type": "nodeEnabled",
+								"target": {"nodeId": "node_skirt", "path": "Root/Skirt"},
+								"visible": false
+							}, {
+								"type": "blendShapeWeight",
+								"target": {"nodeId": "node_shirts", "path": "Root/Shirts"},
+								"name": "Skirt_ON",
+								"value": 0
+							}]
+						}, {
+							"id": "coat",
+							"assetGroups": ["outfit:coat"],
+							"operations": [{
+								"type": "nodeEnabled",
+								"target": {"nodeId": "node_skirt", "path": "Root/Skirt"},
+								"visible": true
+							}]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		let base = apply_unavatar_wardrobe_set(&mut doc, "base").expect("apply base wardrobe");
+		assert_eq!(base.blendshape_applied, 1);
+		assert_eq!(blend_shape_weight(doc.scene.as_ref().unwrap(), 1, "Skirt_ON"), Some(0.0));
+
+		let coat = apply_unavatar_wardrobe_set(&mut doc, "coat").expect("apply coat wardrobe");
+		assert_eq!(coat.blendshape_applied, 1);
+		assert_eq!(blend_shape_weight(doc.scene.as_ref().unwrap(), 1, "Skirt_ON"), Some(1.0));
 	}
 
 	#[test]

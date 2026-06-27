@@ -44,6 +44,6 @@ U.N. Avatar の公開文書と実装・設計メモの索引。初めて使う�
 | [`v2-open-decisions.md`](v2-open-decisions.md) | v2 実装前に相談・決定していた項目 |
 | [`profile-settings-ui-v1-design.md`](profile-settings-ui-v1-design.md) | Supervisor Console の Profiles / Renderers UI 情報設計 |
 | [`bone-based-colliders-v1.md`](bone-based-colliders-v1.md) | ボーンベースコライダーの v1 設計 |
-| [`spring-bone-physics-v1.md`](spring-bone-physics-v1.md) | SpringBone solver と profile 設定の設計 |
+| [`spring-bone-physics-v1.md`](spring-bone-physics-v1.md) | v1 SpringBone 実装資産と v2.1 UNDynamics への移行メモ |
 
 これらの歴史的メモと現行実装が食い違う場合は、現行コード、[`../README.md`](../README.md)、[`v2-getting-started.md`](v2-getting-started.md)、[`roadmap.md`](roadmap.md)、[`runtime-mvp.md`](runtime-mvp.md) を優先する。

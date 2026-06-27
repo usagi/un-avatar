@@ -17,6 +17,12 @@ use un_avatar_core::{
 	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
 	UnaTextureWrapMode,
 };
+use un_avatar_skeleton::{
+	apply_dynamics_mesh_cloth_assist_to_vertices, dynamics_mesh_cloth_assist_joint_roles,
+	dynamics_mesh_cloth_assist_mesh_matches_with_categories as mesh_cloth_assist_mesh_matches_with_categories,
+	dynamics_token_filter_matches, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig, DynamicsMeshClothAssistJointRole,
+	DynamicsMeshClothAssistVertex,
+};
 
 use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
 use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
@@ -122,6 +128,13 @@ pub struct SceneMeshLoadOpts {
 	pub avatar_outline: AvatarOutlineOptions,
 	/// 顔と体で別テクスチャの肌色差が首境界に出るモデル向けの実験的なロード時補正。
 	pub skin_tone_matching: bool,
+	/// Body bone dominated cloth vertices can borrow more influence from already-authored cloth dynamic joints.
+	pub mesh_cloth_assist: DynamicsMeshClothAssistConfig,
+	/// Normalized dynamics category definitions used when mesh cloth assist has no explicit mesh filter.
+	pub mesh_cloth_assist_categories: Vec<DynamicsCategoryDefinition>,
+	/// Scene node indices that are actual dynamics deformation targets.
+	/// When this is non-empty, mesh cloth assist uses it instead of name-only cloth joint classification.
+	pub dynamic_deforming_node_indices: BTreeSet<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -777,6 +790,24 @@ struct Vertex {
 	color: [f32; 4],
 }
 
+impl DynamicsMeshClothAssistVertex for Vertex {
+	fn joints(&self) -> [u16; 4] {
+		self.joints
+	}
+
+	fn weights(&self) -> [f32; 4] {
+		self.weights
+	}
+
+	fn set_joints(&mut self, joints: [u16; 4]) {
+		self.joints = joints;
+	}
+
+	fn set_weights(&mut self, weights: [f32; 4]) {
+		self.weights = weights;
+	}
+}
+
 const _: () = assert!(std::mem::size_of::<Vertex>() == 112);
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -1115,6 +1146,7 @@ struct MeshPrepareSummary {
 	resident_index_bytes: u64,
 	deferred_vertex_bytes: u64,
 	deferred_index_bytes: u64,
+	mesh_cloth_assist_vertices: u64,
 	material_elapsed: Duration,
 	dynamic_morph_elapsed: Duration,
 	expand_elapsed: Duration,
@@ -1147,7 +1179,7 @@ impl MeshPrepareSummary {
 			return;
 		}
 		eprintln!(
-			"un-avatar-renderer: gpu scene mesh prepare summary: total={total_ms:.1}ms prepared={} resident={} deferred={} skipped_invisible={} skipped_empty={} vertices={} indices={} resident_bytes={} deferred_bytes={} cache_hits={} cache_misses={} uncacheable={} material={:.1}ms dynamic_morphs={:.1}ms expand={:.1}ms skinning={:.1}ms skin_palette={:.1}ms buffers={:.1}ms material_bind={:.1}ms morph_resources={:.1}ms fur_resources={:.1}ms draw_push={:.1}ms",
+			"un-avatar-renderer: gpu scene mesh prepare summary: total={total_ms:.1}ms prepared={} resident={} deferred={} skipped_invisible={} skipped_empty={} vertices={} indices={} resident_bytes={} deferred_bytes={} mesh_cloth_assist_vertices={} cache_hits={} cache_misses={} uncacheable={} material={:.1}ms dynamic_morphs={:.1}ms expand={:.1}ms skinning={:.1}ms skin_palette={:.1}ms buffers={:.1}ms material_bind={:.1}ms morph_resources={:.1}ms fur_resources={:.1}ms draw_push={:.1}ms",
 			self.prepared_primitives,
 			self.resident_primitives,
 			self.deferred_primitives,
@@ -1157,6 +1189,7 @@ impl MeshPrepareSummary {
 			self.indices,
 			self.resident_vertex_bytes + self.resident_index_bytes,
 			self.deferred_vertex_bytes + self.deferred_index_bytes,
+			self.mesh_cloth_assist_vertices,
 			self.expanded_cache_hits,
 			self.expanded_cache_misses,
 			self.expanded_uncacheable,
@@ -2114,6 +2147,9 @@ struct MeshDraw {
 	shading: UnaShadingModel,
 	morph_target_count: usize,
 	morph_source_indices: Vec<usize>,
+	morph_target_names: Vec<String>,
+	morph_target_override_keys: Vec<String>,
+	morph_target_override_suffix_keys: Vec<Option<String>>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
 	default_morph_weights: Vec<f32>,
@@ -3404,7 +3440,12 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 	index
 }
 
-fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBinding], include_all: bool) -> BTreeSet<usize> {
+fn dynamic_morph_target_indices(
+	buf: &UnaMeshBuffers,
+	bindings: &[ExpressionBinding],
+	dynamic_morph_target_names: &BTreeSet<String>,
+	include_all: bool,
+) -> BTreeSet<usize> {
 	if include_all {
 		return (0..buf.morph_targets.len()).collect();
 	}
@@ -3417,6 +3458,11 @@ fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBind
 	for binding in bindings {
 		if binding.morph_target_index < buf.morph_targets.len() {
 			indices.insert(binding.morph_target_index);
+		}
+	}
+	for (index, name) in buf.morph_target_names.iter().enumerate() {
+		if index < buf.morph_targets.len() && dynamic_morph_target_names.contains(name) {
+			indices.insert(index);
 		}
 	}
 	indices
@@ -3522,6 +3568,126 @@ fn normalize_skinning_vertices(verts: &mut [Vertex], primitive_has_joints: bool,
 	}
 }
 
+fn apply_mesh_cloth_assist_to_vertices(
+	verts: &mut [Vertex],
+	indices: &[u32],
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[String],
+	mesh_path: &str,
+	config: &DynamicsMeshClothAssistConfig,
+	categories: &[DynamicsCategoryDefinition],
+	dynamic_deforming_node_indices: &BTreeSet<usize>,
+) -> usize {
+	if !config.enabled || config.max_assist_weight <= 0.0 || verts.is_empty() || indices.is_empty() {
+		return 0;
+	}
+	let Some(skin) = skin else {
+		return 0;
+	};
+	if !mesh_cloth_assist_mesh_matches_with_categories(mesh_path, &config.mesh_path_contains, categories) {
+		return 0;
+	}
+	let joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES);
+	if joint_count == 0 {
+		return 0;
+	}
+	let dynamic_nodes = (!dynamic_deforming_node_indices.is_empty()).then_some(dynamic_deforming_node_indices);
+	let joint_roles = dynamics_mesh_cloth_assist_joint_roles(skin, joint_count, dynamic_nodes, |joint_index| {
+		mesh_cloth_assist_joint_leaf(skin, node_paths, joint_index)
+	});
+	apply_dynamics_mesh_cloth_assist_to_vertices(verts, indices, joint_count, config, |joint_index| {
+		joint_roles
+			.get(joint_index)
+			.copied()
+			.unwrap_or(DynamicsMeshClothAssistJointRole::Other)
+	})
+}
+
+fn debug_dump_mesh_vertex_weights_if_requested(
+	mesh_i: usize,
+	prim_i: usize,
+	node_path: &str,
+	material_slot_index: Option<usize>,
+	material_name: Option<&str>,
+	verts: &[Vertex],
+	indices: &[u32],
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[String],
+	dynamic_deforming_node_indices: &BTreeSet<usize>,
+	mesh_cloth_assist_vertices: usize,
+) {
+	let Some(path) = std::env::var_os("UN_AVATAR_DEBUG_MESH_WEIGHTS_PATH") else {
+		return;
+	};
+	let filter = std::env::var("UN_AVATAR_DEBUG_MESH_WEIGHTS_FILTER").unwrap_or_default();
+	if !filter.is_empty() && !dynamics_token_filter_matches(node_path, &filter) {
+		return;
+	}
+	let joint_count = skin
+		.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
+		.unwrap_or(0);
+	let vertices = verts
+		.iter()
+		.enumerate()
+		.map(|(vertex_index, vert)| {
+			let influences = vert
+				.joints
+				.iter()
+				.zip(vert.weights.iter())
+				.map(|(&joint, &weight)| {
+					let joint_index = joint as usize;
+					let node_index = skin.and_then(|skin| skin.joint_nodes.get(joint_index)).copied();
+					let inverse_bind_matrix = skin.and_then(|skin| skin.inverse_bind_matrices.get(joint_index)).copied();
+					let node_path = node_index
+						.and_then(|node_index| node_paths.get(node_index))
+						.cloned()
+						.unwrap_or_default();
+					serde_json::json!({
+						"joint_index": joint_index,
+						"weight": weight,
+						"node_index": node_index,
+						"path": node_path,
+						"dynamic_deforming": node_index.is_some_and(|node_index| dynamic_deforming_node_indices.contains(&node_index)),
+						"inverse_bind_matrix": inverse_bind_matrix,
+					})
+				})
+				.collect::<Vec<_>>();
+			serde_json::json!({
+				"vertex": vertex_index,
+				"pos": vert.pos,
+				"joints": vert.joints,
+				"weights": vert.weights,
+				"influences": influences,
+			})
+		})
+		.collect::<Vec<_>>();
+	let value = serde_json::json!({
+		"mesh_index": mesh_i,
+		"primitive_index": prim_i,
+		"node_path": node_path,
+		"material_slot_index": material_slot_index,
+		"material_name": material_name,
+		"vertex_count": verts.len(),
+		"joint_count": joint_count,
+		"mesh_cloth_assist_vertices": mesh_cloth_assist_vertices,
+		"indices": indices,
+		"vertices": vertices,
+	});
+	let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) else {
+		return;
+	};
+	let _ = serde_json::to_writer(&mut file, &value);
+	let _ = writeln!(file);
+}
+
+fn mesh_cloth_assist_joint_leaf<'a>(skin: &un_avatar_core::UnaSkin, node_paths: &'a [String], joint_index: usize) -> &'a str {
+	let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
+		return "";
+	};
+	let path = node_paths.get(node_index).map(String::as_str).unwrap_or("");
+	path.rsplit('/').next().unwrap_or(path)
+}
+
 fn skin_palette_matrix_capacity(skin: Option<&un_avatar_core::UnaSkin>) -> usize {
 	skin.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
 		.unwrap_or(1)
@@ -3544,11 +3710,70 @@ fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
 	names
 }
 
+fn scene_node_paths(scene: &UnaSceneSnapshot) -> Vec<String> {
+	let mut parents = vec![None; scene.nodes.len()];
+	for (parent, node) in scene.nodes.iter().enumerate() {
+		for &child in &node.children {
+			if child < parents.len() {
+				parents[child] = Some(parent);
+			}
+		}
+	}
+	let mut out = vec![String::new(); scene.nodes.len()];
+	for index in 0..scene.nodes.len() {
+		let mut chain = Vec::new();
+		let mut cursor = Some(index);
+		while let Some(node_index) = cursor {
+			if let Some(node) = scene.nodes.get(node_index) {
+				if let Some(name) = node.name.as_deref().filter(|name| !name.is_empty()) {
+					chain.push(name.to_string());
+				}
+			}
+			cursor = parents.get(node_index).copied().flatten();
+		}
+		chain.reverse();
+		out[index] = chain.join("/");
+	}
+	out
+}
+
+fn morph_override_key(node_path: &str, morph_name: &str) -> String {
+	if node_path.is_empty() {
+		morph_name.to_string()
+	} else {
+		format!("{node_path}\0{morph_name}")
+	}
+}
+
+fn morph_override_path_suffix_key(key: &str) -> Option<String> {
+	let (path, morph_name) = key.split_once('\0')?;
+	let (_, root_relative_path) = path.split_once('/')?;
+	Some(format!("{root_relative_path}\0{morph_name}"))
+}
+
+fn morph_override_value(overrides: &BTreeMap<String, f32>, key: Option<&String>, suffix_key: Option<&String>, name: &str) -> Option<f32> {
+	if let Some(key) = key {
+		if let Some(value) = overrides.get(key).copied() {
+			return Some(value);
+		}
+	}
+	if let Some(suffix_key) = suffix_key {
+		if let Some(value) = overrides.get(suffix_key).copied() {
+			return Some(value);
+		}
+	}
+	overrides.get(name).copied()
+}
+
 fn fill_morph_weights_for_draw(
 	default_morph_weights: &[f32],
 	target_count: usize,
 	bindings: &[ExpressionBinding],
 	expression_values: Option<&[f32]>,
+	morph_target_names: &[String],
+	morph_target_override_keys: &[String],
+	morph_target_override_suffix_keys: &[Option<String>],
+	morph_name_overrides: Option<&BTreeMap<String, f32>>,
 	out: &mut Vec<f32>,
 ) {
 	out.clear();
@@ -3558,16 +3783,32 @@ fn fill_morph_weights_for_draw(
 	}
 	let copy_len = default_morph_weights.len().min(target_count);
 	out[..copy_len].copy_from_slice(&default_morph_weights[..copy_len]);
-	let Some(expression_values) = expression_values else { return };
-	for binding in bindings {
-		let pw = expression_values.get(binding.preset_index).copied().unwrap_or(0.0);
-		if pw == 0.0 {
-			continue;
+	if let Some(expression_values) = expression_values {
+		for binding in bindings {
+			let pw = expression_values.get(binding.preset_index).copied().unwrap_or(0.0);
+			if pw == 0.0 {
+				continue;
+			}
+			let Some(slot) = out.get_mut(binding.morph_target_index) else {
+				continue;
+			};
+			*slot = (*slot + pw * binding.weight_scale).clamp(0.0, 1.0);
 		}
-		let Some(slot) = out.get_mut(binding.morph_target_index) else {
-			continue;
-		};
-		*slot = (*slot + pw * binding.weight_scale).clamp(0.0, 1.0);
+	}
+	if let Some(overrides) = morph_name_overrides {
+		for (index, name) in morph_target_names.iter().enumerate().take(target_count) {
+			let Some(value) = morph_override_value(
+				overrides,
+				morph_target_override_keys.get(index),
+				morph_target_override_suffix_keys.get(index).and_then(Option::as_ref),
+				name,
+			) else {
+				continue;
+			};
+			if let Some(slot) = out.get_mut(index) {
+				*slot = value.clamp(0.0, 1.0);
+			}
+		}
 	}
 }
 
@@ -3578,6 +3819,27 @@ fn expression_bindings_have_active_weight(bindings: &[ExpressionBinding], expres
 	bindings
 		.iter()
 		.any(|binding| expression_values.get(binding.preset_index).copied().unwrap_or(0.0) != 0.0)
+}
+
+fn morph_names_have_active_override(
+	morph_target_names: &[String],
+	morph_target_override_keys: &[String],
+	morph_target_override_suffix_keys: &[Option<String>],
+	morph_name_overrides: Option<&BTreeMap<String, f32>>,
+) -> bool {
+	let Some(overrides) = morph_name_overrides else {
+		return false;
+	};
+	morph_target_names.iter().enumerate().any(|(index, name)| {
+		morph_override_value(
+			overrides,
+			morph_target_override_keys.get(index),
+			morph_target_override_suffix_keys.get(index).and_then(Option::as_ref),
+			name,
+		)
+		.unwrap_or(0.0)
+			!= 0.0
+	})
 }
 
 fn morph_weights_match_default(uploaded: &[f32], default_morph_weights: &[f32], target_count: usize) -> bool {
@@ -7955,6 +8217,76 @@ fn texture_slot_uv_offset_scale(liltoon_like: &un_avatar_core::UnaLilToonLikeMat
 }
 
 impl SceneMeshes {
+	pub(crate) fn diagnostic_morph_state(&self, scene: &UnaSceneSnapshot, filter: Option<&str>, max_draws: usize) -> serde_json::Value {
+		let mut paths: Vec<Option<String>> = vec![None; scene.nodes.len()];
+		fn walk(scene: &UnaSceneSnapshot, node: usize, prefix: String, paths: &mut [Option<String>]) {
+			let Some(scene_node) = scene.nodes.get(node) else {
+				return;
+			};
+			let name = scene_node.name.as_deref().unwrap_or("<unnamed>");
+			let path = if prefix.is_empty() {
+				name.to_string()
+			} else {
+				format!("{prefix}/{name}")
+			};
+			paths[node] = Some(path.clone());
+			for child in &scene_node.children {
+				walk(scene, *child, path.clone(), paths);
+			}
+		}
+		let child_nodes: BTreeSet<usize> = scene.nodes.iter().flat_map(|node| node.children.iter().copied()).collect();
+		for index in 0..scene.nodes.len() {
+			if !child_nodes.contains(&index) {
+				walk(scene, index, String::new(), &mut paths);
+			}
+		}
+		let mut matched_draw_count = 0usize;
+		let mut draws = Vec::new();
+		for (draw_index, draw) in self.draws.iter().enumerate() {
+			if draw.morph_target_count == 0 {
+				continue;
+			}
+			let node_path = paths.get(draw.world_node_index).cloned().flatten().unwrap_or_default();
+			if let Some(filter) = filter.as_deref() {
+				if !dynamics_token_filter_matches(&node_path, filter) {
+					continue;
+				}
+			}
+			matched_draw_count += 1;
+			if draws.len() >= max_draws {
+				continue;
+			}
+			let morphs: Vec<_> = draw
+				.morph_target_names
+				.iter()
+				.enumerate()
+				.map(|(index, name)| {
+					serde_json::json!({
+						"index": index,
+						"name": name,
+						"default_weight": draw.default_morph_weights.get(index).copied().unwrap_or(0.0),
+						"uploaded_weight": draw.morph_weights.get(index).copied().unwrap_or(0.0),
+					})
+				})
+				.collect();
+			draws.push(serde_json::json!({
+					"draw_index": draw_index,
+					"node_index": draw.world_node_index,
+					"node_path": node_path,
+					"visible": draw.visible,
+					"asset_resident": draw.asset_resident,
+					"morph_target_count": draw.morph_target_count,
+					"morphs": morphs,
+			}));
+		}
+		serde_json::json!({
+			"matched_draw_count": matched_draw_count,
+			"sample_limit": max_draws,
+			"truncated": matched_draw_count > draws.len(),
+			"draws": draws
+		})
+	}
+
 	#[allow(clippy::too_many_arguments)]
 	fn create_mesh_pipeline(
 		device: &wgpu::Device,
@@ -8413,6 +8745,7 @@ impl SceneMeshes {
 		pipeline_cache: Option<&wgpu::PipelineCache>,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
+		dynamic_morph_target_names: &BTreeSet<String>,
 		active_asset_groups: &[String],
 		opts: SceneMeshLoadOpts,
 		texture_max_dimension: Option<u32>,
@@ -9680,6 +10013,7 @@ impl SceneMeshes {
 		} else {
 			BTreeMap::new()
 		};
+		let node_paths = scene_node_paths(scene);
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
@@ -9720,7 +10054,12 @@ impl SceneMeshes {
 				}
 				let material_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let original_expression_bindings = expression_bindings.get(&(mesh_i, prim_i)).map(Vec::as_slice).unwrap_or(&[]);
-				let dynamic_morph_targets = dynamic_morph_target_indices(buf, original_expression_bindings, opts.debug_zero_morphs);
+				let dynamic_morph_targets = dynamic_morph_target_indices(
+					buf,
+					original_expression_bindings,
+					dynamic_morph_target_names,
+					opts.debug_zero_morphs,
+				);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let expanded_cache_key = buf
 					.vertex_payload_id
@@ -9802,8 +10141,51 @@ impl SceneMeshes {
 					default_morph_weights,
 				} = exp;
 				let compact_expression_bindings = remap_expression_bindings(original_expression_bindings, &morph_source_indices);
+				let morph_target_names = morph_source_indices
+					.iter()
+					.map(|&source_index| buf.morph_target_names.get(source_index).cloned().unwrap_or_default())
+					.collect::<Vec<_>>();
+				let node_path = node_paths.get(ni).map(String::as_str).unwrap_or("");
+				let morph_target_override_keys = morph_target_names
+					.iter()
+					.map(|name| morph_override_key(node_path, name))
+					.collect::<Vec<_>>();
+				let morph_target_override_suffix_keys = morph_target_override_keys
+					.iter()
+					.map(|key| morph_override_path_suffix_key(key))
+					.collect::<Vec<_>>();
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
+				let mesh_cloth_assist_vertices = apply_mesh_cloth_assist_to_vertices(
+					&mut verts,
+					&indices,
+					skin,
+					&node_paths,
+					node_path,
+					&opts.mesh_cloth_assist,
+					&opts.mesh_cloth_assist_categories,
+					&opts.dynamic_deforming_node_indices,
+				);
+				mesh_prepare_summary.mesh_cloth_assist_vertices += mesh_cloth_assist_vertices as u64;
+				if mesh_cloth_assist_vertices > 0 {
+					log_slow_gpu_scene_step(
+						format!("primitive mesh={mesh_i} primitive={prim_i} mesh cloth assist vertices={mesh_cloth_assist_vertices}"),
+						primitive_start.elapsed(),
+					);
+				}
 				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
+				debug_dump_mesh_vertex_weights_if_requested(
+					mesh_i,
+					prim_i,
+					node_path,
+					material_slot_index,
+					mat.name.as_deref(),
+					&verts,
+					&indices,
+					skin,
+					&node_paths,
+					&opts.dynamic_deforming_node_indices,
+					mesh_cloth_assist_vertices,
+				);
 				let skinning_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let skin_palette_key = skin_palette_key_for_node(ni, node.skin);
 				let skin_palette_index = Self::skin_palette_index(
@@ -9977,6 +10359,9 @@ impl SceneMeshes {
 					shading: mat.shading,
 					morph_target_count,
 					morph_source_indices,
+					morph_target_names,
+					morph_target_override_keys,
+					morph_target_override_suffix_keys,
 					morph_pos,
 					morph_nrm,
 					expression_bindings: compact_expression_bindings,
@@ -10991,6 +11376,7 @@ impl SceneMeshes {
 		world: &[Mat4],
 		expr_weights: Option<&UnaExpressionWeights>,
 		expression_overrides: Option<&BTreeMap<String, f32>>,
+		morph_name_overrides: Option<&BTreeMap<String, f32>>,
 		refresh_scene_morph_defaults: bool,
 	) -> DrawTransformUpdateTimings {
 		let mut timings = DrawTransformUpdateTimings::default();
@@ -11057,7 +11443,14 @@ impl SceneMeshes {
 					continue;
 				};
 				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
+				let draw_has_active_morph_name_override = morph_names_have_active_override(
+					&d.morph_target_names,
+					&d.morph_target_override_keys,
+					&d.morph_target_override_suffix_keys,
+					morph_name_overrides,
+				);
 				let skip_static_default_morph = !draw_has_active_expression
+					&& !draw_has_active_morph_name_override
 					&& !debug_zero_morphs
 					&& morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
 				if !skip_static_default_morph {
@@ -11070,6 +11463,10 @@ impl SceneMeshes {
 							d.morph_target_count,
 							&d.expression_bindings,
 							expression_values,
+							&d.morph_target_names,
+							&d.morph_target_override_keys,
+							&d.morph_target_override_suffix_keys,
+							morph_name_overrides,
 							&mut d.morph_weight_scratch,
 						);
 					}
@@ -12880,8 +13277,76 @@ mod tests {
 			weight_scale: 0.5,
 		}];
 		let mut out = Vec::new();
-		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &mut out);
+		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &[], &[], &[], None, &mut out);
 		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_applies_morph_name_overrides() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([("(Do not Modify)ArmPit_Fix_L".to_string(), 0.75)]);
+		fill_morph_weights_for_draw(
+			&[0.0, 0.2],
+			2,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string(), "Other".to_string()],
+			&[],
+			&[],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.75, 0.2]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_prefers_target_specific_morph_override_key() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([
+			("(Do not Modify)ArmPit_Fix_L".to_string(), 0.25),
+			(
+				morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L"),
+				0.8,
+			),
+		]);
+		fill_morph_weights_for_draw(
+			&[0.0],
+			1,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string()],
+			&[morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L")],
+			&[],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.8]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_matches_avatar_root_relative_override_key() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([(
+			morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L"),
+			0.9,
+		)]);
+		let draw_key = morph_override_key(
+			"GenericAvatar (UNAvatar Export)/AvatarRoot/Cloth_Panel_Mesh",
+			"(Do not Modify)ArmPit_Fix_L",
+		);
+		let draw_suffix_key = morph_override_path_suffix_key(&draw_key);
+		fill_morph_weights_for_draw(
+			&[0.0],
+			1,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string()],
+			&[draw_key],
+			&[draw_suffix_key],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.9]);
 	}
 
 	#[test]
@@ -12935,9 +13400,46 @@ mod tests {
 			},
 		];
 
-		let indices = dynamic_morph_target_indices(&buf, &bindings, false);
+		let indices = dynamic_morph_target_indices(&buf, &bindings, &BTreeSet::new(), false);
 
 		assert_eq!(indices, BTreeSet::from([0, 1, 2]));
+	}
+
+	#[test]
+	fn dynamic_morph_targets_include_animator_morph_names() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+			],
+			morph_target_names: vec!["Unused".to_string(), "(Do not Modify)ArmPit_Fix_L".to_string()],
+			default_morph_weights: vec![0.0, 0.0],
+		};
+		let names = BTreeSet::from(["(Do not Modify)ArmPit_Fix_L".to_string()]);
+
+		let indices = dynamic_morph_target_indices(&buf, &[], &names, false);
+
+		assert_eq!(indices, BTreeSet::from([1]));
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
@@ -12990,6 +13492,398 @@ mod tests {
 	fn skinless_palette_key_is_shared_identity() {
 		assert_eq!(skin_palette_key_for_node(1, None), skin_palette_key_for_node(42, None));
 		assert_ne!(skin_palette_key_for_node(1, Some(0)), skin_palette_key_for_node(42, Some(0)));
+	}
+
+	#[test]
+	fn mesh_cloth_assist_empty_filter_matches_profile_cloth_category() {
+		let filters = Vec::new();
+		let categories = un_avatar_skeleton::DynamicsPhysicsConfig::default().normalized().categories;
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/LongCoat",
+			&filters,
+			&categories
+		));
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/DressHem",
+			&filters,
+			&categories
+		));
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/SleeveFrill",
+			&filters,
+			&categories
+		));
+		assert!(!mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/Body",
+			&filters,
+			&categories
+		));
+	}
+
+	#[test]
+	fn mesh_cloth_assist_runtime_membership_overrides_cloth_alias_fallback() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Alias_Not_Runtime".to_string(),
+			"Root/Actual_Dynamic".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 2, 0, 0], [0.58, 0.42, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::from([2usize]),
+		);
+
+		assert_eq!(changed, 2);
+		assert!(verts[0].joints.contains(&2));
+		let static_alias_weight = verts[0]
+			.joints
+			.iter()
+			.zip(verts[0].weights.iter())
+			.filter_map(|(&joint, &weight)| (joint == 1).then_some(weight))
+			.sum::<f32>();
+		assert!((static_alias_weight - 0.22).abs() < 0.0001);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_transfers_to_existing_dynamic_lane() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.8, 0.2, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::new(),
+		);
+
+		assert_eq!(changed, 1);
+		assert!(verts[0].weights[0] < 0.8);
+		assert!(verts[0].weights[1] > 0.2);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_repairs_connected_dynamic_weight_gap() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.56, 0.44, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.56, 0.44, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.5,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::new(),
+		);
+
+		assert_eq!(changed, 1);
+		assert!((verts[0].weights[0] - 0.56).abs() < 0.001);
+		assert!((verts[0].weights[1] - 0.44).abs() < 0.001);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_relaxes_connected_dynamic_weight_chain() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.9, 0.1, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.32, 0.68, 0.0, 0.0]),
+			test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 3, 1, 2, 3],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::new(),
+		);
+
+		assert_eq!(changed, 2);
+		assert!(
+			verts[0].weights[1] > 0.39,
+			"first row should inherit dynamic weight across the connected cloth strip"
+		);
+		assert!(
+			verts[1].weights[1] > 0.51,
+			"middle row should first inherit from the stronger dynamic neighbor"
+		);
+		assert_eq!(
+			verts[3].weights,
+			[1.0, 0.0, 0.0, 0.0],
+			"vertices without an authored dynamic lane are not seeded"
+		);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_does_not_seed_missing_dynamic_lane() {
+		let left_bind = Mat4::from_translation(Vec3::new(-1.0, 0.0, 0.0)).inverse().to_cols_array();
+		let right_bind = Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).inverse().to_cols_array();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), left_bind, right_bind],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+			"Root/Cloth_Dyn_R".to_string(),
+		];
+		let mut verts = vec![
+			Vertex {
+				pos: [-1.0, 0.0, 0.0],
+				..test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+			},
+			Vertex {
+				pos: [1.0, 0.0, 0.0],
+				..test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+			},
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::new(),
+		);
+
+		assert_eq!(changed, 0);
+		assert_eq!(verts[0].joints, [0, 0, 0, 0]);
+		assert_eq!(verts[1].joints, [0, 0, 0, 0]);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_seeds_missing_dynamic_lane_from_connected_static_cloth_anchor() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Static_L".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([2, 1, 0, 0], [0.62, 0.38, 0.0, 0.0]),
+			test_vertex([2, 1, 0, 0], [0.62, 0.38, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+		let dynamic_nodes = BTreeSet::from([2usize]);
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&dynamic_nodes,
+		);
+
+		assert_eq!(changed, 1);
+		assert!(verts[0].joints.contains(&2));
+		let seeded_lane = verts[0].joints.iter().position(|&joint| joint == 2).expect("seeded lane");
+		assert!(verts[0].weights[seeded_lane] > 0.25);
+		assert!(verts[0].weights[0] < 0.78);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_propagates_tiny_dynamic_bridge_across_static_cloth_strip() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Static_L".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.58, 0.418, 0.002, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.30, 0.684, 0.016, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.16, 0.768, 0.072, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+		let dynamic_nodes = BTreeSet::from([2usize]);
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2, 1, 2, 3],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&dynamic_nodes,
+		);
+
+		assert!(changed >= 2);
+		let head_dynamic = verts[0]
+			.joints
+			.iter()
+			.zip(verts[0].weights.iter())
+			.filter_map(|(&joint, &weight)| (joint == 2).then_some(weight))
+			.sum::<f32>();
+		assert!(
+			head_dynamic >= 0.04,
+			"tiny authored dynamic weights should propagate across the connected static cloth strip, got {head_dynamic}"
+		);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_does_not_seed_when_disabled_by_config() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: false,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&BTreeSet::new(),
+		);
+
+		assert_eq!(changed, 0);
+		assert_eq!(verts[0].joints, [0, 0, 0, 0]);
+		assert_eq!(verts[0].weights, [1.0, 0.0, 0.0, 0.0]);
 	}
 
 	#[test]

@@ -19,6 +19,7 @@ namespace UNAvatar.UnityExporter
             bool bakeAttempted,
             bool bakeSucceeded,
             GameObject registryRoot,
+            List<object> nodeConstraintsPayload,
             List<object> dynamicsPayload,
             List<object> contactsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
@@ -40,6 +41,7 @@ namespace UNAvatar.UnityExporter
                 },
                 ["humanoid"] = humanoid,
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
+                ["nodeConstraints"] = nodeConstraintsPayload ?? new List<object>(),
                 ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["contacts"] = contactsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
@@ -73,6 +75,7 @@ namespace UNAvatar.UnityExporter
             string output,
             bool bakeAttempted,
             bool bakeSucceeded,
+            List<object> nodeConstraintsPayload,
             List<object> dynamicsPayload,
             List<object> contactsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
@@ -123,6 +126,7 @@ namespace UNAvatar.UnityExporter
                 ["wardrobeAssetOwnershipDiagnostics"] = BuildWardrobeAssetOwnershipDiagnostics(rendererAssets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
+                ["nodeConstraints"] = BuildNodeConstraintsReportSummary(nodeConstraintsPayload),
                 ["dynamics"] = BuildDynamicsReportSummary(dynamicsPayload),
                 ["contacts"] = BuildContactsReportSummary(contactsPayload),
                 ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
@@ -164,6 +168,57 @@ namespace UNAvatar.UnityExporter
                 ["rendererAssetCount"] = rendererCount,
                 ["itemLimit"] = 96,
                 ["items"] = items
+            };
+        }
+
+        private static Dictionary<string, object> BuildNodeConstraintsReportSummary(List<object> nodeConstraintsPayload)
+        {
+            var constraints = nodeConstraintsPayload ?? new List<object>();
+            var parentCount = 0;
+            var parentSourceCount = 0;
+            var parentMultiSourceCount = 0;
+            foreach (var item in constraints)
+            {
+                if (!(item is Dictionary<string, object> constraint))
+                {
+                    continue;
+                }
+                var kind = "";
+                if (constraint.TryGetValue("kind", out var rawKind) && rawKind is string kindValue)
+                {
+                    kind = kindValue;
+                }
+                else if (constraint.TryGetValue("type", out var rawType) && rawType is string typeValue)
+                {
+                    kind = typeValue;
+                }
+                if (!string.Equals(kind, "parent", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                parentCount++;
+                var sourceCount = 0;
+                if (constraint.TryGetValue("sources", out var rawSources) && rawSources is List<object> sources)
+                {
+                    sourceCount = sources.Count;
+                }
+                if (sourceCount == 0)
+                {
+                    sourceCount = 1;
+                }
+                parentSourceCount += sourceCount;
+                if (sourceCount > 1)
+                {
+                    parentMultiSourceCount++;
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["count"] = constraints.Count,
+                ["parentCount"] = parentCount,
+                ["parentSourceCount"] = parentSourceCount,
+                ["parentMultiSourceCount"] = parentMultiSourceCount
             };
         }
 

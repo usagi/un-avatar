@@ -14,10 +14,10 @@ v2 の中核は、U.N. Avatar を VRM/glTF レンダラーから、VRM・glTF・
 
 v1.0.0 時点の実装で確認できる重要な前提。
 
-- Runtime は Rust / wgpu ベースで、VRM / glTF を `UnaDocument` に読み込み、GPU skinning / GPU morph / MToon-like / SpringBone / VMC / UNMF/Z / Spout2 を扱う。
-- `crates/un-avatar-core` は `UnaDocument`、scene snapshot、humanoid profile、expression catalog、MToon material、SpringBone settings を持つ。
+- Runtime は Rust / wgpu ベースで、VRM / glTF / `.unavatar` を `UnaDocument` に読み込み、GPU skinning / GPU morph / toon materials / UNPhysics / VMC / UNMF/Z / Spout2 を扱う。v1 時点の SpringBone 実装資産は v2.1 では UNDynamics solver backend 資産として扱う。
+- `crates/un-avatar-core` は `UnaDocument`、scene snapshot、humanoid profile、expression catalog、toon material source、UNDynamics source-normalized settings を持つ。historical `spring_bones` field / type name は serde/API compatibility shim として残す。
 - `crates/un-avatar-io-gltf` は glTF / GLB importer。mesh、skin、morph、PBR material を `UnaDocument` へ変換する。
-- `crates/un-avatar-io-vrm` は VRM0 / VRM1 importer。VRM extension、humanoid、MToon、expression、SpringBone、VRM1 node constraint を取り込む。
+- `crates/un-avatar-io-vrm` は VRM0 / VRM1 importer。VRM extension、humanoid、MToon、expression、VRM SpringBone source、VRM1 node constraint を取り込み、物理 source は UNDynamics terms へ lower する。
 - `crates/un-avatar-io-una` の `.una` / `.una.d` は現状 bootstrap 形式で、`.una` は UTF-8 TOML、`.una.d` は `manifest.toml` を読む空シーン相当。scene / VRM / humanoid / expression は v0 export で保持されない。実際の Renderer 入力としても使われていない。
 - Renderer の `model_loader` は現状 VRM / GLB / glTF を直接判定して import しており、CLI の `IoRegistry` を全面利用していない。
 - CLI / plugin host には `AvatarImporter` / `AvatarExporter` / `FormatDescriptor` / capability / stdio plugin 境界が既にある。
@@ -33,7 +33,7 @@ v1.0.0 時点の実装で確認できる重要な前提。
 - 初期実装は分割 extension 群ではなく単一 `UN_avatar` extension を正本にする。安定後に `UN_avatar_manifest` などへ分割できる JSON 構造にしておく。
 - `UNToon` は v2 では lilToon 互換を主軸に再定義する。開発中の実装名は `UnaLilToonLikeMaterial` とし、MToon / VRM material は後段で lilToon-like 表現へ変換する入力として扱う。lilToon 表現を MToon 互換の範囲に押し込めない。
 - `UNA Toon Material` は既存 `UnaMtoonMaterial` / `UnaMaterialPbr` の実装資産を必要な範囲で参照する。ただし設計上の基準は MToon-like ではなく lilToon-compatible とする。
-- VRM SpringBone / VRC PhysBone は source format ごとの component として直接 solver へ渡さず、U.N. dynamics runtime model へ正規化する。PhysBone は新 physics engine として作り直すのではなく、まず既存 SpringBone runtime primitive へ近似変換する。
+- VRM SpringBone / VRC PhysBone は source format ごとの component として直接 solver へ渡さず、U.N. dynamics runtime model へ正規化する。v2.1 以降は SpringBone / PhysBone どちらの solver 互換も目標にせず、両 source の authored intent を UNPhysics / UNDynamics の独自 response terms へ lower して solver backend が解く。
 - Expressions は現状 morph 中心。material color、texture switch、node visibility、variant は v2 で `UnaDocument` と renderer control へ拡張する対象。
 - Unity Exporter MVP は repo 内 Rust exporter の完成を待たず、Unity 側で GLB + `UN_avatar` extension を書ける構成を許容する。
 - Unity Exporter は同一 repo に内包する。ただし UPM package として隔離し、Rust workspace / Runtime / 通常 CI は Unity に依存させない。
@@ -160,7 +160,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - Import diagnostics: unsupported / approximate / lost feature を機械可読に残す。
 - Renderer smoke: `.unavatar` sample を headless または screenshot で検証する。
 - Material regression: MToon / lilToon-like の shade、matcap、rim、emission、outline の崩れを fixture 化する。
-- Physics regression: SpringBone と PhysBone 近似の揺れすぎ、めり込み、発散を検出する。
+- Physics regression: UNPhysics / UNDynamics response の揺れすぎ、硬すぎ、めり込み、発散を検出する。SpringBone / PhysBone は source-authored intent の入力として扱い、数値互換そのものを品質目標にしない。
 - Startup UX: import failure の原因を Supervisor に短く出す。
 - License UX: VRM / VRC 由来 metadata と再配布注意を profile 選択時に確認できる。
 - Performance: texture cache / compression は v1 の資産を継続しつつ、v2 では `.unavatar` source package、GPU upload format、local optimized cache を明確に分離する。Unity Exporter は texture source bytes を基本として、形式変換や再圧縮をしない。
@@ -227,9 +227,9 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 
 - VRM SpringBone と VRC PhysBone を共通の U.N. dynamics runtime model へ正規化する。
 - VRC PhysBone root / ignoreTransforms / multiChild mode / endpoint / radius / pull / spring / stiffness / gravity / collider / limit metadata / interaction metadata の近似抽出。
-- VRC PhysBone limit solver behavior / interaction 系と detailed collision behavior は Wardrobe hot switch と runtime action state の後に段階対応する。
+- VRC PhysBone 由来の limit / interaction / collider fields は公開・作者向け data を UNDynamics terms へ段階 lower する。未対応 term は source metadata と diagnostics に残す。
 - VRM SpringBone と VRC PhysBone の source metadata は保持しつつ、solver 入力は正規化済み runtime dynamics state にする。
-- 既存 SpringBone runtime primitive へ変換する。
+- 既存 SpringBone 由来の実装資産は solver backend として再利用するが、runtime 入力は SpringBone primitive ではなく正規化済み UNPhysics / UNDynamics terms とする。
 - debug view と tuning UI を追加する。
 
 ### Milestone 7: VRC expressions / outfit toggles
@@ -242,7 +242,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 
 - `Wardrobe (Split)` では Unity Editor で wardrobe set ごとに bake するのではなく、Exporter が Modular Avatar source graph / component payload / reference 解決情報を `.unavatar` に保持し、Runtime resolver が bake 相当の render graph を生成する。
 - Modular Avatar 対応の機能単位 checklist は [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) を正とする。
-- 最初の regression target は `mizuki-split` / `field_drape` の `Hair_Base`。これは alpha / visibility ではなく Modular Avatar Bone Proxy 未適用による transform hierarchy 問題として扱う。
+- 初期 regression target は `mizuki-split` / `field_drape` の `Hair_Base` だった。これは alpha / visibility ではなく Modular Avatar Bone Proxy 未適用による transform hierarchy 問題として扱った。
 - Runtime 側で outfit / accessory 切替を扱い、selected wardrobe set ごとの resolver cache / lazy GPU upload を実装する。
 
 ### Milestone 9: Validator and compatibility report
@@ -256,7 +256,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 v2 初期では次をやらない。
 
 - VRChat client の完全再現
-- VRC SDK runtime 互換実装
+- VRC SDK runtime 互換を品質目標にした実装。VRC / MA / PhysBone 由来の公開・作者向け設定と `.unavatar` 内の authored data は source metadata として保持し、UNPhysics / UNDynamics の独自 response terms へ lower する。
 - FX Layer / Animator Controller 完全再生
 - Poiyomi 完全再現
 - `.unitypackage` の Runtime 直接読み込み

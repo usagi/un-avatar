@@ -2,13 +2,13 @@
 
 U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごとに Modular Avatar bake を繰り返すのではなく、`.unavatar` に source graph と Modular Avatar 由来の解決情報を保持し、Runtime 側で選択 set の render graph / cache を生成する方針とする。
 
-この文書は Modular Avatar 対応の正本 checklist である。個別モデルの見た目だけに合わせた例外処理を入れず、Modular Avatar 本家の処理単位を確認し、Exporter capture / Runtime resolver / Renderer cache のどこで再現するかを明示する。
+この文書は Modular Avatar 対応の正本 checklist である。個別モデルの見た目だけに合わせた例外処理を入れず、公開されている Modular Avatar の処理単位と authored metadata を確認し、Exporter capture / Runtime resolver / Renderer cache のどこで source-neutral に対応するかを明示する。
 
 ## Reference
 
 - Modular Avatar reference: `bdunderscore/modular-avatar`, MIT License
 - Local source during v2 development: `C:\Users\the\tmp\modular-avatar`
-- Current sample issue: `mizuki-split` / `field_drape` / `Mizuki&Rurune_Field Drape_Hair/Hair_Base`
+- Historical regression target: `mizuki-split` / `field_drape` / `Mizuki&Rurune_Field Drape_Hair/Hair_Base`
 
 ## Scope
 
@@ -30,7 +30,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 
 `[~]` は必ず `done` と `remaining` を分ける。何が保存済みで、何が Runtime 未解決なのかを曖昧にしない。
 
-## Current Finding: Hair_Base
+## Historical Finding: Hair_Base
 
 `field_drape` の `Hair_Base` は、alpha / visibility ではなく Modular Avatar Bone Proxy 未適用による transform hierarchy 問題として扱う。
 
@@ -220,5 +220,5 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ## Near-Term Order
 
 1. Treat scoped upload / unload, Menu / Parameter runtime action candidates, external menu asset expansion, Renderer tray access, profile input bindings, and bounded Supervisor controls as sufficient for v2 initial QA.
-2. Resume UNDynamics / PhysBone behavior implementation on the source-neutral runtime model.
+2. Resume source dynamics lowering and UNPhysics behavior implementation on the source-neutral UNDynamics runtime model.
 3. Return to richer wardrobe/menu hierarchy/search UI, full external menu UI parity, and broader eviction policy after physics behavior is stable.

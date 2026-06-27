@@ -140,14 +140,23 @@ fn log_import_report_warnings(report: &ImportReport) {
 }
 
 fn log_import_report_profile(report: &ImportReport) {
-	for message in &report.messages {
-		if message.starts_with("glTF import profile:")
-			|| message.starts_with("glTF scene profile:")
-			|| message.starts_with(".unavatar textureAssets:")
-		{
-			eprintln!("un-avatar-renderer: {message}");
-		}
+	for message in import_report_profile_lines(report) {
+		eprintln!("un-avatar-renderer: {message}");
 	}
+}
+
+fn import_report_profile_lines(report: &ImportReport) -> Vec<&str> {
+	report
+		.messages
+		.iter()
+		.map(String::as_str)
+		.filter(|message| {
+			message.starts_with("glTF import profile:")
+				|| message.starts_with("glTF scene profile:")
+				|| message.starts_with(".unavatar textureAssets:")
+				|| message.starts_with(".unavatar node_constraints:")
+		})
+		.collect()
 }
 
 pub(crate) fn apply_required_wardrobe_set(document: &mut UnaDocument, wardrobe_set: &str) -> Result<WardrobeApplyReport, String> {
@@ -532,6 +541,19 @@ mod tests {
 		assert_eq!(lines[0], "import warning: diagnostic warning");
 		assert!(lines[1].contains("import lost feature: ModularAvatar.Unsupported"));
 		assert!(lines[2].contains("import approximation: ModularAvatar.ModularAvatarShapeChanger"));
+	}
+
+	#[test]
+	fn import_report_profile_lines_include_node_constraints() {
+		let mut report = ImportReport::default();
+		report
+			.messages
+			.push(".unavatar node_constraints: parent=12, missing=0, unsupported=0".to_string());
+		report.messages.push(".unavatar unrelated importer note".to_string());
+
+		let lines = import_report_profile_lines(&report);
+
+		assert_eq!(lines, vec![".unavatar node_constraints: parent=12, missing=0, unsupported=0"]);
 	}
 
 	#[test]

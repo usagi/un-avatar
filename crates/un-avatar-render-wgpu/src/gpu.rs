@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
+	collections::{BTreeMap, BTreeSet, HashMap},
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -12,16 +12,19 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
 	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
-	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaRuntimeActionEffect, UnaRuntimeActionQuery, UnaRuntimeActionTrigger,
-	UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
+	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionQuery,
+	UnaRuntimeActionTrigger, UnaRuntimeDynamics, UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
 };
 use un_avatar_skeleton::{
-	build_dynamics_bone_colliders_with_sources, collider_stats, local_capsule_world, local_sphere_world, BoneColliderConfig,
+	annotate_dynamics_response_group_visibility, build_dynamics_bone_colliders_with_sources, classify_dynamics_group_category,
+	collider_stats, distance_point_segment, dynamics_group_match_text, dynamics_mesh_cloth_assist_deforming_nodes,
+	dynamics_normalize_match_text, dynamics_normalized_token_filter_matches, local_capsule_world, local_sphere_world, BoneColliderConfig,
 	BoneColliderPrimitive, BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator, DynamicsStepProfile,
+	DynamicsSurfaceConstraint, DynamicsTailSample, DynamicsVisualTargetContext, RuntimeBoneColliderPrimitive,
 };
 use winit::window::Window;
 
@@ -299,6 +302,8 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
 	pub(crate) authored_enabled: bool,
 	pub(crate) effective_enabled: bool,
+	pub(crate) resident_in_active_assets: bool,
+	pub(crate) solver_enabled: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) runtime_enabled_override: Option<bool>,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
@@ -308,6 +313,9 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub(crate) category: String,
 	pub(crate) bone_count: usize,
+	pub(crate) visual_target: bool,
+	pub(crate) skinned_joint_count: usize,
+	pub(crate) mesh_subtree_node_count: usize,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) root_node: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -317,8 +325,14 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) tip_path: Option<String>,
 	pub(crate) stiffness: f32,
+	pub(crate) pull: f32,
+	pub(crate) spring: f32,
+	pub(crate) integration_type: un_avatar_core::UnaDynamicsIntegrationType,
 	pub(crate) drag_force: f32,
 	pub(crate) gravity_power: f32,
+	pub(crate) gravity_falloff: f32,
+	pub(crate) immobile: f32,
+	pub(crate) immobile_type: un_avatar_core::UnaDynamicsImmobileType,
 	pub(crate) gravity_dir: [f32; 3],
 	pub(crate) hit_radius: f32,
 	pub(crate) hit_radius_sample_count: usize,
@@ -333,11 +347,20 @@ pub(crate) struct RuntimeDynamicsGroupStatus {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) limit_type: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) limit_rotation: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) max_angle_x: Option<f32>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) max_angle_z: Option<f32>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) max_stretch: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) max_squish: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) stretch_motion: Option<f32>,
+	pub(crate) max_stretch_sample_has_positive: bool,
+	pub(crate) max_squish_sample_has_positive: bool,
+	pub(crate) stretch_motion_sample_has_positive: bool,
 	pub(crate) writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
 	pub(crate) translation_writeback_candidate_count: usize,
 	pub(crate) translation_writeback_target_count: usize,
@@ -372,6 +395,10 @@ pub(crate) struct RuntimeDynamicsInteractionHookStatus {
 pub(crate) struct RuntimeDynamicsColliderStatus {
 	pub(crate) index: usize,
 	pub(crate) source_kind: un_avatar_core::UnaDynamicsSourceKind,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_path: String,
 	pub(crate) node: usize,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub(crate) node_path: Option<String>,
@@ -381,6 +408,140 @@ pub(crate) struct RuntimeDynamicsColliderStatus {
 	pub(crate) position: [f32; 3],
 	pub(crate) rotation: [f32; 4],
 	pub(crate) inside_bounds: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderSelectionStatus {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) selected_collider_count: usize,
+	pub(crate) global_collider_count: usize,
+	pub(crate) authored_collider_count: usize,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_collider_indices: Vec<usize>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_collider_source_ids: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_collider_paths: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_colliders: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_collider_details: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderContactStatus {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) runtime_index: usize,
+	pub(crate) joint_index: usize,
+	pub(crate) parent_node: usize,
+	pub(crate) child_node: usize,
+	pub(crate) collider_index: Option<usize>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_shape: String,
+	pub(crate) hit_radius: f32,
+	pub(crate) collider_radius: f32,
+	pub(crate) distance: f32,
+	pub(crate) threshold: f32,
+	pub(crate) margin: f32,
+	pub(crate) inside_bounds: bool,
+	pub(crate) penetrating: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderContactSummary {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) contact_count: usize,
+	pub(crate) penetrating_count: usize,
+	pub(crate) min_margin: f32,
+	pub(crate) min_distance: f32,
+	pub(crate) min_threshold: f32,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) closest_collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) closest_collider_shape: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderRuntimeSummary {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) source_id: String,
+	pub(crate) selected_collider_count: usize,
+	pub(crate) global_collider_count: usize,
+	pub(crate) authored_collider_count: usize,
+	pub(crate) contact_count: usize,
+	pub(crate) penetrating_count: usize,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_margin: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_distance: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_threshold: Option<f32>,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) closest_collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) closest_collider_shape: String,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_collider_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderPathContactSummary {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_shape: String,
+	pub(crate) contact_count: usize,
+	pub(crate) penetrating_count: usize,
+	pub(crate) source_count: usize,
+	pub(crate) min_margin: f32,
+	pub(crate) min_distance: f32,
+	pub(crate) min_threshold: f32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderPathCandidateSummary {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_shape: String,
+	pub(crate) candidate_count: usize,
+	pub(crate) penetrating_count: usize,
+	pub(crate) source_count: usize,
+	pub(crate) min_margin: f32,
+	pub(crate) min_distance: f32,
+	pub(crate) min_threshold: f32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_source_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub(crate) struct RuntimeDynamicsColliderPathRuntimeSummary {
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_path: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub(crate) collider_shape: String,
+	pub(crate) runtime_collider_count: usize,
+	pub(crate) candidate_count: usize,
+	pub(crate) candidate_penetrating_count: usize,
+	pub(crate) source_count: usize,
+	pub(crate) contact_count: usize,
+	pub(crate) penetrating_count: usize,
+	pub(crate) projection_count: u32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_margin: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_distance: Option<f32>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(crate) min_threshold: Option<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub(crate) sample_source_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
@@ -1396,73 +1557,109 @@ fn contact_parameter_emission_status_summary(doc: &UnaDocument) -> RuntimeContac
 	}
 }
 
-fn dynamics_group_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsGroupStatus> {
+fn dynamics_group_statuses_with_limit(
+	doc: &UnaDocument,
+	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
+	limit: Option<usize>,
+) -> Vec<RuntimeDynamicsGroupStatus> {
 	let runtime_model = doc.runtime_model();
 	let scene = runtime_model.scene();
 	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
 	let dynamics = runtime_model.dynamics();
-	dynamics
-		.dynamics_groups()
-		.enumerate()
-		.take(DYNAMICS_GROUP_STATUS_LIMIT)
-		.map(|(index, group)| {
-			let source_group = dynamics.group(index);
-			let root_node = group.chain.bone_node_indices.first().copied();
-			let tip_node = group.chain.bone_node_indices.last().copied();
-			let center_node = group.parameters.center_node;
-			let (hit_radius_sample_count, hit_radius_sample_min, hit_radius_sample_max) =
-				dynamics_hit_radius_sample_summary(group.chain.hit_radius_samples);
-			let limit_type = group
+	let visual_target_context = scene.map(DynamicsVisualTargetContext::for_scene);
+	let iter = dynamics.dynamics_groups().enumerate().map(|(index, group)| {
+		let source_group = dynamics.group(index);
+		let resident_in_active_assets = scene
+			.map(|scene| dynamics.source_id_resident_in_scene(scene, group.source_id))
+			.unwrap_or(true);
+		let root_node = group.chain.bone_node_indices.first().copied();
+		let tip_node = group.chain.bone_node_indices.last().copied();
+		let center_node = group.parameters.center_node;
+		let (skinned_joint_count, mesh_subtree_node_count) = visual_target_context
+			.as_ref()
+			.map(|context| context.group_counts(group.chain.bone_node_indices))
+			.unwrap_or_default();
+		let (hit_radius_sample_count, hit_radius_sample_min, hit_radius_sample_max) =
+			dynamics_hit_radius_sample_summary(group.chain.hit_radius_samples);
+		let limit_type = group
+			.limit
+			.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone()));
+		RuntimeDynamicsGroupStatus {
+			index,
+			source_kind: group.source_kind,
+			authored_enabled: group.authored_enabled,
+			effective_enabled: group.effective_enabled,
+			resident_in_active_assets,
+			solver_enabled: group.effective_enabled && resident_in_active_assets,
+			runtime_enabled_override: source_group.and_then(|source_group| dynamics.group_enabled_override(source_group)),
+			source_id: group.source_id.to_string(),
+			comment: group.comment.to_string(),
+			category: scene
+				.map(|scene| classify_dynamics_group_category(scene, group, &categories))
+				.unwrap_or_else(|| group.category.to_string()),
+			bone_count: group.chain.bone_node_indices.len(),
+			visual_target: skinned_joint_count > 0 || mesh_subtree_node_count > 0,
+			skinned_joint_count,
+			mesh_subtree_node_count,
+			root_node,
+			root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+			tip_node,
+			tip_path: tip_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+			stiffness: group.parameters.stiffness,
+			pull: group.parameters.pull,
+			spring: group.parameters.spring,
+			integration_type: group.parameters.integration_type,
+			drag_force: group.parameters.drag_force,
+			gravity_power: group.parameters.gravity_power,
+			gravity_falloff: group.parameters.gravity_falloff,
+			immobile: group.parameters.immobile,
+			immobile_type: group.parameters.immobile_type,
+			gravity_dir: group.parameters.gravity_dir,
+			hit_radius: group.parameters.hit_radius,
+			hit_radius_sample_count,
+			hit_radius_sample_min,
+			hit_radius_sample_max,
+			center_node,
+			center_path: center_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+			limit_type,
+			limit_rotation: group.limit.map(|limit| limit.limit_rotation),
+			max_angle_x: group.limit.map(|limit| limit.max_angle_x),
+			max_angle_z: group.limit.map(|limit| limit.max_angle_z),
+			max_stretch: group.limit.map(|limit| limit.max_stretch),
+			max_squish: group.limit.map(|limit| limit.max_squish),
+			stretch_motion: group.limit.and_then(|limit| limit.stretch_motion),
+			max_stretch_sample_has_positive: group
 				.limit
-				.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone()));
-			RuntimeDynamicsGroupStatus {
-				index,
-				source_kind: group.source_kind,
-				authored_enabled: group.authored_enabled,
-				effective_enabled: group.effective_enabled,
-				runtime_enabled_override: source_group.and_then(|source_group| dynamics.group_enabled_override(source_group)),
-				source_id: group.source_id.to_string(),
-				comment: group.comment.to_string(),
-				category: group.category.to_string(),
-				bone_count: group.chain.bone_node_indices.len(),
-				root_node,
-				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
-				tip_node,
-				tip_path: tip_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
-				stiffness: group.parameters.stiffness,
-				drag_force: group.parameters.drag_force,
-				gravity_power: group.parameters.gravity_power,
-				gravity_dir: group.parameters.gravity_dir,
-				hit_radius: group.parameters.hit_radius,
-				hit_radius_sample_count,
-				hit_radius_sample_min,
-				hit_radius_sample_max,
-				center_node,
-				center_path: center_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
-				limit_type,
-				max_angle_x: group.limit.map(|limit| limit.max_angle_x),
-				max_angle_z: group.limit.map(|limit| limit.max_angle_z),
-				max_stretch: group.limit.map(|limit| limit.max_stretch),
-				writeback_mode: group.writeback_mode,
-				translation_writeback_candidate_count: scene
-					.map(|scene| {
-						una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, group.chain.bone_node_indices)
-					})
-					.unwrap_or(0),
-				translation_writeback_target_count: scene
-					.map(|scene| {
-						una_dynamics_translation_writeback_target_count(scene, group.writeback_mode, group.chain.bone_node_indices)
-					})
-					.unwrap_or(0),
-				allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
-				allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
-				interaction_parameter: group
-					.interaction
-					.map(|interaction| interaction.parameter.clone())
-					.unwrap_or_default(),
-			}
-		})
-		.collect()
+				.is_some_and(|limit| runtime_limit_samples_have_positive(&limit.max_stretch_samples)),
+			max_squish_sample_has_positive: group
+				.limit
+				.is_some_and(|limit| runtime_limit_samples_have_positive(&limit.max_squish_samples)),
+			stretch_motion_sample_has_positive: group
+				.limit
+				.is_some_and(|limit| runtime_limit_samples_have_positive(&limit.stretch_motion_samples)),
+			writeback_mode: group.writeback_mode,
+			translation_writeback_candidate_count: scene
+				.map(|scene| una_dynamics_translation_writeback_candidate_count(scene, group.writeback_mode, group.chain.bone_node_indices))
+				.unwrap_or(0),
+			translation_writeback_target_count: scene
+				.map(|scene| una_dynamics_translation_writeback_target_count(scene, group.writeback_mode, group.chain.bone_node_indices))
+				.unwrap_or(0),
+			allow_grabbing: group.interaction.and_then(|interaction| interaction.allow_grabbing),
+			allow_posing: group.interaction.and_then(|interaction| interaction.allow_posing),
+			interaction_parameter: group
+				.interaction
+				.map(|interaction| interaction.parameter.clone())
+				.unwrap_or_default(),
+		}
+	});
+	match limit {
+		Some(limit) => iter.take(limit).collect(),
+		None => iter.collect(),
+	}
+}
+
+fn runtime_limit_samples_have_positive(samples: &[f32]) -> bool {
+	samples.iter().any(|value| value.is_finite() && *value > 0.0)
 }
 
 fn dynamics_interaction_hook_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsInteractionHookStatus> {
@@ -1500,7 +1697,7 @@ fn dynamics_interaction_hook_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsI
 				allow_posing,
 				parameter: interaction.parameter.clone(),
 				suffix_parameters,
-				metadata_only: true,
+				metadata_only: interaction.parameter.is_empty(),
 			})
 		})
 		.collect()
@@ -1517,16 +1714,21 @@ fn dynamics_hit_radius_sample_summary(samples: &[f32]) -> (usize, Option<f32>, O
 }
 
 fn dynamics_collider_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsColliderStatus> {
+	dynamics_collider_statuses_with_limit(doc, Some(DYNAMICS_COLLIDER_STATUS_LIMIT))
+}
+
+fn dynamics_collider_statuses_with_limit(doc: &UnaDocument, limit: Option<usize>) -> Vec<RuntimeDynamicsColliderStatus> {
 	let runtime_model = doc.runtime_model();
 	let node_paths_by_index = runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default();
-	runtime_model
+	let iter = runtime_model
 		.dynamics()
 		.colliders()
 		.enumerate()
-		.take(DYNAMICS_COLLIDER_STATUS_LIMIT)
 		.map(|(index, collider)| RuntimeDynamicsColliderStatus {
 			index,
 			source_kind: collider.source_kind,
+			source_id: collider.source_id.clone(),
+			collider_path: collider.collider_path.clone(),
 			node: collider.node,
 			node_path: node_paths_by_index.get(collider.node).cloned().flatten(),
 			shape: collider.shape.clone(),
@@ -1535,8 +1737,11 @@ fn dynamics_collider_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsColliderS
 			position: collider.position,
 			rotation: collider.rotation,
 			inside_bounds: collider.inside_bounds,
-		})
-		.collect()
+		});
+	match limit {
+		Some(limit) => iter.take(limit).collect(),
+		None => iter.collect(),
+	}
 }
 
 fn dynamics_constraint_ref_statuses(doc: &UnaDocument) -> Vec<RuntimeDynamicsConstraintRefStatus> {
@@ -1589,6 +1794,279 @@ fn scene_node_paths_by_index(scene: &UnaSceneSnapshot) -> Vec<Option<String>> {
 		visit(scene, root, "", &mut out);
 	}
 	out
+}
+
+fn scene_parent_indices(scene: &UnaSceneSnapshot) -> Vec<Option<usize>> {
+	let mut parents = vec![None; scene.nodes.len()];
+	for (parent, node) in scene.nodes.iter().enumerate() {
+		for &child in &node.children {
+			if let Some(slot) = parents.get_mut(child) {
+				*slot = Some(parent);
+			}
+		}
+	}
+	parents
+}
+
+fn diagnostic_world_from_scene(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent_world: Mat4, out: &mut [Mat4]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let world = parent_world * Mat4::from_cols_array(&node.transform);
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = world;
+		}
+		for &child in &node.children {
+			if child < scene.nodes.len() {
+				visit(scene, child, world, out);
+			}
+		}
+	}
+
+	let mut out = vec![Mat4::IDENTITY; scene.nodes.len()];
+	for &root in scene.resolved_roots().iter() {
+		if root < scene.nodes.len() {
+			visit(scene, root, Mat4::IDENTITY, &mut out);
+		}
+	}
+	out
+}
+
+fn runtime_dynamics_node_samples(scene: &UnaSceneSnapshot, rest_nodes: Option<&[un_avatar_core::UnaSceneNode]>) -> Vec<serde_json::Value> {
+	let node_paths = scene_node_paths_by_index(scene);
+	let current_world = diagnostic_world_from_scene(scene);
+	let mut rest_scene = scene.clone();
+	if let Some(rest_nodes) = rest_nodes {
+		if rest_nodes.len() == rest_scene.nodes.len() {
+			rest_scene.nodes.clone_from_slice(rest_nodes);
+		}
+	}
+	let rest_world = diagnostic_world_from_scene(&rest_scene);
+	let mut out = Vec::new();
+	for (node_index, path) in node_paths.iter().enumerate() {
+		let Some(path) = path else {
+			continue;
+		};
+		let (Some(current), Some(rest)) = (current_world.get(node_index), rest_world.get(node_index)) else {
+			continue;
+		};
+		let current_translation = current.transform_point3(Vec3::ZERO);
+		let rest_translation = rest.transform_point3(Vec3::ZERO);
+		let delta = current_translation - rest_translation;
+		let (_, current_rotation, _) = current.to_scale_rotation_translation();
+		let (_, rest_rotation, _) = rest.to_scale_rotation_translation();
+		let rotation_delta = current_rotation * rest_rotation.inverse();
+		let (rotation_axis, rotation_angle) = rotation_axis_angle(rotation_delta);
+		if delta.length() <= 1e-5 && rotation_angle.abs() <= 0.1_f32.to_radians() {
+			continue;
+		}
+		out.push((
+			delta.length().max(rotation_angle.abs() * 0.02),
+			serde_json::json!({
+				"node_index": node_index,
+				"path": path,
+				"rest_translation": rest_translation.to_array(),
+				"current_translation": current_translation.to_array(),
+				"rest_rotation_xyzw": [rest_rotation.x, rest_rotation.y, rest_rotation.z, rest_rotation.w],
+				"current_rotation_xyzw": [current_rotation.x, current_rotation.y, current_rotation.z, current_rotation.w],
+				"rest_axis_x": rest.transform_vector3(Vec3::X).to_array(),
+				"rest_axis_y": rest.transform_vector3(Vec3::Y).to_array(),
+				"rest_axis_z": rest.transform_vector3(Vec3::Z).to_array(),
+				"current_axis_x": current.transform_vector3(Vec3::X).to_array(),
+				"current_axis_y": current.transform_vector3(Vec3::Y).to_array(),
+				"current_axis_z": current.transform_vector3(Vec3::Z).to_array(),
+				"delta": delta.to_array(),
+				"displacement": delta.length(),
+				"rotation_delta_axis": rotation_axis.to_array(),
+				"rotation_delta_angle_deg": rotation_angle.to_degrees(),
+			}),
+		));
+	}
+	out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+	out.into_iter().take(96).map(|(_, value)| value).collect()
+}
+
+fn safe_diagnostic_inverse(matrix: Mat4) -> Mat4 {
+	let det = matrix.determinant();
+	if det.is_finite() && det.abs() > 1.0e-8 {
+		matrix.inverse()
+	} else {
+		Mat4::IDENTITY
+	}
+}
+
+fn skin_mesh_used_joints(scene: &UnaSceneSnapshot, mesh_index: usize) -> BTreeMap<usize, (f32, u32)> {
+	let mut out = BTreeMap::new();
+	let Some(primitives) = scene.meshes.get(mesh_index) else {
+		return out;
+	};
+	for primitive in primitives {
+		let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+			continue;
+		};
+		for (joint_indices, joint_weights) in joints.iter().zip(weights.iter()) {
+			for (&joint_index, &weight) in joint_indices.iter().zip(joint_weights.iter()) {
+				if weight <= 1.0e-5 {
+					continue;
+				}
+				let entry = out.entry(joint_index as usize).or_insert((0.0, 0));
+				entry.0 += weight;
+				entry.1 += 1;
+			}
+		}
+	}
+	out
+}
+
+fn skin_joint_samples(
+	scene: &UnaSceneSnapshot,
+	rest_nodes: Option<&[un_avatar_core::UnaSceneNode]>,
+	dynamic_node_indices: &BTreeSet<usize>,
+) -> Vec<serde_json::Value> {
+	let node_paths = scene_node_paths_by_index(scene);
+	let current_world = diagnostic_world_from_scene(scene);
+	let mut rest_scene = scene.clone();
+	if let Some(rest_nodes) = rest_nodes {
+		if rest_nodes.len() == rest_scene.nodes.len() {
+			rest_scene.nodes.clone_from_slice(rest_nodes);
+		}
+	}
+	let rest_world = diagnostic_world_from_scene(&rest_scene);
+	let mut out = Vec::new();
+	for (mesh_node_index, node) in scene.nodes.iter().enumerate() {
+		if !node.visible {
+			continue;
+		}
+		let Some(mesh_index) = node.mesh else {
+			continue;
+		};
+		let Some(skin_index) = node.skin else {
+			continue;
+		};
+		let Some(mesh_path) = node_paths.get(mesh_node_index).and_then(Option::as_deref) else {
+			continue;
+		};
+		let Some(skin) = scene.skins.get(skin_index) else {
+			continue;
+		};
+		let used_joints = skin_mesh_used_joints(scene, mesh_index);
+		if used_joints.is_empty() {
+			continue;
+		}
+		let current_mesh_world = current_world.get(mesh_node_index).copied().unwrap_or(Mat4::IDENTITY);
+		let rest_mesh_world = rest_world.get(mesh_node_index).copied().unwrap_or(Mat4::IDENTITY);
+		let current_inv_mesh = safe_diagnostic_inverse(current_mesh_world);
+		let rest_inv_mesh = safe_diagnostic_inverse(rest_mesh_world);
+		for (joint_index, &node_index) in skin.joint_nodes.iter().enumerate() {
+			let Some(joint_path) = node_paths.get(node_index).and_then(Option::as_deref) else {
+				continue;
+			};
+			if !dynamic_node_indices.contains(&node_index) {
+				continue;
+			}
+			let Some((weight_sum, weighted_vertex_count)) = used_joints.get(&joint_index).copied() else {
+				continue;
+			};
+			let Some(current_joint_world) = current_world.get(node_index).copied() else {
+				continue;
+			};
+			let Some(rest_joint_world) = rest_world.get(node_index).copied() else {
+				continue;
+			};
+			let ibm = skin
+				.inverse_bind_matrices
+				.get(joint_index)
+				.map(Mat4::from_cols_array)
+				.unwrap_or(Mat4::IDENTITY);
+			let current_palette = current_inv_mesh * current_joint_world * ibm;
+			let rest_palette = rest_inv_mesh * rest_joint_world * ibm;
+			let current_palette_cols = current_palette.to_cols_array();
+			let rest_palette_cols = rest_palette.to_cols_array();
+			let max_palette_abs_delta = current_palette_cols
+				.iter()
+				.zip(rest_palette_cols.iter())
+				.map(|(current, rest)| (current - rest).abs())
+				.fold(0.0_f32, f32::max);
+			let current_translation = current_joint_world.transform_point3(Vec3::ZERO);
+			let rest_translation = rest_joint_world.transform_point3(Vec3::ZERO);
+			let delta = current_translation - rest_translation;
+			let (_, current_rotation, _) = current_joint_world.to_scale_rotation_translation();
+			let (_, rest_rotation, _) = rest_joint_world.to_scale_rotation_translation();
+			let rotation_delta = current_rotation * rest_rotation.inverse();
+			let (rotation_axis, rotation_angle) = rotation_axis_angle(rotation_delta);
+			out.push(serde_json::json!({
+				"mesh_node_index": mesh_node_index,
+				"mesh_path": mesh_path,
+				"mesh_index": mesh_index,
+				"skin_index": skin_index,
+				"joint_index": joint_index,
+				"node_index": node_index,
+				"joint_path": joint_path,
+				"weight_sum": weight_sum,
+				"weighted_vertex_count": weighted_vertex_count,
+				"rest_translation": rest_translation.to_array(),
+				"current_translation": current_translation.to_array(),
+				"displacement": delta.length(),
+				"rest_rotation_xyzw": [rest_rotation.x, rest_rotation.y, rest_rotation.z, rest_rotation.w],
+				"current_rotation_xyzw": [current_rotation.x, current_rotation.y, current_rotation.z, current_rotation.w],
+				"rotation_delta_axis": rotation_axis.to_array(),
+				"rotation_delta_angle_deg": rotation_angle.to_degrees(),
+				"current_palette": current_palette_cols,
+				"max_palette_abs_delta_from_rest": max_palette_abs_delta,
+			}));
+			if out.len() >= 512 {
+				return out;
+			}
+		}
+	}
+	out
+}
+
+fn visible_nonzero_morph_weights(scene: &UnaSceneSnapshot, limit: usize) -> Vec<serde_json::Value> {
+	let node_paths = scene_node_paths_by_index(scene);
+	let mut out = Vec::new();
+	for (node_index, node) in scene.nodes.iter().enumerate() {
+		if !scene.effective_node_visible(node_index) {
+			continue;
+		}
+		let Some(mesh_index) = node.mesh else {
+			continue;
+		};
+		let Some(primitives) = scene.meshes.get(mesh_index) else {
+			continue;
+		};
+		let node_path = node_paths.get(node_index).and_then(Option::as_deref).unwrap_or("<unknown>");
+		for (primitive_index, primitive) in primitives.iter().enumerate() {
+			for (morph_index, &weight) in primitive.default_morph_weights.iter().enumerate() {
+				if weight.abs() <= 1.0e-5 {
+					continue;
+				}
+				out.push(serde_json::json!({
+					"node_index": node_index,
+					"node_path": node_path,
+					"mesh_index": mesh_index,
+					"primitive_index": primitive_index,
+					"morph_index": morph_index,
+					"name": primitive.morph_target_names.get(morph_index),
+					"weight": weight,
+				}));
+				if out.len() >= limit {
+					return out;
+				}
+			}
+		}
+	}
+	out
+}
+
+fn rotation_axis_angle(rotation: Quat) -> (Vec3, f32) {
+	let normalized = if rotation.is_finite() && rotation.length_squared() > 1.0e-12 {
+		rotation.normalize()
+	} else {
+		Quat::IDENTITY
+	};
+	let angle = normalized.angle_between(Quat::IDENTITY);
+	let axis = normalized.to_axis_angle().0;
+	(axis, angle)
 }
 
 fn modular_avatar_menu_components(unavatar: &un_avatar_core::UnaUnavatarExtension) -> Vec<RuntimeMenuComponentSummary> {
@@ -1942,6 +2420,37 @@ pub struct DynamicsRuntimeCounts {
 	pub contact_parameter_declarations: u32,
 	pub constraint_refs: u32,
 	pub vrc_constraint_refs: u32,
+	pub surface_constraints: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SceneNodeConstraintCounts {
+	pub(crate) total: u32,
+	pub(crate) parent: u32,
+	pub(crate) parent_sources: u32,
+	pub(crate) parent_multi_source: u32,
+}
+
+fn scene_node_constraint_counts(scene: &UnaSceneSnapshot) -> SceneNodeConstraintCounts {
+	let mut counts = SceneNodeConstraintCounts {
+		total: scene.node_constraints.len() as u32,
+		..Default::default()
+	};
+	for constraint in &scene.node_constraints {
+		if matches!(constraint.kind, UnaNodeConstraintKind::Parent { .. }) {
+			counts.parent += 1;
+			let source_count = if constraint.sources.is_empty() {
+				1
+			} else {
+				constraint.sources.len()
+			};
+			counts.parent_sources += source_count as u32;
+			if source_count > 1 {
+				counts.parent_multi_source += 1;
+			}
+		}
+	}
+	counts
 }
 
 impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
@@ -1969,6 +2478,7 @@ impl From<UnaRuntimeDynamicsCounts> for DynamicsRuntimeCounts {
 			contact_parameter_declarations: counts.contact_parameter_declarations as u32,
 			constraint_refs: counts.constraint_refs as u32,
 			vrc_constraint_refs: counts.vrc_constraint_refs as u32,
+			surface_constraints: 0,
 		}
 	}
 }
@@ -2155,6 +2665,624 @@ fn active_expression_overrides<'a>(
 	}
 }
 
+fn animator_dynamic_morph_target_names(doc: &UnaDocument) -> BTreeSet<String> {
+	let mut names = BTreeSet::new();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return names;
+	};
+	collect_animator_motion_morph_target_names(animator, &mut names);
+	names
+}
+
+fn collect_animator_motion_morph_target_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {
+	match value {
+		serde_json::Value::Object(map) => {
+			if let Some(property) = map.get("propertyName").and_then(serde_json::Value::as_str) {
+				if let Some(name) = property.strip_prefix("blendShape.").map(str::trim).filter(|name| !name.is_empty()) {
+					names.insert(name.to_string());
+				}
+			}
+			for child in map.values() {
+				collect_animator_motion_morph_target_names(child, names);
+			}
+		}
+		serde_json::Value::Array(values) => {
+			for child in values {
+				collect_animator_motion_morph_target_names(child, names);
+			}
+		}
+		_ => {}
+	}
+}
+
+fn animator_morph_overrides_for_doc(doc: &UnaDocument) -> BTreeMap<String, f32> {
+	let mut out = BTreeMap::new();
+	let runtime = doc.runtime_model();
+	let parameter_values = runtime.runtime_parameter_values();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return out;
+	};
+	let Some(controllers) = animator.get("controllers").and_then(Value::as_array) else {
+		return out;
+	};
+	for controller in controllers {
+		if controller.get("source").and_then(Value::as_str) != Some("modularAvatarMergeAnimator") {
+			continue;
+		}
+		let motion_base_path = controller
+			.get("motionBasePath")
+			.or_else(|| controller.get("motion_base_path"))
+			.and_then(Value::as_str)
+			.unwrap_or("");
+		let parameter_defaults = animator_controller_parameter_defaults(controller);
+		let Some(layers) = controller.get("layers").and_then(Value::as_array) else {
+			continue;
+		};
+		for (layer_index, layer) in layers.iter().enumerate() {
+			let layer_weight = if layer_index == 0 {
+				1.0
+			} else {
+				layer.get("defaultWeight").and_then(Value::as_f64).unwrap_or(1.0) as f32
+			};
+			if layer_weight <= 0.0001 {
+				continue;
+			}
+			let Some(states) = layer.get("states").and_then(Value::as_array) else {
+				continue;
+			};
+			if states.len() != 1 {
+				continue;
+			}
+			let Some(motion) = states[0].get("motion") else {
+				continue;
+			};
+			accumulate_animator_motion_morph_overrides(
+				motion,
+				motion_base_path,
+				parameter_values,
+				&parameter_defaults,
+				layer_weight,
+				&mut out,
+			);
+		}
+	}
+	out
+}
+
+fn animator_controller_parameter_defaults(controller: &Value) -> BTreeMap<String, f32> {
+	let mut out = BTreeMap::new();
+	let Some(parameters) = controller.get("parameters").and_then(Value::as_array) else {
+		return out;
+	};
+	for parameter in parameters {
+		let Some(name) = parameter.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()) else {
+			continue;
+		};
+		let value = parameter
+			.get("defaultFloat")
+			.or_else(|| parameter.get("default_float"))
+			.and_then(Value::as_f64)
+			.map(|value| value as f32)
+			.unwrap_or_else(|| {
+				parameter
+					.get("defaultInt")
+					.or_else(|| parameter.get("default_int"))
+					.and_then(Value::as_i64)
+					.map(|value| value as f32)
+					.unwrap_or(0.0)
+			});
+		out.insert(name.to_string(), value);
+	}
+	out
+}
+
+fn animator_parameter_value(name: &str, parameter_values: &BTreeMap<String, f32>, parameter_defaults: &BTreeMap<String, f32>) -> f32 {
+	parameter_values
+		.get(name)
+		.or_else(|| parameter_defaults.get(name))
+		.copied()
+		.unwrap_or(0.0)
+}
+
+fn accumulate_animator_motion_morph_overrides(
+	motion: &Value,
+	motion_base_path: &str,
+	parameter_values: &BTreeMap<String, f32>,
+	parameter_defaults: &BTreeMap<String, f32>,
+	weight: f32,
+	out: &mut BTreeMap<String, f32>,
+) {
+	if weight <= 0.0001 {
+		return;
+	}
+	match motion.get("motionType").and_then(Value::as_str) {
+		Some("AnimationClip") => {
+			let Some(bindings) = motion.get("curveBindings").and_then(Value::as_array) else {
+				return;
+			};
+			for binding in bindings {
+				let Some(property) = binding.get("propertyName").and_then(Value::as_str) else {
+					continue;
+				};
+				let Some(name) = property.strip_prefix("blendShape.").map(str::trim).filter(|name| !name.is_empty()) else {
+					continue;
+				};
+				let Some(value) = animator_curve_binding_value(binding) else {
+					continue;
+				};
+				let binding_path = binding.get("path").and_then(Value::as_str).unwrap_or("");
+				let target_path = animator_resolve_binding_path(motion_base_path, binding_path);
+				let key = if target_path.is_empty() {
+					name.to_string()
+				} else {
+					format!("{target_path}\0{name}")
+				};
+				let normalized = if value > 1.0 { value / 100.0 } else { value };
+				let entry = out.entry(key).or_insert(0.0);
+				*entry = (*entry + normalized * weight).clamp(0.0, 1.0);
+			}
+		}
+		Some("BlendTree") => {
+			let blend_type = motion.get("blendType").and_then(Value::as_str).unwrap_or("");
+			if blend_type != "Simple1D" && blend_type != "1D" {
+				return;
+			}
+			let parameter = motion.get("blendParameter").and_then(Value::as_str).unwrap_or("");
+			let Some(children) = motion.get("children").and_then(Value::as_array) else {
+				return;
+			};
+			let value = animator_parameter_value(parameter, parameter_values, parameter_defaults);
+			for (child_index, child) in children.iter().enumerate() {
+				let child_weight = simple_1d_blend_child_weight(children, child_index, value);
+				if child_weight > 0.0001 {
+					accumulate_animator_motion_morph_overrides(
+						child,
+						motion_base_path,
+						parameter_values,
+						parameter_defaults,
+						weight * child_weight,
+						out,
+					);
+				}
+			}
+		}
+		_ => {}
+	}
+}
+
+fn animator_curve_binding_value(binding: &Value) -> Option<f32> {
+	binding
+		.get("constantValue")
+		.or_else(|| binding.get("constant_value"))
+		.or_else(|| binding.get("lastValue"))
+		.or_else(|| binding.get("last_value"))
+		.or_else(|| binding.get("firstValue"))
+		.or_else(|| binding.get("first_value"))
+		.and_then(Value::as_f64)
+		.map(|value| value as f32)
+}
+
+fn animator_resolve_binding_path(motion_base_path: &str, binding_path: &str) -> String {
+	let binding_path = binding_path.trim_matches('/');
+	if binding_path.is_empty() {
+		return motion_base_path.trim_matches('/').to_string();
+	}
+	let motion_base_path = motion_base_path.trim_matches('/');
+	if motion_base_path.is_empty() || binding_path.starts_with(motion_base_path) {
+		binding_path.to_string()
+	} else {
+		format!("{motion_base_path}/{binding_path}")
+	}
+}
+
+fn simple_1d_blend_child_weight(children: &[Value], index: usize, value: f32) -> f32 {
+	if children.is_empty() || index >= children.len() {
+		return 0.0;
+	}
+	let threshold = |child: &Value| {
+		child
+			.get("threshold")
+			.and_then(Value::as_f64)
+			.map(|value| value as f32)
+			.unwrap_or(0.0)
+	};
+	let mut sorted = children
+		.iter()
+		.enumerate()
+		.map(|(child_index, child)| (child_index, threshold(child)))
+		.collect::<Vec<_>>();
+	sorted.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal));
+	let Some(rank) = sorted.iter().position(|(child_index, _)| *child_index == index) else {
+		return 0.0;
+	};
+	let current = sorted[rank].1;
+	if sorted.len() == 1 {
+		return 1.0;
+	}
+	if rank == 0 {
+		let next = sorted[1].1;
+		if value <= current {
+			return 1.0;
+		}
+		return if next > current {
+			((next - value) / (next - current)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		};
+	}
+	if rank + 1 == sorted.len() {
+		let prev = sorted[rank - 1].1;
+		if value >= current {
+			return 1.0;
+		}
+		return if current > prev {
+			((value - prev) / (current - prev)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		};
+	}
+	let prev = sorted[rank - 1].1;
+	let next = sorted[rank + 1].1;
+	if value <= current {
+		if current > prev {
+			((value - prev) / (current - prev)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		}
+	} else if next > current {
+		((next - value) / (next - current)).clamp(0.0, 1.0)
+	} else {
+		0.0
+	}
+}
+
+fn dynamics_interaction_parameter_values(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> BTreeMap<String, f32> {
+	let mut values = BTreeMap::new();
+	let runtime = doc.runtime_model();
+	let Some(scene) = runtime.scene() else {
+		return values;
+	};
+	let dynamics = runtime.dynamics();
+	let active_dynamics_source_ids = active_dynamics_source_ids_for_scene(doc, scene);
+	let node_paths_by_index = scene_node_paths_by_index(scene);
+	let world = crate::scene_transform::scene_world_matrices(scene);
+	let center_peak_angle_parameters = animator_center_peak_angle_parameters(doc);
+	for group in dynamics.dynamics_groups() {
+		if !group.effective_enabled || !dynamics_source_id_resident(group.source_id, active_dynamics_source_ids.as_ref()) {
+			continue;
+		}
+		let Some(interaction) = group.interaction else {
+			continue;
+		};
+		if interaction.parameter.is_empty() {
+			continue;
+		}
+		let shape_angle = dynamics_group_shape_angle(rest_nodes, &scene.nodes, group, &node_paths_by_index).unwrap_or(0.0);
+		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, &world, group, &node_paths_by_index).unwrap_or(0.0);
+		let angle = shape_angle.max(gravity_angle);
+		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
+		let angle_parameter = format!("{}_Angle", interaction.parameter);
+		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
+		let angle_value = if center_peak_angle_parameters.contains(&angle_parameter) {
+			(angle_norm * 0.5).clamp(0.0, 1.0)
+		} else {
+			angle_norm
+		};
+		values.insert(angle_parameter, angle_value);
+		values.insert(format!("{}_IsGrabbed", interaction.parameter), 0.0);
+		values.insert(format!("{}_IsPosed", interaction.parameter), 0.0);
+		values.insert(format!("{}_Stretch", interaction.parameter), 0.0);
+		values.insert(format!("{}_Squish", interaction.parameter), 0.0);
+	}
+	values
+}
+
+fn animator_center_peak_angle_parameters(doc: &UnaDocument) -> BTreeSet<String> {
+	let mut out = BTreeSet::new();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return out;
+	};
+	collect_center_peak_angle_parameters(animator, &mut out);
+	out
+}
+
+fn collect_center_peak_angle_parameters(value: &Value, out: &mut BTreeSet<String>) {
+	if let Some(motion_type) = value.get("motionType").and_then(Value::as_str) {
+		if motion_type == "BlendTree" {
+			let blend_type = value.get("blendType").and_then(Value::as_str).unwrap_or("");
+			if (blend_type == "Simple1D" || blend_type == "1D")
+				&& value
+					.get("blendParameter")
+					.and_then(Value::as_str)
+					.is_some_and(|parameter| parameter.ends_with("_Angle") && blend_tree_has_center_peak_thresholds(value))
+			{
+				if let Some(parameter) = value.get("blendParameter").and_then(Value::as_str) {
+					out.insert(parameter.to_string());
+				}
+			}
+		}
+	}
+	if let Some(children) = value.get("children").and_then(Value::as_array) {
+		for child in children {
+			collect_center_peak_angle_parameters(child, out);
+		}
+	}
+	if let Some(controllers) = value.get("controllers").and_then(Value::as_array) {
+		for controller in controllers {
+			collect_center_peak_angle_parameters(controller, out);
+		}
+	}
+	if let Some(layers) = value.get("layers").and_then(Value::as_array) {
+		for layer in layers {
+			collect_center_peak_angle_parameters(layer, out);
+		}
+	}
+	if let Some(states) = value.get("states").and_then(Value::as_array) {
+		for state in states {
+			collect_center_peak_angle_parameters(state, out);
+		}
+	}
+	if let Some(motion) = value.get("motion") {
+		collect_center_peak_angle_parameters(motion, out);
+	}
+}
+
+fn blend_tree_has_center_peak_thresholds(value: &Value) -> bool {
+	let Some(children) = value.get("children").and_then(Value::as_array) else {
+		return false;
+	};
+	let mut has_low = false;
+	let mut has_center = false;
+	let mut has_high = false;
+	for child in children {
+		let Some(threshold) = child.get("threshold").and_then(Value::as_f64) else {
+			continue;
+		};
+		has_low |= (threshold - 0.0).abs() <= 0.001;
+		has_center |= (threshold - 0.5).abs() <= 0.001;
+		has_high |= (threshold - 1.0).abs() <= 0.001;
+	}
+	has_low && has_center && has_high
+}
+
+fn dynamics_interaction_parameter_diagnostics(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>) -> Vec<Value> {
+	let runtime = doc.runtime_model();
+	let Some(scene) = runtime.scene() else {
+		return Vec::new();
+	};
+	let dynamics = runtime.dynamics();
+	let active_dynamics_source_ids = active_dynamics_source_ids_for_scene(doc, scene);
+	let node_paths_by_index = scene_node_paths_by_index(scene);
+	let world = crate::scene_transform::scene_world_matrices(scene);
+	let mut out = Vec::new();
+	for group in dynamics.dynamics_groups() {
+		if !group.effective_enabled || !dynamics_source_id_resident(group.source_id, active_dynamics_source_ids.as_ref()) {
+			continue;
+		}
+		let Some(interaction) = group.interaction else {
+			continue;
+		};
+		if interaction.parameter.is_empty() {
+			continue;
+		}
+		let shape_angle = dynamics_group_shape_angle(rest_nodes, &scene.nodes, group, &node_paths_by_index).unwrap_or(0.0);
+		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, &world, group, &node_paths_by_index).unwrap_or(0.0);
+		let angle = shape_angle.max(gravity_angle);
+		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
+		let (limit_type, limit_max_angle_x, limit_max_angle_z) = group
+			.limit
+			.map(|limit| {
+				(
+					(!limit.limit_type.is_empty()).then(|| limit.limit_type.clone()),
+					Some(limit.max_angle_x),
+					Some(limit.max_angle_z),
+				)
+			})
+			.unwrap_or((None, None, None));
+		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
+		let chain = dynamics_interaction_chain(group, &node_paths_by_index)
+			.iter()
+			.filter_map(|node| node_paths_by_index.get(*node).and_then(|path| path.clone()))
+			.collect::<Vec<_>>();
+		out.push(serde_json::json!({
+			"parameter": interaction.parameter,
+			"angle_parameter": format!("{}_Angle", interaction.parameter),
+			"source_id": group.source_id,
+			"source_kind": format!("{:?}", group.source_kind),
+			"category": format!("{:?}", group.category),
+			"angle_norm": angle_norm,
+			"angle_deg": angle.to_degrees(),
+			"shape_angle_deg": shape_angle.to_degrees(),
+			"gravity_angle_deg": gravity_angle.to_degrees(),
+			"dominant": if gravity_angle > shape_angle { "gravity" } else { "shape" },
+			"max_angle_deg": max_angle,
+			"limit_type": limit_type,
+			"limit_max_angle_x_deg": limit_max_angle_x,
+			"limit_max_angle_z_deg": limit_max_angle_z,
+			"gravity_power": group.parameters.gravity_power,
+			"gravity_dir": group.parameters.gravity_dir,
+			"chain": chain,
+		}));
+	}
+	out
+}
+
+fn active_dynamics_source_ids_for_scene(doc: &UnaDocument, scene: &UnaSceneSnapshot) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+	let active_groups = doc.runtime_state.active_asset_groups.as_slice();
+	if active_groups.is_empty() || scene.asset_group_ownership.is_empty() {
+		return None;
+	}
+	let active_groups = active_groups.iter().collect::<BTreeSet<_>>();
+	let mut owned = BTreeSet::new();
+	let mut active = BTreeSet::new();
+	for group in &scene.asset_group_ownership {
+		for source_id in &group.dynamics_source_ids {
+			if source_id.is_empty() {
+				continue;
+			}
+			owned.insert(source_id.clone());
+			if active_groups.contains(&group.group_id) {
+				active.insert(source_id.clone());
+			}
+		}
+	}
+	if owned.is_empty() {
+		return None;
+	}
+	Some((owned, active))
+}
+
+fn dynamics_source_id_resident(source_id: &str, source_ids: Option<&(BTreeSet<String>, BTreeSet<String>)>) -> bool {
+	let Some((owned_source_ids, active_source_ids)) = source_ids else {
+		return true;
+	};
+	source_id.is_empty() || !owned_source_ids.contains(source_id) || active_source_ids.contains(source_id)
+}
+
+fn dynamics_group_shape_angle(
+	rest_nodes: Option<&[UnaSceneNode]>,
+	current_nodes: &[UnaSceneNode],
+	group: un_avatar_core::UnaDynamicsGroup<'_>,
+	node_paths_by_index: &[Option<String>],
+) -> Option<f32> {
+	let chain = dynamics_interaction_chain(group, node_paths_by_index);
+	if chain.len() < 2 {
+		return Some(0.0);
+	}
+	let mut max_angle = 0.0_f32;
+	let mut measured = false;
+	let rest_nodes = rest_nodes.unwrap_or(current_nodes);
+	for segment in chain.windows(2) {
+		let root = segment[0];
+		let tip = segment[1];
+		if root == tip {
+			continue;
+		}
+		let Some(rest_tip) = rest_nodes.get(tip) else {
+			continue;
+		};
+		let Some(current_tip) = current_nodes.get(tip) else {
+			continue;
+		};
+		let rest_local = Mat4::from_cols_array(&rest_tip.transform);
+		let current_local = Mat4::from_cols_array(&current_tip.transform);
+		let (_, rest_rotation, rest_translation) = rest_local.to_scale_rotation_translation();
+		let (_, current_rotation, current_translation) = current_local.to_scale_rotation_translation();
+		if rest_rotation.length_squared() > 1e-12 && current_rotation.length_squared() > 1e-12 {
+			max_angle = max_angle.max(rest_rotation.normalize().angle_between(current_rotation.normalize()));
+			measured = true;
+		}
+		if let (Some(rest_dir), Some(current_dir)) = (rest_translation.try_normalize(), current_translation.try_normalize()) {
+			max_angle = max_angle.max(rest_dir.angle_between(current_dir));
+			measured = true;
+		}
+	}
+	measured.then_some(max_angle)
+}
+
+fn dynamics_interaction_angle_normalizer(limit: Option<&un_avatar_core::UnaDynamicsLimit>) -> f32 {
+	let Some(limit) = limit else {
+		return 90.0;
+	};
+	let x = limit.max_angle_x.max(0.0);
+	let z = limit.max_angle_z.max(0.0);
+	let positive_min = match (x > 0.0, z > 0.0) {
+		(true, true) => x.min(z),
+		(true, false) => x,
+		(false, true) => z,
+		(false, false) => 90.0,
+	};
+	let limit_type = limit.limit_type.to_ascii_lowercase();
+	if limit_type.contains("hinge") {
+		positive_min.max(1.0)
+	} else {
+		x.max(z).max(1.0)
+	}
+}
+
+fn dynamics_interaction_chain<'a>(group: un_avatar_core::UnaDynamicsGroup<'a>, node_paths_by_index: &[Option<String>]) -> &'a [usize] {
+	let chain = group.chain.bone_node_indices;
+	let start = group.chain.interaction_start_index.min(chain.len());
+	if start == 0 && legacy_interaction_chain_has_prepended_anchor(group, node_paths_by_index) {
+		return &chain[1..];
+	}
+	&chain[start..]
+}
+
+fn legacy_interaction_chain_has_prepended_anchor(
+	group: un_avatar_core::UnaDynamicsGroup<'_>,
+	node_paths_by_index: &[Option<String>],
+) -> bool {
+	if group.interaction.is_none() {
+		return false;
+	}
+	let chain = group.chain.bone_node_indices;
+	if chain.len() < 3 {
+		return false;
+	}
+	let Some(source_path) = group
+		.source_id
+		.split_once(':')
+		.map(|(_, path)| path)
+		.filter(|path| !path.is_empty())
+	else {
+		return false;
+	};
+	let Some(authored_root_path) = chain
+		.get(1)
+		.and_then(|node| node_paths_by_index.get(*node))
+		.and_then(|path| path.as_deref())
+	else {
+		return false;
+	};
+	authored_root_path == source_path || authored_root_path.ends_with(&format!("/{source_path}"))
+}
+
+fn dynamics_group_gravity_sensor_angle(
+	rest_nodes: Option<&[UnaSceneNode]>,
+	world: &[Mat4],
+	group: un_avatar_core::UnaDynamicsGroup<'_>,
+	node_paths_by_index: &[Option<String>],
+) -> Option<f32> {
+	if group.parameters.gravity_power.abs() <= f32::EPSILON {
+		return Some(0.0);
+	}
+	let gravity_dir = Vec3::from_array(group.parameters.gravity_dir)
+		.try_normalize()
+		.unwrap_or(Vec3::NEG_Y);
+	let rest_nodes = rest_nodes?;
+	let chain = dynamics_interaction_chain(group, node_paths_by_index);
+	if chain.len() < 2 {
+		return Some(0.0);
+	}
+	let mut max_angle = 0.0_f32;
+	let mut measured = false;
+	for segment in chain.windows(2) {
+		let parent = segment[0];
+		let child = segment[1];
+		let Some(parent_world) = world.get(parent).copied() else {
+			continue;
+		};
+		let Some(rest_child) = rest_nodes.get(child) else {
+			continue;
+		};
+		let (_, parent_rot, _) = parent_world.to_scale_rotation_translation();
+		let rest_child_local = Mat4::from_cols_array(&rest_child.transform);
+		let (_, _, rest_child_translation) = rest_child_local.to_scale_rotation_translation();
+		let Some(axis) = (parent_rot.normalize() * rest_child_translation).try_normalize() else {
+			continue;
+		};
+		let gravity_amount = group.parameters.gravity_power.abs().clamp(0.0, 1.0);
+		let gravity_target = axis.lerp(gravity_dir * group.parameters.gravity_power.signum(), gravity_amount);
+		let Some(gravity_axis) = gravity_target.try_normalize() else {
+			continue;
+		};
+		max_angle = max_angle.max(axis.angle_between(gravity_axis));
+		measured = true;
+	}
+	measured.then_some(max_angle)
+}
+
 fn count_hand_finger_target_matches(
 	profile: &un_avatar_skeleton::HumanoidProfile,
 	hand: Option<&un_motion_frame::HandMotion>,
@@ -2229,6 +3357,22 @@ fn normalize_profile_match_key(name: &str) -> String {
 			.map(|ch| ch.to_ascii_lowercase()),
 	);
 	normalized
+}
+
+fn runtime_token_filter_matches(value: &str, needles: &[String]) -> bool {
+	needles.iter().any(|needle| dynamics_normalized_token_filter_matches(value, needle))
+}
+
+fn runtime_physics_source_scope_key(value: &str) -> String {
+	let value = value.strip_prefix("physbone:").unwrap_or(value);
+	let lower = value.to_ascii_lowercase();
+	if let Some(index) = lower.find("/pb/") {
+		return normalize_profile_match_key(&value[..index]);
+	}
+	if let Some(index) = value.find('/') {
+		return normalize_profile_match_key(&value[..index]);
+	}
+	normalize_profile_match_key(value)
 }
 
 /// GPU とシェーダに渡すグローバル（WGSL `Globals` と一致。末尾パディングで 256 バイトに揃える）。
@@ -2361,7 +3505,7 @@ pub(crate) struct DocumentAttachOptions {
 	pub(crate) processed_texture_cache: bool,
 	pub(crate) dynamics_enabled: bool,
 	pub(crate) bone_colliders: BoneColliderConfig,
-	pub(crate) spring_bone_physics: DynamicsPhysicsConfig,
+	pub(crate) dynamics_physics: DynamicsPhysicsConfig,
 	pub(crate) debug_material_dump: bool,
 	pub(crate) vmc_address: Option<SocketAddr>,
 	pub(crate) unmotion_zenoh: crate::options::UnmotionZenohOptions,
@@ -2448,29 +3592,1250 @@ struct RuntimePhysicsBuild {
 	stats: BoneColliderStats,
 }
 
+#[derive(Clone, Debug)]
+struct SurfaceConstraintNode {
+	group_index: usize,
+	rest_tail: Vec3,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SurfaceConstraintPairStats {
+	edge_count: usize,
+	edge_distance_sum: f32,
+	stiffness: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SurfaceConstraintVertex {
+	vertex_index: usize,
+	node_index: usize,
+	pos: Vec3,
+}
+
+fn build_dynamics_surface_constraints(
+	scene: &UnaSceneSnapshot,
+	dynamics: UnaRuntimeDynamics<'_>,
+	physics: &DynamicsPhysicsConfig,
+) -> Vec<DynamicsSurfaceConstraint> {
+	let world = scene_world_matrices(scene);
+	let surface_nodes = dynamics_surface_constraint_nodes(scene, dynamics, &world, &physics.categories);
+	if surface_nodes.is_empty() {
+		return Vec::new();
+	}
+	let topology_enabled = physics.surface_constraint_topology_stiffness > 0.0
+		&& physics.surface_constraint_topology_max_edge_distance_m > 0.0
+		&& physics.surface_constraint_topology_max_mean_edge_distance_m > 0.0;
+	let spatial_enabled = physics.surface_constraint_spatial_stiffness > 0.0 && physics.surface_constraint_spatial_max_distance_m > 0.0;
+	if !topology_enabled && !spatial_enabled {
+		return Vec::new();
+	}
+	let mut pair_stats = BTreeMap::<(usize, usize), SurfaceConstraintPairStats>::new();
+	for node in &scene.nodes {
+		let (Some(mesh_index), Some(skin_index)) = (node.mesh, node.skin) else {
+			continue;
+		};
+		let (Some(primitives), Some(skin)) = (scene.meshes.get(mesh_index), scene.skins.get(skin_index)) else {
+			continue;
+		};
+		for primitive in primitives {
+			let (Some(joints), Some(weights), Some(indices)) = (&primitive.joints, &primitive.weights, &primitive.indices) else {
+				continue;
+			};
+			if primitive.positions.is_empty() || joints.len() != weights.len() {
+				continue;
+			}
+			let dominant_nodes = joints
+				.iter()
+				.zip(weights.iter())
+				.map(|(joint_indices, joint_weights)| dominant_surface_constraint_node(joint_indices, joint_weights, skin, &surface_nodes))
+				.collect::<Vec<_>>();
+			if spatial_enabled {
+				accumulate_spatial_surface_seams(
+					&primitive.positions,
+					&dominant_nodes,
+					&surface_nodes,
+					&mut pair_stats,
+					physics.surface_constraint_spatial_max_distance_m,
+					physics.surface_constraint_spatial_stiffness,
+				);
+			}
+			if topology_enabled {
+				for triangle in indices.chunks_exact(3) {
+					let tri = [triangle[0] as usize, triangle[1] as usize, triangle[2] as usize];
+					for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+						let Some(Some(node_a)) = dominant_nodes.get(a) else {
+							continue;
+						};
+						let Some(Some(node_b)) = dominant_nodes.get(b) else {
+							continue;
+						};
+						if node_a == node_b {
+							continue;
+						}
+						let (Some(a_info), Some(b_info)) = (surface_nodes.get(node_a), surface_nodes.get(node_b)) else {
+							continue;
+						};
+						if a_info.group_index == b_info.group_index {
+							continue;
+						}
+						let (Some(pos_a), Some(pos_b)) = (primitive.positions.get(a), primitive.positions.get(b)) else {
+							continue;
+						};
+						let edge_distance = Vec3::from_array(*pos_a).distance(Vec3::from_array(*pos_b));
+						if !edge_distance.is_finite() || edge_distance > physics.surface_constraint_topology_max_edge_distance_m {
+							continue;
+						}
+						let key = if node_a < node_b { (*node_a, *node_b) } else { (*node_b, *node_a) };
+						let stats = pair_stats.entry(key).or_default();
+						stats.edge_count += 1;
+						stats.edge_distance_sum += edge_distance;
+						stats.stiffness = stats.stiffness.max(physics.surface_constraint_topology_stiffness);
+					}
+				}
+			}
+		}
+	}
+	pair_stats
+		.into_iter()
+		.filter_map(|((node_a, node_b), stats)| {
+			if stats.edge_count < physics.surface_constraint_min_edge_count as usize {
+				return None;
+			}
+			let mean_edge_distance = stats.edge_distance_sum / stats.edge_count as f32;
+			if !mean_edge_distance.is_finite() || mean_edge_distance > physics.surface_constraint_topology_max_mean_edge_distance_m {
+				return None;
+			}
+			let rest_distance = surface_nodes
+				.get(&node_a)?
+				.rest_tail
+				.distance(surface_nodes.get(&node_b)?.rest_tail);
+			if !rest_distance.is_finite() || rest_distance <= 1e-5 {
+				return None;
+			}
+			Some(DynamicsSurfaceConstraint {
+				node_a,
+				node_b,
+				rest_distance,
+				stiffness: stats.stiffness.max(0.35),
+			})
+		})
+		.collect()
+}
+
+fn accumulate_spatial_surface_seams(
+	positions: &[[f32; 3]],
+	dominant_nodes: &[Option<usize>],
+	surface_nodes: &BTreeMap<usize, SurfaceConstraintNode>,
+	pair_stats: &mut BTreeMap<(usize, usize), SurfaceConstraintPairStats>,
+	max_distance_m: f32,
+	stiffness: f32,
+) {
+	const SEAM_CELL_M: f32 = 0.012;
+	if positions.is_empty() || dominant_nodes.is_empty() || max_distance_m <= 0.0 || stiffness <= 0.0 {
+		return;
+	}
+	let mut vertices = Vec::new();
+	for (vertex_index, node_index) in dominant_nodes.iter().enumerate() {
+		let Some(node_index) = *node_index else {
+			continue;
+		};
+		if vertex_index >= positions.len() {
+			continue;
+		}
+		if !surface_nodes.contains_key(&node_index) {
+			continue;
+		}
+		let pos = Vec3::from_array(positions[vertex_index]);
+		if !pos.is_finite() {
+			continue;
+		}
+		vertices.push(SurfaceConstraintVertex {
+			vertex_index,
+			node_index,
+			pos,
+		});
+	}
+	if vertices.len() < 2 {
+		return;
+	}
+	let mut grid = HashMap::<(i32, i32, i32), Vec<usize>>::new();
+	for (local_index, vertex) in vertices.iter().enumerate() {
+		grid.entry(surface_seam_cell(vertex.pos, SEAM_CELL_M))
+			.or_default()
+			.push(local_index);
+	}
+	for (local_index, vertex) in vertices.iter().enumerate() {
+		let cell = surface_seam_cell(vertex.pos, SEAM_CELL_M);
+		for dx in -1..=1 {
+			for dy in -1..=1 {
+				for dz in -1..=1 {
+					let key = (cell.0 + dx, cell.1 + dy, cell.2 + dz);
+					let Some(candidates) = grid.get(&key) else {
+						continue;
+					};
+					for &other_index in candidates {
+						if other_index <= local_index {
+							continue;
+						}
+						let other = vertices[other_index];
+						if other.vertex_index == vertex.vertex_index || other.node_index == vertex.node_index {
+							continue;
+						}
+						let (Some(a_info), Some(b_info)) = (surface_nodes.get(&vertex.node_index), surface_nodes.get(&other.node_index))
+						else {
+							continue;
+						};
+						if a_info.group_index == b_info.group_index {
+							continue;
+						}
+						let distance = vertex.pos.distance(other.pos);
+						if !distance.is_finite() || distance > max_distance_m {
+							continue;
+						}
+						let key = if vertex.node_index < other.node_index {
+							(vertex.node_index, other.node_index)
+						} else {
+							(other.node_index, vertex.node_index)
+						};
+						let stats = pair_stats.entry(key).or_default();
+						stats.edge_count += 1;
+						stats.edge_distance_sum += distance;
+						stats.stiffness = stats.stiffness.max(stiffness);
+					}
+				}
+			}
+		}
+	}
+}
+
+fn surface_seam_cell(pos: Vec3, cell_size: f32) -> (i32, i32, i32) {
+	(
+		(pos.x / cell_size).floor() as i32,
+		(pos.y / cell_size).floor() as i32,
+		(pos.z / cell_size).floor() as i32,
+	)
+}
+
+fn dynamics_surface_constraint_nodes(
+	scene: &UnaSceneSnapshot,
+	dynamics: UnaRuntimeDynamics<'_>,
+	world: &[Mat4],
+	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
+) -> BTreeMap<usize, SurfaceConstraintNode> {
+	let mut nodes = BTreeMap::new();
+	for (group_index, group) in dynamics.dynamics_groups().enumerate() {
+		if !group.effective_enabled || !dynamics.source_id_resident_in_scene(scene, group.source_id) {
+			continue;
+		}
+		if classify_dynamics_group_category(scene, group, categories) != "cloth" {
+			continue;
+		}
+		let chain = group.chain.bone_node_indices;
+		for chain_index in 1..chain.len() {
+			let child = chain[chain_index];
+			if child >= scene.nodes.len() || child >= world.len() {
+				continue;
+			}
+			let rest_tail = dynamics_chain_rest_tail(scene, world, chain, chain_index);
+			if rest_tail.is_finite() {
+				nodes.entry(child).or_insert(SurfaceConstraintNode { group_index, rest_tail });
+			}
+		}
+	}
+	nodes
+}
+
+fn dynamics_chain_rest_tail(scene: &UnaSceneSnapshot, world: &[Mat4], chain: &[usize], child_chain_index: usize) -> Vec3 {
+	let child = chain[child_chain_index];
+	let child_world = world[child];
+	let local_tail_translation = if child_chain_index + 1 < chain.len() {
+		let next = chain[child_chain_index + 1];
+		scene
+			.nodes
+			.get(next)
+			.map(|node| Mat4::from_cols_array(&node.transform).to_scale_rotation_translation().2)
+			.unwrap_or(Vec3::Y)
+	} else {
+		scene
+			.nodes
+			.get(child)
+			.map(|node| Mat4::from_cols_array(&node.transform).to_scale_rotation_translation().2)
+			.unwrap_or(Vec3::Y)
+	};
+	let length = local_tail_translation.length().max(1e-4);
+	let axis = local_tail_translation.normalize_or_zero();
+	let axis = if axis.length_squared() > 1e-12 { axis } else { Vec3::Y };
+	child_world.transform_point3(Vec3::ZERO) + child_world.transform_vector3(axis) * length
+}
+
+fn dominant_surface_constraint_node(
+	joint_indices: &[u16; 4],
+	joint_weights: &[f32; 4],
+	skin: &un_avatar_core::UnaSkin,
+	surface_nodes: &BTreeMap<usize, SurfaceConstraintNode>,
+) -> Option<usize> {
+	let mut best = None;
+	let mut best_weight = 0.0;
+	for lane in 0..4 {
+		let weight = joint_weights[lane];
+		if !weight.is_finite() || weight < 0.25 || weight <= best_weight {
+			continue;
+		}
+		let joint_index = joint_indices[lane] as usize;
+		let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
+			continue;
+		};
+		if !surface_nodes.contains_key(&node_index) {
+			continue;
+		}
+		best = Some(node_index);
+		best_weight = weight;
+	}
+	best
+}
+
+fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
+	let mut world = vec![Mat4::IDENTITY; scene.nodes.len()];
+	for &root in scene.resolved_roots().iter() {
+		if root < scene.nodes.len() {
+			propagate_scene_world_matrix(&scene.nodes, &mut world, root, Mat4::IDENTITY);
+		}
+	}
+	world
+}
+
+fn propagate_scene_world_matrix(nodes: &[UnaSceneNode], world: &mut [Mat4], node_index: usize, parent_world: Mat4) {
+	let local = Mat4::from_cols_array(&nodes[node_index].transform);
+	let node_world = parent_world * local;
+	world[node_index] = node_world;
+	for &child in &nodes[node_index].children {
+		if child < nodes.len() {
+			propagate_scene_world_matrix(nodes, world, child, node_world);
+		}
+	}
+}
+
+fn dynamics_surface_constraint_samples(scene: &UnaSceneSnapshot, constraints: &[DynamicsSurfaceConstraint]) -> Vec<String> {
+	let paths = scene_node_paths_by_index(scene);
+	constraints
+		.iter()
+		.take(12)
+		.map(|constraint| {
+			let a = paths
+				.get(constraint.node_a)
+				.and_then(|path| path.as_deref())
+				.and_then(str_leaf)
+				.unwrap_or("<unknown>");
+			let b = paths
+				.get(constraint.node_b)
+				.and_then(|path| path.as_deref())
+				.and_then(str_leaf)
+				.unwrap_or("<unknown>");
+			format!("{a}<->{b}:{:.3}", constraint.rest_distance)
+		})
+		.collect()
+}
+
+fn dynamics_surface_constraint_statuses(scene: &UnaSceneSnapshot, constraints: &[DynamicsSurfaceConstraint]) -> Vec<serde_json::Value> {
+	let paths = scene_node_paths_by_index(scene);
+	constraints
+		.iter()
+		.map(|constraint| {
+			let path_a = paths.get(constraint.node_a).and_then(|path| path.as_deref()).unwrap_or("<unknown>");
+			let path_b = paths.get(constraint.node_b).and_then(|path| path.as_deref()).unwrap_or("<unknown>");
+			serde_json::json!({
+				"node_a": constraint.node_a,
+				"node_b": constraint.node_b,
+				"path_a": path_a,
+				"path_b": path_b,
+				"leaf_a": str_leaf(path_a).unwrap_or("<unknown>"),
+				"leaf_b": str_leaf(path_b).unwrap_or("<unknown>"),
+				"rest_distance": constraint.rest_distance,
+				"stiffness": constraint.stiffness,
+			})
+		})
+		.collect()
+}
+
+fn str_leaf(path: &str) -> Option<&str> {
+	path.rsplit('/').next().filter(|leaf| !leaf.is_empty())
+}
+
+fn dynamics_bone_collider_samples(scene: &UnaSceneSnapshot, colliders: &[RuntimeBoneColliderPrimitive]) -> Vec<String> {
+	let paths = scene_node_paths_by_index(scene);
+	colliders
+		.iter()
+		.filter(|collider| {
+			!collider.source_id.is_empty()
+				&& (!collider.collider_path.is_empty()
+					|| matches!(
+						collider.primitive,
+						BoneColliderPrimitive::Sphere { .. }
+							| BoneColliderPrimitive::Capsule { .. }
+							| BoneColliderPrimitive::LocalSphere { .. }
+							| BoneColliderPrimitive::LocalCapsule { .. }
+							| BoneColliderPrimitive::LocalPlane { .. }
+					))
+		})
+		.take(24)
+		.map(|collider| format_runtime_bone_collider_sample(&paths, collider))
+		.collect()
+}
+
+fn dynamics_bone_collider_source_counts(colliders: &[RuntimeBoneColliderPrimitive]) -> Vec<String> {
+	let mut counts = BTreeMap::<String, usize>::new();
+	for collider in colliders {
+		if collider.source_id.is_empty() {
+			continue;
+		}
+		let source_leaf = collider
+			.source_id
+			.rsplit('/')
+			.next()
+			.unwrap_or(collider.source_id.as_str())
+			.to_string();
+		*counts.entry(source_leaf).or_default() += 1;
+	}
+	counts
+		.into_iter()
+		.take(80)
+		.map(|(source, count)| format!("{source}:{count}"))
+		.collect()
+}
+
+fn dynamics_group_source_samples(dynamics: UnaRuntimeDynamics<'_>) -> Vec<String> {
+	dynamics
+		.dynamics_groups()
+		.filter(|group| !group.source_id.is_empty())
+		.take(96)
+		.map(|group| {
+			let source_leaf = group.source_id.rsplit('/').next().unwrap_or(group.source_id);
+			format!(
+				"{source_leaf}:enabled={} chain={}",
+				group.effective_enabled,
+				group.chain.bone_node_indices.len()
+			)
+		})
+		.collect()
+}
+
+fn format_runtime_bone_collider_sample(paths: &[Option<String>], collider: &RuntimeBoneColliderPrimitive) -> String {
+	format_bone_collider_sample(paths, None, collider.primitive, &collider.source_id, &collider.collider_path)
+}
+
+fn format_bone_collider_sample(
+	paths: &[Option<String>],
+	index: Option<usize>,
+	primitive: BoneColliderPrimitive,
+	source_id: &str,
+	collider_path: &str,
+) -> String {
+	let (shape, node) = match primitive {
+		BoneColliderPrimitive::Sphere { node, .. }
+		| BoneColliderPrimitive::LocalSphere { node, .. }
+		| BoneColliderPrimitive::LocalCapsule { node, .. }
+		| BoneColliderPrimitive::LocalPlane { node, .. } => (runtime_bone_collider_shape_name(primitive), Some(node)),
+		BoneColliderPrimitive::Capsule { start_node, .. } => (runtime_bone_collider_shape_name(primitive), Some(start_node)),
+	};
+	let node_leaf = node
+		.and_then(|node| paths.get(node))
+		.and_then(|path| path.as_deref())
+		.and_then(str_leaf)
+		.unwrap_or("<unknown>");
+	let source_leaf = source_id.rsplit('/').next().unwrap_or(source_id);
+	let collider_leaf = collider_path.rsplit('/').next().filter(|leaf| !leaf.is_empty());
+	match index {
+		Some(index) => match collider_leaf {
+			Some(collider_leaf) => format!("#{index}:{source_leaf}/{collider_leaf}:{shape}@{node_leaf}"),
+			None => format!("#{index}:{source_leaf}:{shape}@{node_leaf}"),
+		},
+		None => match collider_leaf {
+			Some(collider_leaf) => format!("{source_leaf}/{collider_leaf}:{shape}@{node_leaf}"),
+			None => format!("{source_leaf}:{shape}@{node_leaf}"),
+		},
+	}
+}
+
+fn runtime_bone_collider_shape_name(collider: BoneColliderPrimitive) -> &'static str {
+	match collider {
+		BoneColliderPrimitive::Sphere { .. } | BoneColliderPrimitive::LocalSphere { .. } => "sphere",
+		BoneColliderPrimitive::Capsule { .. } | BoneColliderPrimitive::LocalCapsule { .. } => "capsule",
+		BoneColliderPrimitive::LocalPlane { .. } => "plane",
+	}
+}
+
+fn runtime_bone_collider_detail(
+	paths: &[Option<String>],
+	world: &[Mat4],
+	index: usize,
+	primitive: BoneColliderPrimitive,
+	source_id: &str,
+	collider_path: &str,
+) -> serde_json::Value {
+	let node_path = |node: usize| paths.get(node).and_then(|path| path.as_deref()).unwrap_or("<unknown>");
+	let world_point = |node: usize, point: [f32; 3]| {
+		world
+			.get(node)
+			.map(|matrix| matrix.transform_point3(Vec3::from_array(point)).to_array())
+			.unwrap_or(point)
+	};
+	let world_vector = |node: usize, vector: [f32; 3]| {
+		world
+			.get(node)
+			.map(|matrix| matrix.transform_vector3(Vec3::from_array(vector)).to_array())
+			.unwrap_or(vector)
+	};
+	match primitive {
+		BoneColliderPrimitive::Sphere { node, radius } => serde_json::json!({
+			"index": index,
+			"source_id": source_id,
+			"collider_path": collider_path,
+			"shape": "sphere",
+			"node": node,
+			"node_path": node_path(node),
+			"radius": radius,
+			"world_center": world_point(node, [0.0, 0.0, 0.0]),
+			"inside_bounds": false,
+		}),
+		BoneColliderPrimitive::Capsule {
+			start_node,
+			end_node,
+			radius,
+		} => serde_json::json!({
+			"index": index,
+			"source_id": source_id,
+			"collider_path": collider_path,
+			"shape": "capsule",
+			"start_node": start_node,
+			"start_node_path": node_path(start_node),
+			"end_node": end_node,
+			"end_node_path": node_path(end_node),
+			"radius": radius,
+			"world_a": world_point(start_node, [0.0, 0.0, 0.0]),
+			"world_b": world_point(end_node, [0.0, 0.0, 0.0]),
+			"inside_bounds": false,
+		}),
+		BoneColliderPrimitive::LocalSphere {
+			node,
+			center,
+			radius,
+			inside_bounds,
+		} => serde_json::json!({
+			"index": index,
+			"source_id": source_id,
+			"collider_path": collider_path,
+			"shape": "local_sphere",
+			"node": node,
+			"node_path": node_path(node),
+			"center": center,
+			"radius": radius,
+			"world_center": world_point(node, center),
+			"inside_bounds": inside_bounds,
+		}),
+		BoneColliderPrimitive::LocalCapsule {
+			node,
+			center,
+			axis,
+			half_length,
+			radius,
+			inside_bounds,
+		} => {
+			let axis_vec = Vec3::from_array(axis).normalize_or_zero();
+			let a = Vec3::from_array(center) - axis_vec * half_length;
+			let b = Vec3::from_array(center) + axis_vec * half_length;
+			serde_json::json!({
+				"index": index,
+				"source_id": source_id,
+				"collider_path": collider_path,
+				"shape": "local_capsule",
+				"node": node,
+				"node_path": node_path(node),
+				"center": center,
+				"axis": axis,
+				"half_length": half_length,
+				"radius": radius,
+				"world_a": world_point(node, a.to_array()),
+				"world_b": world_point(node, b.to_array()),
+				"world_axis": world_vector(node, axis),
+				"inside_bounds": inside_bounds,
+			})
+		}
+		BoneColliderPrimitive::LocalPlane {
+			node,
+			center,
+			normal,
+			inside_bounds,
+		} => serde_json::json!({
+			"index": index,
+			"source_id": source_id,
+			"collider_path": collider_path,
+			"shape": "local_plane",
+			"node": node,
+			"node_path": node_path(node),
+			"center": center,
+			"normal": normal,
+			"world_point": world_point(node, center),
+			"world_normal": world_vector(node, normal),
+			"inside_bounds": inside_bounds,
+		}),
+	}
+}
+
+fn dynamics_collider_selection_statuses(
+	sim: &DynamicsSimulator,
+	node_paths_by_index: &[Option<String>],
+	world: &[Mat4],
+) -> Vec<RuntimeDynamicsColliderSelectionStatus> {
+	let bone_colliders = sim.bone_colliders();
+	let bone_collider_source_ids = sim.bone_collider_source_ids();
+	let bone_collider_paths = sim.bone_collider_paths();
+	sim.collider_selection_summaries()
+		.into_iter()
+		.map(|summary| {
+			let sample_colliders = summary
+				.sample_collider_indices
+				.iter()
+				.filter_map(|index| {
+					let primitive = bone_colliders.get(*index).copied()?;
+					let source_id = bone_collider_source_ids.get(*index).map(String::as_str).unwrap_or_default();
+					let collider_path = bone_collider_paths.get(*index).map(String::as_str).unwrap_or_default();
+					Some(format_bone_collider_sample(
+						node_paths_by_index,
+						Some(*index),
+						primitive,
+						source_id,
+						collider_path,
+					))
+				})
+				.collect();
+			let sample_collider_details = summary
+				.sample_collider_indices
+				.iter()
+				.filter_map(|index| {
+					let primitive = bone_colliders.get(*index).copied()?;
+					let source_id = bone_collider_source_ids.get(*index).map(String::as_str).unwrap_or_default();
+					let collider_path = bone_collider_paths.get(*index).map(String::as_str).unwrap_or_default();
+					Some(runtime_bone_collider_detail(
+						node_paths_by_index,
+						world,
+						*index,
+						primitive,
+						source_id,
+						collider_path,
+					))
+				})
+				.collect();
+			RuntimeDynamicsColliderSelectionStatus {
+				source_id: summary.source_id,
+				selected_collider_count: summary.selected_collider_count,
+				global_collider_count: summary.global_collider_count,
+				authored_collider_count: summary.authored_collider_count,
+				sample_collider_indices: summary.sample_collider_indices,
+				sample_collider_source_ids: summary.sample_collider_source_ids,
+				sample_collider_paths: summary.sample_collider_paths,
+				sample_colliders,
+				sample_collider_details,
+			}
+		})
+		.collect()
+}
+
+fn dynamics_collider_details_by_selection_source<'a>(
+	collider_selections: &'a [RuntimeDynamicsColliderSelectionStatus],
+) -> BTreeMap<&'a str, Vec<&'a serde_json::Value>> {
+	let mut colliders_by_source_id = BTreeMap::<&str, Vec<&serde_json::Value>>::new();
+	let mut seen = BTreeSet::<(&str, String)>::new();
+	for selection in collider_selections {
+		for detail in &selection.sample_collider_details {
+			let key = (
+				selection.source_id.as_str(),
+				detail
+					.get("index")
+					.and_then(Value::as_u64)
+					.map(|index| index.to_string())
+					.or_else(|| detail.get("collider_path").and_then(Value::as_str).map(str::to_string))
+					.unwrap_or_default(),
+			);
+			if seen.insert(key) {
+				colliders_by_source_id.entry(selection.source_id.as_str()).or_default().push(detail);
+			}
+		}
+	}
+	colliders_by_source_id
+}
+
+fn dynamics_collider_contact_statuses(
+	tail_samples: &[DynamicsTailSample],
+	collider_selections: &[RuntimeDynamicsColliderSelectionStatus],
+) -> Vec<RuntimeDynamicsColliderContactStatus> {
+	const CONTACT_STATUS_LIMIT: usize = 1024;
+	let colliders_by_source_id = dynamics_collider_details_by_selection_source(collider_selections);
+	let mut out = Vec::new();
+	for tail in tail_samples {
+		let Some(colliders) = colliders_by_source_id.get(tail.source_id.as_str()) else {
+			continue;
+		};
+		let tail_point = Vec3::from_array(tail.curr_tail);
+		let mut best = None::<RuntimeDynamicsColliderContactStatus>;
+		for collider in colliders {
+			let Some(contact) = dynamics_collider_contact_status(tail, tail_point, collider) else {
+				continue;
+			};
+			if best.as_ref().is_none_or(|best| contact.margin < best.margin) {
+				best = Some(contact);
+			}
+		}
+		if let Some(contact) = best {
+			out.push(contact);
+		}
+		if out.len() >= CONTACT_STATUS_LIMIT {
+			break;
+		}
+	}
+	out
+}
+
+fn dynamics_collider_contact_summary_statuses(
+	contacts: &[RuntimeDynamicsColliderContactStatus],
+) -> Vec<RuntimeDynamicsColliderContactSummary> {
+	let mut summaries = BTreeMap::<String, RuntimeDynamicsColliderContactSummary>::new();
+	for contact in contacts {
+		let summary = summaries
+			.entry(contact.source_id.clone())
+			.or_insert_with(|| RuntimeDynamicsColliderContactSummary {
+				source_id: contact.source_id.clone(),
+				contact_count: 0,
+				penetrating_count: 0,
+				min_margin: contact.margin,
+				min_distance: contact.distance,
+				min_threshold: contact.threshold,
+				closest_collider_path: contact.collider_path.clone(),
+				closest_collider_shape: contact.collider_shape.clone(),
+			});
+		summary.contact_count += 1;
+		if contact.penetrating {
+			summary.penetrating_count += 1;
+		}
+		if contact.margin < summary.min_margin {
+			summary.min_margin = contact.margin;
+			summary.min_distance = contact.distance;
+			summary.min_threshold = contact.threshold;
+			summary.closest_collider_path = contact.collider_path.clone();
+			summary.closest_collider_shape = contact.collider_shape.clone();
+		}
+	}
+	summaries.into_values().collect()
+}
+
+fn dynamics_collider_runtime_summary_statuses(
+	selections: &[RuntimeDynamicsColliderSelectionStatus],
+	contact_summaries: &[RuntimeDynamicsColliderContactSummary],
+) -> Vec<RuntimeDynamicsColliderRuntimeSummary> {
+	let contact_summaries = contact_summaries
+		.iter()
+		.map(|summary| (summary.source_id.as_str(), summary))
+		.collect::<BTreeMap<_, _>>();
+	selections
+		.iter()
+		.map(|selection| {
+			let contact = contact_summaries.get(selection.source_id.as_str()).copied();
+			RuntimeDynamicsColliderRuntimeSummary {
+				source_id: selection.source_id.clone(),
+				selected_collider_count: selection.selected_collider_count,
+				global_collider_count: selection.global_collider_count,
+				authored_collider_count: selection.authored_collider_count,
+				contact_count: contact.map_or(0, |summary| summary.contact_count),
+				penetrating_count: contact.map_or(0, |summary| summary.penetrating_count),
+				min_margin: contact.map(|summary| summary.min_margin),
+				min_distance: contact.map(|summary| summary.min_distance),
+				min_threshold: contact.map(|summary| summary.min_threshold),
+				closest_collider_path: contact.map_or_else(String::new, |summary| summary.closest_collider_path.clone()),
+				closest_collider_shape: contact.map_or_else(String::new, |summary| summary.closest_collider_shape.clone()),
+				sample_collider_paths: selection.sample_collider_paths.clone(),
+			}
+		})
+		.collect()
+}
+
+fn dynamics_collider_path_contact_summary_statuses(
+	contacts: &[RuntimeDynamicsColliderContactStatus],
+) -> Vec<RuntimeDynamicsColliderPathContactSummary> {
+	#[derive(Clone)]
+	struct Accum {
+		summary: RuntimeDynamicsColliderPathContactSummary,
+		source_ids: BTreeSet<String>,
+	}
+	let mut by_collider = BTreeMap::<String, Accum>::new();
+	for contact in contacts {
+		let key = if contact.collider_path.is_empty() {
+			format!(
+				"collider_index:{}",
+				contact.collider_index.map_or_else(|| "?".to_string(), |index| index.to_string())
+			)
+		} else {
+			contact.collider_path.clone()
+		};
+		let accum = by_collider.entry(key).or_insert_with(|| Accum {
+			summary: RuntimeDynamicsColliderPathContactSummary {
+				collider_path: contact.collider_path.clone(),
+				collider_shape: contact.collider_shape.clone(),
+				contact_count: 0,
+				penetrating_count: 0,
+				source_count: 0,
+				min_margin: contact.margin,
+				min_distance: contact.distance,
+				min_threshold: contact.threshold,
+				sample_source_ids: Vec::new(),
+			},
+			source_ids: BTreeSet::new(),
+		});
+		accum.summary.contact_count += 1;
+		if contact.penetrating {
+			accum.summary.penetrating_count += 1;
+		}
+		if contact.margin < accum.summary.min_margin {
+			accum.summary.min_margin = contact.margin;
+			accum.summary.min_distance = contact.distance;
+			accum.summary.min_threshold = contact.threshold;
+			accum.summary.collider_shape = contact.collider_shape.clone();
+		}
+		if accum.source_ids.insert(contact.source_id.clone()) && accum.summary.sample_source_ids.len() < 8 {
+			accum.summary.sample_source_ids.push(contact.source_id.clone());
+		}
+	}
+	by_collider
+		.into_values()
+		.map(|mut accum| {
+			accum.summary.source_count = accum.source_ids.len();
+			accum.summary
+		})
+		.collect()
+}
+
+fn dynamics_collider_path_candidate_summary_statuses(
+	tail_samples: &[DynamicsTailSample],
+	collider_selections: &[RuntimeDynamicsColliderSelectionStatus],
+) -> Vec<RuntimeDynamicsColliderPathCandidateSummary> {
+	#[derive(Clone)]
+	struct Accum {
+		summary: RuntimeDynamicsColliderPathCandidateSummary,
+		source_ids: BTreeSet<String>,
+	}
+	let colliders_by_source_id = dynamics_collider_details_by_selection_source(collider_selections);
+
+	let mut by_collider = BTreeMap::<String, Accum>::new();
+	for tail in tail_samples {
+		let Some(colliders) = colliders_by_source_id.get(tail.source_id.as_str()) else {
+			continue;
+		};
+		let tail_point = Vec3::from_array(tail.curr_tail);
+		for collider in colliders {
+			let Some(contact) = dynamics_collider_contact_status(tail, tail_point, collider) else {
+				continue;
+			};
+			let key = if contact.collider_path.is_empty() {
+				format!(
+					"collider_index:{}",
+					contact.collider_index.map_or_else(|| "?".to_string(), |index| index.to_string())
+				)
+			} else {
+				contact.collider_path.clone()
+			};
+			let accum = by_collider.entry(key.clone()).or_insert_with(|| Accum {
+				summary: RuntimeDynamicsColliderPathCandidateSummary {
+					collider_path: if contact.collider_path.is_empty() {
+						key.clone()
+					} else {
+						contact.collider_path.clone()
+					},
+					collider_shape: contact.collider_shape.clone(),
+					candidate_count: 0,
+					penetrating_count: 0,
+					source_count: 0,
+					min_margin: contact.margin,
+					min_distance: contact.distance,
+					min_threshold: contact.threshold,
+					sample_source_ids: Vec::new(),
+				},
+				source_ids: BTreeSet::new(),
+			});
+			accum.summary.candidate_count += 1;
+			if contact.penetrating {
+				accum.summary.penetrating_count += 1;
+			}
+			if contact.margin < accum.summary.min_margin {
+				accum.summary.min_margin = contact.margin;
+				accum.summary.min_distance = contact.distance;
+				accum.summary.min_threshold = contact.threshold;
+				accum.summary.collider_shape = contact.collider_shape.clone();
+			}
+			if accum.source_ids.insert(contact.source_id.clone()) && accum.summary.sample_source_ids.len() < 8 {
+				accum.summary.sample_source_ids.push(contact.source_id.clone());
+			}
+		}
+	}
+	by_collider
+		.into_values()
+		.map(|mut accum| {
+			accum.summary.source_count = accum.source_ids.len();
+			accum.summary
+		})
+		.collect()
+}
+
+fn dynamics_collider_path_runtime_summary_statuses(
+	colliders: &[RuntimeDynamicsColliderStatus],
+	contact_summaries: &[RuntimeDynamicsColliderPathContactSummary],
+	candidate_summaries: &[RuntimeDynamicsColliderPathCandidateSummary],
+	projection_counts: &BTreeMap<String, u32>,
+) -> Vec<RuntimeDynamicsColliderPathRuntimeSummary> {
+	#[derive(Default)]
+	struct Accum {
+		collider_path: String,
+		collider_shape: String,
+		runtime_collider_count: usize,
+		source_ids: BTreeSet<String>,
+		sample_source_ids: Vec<String>,
+	}
+	fn push_sample_source_ids(accum: &mut Accum, sample_source_ids: &[String]) {
+		for source_id in sample_source_ids {
+			if accum.sample_source_ids.len() >= 8 {
+				break;
+			}
+			if !accum.sample_source_ids.iter().any(|sample| sample == source_id) {
+				accum.sample_source_ids.push(source_id.clone());
+			}
+		}
+	}
+	fn ensure_accum<'a>(by_collider: &'a mut BTreeMap<String, Accum>, collider_path: &str, collider_shape: &str) -> &'a mut Accum {
+		by_collider.entry(collider_path.to_string()).or_insert_with(|| Accum {
+			collider_path: collider_path.to_string(),
+			collider_shape: collider_shape.to_string(),
+			..Default::default()
+		})
+	}
+	let mut by_collider = BTreeMap::<String, Accum>::new();
+	for collider in colliders {
+		let key = if collider.collider_path.is_empty() {
+			format!("collider_index:{}", collider.index)
+		} else {
+			collider.collider_path.clone()
+		};
+		let accum = by_collider.entry(key).or_insert_with(|| Accum {
+			collider_path: if collider.collider_path.is_empty() {
+				format!("collider_index:{}", collider.index)
+			} else {
+				collider.collider_path.clone()
+			},
+			collider_shape: format!("{:?}", collider.shape).to_ascii_lowercase(),
+			..Default::default()
+		});
+		accum.runtime_collider_count += 1;
+		if accum.source_ids.insert(collider.source_id.clone()) && accum.sample_source_ids.len() < 8 {
+			accum.sample_source_ids.push(collider.source_id.clone());
+		}
+	}
+	for summary in contact_summaries {
+		if summary.collider_path.is_empty() {
+			continue;
+		}
+		let accum = ensure_accum(&mut by_collider, &summary.collider_path, &summary.collider_shape);
+		if accum.collider_shape.is_empty() {
+			accum.collider_shape = summary.collider_shape.clone();
+		}
+		push_sample_source_ids(accum, &summary.sample_source_ids);
+	}
+	for summary in candidate_summaries {
+		if summary.collider_path.is_empty() {
+			continue;
+		}
+		let accum = ensure_accum(&mut by_collider, &summary.collider_path, &summary.collider_shape);
+		if accum.collider_shape.is_empty() {
+			accum.collider_shape = summary.collider_shape.clone();
+		}
+		push_sample_source_ids(accum, &summary.sample_source_ids);
+	}
+	for collider_path in projection_counts.keys() {
+		if collider_path.is_empty() {
+			continue;
+		}
+		ensure_accum(&mut by_collider, collider_path, "");
+	}
+	let contact_summaries = contact_summaries
+		.iter()
+		.map(|summary| (summary.collider_path.as_str(), summary))
+		.collect::<BTreeMap<_, _>>();
+	let candidate_summaries = candidate_summaries
+		.iter()
+		.map(|summary| (summary.collider_path.as_str(), summary))
+		.collect::<BTreeMap<_, _>>();
+	by_collider
+		.into_values()
+		.map(|accum| {
+			let contact = contact_summaries.get(accum.collider_path.as_str()).copied();
+			let candidate = candidate_summaries.get(accum.collider_path.as_str()).copied();
+			let projection_count = projection_counts.get(accum.collider_path.as_str()).copied().unwrap_or_default();
+			let source_count = accum
+				.source_ids
+				.len()
+				.max(contact.map_or(0, |summary| summary.source_count))
+				.max(candidate.map_or(0, |summary| summary.source_count));
+			RuntimeDynamicsColliderPathRuntimeSummary {
+				collider_path: accum.collider_path,
+				collider_shape: contact.map_or(accum.collider_shape, |summary| summary.collider_shape.clone()),
+				runtime_collider_count: accum.runtime_collider_count,
+				candidate_count: candidate.map_or(0, |summary| summary.candidate_count),
+				candidate_penetrating_count: candidate.map_or(0, |summary| summary.penetrating_count),
+				source_count,
+				contact_count: contact.map_or(0, |summary| summary.contact_count),
+				penetrating_count: contact.map_or(0, |summary| summary.penetrating_count),
+				projection_count,
+				min_margin: contact.map(|summary| summary.min_margin),
+				min_distance: contact.map(|summary| summary.min_distance),
+				min_threshold: contact.map(|summary| summary.min_threshold),
+				sample_source_ids: accum.sample_source_ids,
+			}
+		})
+		.collect()
+}
+
+fn dynamics_collider_contact_status(
+	tail: &DynamicsTailSample,
+	tail_point: Vec3,
+	collider: &serde_json::Value,
+) -> Option<RuntimeDynamicsColliderContactStatus> {
+	let shape = collider.get("shape").and_then(Value::as_str).unwrap_or_default();
+	let shape_kind = dynamics_collider_shape_kind(shape)?;
+	let radius = collider.get("radius").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+	let inside_bounds = collider.get("inside_bounds").and_then(Value::as_bool).unwrap_or(false);
+	let distance = match shape_kind {
+		DynamicsColliderShapeKind::Capsule => {
+			let a = json_vec3(collider.get("world_a")?)?;
+			let b = json_vec3(collider.get("world_b")?)?;
+			distance_point_segment(tail_point, a, b)
+		}
+		DynamicsColliderShapeKind::Sphere => {
+			let center = json_vec3(collider.get("world_center").or_else(|| collider.get("center"))?)?;
+			tail_point.distance(center)
+		}
+		DynamicsColliderShapeKind::Plane => {
+			let point = json_vec3(collider.get("world_point")?)?;
+			let normal = json_vec3(collider.get("world_normal")?)?.normalize_or_zero();
+			(tail_point - point).dot(normal).abs()
+		}
+	};
+	if !distance.is_finite() {
+		return None;
+	}
+	let hit_radius = tail.hit_radius.max(0.0);
+	let threshold = match shape_kind {
+		DynamicsColliderShapeKind::Plane => hit_radius,
+		DynamicsColliderShapeKind::Capsule | DynamicsColliderShapeKind::Sphere => radius.max(0.0) + hit_radius,
+	};
+	let margin = distance - threshold;
+	Some(RuntimeDynamicsColliderContactStatus {
+		source_id: tail.source_id.clone(),
+		runtime_index: tail.runtime_index,
+		joint_index: tail.joint_index,
+		parent_node: tail.parent_node,
+		child_node: tail.child_node,
+		collider_index: collider.get("index").and_then(Value::as_u64).map(|index| index as usize),
+		collider_path: collider
+			.get("collider_path")
+			.and_then(Value::as_str)
+			.unwrap_or_default()
+			.to_string(),
+		collider_shape: shape.to_string(),
+		hit_radius,
+		collider_radius: radius.max(0.0),
+		distance,
+		threshold,
+		margin,
+		inside_bounds,
+		penetrating: margin < 0.0,
+	})
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DynamicsColliderShapeKind {
+	Capsule,
+	Sphere,
+	Plane,
+}
+
+fn dynamics_collider_shape_kind(shape: &str) -> Option<DynamicsColliderShapeKind> {
+	match shape.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+		"capsule" | "local_capsule" => Some(DynamicsColliderShapeKind::Capsule),
+		"sphere" | "local_sphere" => Some(DynamicsColliderShapeKind::Sphere),
+		"plane" | "local_plane" => Some(DynamicsColliderShapeKind::Plane),
+		_ => None,
+	}
+}
+
+fn json_vec3(value: &serde_json::Value) -> Option<Vec3> {
+	let array = value.as_array()?;
+	if array.len() < 3 {
+		return None;
+	}
+	Some(Vec3::new(
+		array.first()?.as_f64()? as f32,
+		array.get(1)?.as_f64()? as f32,
+		array.get(2)?.as_f64()? as f32,
+	))
+}
+
+fn augment_dynamics_bone_colliders(
+	dynamics: UnaRuntimeDynamics<'_>,
+	scene: &UnaSceneSnapshot,
+	config: &DynamicsPhysicsConfig,
+	colliders: &mut Vec<RuntimeBoneColliderPrimitive>,
+) {
+	if config.collider_augment_overrides.is_empty() {
+		return;
+	}
+	let groups = dynamics.dynamics_groups().collect::<Vec<_>>();
+	let group_match_texts = groups
+		.iter()
+		.map(|group| (*group, dynamics_group_match_text(scene, *group)))
+		.collect::<Vec<_>>();
+	let mut existing_pairs = colliders
+		.iter()
+		.map(|collider| (collider.source_id.clone(), collider.collider_path.clone()))
+		.collect::<BTreeSet<_>>();
+	for override_item in &config.collider_augment_overrides {
+		let source_needles = override_item
+			.source_id_contains
+			.iter()
+			.map(|needle| dynamics_normalize_match_text(needle))
+			.filter(|needle| !needle.is_empty())
+			.collect::<Vec<_>>();
+		let collider_path_needles = override_item
+			.collider_path_contains
+			.iter()
+			.map(|needle| dynamics_normalize_match_text(needle))
+			.filter(|needle| !needle.is_empty())
+			.collect::<Vec<_>>();
+		if source_needles.is_empty() || collider_path_needles.is_empty() {
+			continue;
+		}
+		let target_source_ids = group_match_texts
+			.iter()
+			.filter(|(_, match_text)| runtime_token_filter_matches(match_text, &source_needles))
+			.map(|(group, _)| {
+				let source_id = group.source_id.to_string();
+				let scope = runtime_physics_source_scope_key(group.source_id);
+				(source_id, scope)
+			})
+			.collect::<Vec<_>>();
+		if target_source_ids.is_empty() {
+			continue;
+		}
+		let candidates = colliders
+			.iter()
+			.filter(|collider| {
+				runtime_token_filter_matches(&dynamics_normalize_match_text(&collider.collider_path), &collider_path_needles)
+			})
+			.map(|collider| {
+				let scope = runtime_physics_source_scope_key(&collider.collider_path);
+				(collider.clone(), scope)
+			})
+			.collect::<Vec<_>>();
+		if candidates.is_empty() {
+			eprintln!(
+				"un-avatar-renderer: dynamics collider augment '{}' skipped: targets={} candidates=0",
+				override_item.name,
+				target_source_ids.len()
+			);
+			continue;
+		}
+		let before_count = colliders.len();
+		for (target_source_id, target_scope) in target_source_ids {
+			for (candidate, candidate_scope) in &candidates {
+				if !target_scope.is_empty() && !candidate_scope.is_empty() && target_scope.as_str() != candidate_scope {
+					continue;
+				}
+				let pair = (target_source_id.clone(), candidate.collider_path.clone());
+				if existing_pairs.contains(&pair) {
+					continue;
+				}
+				let mut augmented = candidate.clone();
+				augmented.source_id.clone_from(&target_source_id);
+				colliders.push(augmented);
+				existing_pairs.insert(pair);
+			}
+		}
+		let added = colliders.len().saturating_sub(before_count);
+		eprintln!(
+			"un-avatar-renderer: dynamics collider augment '{}' targets added={} candidates={}",
+			override_item.name,
+			added,
+			candidates.len()
+		);
+	}
+}
+
 fn build_runtime_physics_for_document(
 	document: &UnaDocument,
 	dynamics_enabled: bool,
 	bone_collider_config: BoneColliderConfig,
-	spring_bone_physics: &DynamicsPhysicsConfig,
+	dynamics_physics: &DynamicsPhysicsConfig,
 ) -> RuntimePhysicsBuild {
+	let dynamics_physics = dynamics_physics.clone().normalized();
+	let dynamics_physics = &dynamics_physics;
 	let runtime_model = document.runtime_model();
 	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
-	let tagged_bone_colliders = if let Some(runtime) = scene_profile_dynamics {
+	let mut tagged_bone_colliders = if let Some(runtime) = scene_profile_dynamics {
 		build_dynamics_bone_colliders_with_sources(runtime.scene, runtime.humanoid_profile, bone_collider_config, runtime.dynamics)
 	} else {
 		Vec::new()
 	};
+	if let Some(runtime) = scene_profile_dynamics {
+		augment_dynamics_bone_colliders(runtime.dynamics, runtime.scene, dynamics_physics, &mut tagged_bone_colliders);
+	}
+	if let Some(runtime) = scene_profile_dynamics {
+		let authored = tagged_bone_colliders
+			.iter()
+			.filter(|collider| !collider.source_id.is_empty())
+			.count();
+		let global_or_auto = tagged_bone_colliders.len().saturating_sub(authored);
+		let samples = dynamics_bone_collider_samples(runtime.scene, &tagged_bone_colliders).join(", ");
+		let counts = dynamics_bone_collider_source_counts(&tagged_bone_colliders).join(", ");
+		let group_samples = dynamics_group_source_samples(runtime.dynamics).join(", ");
+		eprintln!(
+			"un-avatar-renderer: dynamics bone colliders built total={} global_or_auto={} authored={} augment_overrides={} source_counts=[{}] group_samples=[{}] samples=[{}]",
+			tagged_bone_colliders.len(),
+			global_or_auto,
+			authored,
+			dynamics_physics.collider_augment_overrides.len(),
+			counts,
+			group_samples,
+			samples
+		);
+	}
 	let bone_colliders = tagged_bone_colliders.iter().map(|collider| collider.primitive).collect::<Vec<_>>();
 	let stats = collider_stats(&bone_colliders);
 	let dynamics_sim = if dynamics_enabled {
 		if let Some(runtime) = scene_profile_dynamics {
 			if runtime.dynamics.has_groups() {
-				DynamicsSimulator::new_with_runtime_dynamics_and_collider_sources(
+				let surface_constraints = if dynamics_physics.surface_constraints_enabled {
+					build_dynamics_surface_constraints(runtime.scene, runtime.dynamics, dynamics_physics)
+				} else {
+					Vec::new()
+				};
+				if !surface_constraints.is_empty() {
+					let samples = dynamics_surface_constraint_samples(runtime.scene, &surface_constraints).join(", ");
+					eprintln!(
+						"un-avatar-renderer: dynamics surface constraints generated count={} samples=[{}]",
+						surface_constraints.len(),
+						samples
+					);
+				}
+				DynamicsSimulator::new_with_runtime_dynamics_collider_sources_and_surface_constraints(
 					runtime.scene,
 					runtime.dynamics,
 					tagged_bone_colliders,
-					spring_bone_physics.clone(),
+					dynamics_physics.clone(),
+					&surface_constraints,
 				)
 			} else {
 				None
@@ -2483,13 +4848,36 @@ fn build_runtime_physics_for_document(
 	};
 	if let Some(sim) = dynamics_sim.as_ref() {
 		eprintln!(
-			"un-avatar-renderer: dynamics simulator stats active_groups={} active_joints={} colliders={} translation_writeback_candidates={} translation_writeback_targets={}",
+			"un-avatar-renderer: dynamics simulator stats active_groups={} active_joints={} colliders={} surface_constraints={} translation_writeback_candidates={} translation_writeback_targets={}",
 			sim.active_group_count(),
 			sim.active_joint_count(),
 			sim.bone_collider_count(),
+			sim.surface_constraint_count(),
 			sim.translation_writeback_candidate_count(),
 			sim.translation_writeback_target_count()
 		);
+		let response_categories = sim
+			.response_category_summaries()
+			.into_iter()
+			.map(|summary| {
+				format!(
+					"{}:groups={} joints={} xpbd={} compliance={:.5} rest={:.3} shape={:.3} bounce={:.3} drag={:.3} follow={:.3} orient={:.3}",
+					summary.category,
+					summary.group_count,
+					summary.joint_count,
+					summary.xpbd_group_count,
+					summary.average_xpbd_compliance,
+					summary.average_rest_response,
+					summary.average_shape_preservation,
+					summary.average_bounce_response,
+					summary.average_drag_force,
+					summary.average_parent_motion_follow,
+					summary.average_orientation_follow
+				)
+			})
+			.collect::<Vec<_>>()
+			.join(", ");
+		eprintln!("un-avatar-renderer: dynamics response categories [{response_categories}]");
 	}
 	let debug_bone_colliders = if dynamics_sim.is_some() { Vec::new() } else { bone_colliders };
 	RuntimePhysicsBuild {
@@ -2590,7 +4978,7 @@ fn vertical_fov_from_diagonal(diagonal_rad: f32, aspect_wh: f32) -> f32 {
 /// `gpu_ms` は `Features::TIMESTAMP_QUERY` 対応 GPU では真の GPU 時間（メインパスの開始から終了まで）。
 /// 非対応 GPU では 0 を返す。CPU は `desired_maximum_frame_latency` と present_mode で律速されるため
 /// 旧実装のブロッキング `device.poll(wait_indefinitely)` は不要。
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FrameTimings {
 	pub wall_since_last_ms: f32,
 	pub cpu_record_ms: f32,
@@ -2771,7 +5159,37 @@ pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions
 	mesh_diagnostics.debug_disable_normal_map |= opts.debug_disable_normal_map;
 	mesh_diagnostics.debug_base_texture_only |= opts.debug_base_texture_only;
 	mesh_diagnostics.skin_tone_matching |= opts.skin_tone_matching;
+	mesh_diagnostics.mesh_cloth_assist = opts.dynamics_physics.mesh_cloth_assist.clone();
+	mesh_diagnostics.mesh_cloth_assist_categories = opts.dynamics_physics.categories.clone();
 	mesh_diagnostics
+}
+
+fn dynamics_deforming_node_indices_for_mesh_assist(
+	runtime_model: un_avatar_core::UnaRuntimeModel<'_>,
+	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
+) -> BTreeSet<usize> {
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return BTreeSet::new();
+	};
+	let mut out = BTreeSet::new();
+	let dynamics = runtime.dynamics;
+	for group in dynamics.dynamics_groups() {
+		if !group.effective_enabled || !dynamics.source_id_resident_in_scene(runtime.scene, group.source_id) {
+			continue;
+		}
+		if classify_dynamics_group_category(runtime.scene, group, categories) != "cloth" {
+			continue;
+		}
+		let chain = group.chain.bone_node_indices;
+		if chain.len() < 3 {
+			continue;
+		}
+		out.extend(dynamics_mesh_cloth_assist_deforming_nodes(
+			chain,
+			group.chain.interaction_start_index,
+		));
+	}
+	out
 }
 
 fn startup_texture_target_size_for_window_options(opts: &AvatarWindowOptions) -> (u32, u32) {
@@ -2882,7 +5300,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		processed_texture_cache: opts.processed_texture_cache,
 		dynamics_enabled: opts.dynamics_enabled,
 		bone_colliders: opts.bone_colliders,
-		spring_bone_physics: opts.spring_bone_physics.clone(),
+		dynamics_physics: opts.dynamics_physics.clone(),
 		debug_material_dump: opts.debug_material_dump,
 		vmc_address: opts.vmc_address,
 		unmotion_zenoh: opts.unmotion_zenoh.clone(),
@@ -4033,6 +6451,7 @@ pub(crate) struct GpuState {
 	audio_link_runtime: Option<crate::audio_link::AudioLinkInputRuntime>,
 	dynamics_sim: Option<DynamicsSimulator>,
 	dynamics_profile_enabled: bool,
+	last_dynamics_profile: DynamicsStepProfile,
 	runtime_dynamics_enabled: bool,
 	runtime_bone_collider_config: BoneColliderConfig,
 	runtime_dynamics_physics: DynamicsPhysicsConfig,
@@ -4406,6 +6825,7 @@ impl GpuState {
 			audio_link_runtime: None,
 			dynamics_sim,
 			dynamics_profile_enabled,
+			last_dynamics_profile: DynamicsStepProfile::default(),
 			runtime_dynamics_enabled: true,
 			runtime_bone_collider_config: BoneColliderConfig::default(),
 			runtime_dynamics_physics: DynamicsPhysicsConfig::default(),
@@ -4539,7 +6959,22 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return DynamicsRuntimeCounts::default();
 		};
-		doc.runtime_model().dynamics().counts().into()
+		let mut counts: DynamicsRuntimeCounts = doc.runtime_model().dynamics().counts().into();
+		counts.surface_constraints = self.dynamics_sim.as_ref().map_or(0, |sim| sim.surface_constraint_count() as u32);
+		counts
+	}
+
+	pub(crate) fn scene_node_constraint_counts(&self) -> SceneNodeConstraintCounts {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return SceneNodeConstraintCounts::default();
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return SceneNodeConstraintCounts::default();
+		};
+		let Some(scene) = doc.scene.as_ref() else {
+			return SceneNodeConstraintCounts::default();
+		};
+		scene_node_constraint_counts(scene)
 	}
 
 	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
@@ -4566,6 +7001,9 @@ impl GpuState {
 		let t_expr0 = Instant::now();
 		let expr_weights = active_expression_weights_for_doc(self.disable_expression_morphs, &doc);
 		let expression_overrides = active_expression_overrides(self.disable_expression_morphs, &self.expression_overrides);
+		let animator_morph_overrides = animator_morph_overrides_for_doc(&doc);
+		let animator_morph_overrides =
+			(!self.disable_expression_morphs && !animator_morph_overrides.is_empty()).then_some(animator_morph_overrides);
 		self.last_draw_expression_select_ms = t_expr0.elapsed().as_secs_f32() * 1000.0;
 		if document_changed {
 			sm.refresh_draw_visibility_from_scene(runtime.scene);
@@ -4726,6 +7164,7 @@ impl GpuState {
 			&self.world_scratch,
 			expr_weights,
 			expression_overrides,
+			animator_morph_overrides.as_ref(),
 			refresh_scene_morph_defaults,
 		);
 		self.last_draw_update_total_ms = t_update0.elapsed().as_secs_f32() * 1000.0;
@@ -4817,11 +7256,11 @@ impl GpuState {
 		&mut self,
 		enabled: bool,
 		bone_collider_config: BoneColliderConfig,
-		spring_bone_physics: DynamicsPhysicsConfig,
+		dynamics_physics: DynamicsPhysicsConfig,
 	) {
 		self.runtime_dynamics_enabled = enabled;
 		self.runtime_bone_collider_config = bone_collider_config;
-		self.runtime_dynamics_physics = spring_bone_physics;
+		self.runtime_dynamics_physics = dynamics_physics;
 		self.reset_dynamics_nodes_to_rest();
 		self.rebuild_runtime_dynamics();
 	}
@@ -5801,6 +8240,106 @@ impl GpuState {
 		doc.runtime_model().runtime_parameter_values().clone()
 	}
 
+	pub(crate) fn dump_runtime_state(&self, path: &std::path::Path) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not loaded".to_string());
+		};
+		let doc = doc_arc.read().map_err(|_| "document lock poisoned".to_string())?;
+		let parameter_values = doc.runtime_model().runtime_parameter_values().clone();
+		let morph_overrides = animator_morph_overrides_for_doc(&doc);
+		let dynamics_interaction_parameters =
+			dynamics_interaction_parameter_diagnostics(&doc, self.rest_nodes.as_deref().map(Vec::as_slice));
+		let dynamics_groups = dynamics_group_statuses_with_limit(&doc, &self.runtime_dynamics_physics.categories, None);
+		let dynamics_colliders = dynamics_collider_statuses_with_limit(&doc, None);
+		let dynamics_response_categories = self.dynamics_response_categories();
+		let dynamics_response_groups = self.dynamics_response_groups();
+		let (node_paths_by_index, scene_world) = doc
+			.runtime_model()
+			.scene()
+			.map(|scene| (scene_node_paths_by_index(scene), scene_world_matrices(scene)))
+			.unwrap_or_default();
+		let dynamics_surface_constraints = doc
+			.runtime_model()
+			.scene_profile_dynamics()
+			.map(|runtime| {
+				let constraints = if self.runtime_dynamics_physics.surface_constraints_enabled {
+					build_dynamics_surface_constraints(runtime.scene, runtime.dynamics, &self.runtime_dynamics_physics)
+				} else {
+					Vec::new()
+				};
+				dynamics_surface_constraint_statuses(runtime.scene, &constraints)
+			})
+			.unwrap_or_default();
+		let dynamics_collider_selections = self
+			.dynamics_sim
+			.as_ref()
+			.map(|sim| dynamics_collider_selection_statuses(sim, &node_paths_by_index, &scene_world))
+			.unwrap_or_default();
+		let dynamics_tail_samples = self.dynamics_sim.as_ref().map(DynamicsSimulator::tail_samples).unwrap_or_default();
+		let dynamics_collider_contacts = dynamics_collider_contact_statuses(&dynamics_tail_samples, &dynamics_collider_selections);
+		let dynamics_collider_contact_summaries = dynamics_collider_contact_summary_statuses(&dynamics_collider_contacts);
+		let dynamics_collider_runtime_summaries =
+			dynamics_collider_runtime_summary_statuses(&dynamics_collider_selections, &dynamics_collider_contact_summaries);
+		let dynamics_collider_path_contact_summaries = dynamics_collider_path_contact_summary_statuses(&dynamics_collider_contacts);
+		let dynamics_collider_path_candidate_summaries =
+			dynamics_collider_path_candidate_summary_statuses(&dynamics_tail_samples, &dynamics_collider_selections);
+		let dynamics_collider_path_runtime_summaries = dynamics_collider_path_runtime_summary_statuses(
+			&dynamics_colliders,
+			&dynamics_collider_path_contact_summaries,
+			&dynamics_collider_path_candidate_summaries,
+			&self.last_dynamics_profile.collision_projection_collider_path_counts,
+		);
+		let dynamics_node_samples = doc
+			.scene
+			.as_ref()
+			.map(|scene| runtime_dynamics_node_samples(scene, self.rest_nodes.as_deref().map(Vec::as_slice)))
+			.unwrap_or_default();
+		let dynamic_node_indices = doc
+			.runtime_model()
+			.scene_profile_dynamics()
+			.map(|runtime| runtime.dynamics.dynamic_bone_node_indices().collect::<BTreeSet<_>>())
+			.unwrap_or_default();
+		let skin_joint_samples = doc
+			.scene
+			.as_ref()
+			.map(|scene| skin_joint_samples(scene, self.rest_nodes.as_deref().map(Vec::as_slice), &dynamic_node_indices))
+			.unwrap_or_default();
+		let visible_nonzero_morph_weights = doc
+			.scene
+			.as_ref()
+			.map(|scene| visible_nonzero_morph_weights(scene, 512))
+			.unwrap_or_default();
+		let morph_draws = match (self.scene_meshes.as_ref(), doc.scene.as_ref()) {
+			(Some(meshes), Some(scene)) => meshes.diagnostic_morph_state(scene, None, 64),
+			_ => serde_json::json!({ "draws": [] }),
+		};
+		let value = serde_json::json!({
+			"runtime_parameters": parameter_values,
+			"dynamics_interaction_parameters": dynamics_interaction_parameters,
+			"dynamics_groups": dynamics_groups,
+			"dynamics_colliders": dynamics_colliders,
+			"dynamics_last_profile": self.last_dynamics_profile,
+			"dynamics_response_categories": dynamics_response_categories,
+			"dynamics_response_groups": dynamics_response_groups,
+			"dynamics_collider_selections": dynamics_collider_selections,
+			"dynamics_collider_contacts": dynamics_collider_contacts,
+			"dynamics_collider_contact_summaries": dynamics_collider_contact_summaries,
+			"dynamics_collider_runtime_summaries": dynamics_collider_runtime_summaries,
+			"dynamics_collider_path_contact_summaries": dynamics_collider_path_contact_summaries,
+			"dynamics_collider_path_candidate_summaries": dynamics_collider_path_candidate_summaries,
+			"dynamics_collider_path_runtime_summaries": dynamics_collider_path_runtime_summaries,
+			"dynamics_tail_samples": dynamics_tail_samples,
+			"dynamics_surface_constraints": dynamics_surface_constraints,
+			"dynamics_node_samples": dynamics_node_samples,
+			"skin_joint_samples": skin_joint_samples,
+			"visible_nonzero_morph_weights": visible_nonzero_morph_weights,
+			"animator_morph_overrides": morph_overrides,
+			"morph_draws": morph_draws,
+		});
+		let bytes = serde_json::to_vec_pretty(&value).map_err(|err| err.to_string())?;
+		std::fs::write(path, bytes).map_err(|err| err.to_string())
+	}
+
 	pub(crate) fn runtime_action_expression_weights(&self, action_id: &str) -> Vec<(String, f32)> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Vec::new();
@@ -6069,6 +8608,29 @@ impl GpuState {
 			.collect())
 	}
 
+	pub(crate) fn apply_dynamics_interaction_parameter_emissions(&mut self) -> Result<BTreeMap<String, f32>, String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Ok(BTreeMap::new());
+		};
+		let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let values = dynamics_interaction_parameter_values(&doc, self.rest_nodes.as_deref().map(Vec::as_slice));
+		if values.is_empty() {
+			return Ok(BTreeMap::new());
+		}
+		let before = doc.runtime_model().runtime_parameter_values().clone();
+		doc.runtime_model_mut().set_runtime_parameter_values(values);
+		let after = doc.runtime_model().runtime_parameter_values();
+		Ok(after
+			.iter()
+			.filter_map(|(name, value)| {
+				(before.get(name).copied().unwrap_or(f32::NAN) - *value)
+					.abs()
+					.gt(&0.0001)
+					.then_some((name.clone(), *value))
+			})
+			.collect())
+	}
+
 	fn apply_restored_runtime_action_effects(&mut self, restored: &[un_avatar_core::UnaEvaluationRestoreApplyEntry]) {
 		if restored.is_empty() {
 			return;
@@ -6101,7 +8663,130 @@ impl GpuState {
 		let Ok(doc) = doc_arc.read() else {
 			return Vec::new();
 		};
-		dynamics_group_statuses(&doc)
+		dynamics_group_statuses_with_limit(&doc, &self.runtime_dynamics_physics.categories, Some(DYNAMICS_GROUP_STATUS_LIMIT))
+	}
+
+	pub(crate) fn dump_scene_nodes(&self, path: &std::path::Path, filter: Option<&str>) -> Result<(), String> {
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not attached".to_string());
+		};
+		let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+		let Some(scene) = doc.runtime_model().scene() else {
+			return Err("runtime scene is not available".to_string());
+		};
+		let paths = scene_node_paths_by_index(scene);
+		let parents = scene_parent_indices(scene);
+		let world = diagnostic_world_from_scene(scene);
+		let filter = filter.map(|value| value.to_ascii_lowercase());
+		let nodes = scene
+			.nodes
+			.iter()
+			.enumerate()
+			.filter_map(|(index, node)| {
+				let node_path = paths.get(index).cloned().flatten();
+				if let Some(filter) = filter.as_deref() {
+					let name_matches = node.name.as_deref().is_some_and(|name| name.to_ascii_lowercase().contains(filter));
+					let path_matches = node_path.as_deref().is_some_and(|path| path.to_ascii_lowercase().contains(filter));
+					if !name_matches && !path_matches {
+						return None;
+					}
+				}
+				let local = Mat4::from_cols_array(&node.transform);
+				let (_, local_rotation, local_translation) = local.to_scale_rotation_translation();
+				let world_matrix = world.get(index).copied().unwrap_or(Mat4::IDENTITY);
+				let (_, world_rotation, world_translation) = world_matrix.to_scale_rotation_translation();
+				let parent_index = parents.get(index).copied().flatten();
+				Some(serde_json::json!({
+					"index": index,
+					"name": node.name.clone(),
+					"path": node_path,
+					"parent_index": parent_index,
+					"parent_path": parent_index.and_then(|parent| paths.get(parent).cloned().flatten()),
+					"children": node.children.clone(),
+					"mesh": node.mesh,
+					"skin": node.skin,
+					"visible": node.visible,
+					"local_translation": local_translation.to_array(),
+					"local_rotation_xyzw": [local_rotation.x, local_rotation.y, local_rotation.z, local_rotation.w],
+					"world_translation": world_translation.to_array(),
+					"world_rotation_xyzw": [world_rotation.x, world_rotation.y, world_rotation.z, world_rotation.w],
+				}))
+			})
+			.collect::<Vec<_>>();
+		let output = serde_json::json!({
+			"filter": filter,
+			"node_count": scene.nodes.len(),
+			"nodes": nodes,
+		});
+		if let Some(parent) = path.parent() {
+			std::fs::create_dir_all(parent).map_err(|e| format!("create dump dir {}: {e}", parent.display()))?;
+		}
+		let text = serde_json::to_string_pretty(&output).map_err(|e| format!("serialize scene node dump: {e}"))?;
+		std::fs::write(path, text).map_err(|e| format!("write scene node dump {}: {e}", path.display()))
+	}
+
+	pub(crate) fn dynamics_response_categories(&self) -> Vec<un_avatar_skeleton::DynamicsResponseCategorySummary> {
+		let mut categories = self
+			.dynamics_sim
+			.as_ref()
+			.map(DynamicsSimulator::response_category_summaries)
+			.unwrap_or_default();
+		let Some(doc_arc) = self.document.as_ref() else {
+			return categories;
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return categories;
+		};
+		let runtime_model = doc.runtime_model();
+		let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+			return categories;
+		};
+		let visual_target_context = DynamicsVisualTargetContext::for_scene(runtime.scene);
+		for group in runtime
+			.dynamics
+			.dynamics_groups()
+			.filter(|group| group.effective_enabled && runtime.dynamics.source_id_resident_in_scene(runtime.scene, group.source_id))
+		{
+			let category_name = classify_dynamics_group_category(runtime.scene, group, &self.runtime_dynamics_physics.categories);
+			let (skinned_joint_count, mesh_subtree_node_count) = visual_target_context.group_counts(group.chain.bone_node_indices);
+			let Some(category) = categories.iter_mut().find(|category| category.category == category_name) else {
+				continue;
+			};
+			if skinned_joint_count > 0 || mesh_subtree_node_count > 0 {
+				category.visual_target_group_count += 1;
+			} else {
+				category.nonvisual_group_count += 1;
+			}
+			category.visible_skinned_joint_count += skinned_joint_count;
+			category.visible_mesh_subtree_node_count += mesh_subtree_node_count;
+		}
+		categories
+	}
+
+	pub(crate) fn dynamics_response_groups(&self) -> Vec<un_avatar_skeleton::DynamicsResponseGroupSummary> {
+		let mut groups = self
+			.dynamics_sim
+			.as_ref()
+			.map(DynamicsSimulator::response_group_summaries)
+			.unwrap_or_default();
+		let Some(doc_arc) = self.document.as_ref() else {
+			return groups;
+		};
+		let Ok(doc) = doc_arc.read() else {
+			return groups;
+		};
+		let Some(runtime) = doc.runtime_model().scene_profile_dynamics() else {
+			return groups;
+		};
+		annotate_dynamics_response_group_visibility(&mut groups, runtime.scene, runtime.dynamics);
+		groups
+	}
+
+	pub(crate) fn dynamics_tuning_warnings(&self) -> Vec<String> {
+		self.dynamics_sim
+			.as_ref()
+			.map(|sim| sim.tuning_warnings().to_vec())
+			.unwrap_or_default()
 	}
 
 	pub(crate) fn dynamics_interaction_hooks(&self) -> Vec<RuntimeDynamicsInteractionHookStatus> {
@@ -6544,7 +9229,7 @@ impl GpuState {
 			debug_vmc,
 			dynamics_enabled,
 			bone_colliders,
-			spring_bone_physics,
+			dynamics_physics,
 			..
 		} = options;
 		let options_elapsed = attach_start.elapsed();
@@ -6552,7 +9237,7 @@ impl GpuState {
 		prepared_timings.log_slow();
 		self.runtime_dynamics_enabled = dynamics_enabled;
 		self.runtime_bone_collider_config = bone_colliders;
-		self.runtime_dynamics_physics = spring_bone_physics;
+		self.runtime_dynamics_physics = dynamics_physics;
 		self.expression_presets = prepared.expression_presets;
 		self.rest_nodes = prepared.rest_nodes;
 		let apply_initial_values_start = Instant::now();
@@ -6614,7 +9299,7 @@ impl GpuSceneBuildContext {
 			&document,
 			options.dynamics_enabled,
 			options.bone_colliders,
-			&options.spring_bone_physics,
+			&options.dynamics_physics,
 		);
 		timings.physics = physics_start.elapsed();
 		let needs_rest_nodes = runtime_model.has_humanoid_scene() || physics.dynamics_sim.is_some();
@@ -6627,6 +9312,7 @@ impl GpuSceneBuildContext {
 		timings.rest_nodes = rest_nodes_start.elapsed();
 		let expressions_start = Instant::now();
 		let expression_presets = expression_preset_names(runtime_model.expression_catalog());
+		let dynamic_morph_target_names = animator_dynamic_morph_target_names(&document);
 		timings.expressions = expressions_start.elapsed();
 		let mut scene_meshes = None;
 		let mut texture_summary = None;
@@ -6641,6 +9327,10 @@ impl GpuSceneBuildContext {
 					TextureCompressionMode::Source | TextureCompressionMode::Compat
 				);
 			let mesh_build_start = Instant::now();
+			let mut mesh_load_opts = options.mesh_diagnostics.clone();
+			mesh_load_opts.mesh_cloth_assist_categories = options.dynamics_physics.categories.clone();
+			mesh_load_opts.dynamic_deforming_node_indices =
+				dynamics_deforming_node_indices_for_mesh_assist(runtime_model, &options.dynamics_physics.categories);
 			let mut sm = SceneMeshes::new(
 				&device,
 				&queue,
@@ -6650,8 +9340,9 @@ impl GpuSceneBuildContext {
 				pipeline_cache.cache(),
 				runtime.scene,
 				runtime.expression_catalog,
+				&dynamic_morph_target_names,
 				runtime_model.active_asset_groups(),
-				options.mesh_diagnostics.clone(),
+				mesh_load_opts,
 				options.texture_max_dimension,
 				options.texture_compression,
 				options.block_compression_encoder,
@@ -6686,7 +9377,7 @@ impl GpuSceneBuildContext {
 				sm.promote_visible_draw_residency();
 				log_slow_gpu_scene_context_step("initial asset residency refresh", residency_start.elapsed());
 				let transform_start = Instant::now();
-				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, true);
+				let _ = sm.update_draw_transforms(&queue, runtime.scene, &world, expression_weights, None, None, true);
 				log_slow_gpu_scene_context_step("initial draw transform upload", transform_start.elapsed());
 				log_slow_gpu_scene_context_step("initial draw state preparation", initial_draw_start.elapsed());
 				timings.initial_draw_state = initial_draw_start.elapsed();
@@ -7813,6 +10504,7 @@ impl GpuState {
 			frame.present();
 			submit_present_ms += t_present0.elapsed().as_secs_f32() * 1000.0;
 		}
+		self.last_dynamics_profile = dynamics_profile.clone();
 
 		Some(FrameTimings {
 			wall_since_last_ms: wall_since_last.as_secs_f32() * 1000.0,
@@ -7953,7 +10645,31 @@ fn append_collider_wire_vertices(collider: BoneColliderPrimitive, world: &[Mat4]
 			append_wire_sphere(a, radius, COLOR, out);
 			append_wire_sphere(b, radius, COLOR, out);
 		}
+		BoneColliderPrimitive::LocalPlane { node, center, normal, .. } => {
+			let Some(m) = world.get(node) else {
+				return;
+			};
+			let point = m.transform_point3(Vec3::from(center));
+			let normal = m.transform_vector3(Vec3::from(normal)).normalize_or_zero();
+			if normal.length_squared() < 1e-12 {
+				return;
+			}
+			append_wire_plane(point, normal, COLOR, out);
+		}
 	}
+}
+
+fn append_wire_plane(point: Vec3, normal: Vec3, color: [f32; 4], out: &mut Vec<DebugLineVertex>) {
+	let tangent_seed = if normal.x.abs() < 0.9 { Vec3::X } else { Vec3::Z };
+	let tangent = normal.cross(tangent_seed).normalize_or_zero();
+	let bitangent = normal.cross(tangent).normalize_or_zero();
+	if tangent.length_squared() < 1e-12 || bitangent.length_squared() < 1e-12 {
+		return;
+	}
+	let half = 0.12;
+	push_debug_line(point - tangent * half, point + tangent * half, color, out);
+	push_debug_line(point - bitangent * half, point + bitangent * half, color, out);
+	push_debug_line(point, point + normal * half, color, out);
 }
 
 fn append_wire_sphere(center: Vec3, radius: f32, color: [f32; 4], out: &mut Vec<DebugLineVertex>) {
@@ -8367,22 +11083,1004 @@ mod tests {
 	use std::collections::BTreeMap;
 
 	use super::{
-		effective_window_backend, menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
+		accumulate_spatial_surface_seams, animator_morph_overrides_for_doc, augment_dynamics_bone_colliders,
+		dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
+		dynamics_collider_path_runtime_summary_statuses, dynamics_collider_shape_kind, dynamics_group_statuses_with_limit,
+		dynamics_interaction_angle_normalizer, dynamics_interaction_parameter_values, effective_window_backend,
+		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_statuses, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, RenderedFrameRole,
-		RendererStartupPresentation, RuntimeMenuGraphNode, Spout2FrameDelivery, StartupProgressOverlayFrame, WardrobeAssetUploadPlan,
-		WardrobeChangingBillboardFrame, WardrobeTransitionPresentation, BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE,
-		BASELINE_FALLBACK_SAMPLERS_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
+		runtime_action_statuses, scene_node_constraint_counts, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
+		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
+		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
+		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
+		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
 	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
+	use glam::{Mat4, Vec3};
 	use serde_json::json;
-	use un_avatar_core::{UnaDocument, UnaSceneSnapshot};
-	use un_avatar_skeleton::HumanoidProfile;
+	use un_avatar_core::{UnaDocument, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaSceneNode, UnaSceneSnapshot};
+	use un_avatar_skeleton::{
+		BoneColliderPrimitive, DynamicsColliderAugmentOverride, DynamicsPhysicsConfig, DynamicsTailSample, HumanoidProfile,
+		RuntimeBoneColliderPrimitive,
+	};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+
+	#[test]
+	fn surface_constraints_use_topology_not_cape_names() {
+		let surface_nodes = BTreeMap::from([
+			(
+				10,
+				SurfaceConstraintNode {
+					group_index: 0,
+					rest_tail: Vec3::ZERO,
+				},
+			),
+			(
+				20,
+				SurfaceConstraintNode {
+					group_index: 1,
+					rest_tail: Vec3::X,
+				},
+			),
+		]);
+		let positions = [[0.0, 0.0, 0.0], [0.006, 0.0, 0.0], [0.0, 0.006, 0.0]];
+		let dominant_nodes = vec![Some(10), Some(20), Some(10)];
+		let mut pair_stats = BTreeMap::new();
+
+		accumulate_spatial_surface_seams(&positions, &dominant_nodes, &surface_nodes, &mut pair_stats, 0.012, 0.9);
+
+		let stats = pair_stats
+			.get(&(10, 20))
+			.expect("non-cape seam should be inferred from nearby vertices");
+		assert!(stats.edge_count > 0);
+		assert!(stats.stiffness >= 0.9);
+	}
+
+	#[test]
+	fn surface_constraints_skip_disabled_spatial_stiffness() {
+		let surface_nodes = BTreeMap::from([
+			(
+				10,
+				SurfaceConstraintNode {
+					group_index: 0,
+					rest_tail: Vec3::ZERO,
+				},
+			),
+			(
+				20,
+				SurfaceConstraintNode {
+					group_index: 1,
+					rest_tail: Vec3::X,
+				},
+			),
+		]);
+		let positions = [[0.0, 0.0, 0.0], [0.006, 0.0, 0.0]];
+		let dominant_nodes = vec![Some(10), Some(20)];
+		let mut pair_stats = BTreeMap::new();
+
+		accumulate_spatial_surface_seams(&positions, &dominant_nodes, &surface_nodes, &mut pair_stats, 0.012, 0.0);
+
+		assert!(pair_stats.is_empty());
+	}
+
+	#[test]
+	fn dynamics_collider_shape_kind_is_exact_over_substring() {
+		assert_eq!(dynamics_collider_shape_kind("capsule"), Some(DynamicsColliderShapeKind::Capsule));
+		assert_eq!(
+			dynamics_collider_shape_kind("local_capsule"),
+			Some(DynamicsColliderShapeKind::Capsule)
+		);
+		assert_eq!(dynamics_collider_shape_kind("sphere"), Some(DynamicsColliderShapeKind::Sphere));
+		assert_eq!(
+			dynamics_collider_shape_kind("local_sphere"),
+			Some(DynamicsColliderShapeKind::Sphere)
+		);
+		assert_eq!(dynamics_collider_shape_kind("plane"), Some(DynamicsColliderShapeKind::Plane));
+		assert_eq!(dynamics_collider_shape_kind("local_plane"), Some(DynamicsColliderShapeKind::Plane));
+		assert_eq!(dynamics_collider_shape_kind("capsule_hint"), None);
+		assert_eq!(dynamics_collider_shape_kind("not_a_sphere"), None);
+	}
+
+	#[test]
+	fn dynamics_collider_summaries_keep_global_colliders_in_source_selection() {
+		let tail_samples = vec![DynamicsTailSample {
+			source_id: "physbone:cloth".to_string(),
+			curr_tail: [0.03, 0.0, 0.0],
+			hit_radius: 0.02,
+			..Default::default()
+		}];
+		let collider_selections = vec![RuntimeDynamicsColliderSelectionStatus {
+			source_id: "physbone:cloth".to_string(),
+			sample_collider_details: vec![
+				json!({
+					"index": 1,
+					"source_id": "",
+					"collider_path": "Body/Chest",
+					"shape": "local_sphere",
+					"radius": 0.05,
+					"world_center": [0.0, 0.0, 0.0],
+				}),
+				json!({
+					"index": 2,
+					"source_id": "physbone:cloth",
+					"collider_path": "Cloth/Side",
+					"shape": "local_sphere",
+					"radius": 0.01,
+					"world_center": [0.2, 0.0, 0.0],
+				}),
+			],
+			..Default::default()
+		}];
+
+		let contacts = dynamics_collider_contact_statuses(&tail_samples, &collider_selections);
+		assert_eq!(contacts.len(), 1);
+		assert_eq!(contacts[0].collider_path, "Body/Chest");
+
+		let summaries = dynamics_collider_path_candidate_summary_statuses(&tail_samples, &collider_selections);
+		let paths = summaries.iter().map(|summary| summary.collider_path.as_str()).collect::<Vec<_>>();
+
+		assert!(paths.contains(&"Body/Chest"));
+		assert!(paths.contains(&"Cloth/Side"));
+		assert_eq!(
+			summaries
+				.iter()
+				.find(|summary| summary.collider_path == "Body/Chest")
+				.expect("global collider summary")
+				.sample_source_ids,
+			vec!["physbone:cloth".to_string()]
+		);
+	}
+
+	#[test]
+	fn dynamics_collider_path_runtime_summary_merges_candidates_and_projections() {
+		let colliders = vec![RuntimeDynamicsColliderStatus {
+			index: 3,
+			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+			source_id: "physbone:cloth".to_string(),
+			collider_path: "Body/Chest".to_string(),
+			node: 1,
+			node_path: Some("Root/Chest".to_string()),
+			shape: un_avatar_core::UnaDynamicsColliderShape::Sphere,
+			radius: 0.1,
+			height: 0.0,
+			position: [0.0; 3],
+			rotation: [0.0, 0.0, 0.0, 1.0],
+			inside_bounds: false,
+		}];
+		let contact_summaries = vec![RuntimeDynamicsColliderPathContactSummary {
+			collider_path: "Body/Chest".to_string(),
+			collider_shape: "local_sphere".to_string(),
+			contact_count: 4,
+			penetrating_count: 2,
+			source_count: 1,
+			min_margin: -0.01,
+			min_distance: 0.04,
+			min_threshold: 0.05,
+			sample_source_ids: vec!["physbone:cloth".to_string()],
+		}];
+		let candidate_summaries = vec![RuntimeDynamicsColliderPathCandidateSummary {
+			collider_path: "Body/Chest".to_string(),
+			collider_shape: "local_sphere".to_string(),
+			candidate_count: 9,
+			penetrating_count: 3,
+			source_count: 1,
+			min_margin: -0.02,
+			min_distance: 0.03,
+			min_threshold: 0.05,
+			sample_source_ids: vec!["physbone:cloth".to_string()],
+		}];
+		let projection_counts = BTreeMap::from([("Body/Chest".to_string(), 7)]);
+
+		let summaries =
+			dynamics_collider_path_runtime_summary_statuses(&colliders, &contact_summaries, &candidate_summaries, &projection_counts);
+
+		assert_eq!(summaries.len(), 1);
+		assert_eq!(summaries[0].runtime_collider_count, 1);
+		assert_eq!(summaries[0].candidate_count, 9);
+		assert_eq!(summaries[0].candidate_penetrating_count, 3);
+		assert_eq!(summaries[0].contact_count, 4);
+		assert_eq!(summaries[0].penetrating_count, 2);
+		assert_eq!(summaries[0].projection_count, 7);
+	}
+
+	#[test]
+	fn dynamics_collider_path_runtime_summary_keeps_observation_only_paths() {
+		let contact_summaries = vec![RuntimeDynamicsColliderPathContactSummary {
+			collider_path: "Body/ContactOnly".to_string(),
+			collider_shape: "local_capsule".to_string(),
+			contact_count: 2,
+			penetrating_count: 1,
+			source_count: 1,
+			min_margin: -0.01,
+			min_distance: 0.04,
+			min_threshold: 0.05,
+			sample_source_ids: vec!["physbone:cloth".to_string()],
+		}];
+		let candidate_summaries = vec![RuntimeDynamicsColliderPathCandidateSummary {
+			collider_path: "Body/CandidateOnly".to_string(),
+			collider_shape: "local_sphere".to_string(),
+			candidate_count: 3,
+			penetrating_count: 1,
+			source_count: 1,
+			min_margin: -0.02,
+			min_distance: 0.03,
+			min_threshold: 0.05,
+			sample_source_ids: vec!["physbone:tail".to_string()],
+		}];
+		let projection_counts = BTreeMap::from([("Body/ProjectionOnly".to_string(), 5)]);
+
+		let summaries = dynamics_collider_path_runtime_summary_statuses(&[], &contact_summaries, &candidate_summaries, &projection_counts);
+
+		let contact = summaries
+			.iter()
+			.find(|summary| summary.collider_path == "Body/ContactOnly")
+			.expect("contact-only path should be preserved");
+		assert_eq!(contact.runtime_collider_count, 0);
+		assert_eq!(contact.contact_count, 2);
+		assert_eq!(contact.source_count, 1);
+		assert_eq!(contact.sample_source_ids, vec!["physbone:cloth".to_string()]);
+
+		let candidate = summaries
+			.iter()
+			.find(|summary| summary.collider_path == "Body/CandidateOnly")
+			.expect("candidate-only path should be preserved");
+		assert_eq!(candidate.runtime_collider_count, 0);
+		assert_eq!(candidate.candidate_count, 3);
+		assert_eq!(candidate.candidate_penetrating_count, 1);
+		assert_eq!(candidate.source_count, 1);
+		assert_eq!(candidate.sample_source_ids, vec!["physbone:tail".to_string()]);
+
+		let projection = summaries
+			.iter()
+			.find(|summary| summary.collider_path == "Body/ProjectionOnly")
+			.expect("projection-only path should be preserved");
+		assert_eq!(projection.runtime_collider_count, 0);
+		assert_eq!(projection.projection_count, 5);
+	}
+
+	#[test]
+	fn collider_augment_source_match_uses_chain_node_names() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node_with_transform("Avatar", Mat4::IDENTITY, vec![1, 2]),
+				test_scene_node_with_transform("PanelRig", Mat4::from_translation(Vec3::X), vec![2]),
+				test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::Y), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = un_avatar_core::UnaDynamicsSettings {
+			groups: vec![un_avatar_core::UnaDynamicsSourceGroup {
+				enabled: true,
+				source_id: "physbone:Avatar/generic".to_string(),
+				bone_node_indices: vec![1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let mut colliders = vec![RuntimeBoneColliderPrimitive {
+			source_id: "physbone:donor".to_string(),
+			collider_path: "Avatar/PB/Body/Chest Collider".to_string(),
+			primitive: BoneColliderPrimitive::LocalSphere {
+				node: 1,
+				center: [0.0; 3],
+				radius: 0.1,
+				inside_bounds: false,
+			},
+		}];
+		let config = DynamicsPhysicsConfig {
+			collider_augment_overrides: vec![DynamicsColliderAugmentOverride {
+				name: "panel chest".to_string(),
+				source_id_contains: vec!["panel rig".to_string()],
+				collider_path_contains: vec!["chest collider".to_string()],
+			}],
+			..Default::default()
+		}
+		.normalized();
+
+		augment_dynamics_bone_colliders(settings.runtime_dynamics(), &scene, &config, &mut colliders);
+
+		assert!(colliders
+			.iter()
+			.any(|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/Body/Chest Collider"));
+	}
+
+	#[test]
+	fn collider_augment_source_match_keeps_non_ascii_tokens() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node_with_transform("Avatar", Mat4::IDENTITY, vec![1, 2]),
+				test_scene_node_with_transform("ケープ_制御", Mat4::from_translation(Vec3::X), vec![2]),
+				test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::Y), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = un_avatar_core::UnaDynamicsSettings {
+			groups: vec![un_avatar_core::UnaDynamicsSourceGroup {
+				enabled: true,
+				source_id: "physbone:Avatar/generic".to_string(),
+				bone_node_indices: vec![1, 2],
+				..Default::default()
+			}],
+			..Default::default()
+		};
+		let mut colliders = vec![RuntimeBoneColliderPrimitive {
+			source_id: "physbone:donor".to_string(),
+			collider_path: "Avatar/PB/胸 コライダー".to_string(),
+			primitive: BoneColliderPrimitive::LocalSphere {
+				node: 1,
+				center: [0.0; 3],
+				radius: 0.1,
+				inside_bounds: false,
+			},
+		}];
+		let config = DynamicsPhysicsConfig {
+			collider_augment_overrides: vec![DynamicsColliderAugmentOverride {
+				name: "jp cape chest".to_string(),
+				source_id_contains: vec!["ケープ".to_string()],
+				collider_path_contains: vec!["胸 コライダー".to_string()],
+			}],
+			..Default::default()
+		}
+		.normalized();
+
+		augment_dynamics_bone_colliders(settings.runtime_dynamics(), &scene, &config, &mut colliders);
+
+		assert!(colliders
+			.iter()
+			.any(|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/胸 コライダー"));
+	}
+
+	fn test_scene_node_with_transform(name: &str, transform: Mat4, children: Vec<usize>) -> UnaSceneNode {
+		UnaSceneNode {
+			name: Some(name.to_string()),
+			source_node_id: None,
+			resolved_node_id: None,
+			visible: true,
+			transform: transform.to_cols_array(),
+			children,
+			mesh: None,
+			skin: None,
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
+	#[test]
+	fn dynamics_group_statuses_use_profile_categories() {
+		let document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Avatar", Mat4::IDENTITY, vec![1, 2]),
+					test_scene_node_with_transform("PanelRig", Mat4::from_translation(Vec3::X), vec![2]),
+					test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::Y), Vec::new()),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaDynamicsSourceGroup {
+					enabled: true,
+					source_id: "physbone:Fixture/PanelRig".to_string(),
+					bone_node_indices: vec![1, 2],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let categories = vec![un_avatar_skeleton::DynamicsCategoryDefinition {
+			id: "cloth".to_string(),
+			matches: vec!["panel_rig".to_string()],
+			..Default::default()
+		}];
+
+		let statuses = dynamics_group_statuses_with_limit(&document, &categories, None);
+
+		assert_eq!(statuses.len(), 1);
+		assert_eq!(statuses[0].category, "cloth");
+	}
+
+	#[test]
+	fn scene_node_constraint_counts_report_parent_sources() {
+		let scene = UnaSceneSnapshot {
+			node_constraints: vec![
+				UnaNodeConstraint {
+					target_node: 2,
+					source_node: 0,
+					weight: 1.0,
+					kind: UnaNodeConstraintKind::Parent {
+						translate_x: true,
+						translate_y: true,
+						translate_z: true,
+						rotate_x: true,
+						rotate_y: true,
+						rotate_z: true,
+						translation_at_rest: [0.0; 3],
+						rotation_at_rest: [0.0; 3],
+					},
+					sources: vec![
+						UnaNodeConstraintSource {
+							source_node: 0,
+							weight: 0.25,
+							translation_offset: [0.0; 3],
+							rotation_offset: [0.0; 3],
+						},
+						UnaNodeConstraintSource {
+							source_node: 1,
+							weight: 0.75,
+							translation_offset: [0.0; 3],
+							rotation_offset: [0.0; 3],
+						},
+					],
+				},
+				UnaNodeConstraint {
+					target_node: 3,
+					source_node: 0,
+					weight: 1.0,
+					kind: UnaNodeConstraintKind::Rotation,
+					sources: Vec::new(),
+				},
+			],
+			..Default::default()
+		};
+
+		assert_eq!(
+			scene_node_constraint_counts(&scene),
+			SceneNodeConstraintCounts {
+				total: 2,
+				parent: 1,
+				parent_sources: 2,
+				parent_multi_source: 1
+			}
+		);
+	}
+
+	#[test]
+	fn modular_avatar_blendtree_animator_drives_mesh_local_morph_override_from_base_layer() {
+		let mut document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"animator": {
+						"controllers": [{
+							"name": "Fit_Controller",
+							"source": "modularAvatarMergeAnimator",
+							"motionBasePath": "AvatarRoot",
+							"parameters": [{
+								"name": "LeftArmDown_Angle",
+								"type": "Float",
+								"defaultFloat": 0.0
+							}],
+							"layers": [{
+								"name": "LeftArm_Fit",
+								"defaultWeight": 0.0,
+								"states": [{
+									"name": "Blend Tree",
+									"motion": {
+										"motionType": "BlendTree",
+										"blendType": "Simple1D",
+										"blendParameter": "LeftArmDown_Angle",
+										"children": [
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.5,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 100.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 1.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											}
+										]
+									}
+								}]
+							}]
+						}]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().set_runtime_parameter_value("LeftArmDown_Angle", 0.5);
+
+		let overrides = animator_morph_overrides_for_doc(&document);
+
+		assert_eq!(
+			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
+			Some(1.0)
+		);
+	}
+
+	#[test]
+	fn dynamics_angle_animator_center_peak_uses_standard_blend_tree_shape() {
+		let mut document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"animator": {
+						"controllers": [{
+							"name": "Fit_Controller",
+							"source": "modularAvatarMergeAnimator",
+							"motionBasePath": "AvatarRoot",
+							"parameters": [{
+								"name": "LeftArmDown_Angle",
+								"type": "Float",
+								"defaultFloat": 0.0
+							}],
+							"layers": [{
+								"name": "LeftArm_Fit",
+								"defaultWeight": 1.0,
+								"states": [{
+									"name": "Blend Tree",
+									"motion": {
+										"motionType": "BlendTree",
+										"blendType": "Simple1D",
+										"blendParameter": "LeftArmDown_Angle",
+										"children": [
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.5,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 100.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 1.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											}
+										]
+									}
+								}]
+							}]
+						}]
+					}
+				}),
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "physbone:arm".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "LeftArmDown".to_string(),
+						..Default::default()
+					}),
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().set_runtime_parameter_value("LeftArmDown_Angle", 1.0);
+
+		let overrides = animator_morph_overrides_for_doc(&document);
+
+		assert_eq!(
+			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
+			Some(0.0)
+		);
+
+		document.runtime_model_mut().set_runtime_parameter_value("LeftArmDown_Angle", 0.8);
+		let overrides = animator_morph_overrides_for_doc(&document);
+		assert_eq!(
+			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
+			Some(0.39999998)
+		);
+
+		document.runtime_model_mut().set_runtime_parameter_value("LeftArmDown_Angle", 0.25);
+		let overrides = animator_morph_overrides_for_doc(&document);
+		assert_eq!(
+			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
+			Some(0.5)
+		);
+	}
+
+	#[test]
+	fn dynamics_interaction_emits_angle_parameter_from_current_chain_shape() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::X), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "physbone:test".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "Test".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = vec![
+			test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+			test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::Y), Vec::new()),
+		];
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+
+		assert!(values.get("Test_Angle").copied().unwrap_or(0.0) > 0.99);
+		assert_eq!(values.get("Test_IsGrabbed").copied(), Some(0.0));
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_uses_strongest_chain_segment() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Mid", Mat4::from_translation(Vec3::X), vec![2]),
+					test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::new(1.0, 1.0, 0.0)), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "physbone:test".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "Test".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					bone_node_indices: vec![0, 1, 2],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = vec![
+			test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+			test_scene_node_with_transform("Mid", Mat4::from_translation(Vec3::Y), vec![2]),
+			test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)), Vec::new()),
+		];
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+
+		assert!(
+			values.get("Test_Angle").copied().unwrap_or(0.0) > 0.99,
+			"local segment bending must not be diluted by the total root-to-tip vector"
+		);
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_uses_gravity_response_when_chain_has_no_local_deformation() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::X), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "physbone:test".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "Test".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					gravity_dir: [0.0, -1.0, 0.0],
+					gravity_power: 1.0,
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = vec![
+			test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+			test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::X), Vec::new()),
+		];
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+
+		assert!(
+			values.get("Test_Angle").copied().unwrap_or(0.0) > 0.99,
+			"interaction parameters must include the authored gravity response so animator-driven corrective morphs can follow the effective dynamics pose"
+		);
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_uses_center_peak_scale_when_animator_consumes_center_peak_angle() {
+		let mut document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"animator": {
+						"controllers": [{
+							"name": "Fit_Controller",
+							"source": "modularAvatarMergeAnimator",
+							"motionBasePath": "AvatarRoot",
+							"parameters": [{
+								"name": "LeftArmDown_Angle",
+								"type": "Float",
+								"defaultFloat": 0.0
+							}],
+							"layers": [{
+								"name": "LeftArm_Fit",
+								"defaultWeight": 1.0,
+								"states": [{
+									"name": "Blend Tree",
+									"motion": {
+										"motionType": "BlendTree",
+										"blendType": "Simple1D",
+										"blendParameter": "LeftArmDown_Angle",
+										"children": [
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.5,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 100.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 1.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											}
+										]
+									}
+								}]
+							}]
+						}]
+					}
+				}),
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::X), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "physbone:arm".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "LeftArmDown".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					gravity_dir: [0.0, -1.0, 0.0],
+					gravity_power: 1.0,
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = vec![
+			test_scene_node_with_transform("Root", Mat4::IDENTITY, vec![1]),
+			test_scene_node_with_transform("Tip", Mat4::from_translation(Vec3::X), Vec::new()),
+		];
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+		assert_eq!(values.get("LeftArmDown_Angle").copied(), Some(0.5));
+		document.runtime_model_mut().set_runtime_parameter_values(values);
+		let overrides = animator_morph_overrides_for_doc(&document);
+
+		assert_eq!(
+			overrides.get("AvatarRoot/ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(),
+			Some(1.0)
+		);
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_normalizer_uses_narrow_hinge_axis() {
+		let limit = un_avatar_core::UnaDynamicsLimit {
+			limit_type: "Hinge".to_string(),
+			max_angle_x: 90.0,
+			max_angle_z: 45.0,
+			..Default::default()
+		};
+
+		assert_eq!(dynamics_interaction_angle_normalizer(Some(&limit)), 45.0);
+
+		let limit = un_avatar_core::UnaDynamicsLimit {
+			limit_type: "Polar".to_string(),
+			max_angle_x: 90.0,
+			max_angle_z: 45.0,
+			..Default::default()
+		};
+
+		assert_eq!(dynamics_interaction_angle_normalizer(Some(&limit)), 90.0);
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_skips_solver_parent_anchor() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Upperarm", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Arm_Phys", Mat4::from_translation(Vec3::X), vec![2]),
+					test_scene_node_with_transform("Arm_Phys Endpoint", Mat4::from_translation(Vec3::NEG_Y), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:arm".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "LeftArmDown".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					gravity_dir: [0.0, -1.0, 0.0],
+					gravity_power: 1.0,
+					interaction_chain_start_index: 1,
+					bone_node_indices: vec![0, 1, 2],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = document.scene.as_ref().unwrap().nodes.clone();
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+
+		assert!(
+			values.get("LeftArmDown_Angle").copied().unwrap_or(1.0) < 0.01,
+			"prepended solver anchors must not drive authored PhysBone interaction sensors"
+		);
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_legacy_anchor_skip_uses_interaction_metadata_not_source_kind() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Upperarm", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Arm_Phys", Mat4::from_translation(Vec3::X), vec![2]),
+					test_scene_node_with_transform("Arm_Phys Endpoint", Mat4::from_translation(Vec3::NEG_Y), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_id: "custom:Arm_Phys".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "LeftArmDown".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					gravity_dir: [0.0, -1.0, 0.0],
+					gravity_power: 1.0,
+					bone_node_indices: vec![0, 1, 2],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = document.scene.as_ref().unwrap().nodes.clone();
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+
+		assert!(
+			values.get("LeftArmDown_Angle").copied().unwrap_or(1.0) < 0.01,
+			"legacy interaction anchor detection should not depend on VRC source kind"
+		);
+	}
 
 	#[test]
 	fn menu_graph_node_path_reports_truncated_cycles() {
