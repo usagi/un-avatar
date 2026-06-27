@@ -1481,6 +1481,7 @@ fn apply_parent_constraint(
 	nodes: &mut [UnaSceneNode],
 	roots: &[usize],
 	rest_nodes: &[UnaSceneNode],
+	rest_world: &[Mat4],
 	parents: &[usize],
 	c: &UnaNodeConstraint,
 	translate_x: bool,
@@ -1498,7 +1499,6 @@ fn apply_parent_constraint(
 		return;
 	}
 	let world = scene_world_matrices(nodes, roots);
-	let rest_world = scene_world_matrices(rest_nodes, roots);
 	let current_parent_world = parents
 		.get(c.target_node)
 		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
@@ -1591,6 +1591,7 @@ pub fn apply_node_constraints_to_scene(
 		return;
 	}
 	let mut parents = None;
+	let mut rest_world = None;
 	for c in constraints {
 		match c.kind {
 			UnaNodeConstraintKind::Rotation => apply_rotation_constraint(nodes, rest_nodes, c),
@@ -1609,10 +1610,12 @@ pub fn apply_node_constraints_to_scene(
 				..
 			} => {
 				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
+				let rest_world = rest_world.get_or_insert_with(|| scene_world_matrices(rest_nodes, roots));
 				apply_parent_constraint(
 					nodes,
 					roots,
 					rest_nodes,
+					rest_world,
 					parents,
 					c,
 					translate_x,
