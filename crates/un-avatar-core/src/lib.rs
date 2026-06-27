@@ -4306,17 +4306,18 @@ impl UnaSceneSnapshot {
 		if active_asset_groups.is_empty() {
 			return UnaSceneScopedAssetSelection::default();
 		}
-		let mut remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
-		let mut owned_active_groups = BTreeSet::new();
-		let mut mesh_primitives = BTreeSet::<(usize, usize)>::new();
-		let mut materials = BTreeSet::new();
-		let mut images = BTreeSet::new();
-		let mut dynamics_source_ids = BTreeSet::new();
+		let mut active_groups = active_asset_groups.to_vec();
+		sort_dedup(&mut active_groups);
+		let mut owned_active_groups = Vec::new();
+		let mut mesh_primitives = Vec::<(usize, usize)>::new();
+		let mut materials = Vec::new();
+		let mut images = Vec::new();
+		let mut dynamics_source_ids = Vec::new();
 		for group in &self.asset_group_ownership {
-			if !remaining_active_groups.contains(&group.group_id) {
+			if active_groups.binary_search(&group.group_id).is_err() {
 				continue;
 			}
-			owned_active_groups.insert(group.group_id.clone());
+			owned_active_groups.push(group.group_id.clone());
 			mesh_primitives.extend(
 				group
 					.mesh_primitives
@@ -4327,15 +4328,23 @@ impl UnaSceneSnapshot {
 			images.extend(group.images.iter().copied());
 			dynamics_source_ids.extend(group.dynamics_source_ids.iter().cloned());
 		}
-		for group in &owned_active_groups {
-			remaining_active_groups.remove(group);
+		sort_dedup(&mut owned_active_groups);
+		let mut missing_active_asset_groups = active_groups
+			.into_iter()
+			.filter(|group| owned_active_groups.binary_search(group).is_err())
+			.collect::<Vec<_>>();
+		if let Ok(index) = missing_active_asset_groups.binary_search(&String::new()) {
+			missing_active_asset_groups.remove(index);
+			owned_active_groups.push(String::new());
 		}
-		if remaining_active_groups.remove("") {
-			owned_active_groups.insert(String::new());
-		}
+		sort_dedup(&mut owned_active_groups);
+		sort_dedup(&mut mesh_primitives);
+		sort_dedup(&mut materials);
+		sort_dedup(&mut images);
+		sort_dedup(&mut dynamics_source_ids);
 		UnaSceneScopedAssetSelection {
-			owned_active_groups: owned_active_groups.into_iter().collect(),
-			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
+			owned_active_groups,
+			missing_active_asset_groups,
 			mesh_primitives: mesh_primitives
 				.into_iter()
 				.map(|(mesh_index, primitive_index)| UnaMeshPrimitiveKey {
@@ -4343,11 +4352,16 @@ impl UnaSceneSnapshot {
 					primitive_index,
 				})
 				.collect(),
-			materials: materials.into_iter().collect(),
-			images: images.into_iter().collect(),
-			dynamics_source_ids: dynamics_source_ids.into_iter().collect(),
+			materials,
+			images,
+			dynamics_source_ids,
 		}
 	}
+}
+
+fn sort_dedup<T: Ord>(values: &mut Vec<T>) {
+	values.sort_unstable();
+	values.dedup();
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
