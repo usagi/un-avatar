@@ -1927,7 +1927,7 @@ fn skin_mesh_used_joints(scene: &UnaSceneSnapshot, mesh_index: usize) -> BTreeMa
 fn skin_joint_samples(
 	scene: &UnaSceneSnapshot,
 	rest_nodes: Option<&[un_avatar_core::UnaSceneNode]>,
-	dynamic_node_indices: &BTreeSet<usize>,
+	dynamic_node_indices: &[usize],
 ) -> Vec<serde_json::Value> {
 	let node_paths = scene_node_paths_by_index(scene);
 	let current_world = diagnostic_world_from_scene(scene);
@@ -1967,7 +1967,7 @@ fn skin_joint_samples(
 			let Some(joint_path) = node_paths.get(node_index).and_then(Option::as_deref) else {
 				continue;
 			};
-			if !dynamic_node_indices.contains(&node_index) {
+			if dynamic_node_indices.binary_search(&node_index).is_err() {
 				continue;
 			}
 			let Some((weight_sum, weighted_vertex_count)) = used_joints.get(&joint_index).copied() else {
@@ -8442,7 +8442,12 @@ impl GpuState {
 		let dynamic_node_indices = doc
 			.runtime_model()
 			.scene_profile_dynamics()
-			.map(|runtime| runtime.dynamics.dynamic_bone_node_indices().collect::<BTreeSet<_>>())
+			.map(|runtime| {
+				let mut indices = runtime.dynamics.dynamic_bone_node_indices().collect::<Vec<_>>();
+				indices.sort_unstable();
+				indices.dedup();
+				indices
+			})
 			.unwrap_or_default();
 		let skin_joint_samples = doc
 			.scene
