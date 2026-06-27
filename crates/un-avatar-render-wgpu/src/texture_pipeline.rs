@@ -1150,9 +1150,12 @@ fn build_processed_texture(
 	let src_width = width.max(1);
 	let src_height = height.max(1);
 	let base = alpha_safe_rgba_base(rgba, src_width, src_height, role);
-	let (width, height, rgba) = max_dimension
-		.map(|max_dimension| resize_rgba_to_max_dimension(&base, src_width, src_height, max_dimension))
-		.unwrap_or((src_width, src_height, base));
+	let (width, height, rgba) = match max_dimension.map(|value| value.max(1)) {
+		Some(max_dimension) if src_width > max_dimension || src_height > max_dimension => {
+			resize_rgba_to_max_dimension(&base, src_width, src_height, max_dimension)
+		}
+		_ => (src_width, src_height, base),
+	};
 	let mips = if texture_role_uses_mips(role) {
 		let alpha_weighted_rgb = texture_role_needs_alpha_weighted_rgb_mips(role, &rgba);
 		let mut mips = build_rgba_mips_from_base(rgba, width, height, mipmap_filter, alpha_weighted_rgb);
