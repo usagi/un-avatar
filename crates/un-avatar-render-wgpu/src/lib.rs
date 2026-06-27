@@ -2558,8 +2558,10 @@ impl AvatarApp {
 
 		let next_bindings = animator_bindings_from_runtime_controls(bindings);
 
-		let enabled: BTreeSet<_> = action_ids.iter().cloned().collect();
-		self.active_profile_animator_actions.retain(|id| enabled.contains(id));
+		let mut enabled = action_ids.clone();
+		enabled.sort_unstable();
+		enabled.dedup();
+		self.active_profile_animator_actions.retain(|id| enabled.binary_search(id).is_ok());
 		self.opts.animator_action_ids = action_ids;
 		self.opts.animator_action_modes = action_modes;
 		self.opts.animator_action_values = action_values;

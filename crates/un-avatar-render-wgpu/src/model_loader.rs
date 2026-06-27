@@ -363,18 +363,20 @@ pub(crate) fn add_enabled_expression_runtime_actions(
 	let Some(catalog) = document.expression_catalog.as_ref() else {
 		return;
 	};
-	let enabled = enabled_animator_action_ids
+	let mut enabled = enabled_animator_action_ids
 		.iter()
 		.map(|id| id.trim())
 		.filter(|id| id.starts_with("expression:"))
-		.collect::<std::collections::BTreeSet<_>>();
+		.collect::<Vec<_>>();
+	enabled.sort_unstable();
+	enabled.dedup();
 	if enabled.is_empty() {
 		return;
 	}
 	let mut actions = document.runtime_actions.take().unwrap_or_default().actions;
 	for preset in &catalog.presets {
 		let id = format!("expression:{}", stable_identifier(&preset.name));
-		if !enabled.contains(id.as_str()) {
+		if enabled.binary_search(&id.as_str()).is_err() {
 			continue;
 		}
 		let weight = animator_action_values.get(&id).copied().unwrap_or(1.0).clamp(0.0, 1.0);

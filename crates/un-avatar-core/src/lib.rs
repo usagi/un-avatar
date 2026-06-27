@@ -4,11 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{
-	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
-	path::PathBuf,
-};
+use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -3252,10 +3248,12 @@ impl<'a> UnaRuntimeModel<'a> {
 		let mut conflicts = Vec::new();
 		for (name, entries) in parameters {
 			let owner_keys = entries.iter().map(|(owner_key, _, _)| owner_key.clone()).collect::<Vec<_>>();
-			let sync_types = entries
+			let mut sync_types = entries
 				.iter()
 				.filter_map(|(_, sync_type, _)| (sync_type != "NotSynced").then_some(sync_type.clone()))
-				.collect::<BTreeSet<_>>();
+				.collect::<Vec<_>>();
+			sync_types.sort_unstable();
+			sync_types.dedup();
 			if sync_types.len() > 1 {
 				conflicts.push(UnaRuntimeParameterConflict {
 					name: name.clone(),
