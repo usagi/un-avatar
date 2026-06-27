@@ -10291,19 +10291,18 @@ impl SceneMeshes {
 					default_morph_weights,
 				} = exp;
 				let compact_expression_bindings = remap_expression_bindings(original_expression_bindings, &morph_source_indices);
-				let morph_target_names = morph_source_indices
-					.iter()
-					.map(|&source_index| buf.morph_target_names.get(source_index).cloned().unwrap_or_default())
-					.collect::<Vec<_>>();
 				let node_path = node_paths.get(ni).map(String::as_str).unwrap_or("");
-				let morph_target_override_keys = morph_target_names
-					.iter()
-					.map(|name| morph_override_key(node_path, name))
-					.collect::<Vec<_>>();
-				let morph_target_override_suffix_keys = morph_target_override_keys
-					.iter()
-					.map(|key| morph_override_path_suffix_key(key))
-					.collect::<Vec<_>>();
+				let mut morph_target_names = Vec::with_capacity(morph_source_indices.len());
+				let mut morph_target_override_keys = Vec::with_capacity(morph_source_indices.len());
+				let mut morph_target_override_suffix_keys = Vec::with_capacity(morph_source_indices.len());
+				for &source_index in &morph_source_indices {
+					let name = buf.morph_target_names.get(source_index).cloned().unwrap_or_default();
+					let key = morph_override_key(node_path, &name);
+					let suffix_key = morph_override_path_suffix_key(&key);
+					morph_target_names.push(name);
+					morph_target_override_keys.push(key);
+					morph_target_override_suffix_keys.push(suffix_key);
+				}
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
 				let mesh_cloth_assist_vertices = apply_mesh_cloth_assist_to_vertices(
 					&mut verts,
