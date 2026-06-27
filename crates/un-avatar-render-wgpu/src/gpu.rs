@@ -2994,7 +2994,7 @@ fn dynamics_interaction_parameter_updates_with_context(
 		let gravity_angle = dynamics_group_gravity_sensor_angle(rest_nodes, world, group, &node_paths_by_index).unwrap_or(0.0);
 		let angle = shape_angle.max(gravity_angle);
 		let max_angle = dynamics_interaction_angle_normalizer(group.limit);
-		let angle_parameter = format!("{}_Angle", interaction.parameter);
+		let angle_parameter = dynamics_interaction_parameter_name(&interaction.parameter, "_Angle");
 		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
 		let angle_value = if center_peak_angle_parameters
 			.binary_search_by(|parameter| parameter.as_str().cmp(angle_parameter.as_str()))
@@ -3009,14 +3009,39 @@ fn dynamics_interaction_parameter_updates_with_context(
 			&mut values,
 			&mut changed,
 			before,
-			format!("{}_IsGrabbed", interaction.parameter),
+			dynamics_interaction_parameter_name(&interaction.parameter, "_IsGrabbed"),
 			0.0,
 		);
-		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_IsPosed", interaction.parameter), 0.0);
-		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_Stretch", interaction.parameter), 0.0);
-		insert_dynamics_interaction_parameter_value(&mut values, &mut changed, before, format!("{}_Squish", interaction.parameter), 0.0);
+		insert_dynamics_interaction_parameter_value(
+			&mut values,
+			&mut changed,
+			before,
+			dynamics_interaction_parameter_name(&interaction.parameter, "_IsPosed"),
+			0.0,
+		);
+		insert_dynamics_interaction_parameter_value(
+			&mut values,
+			&mut changed,
+			before,
+			dynamics_interaction_parameter_name(&interaction.parameter, "_Stretch"),
+			0.0,
+		);
+		insert_dynamics_interaction_parameter_value(
+			&mut values,
+			&mut changed,
+			before,
+			dynamics_interaction_parameter_name(&interaction.parameter, "_Squish"),
+			0.0,
+		);
 	}
 	DynamicsInteractionParameterUpdates { values, changed }
+}
+
+fn dynamics_interaction_parameter_name(base: &str, suffix: &str) -> String {
+	let mut name = String::with_capacity(base.len() + suffix.len());
+	name.push_str(base);
+	name.push_str(suffix);
+	name
 }
 
 fn insert_dynamics_interaction_parameter_value(
