@@ -2399,7 +2399,9 @@ impl DynamicsSimulator {
 		let override_params_by_category = merge_category_override_params(&physics.overrides);
 		let override_params_by_source_id = merge_group_override_params(&physics.group_overrides);
 		let compiled_match_overrides = compile_match_overrides(&physics.match_overrides);
-		let known_source_ids: std::collections::BTreeSet<_> = groups.iter().map(|(_, group)| group.source_id.to_string()).collect();
+		let mut known_source_ids = groups.iter().map(|(_, group)| group.source_id).collect::<Vec<_>>();
+		known_source_ids.sort_unstable();
+		known_source_ids.dedup();
 		let mut matched_match_indices = Vec::new();
 		for (_, group) in groups.iter().copied() {
 			let match_text = dynamics_group_match_text(scene, group);
@@ -3305,12 +3307,14 @@ fn dynamics_tuning_warnings(
 	match_overrides: &[CompiledDynamicsMatchOverride<'_>],
 	matched_match_indices: &[usize],
 	group_overrides: &[DynamicsGroupOverride],
-	known_source_ids: &std::collections::BTreeSet<String>,
+	known_source_ids: &[&str],
 ) -> Vec<String> {
-	let matched_match_indices: std::collections::BTreeSet<_> = matched_match_indices.iter().copied().collect();
+	let mut matched_match_indices = matched_match_indices.to_vec();
+	matched_match_indices.sort_unstable();
+	matched_match_indices.dedup();
 	let mut warnings = Vec::new();
 	for (index, override_item) in match_overrides.iter().enumerate() {
-		if !matched_match_indices.contains(&index) {
+		if matched_match_indices.binary_search(&index).is_err() {
 			warnings.push(format!(
 				"dynamics match override did not match any current source group: {}",
 				override_item.label
@@ -3318,7 +3322,7 @@ fn dynamics_tuning_warnings(
 		}
 	}
 	for override_item in group_overrides {
-		if !known_source_ids.contains(&override_item.source_id) {
+		if known_source_ids.binary_search(&override_item.source_id.as_str()).is_err() {
 			warnings.push(format!(
 				"dynamics exact group override source_id is not present in current model: {}",
 				override_item.source_id
