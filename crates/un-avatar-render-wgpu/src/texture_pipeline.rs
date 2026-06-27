@@ -994,6 +994,12 @@ fn read_u64_le(reader: &mut impl Read) -> Option<u64> {
 	Some(u64::from_le_bytes(read_exact_array(reader)?))
 }
 
+fn read_exact_vec(reader: &mut impl Read, len: usize) -> Option<Vec<u8>> {
+	let mut data = Vec::with_capacity(len);
+	let read = reader.take(len as u64).read_to_end(&mut data).ok()?;
+	(read == len).then_some(data)
+}
+
 fn write_u32_le(writer: &mut impl Write, value: u32) -> std::io::Result<()> {
 	writer.write_all(&value.to_le_bytes())
 }
@@ -1061,8 +1067,7 @@ fn read_processed_texture_cache(path: &Path, key: u64) -> Option<(ProcessedTextu
 		if len != expected {
 			return None;
 		}
-		let mut data = vec![0u8; len];
-		file.read_exact(&mut data).ok()?;
+		let data = read_exact_vec(&mut file, len)?;
 		read_bytes = read_bytes.saturating_add(len as u64);
 		mips.push((mip_width, mip_height, data));
 	}
@@ -1113,8 +1118,7 @@ pub(crate) fn read_compressed_texture_cache(path: &Path, key: u64, expected_kind
 		if len != expected {
 			return None;
 		}
-		let mut data = vec![0u8; len];
-		file.read_exact(&mut data).ok()?;
+		let data = read_exact_vec(&mut file, len)?;
 		mips.push(TextureUploadMip { width, height, data });
 	}
 	Some(TextureUploadPayload { kind, mips })
