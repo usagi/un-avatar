@@ -9233,7 +9233,7 @@ impl GpuState {
 			return Ok(Vec::new());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (parameter_values, action_ids) = {
+		let (parameter_values, action_ids, actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
 			let parameter_values = runtime.runtime_parameter_values();
@@ -9246,17 +9246,11 @@ impl GpuState {
 				return Ok(Vec::new());
 			};
 			let action_ids = runtime_action_ids_for_parameter_values(actions, runtime.scene(), &parameter_values);
-			(parameter_values, action_ids)
+			let actions_snapshot = actions.restore_effect_snapshot();
+			(parameter_values, action_ids, actions_snapshot)
 		};
 		self.last_runtime_parameter_action_values = parameter_values;
 		if action_ids.is_empty() {
-			let actions_snapshot = {
-				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-				let Some(actions) = doc.runtime_model().runtime_actions() else {
-					return Ok(Vec::new());
-				};
-				actions.restore_effect_snapshot()
-			};
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
@@ -9265,7 +9259,14 @@ impl GpuState {
 		}
 		let mut activations = Vec::new();
 		for action_id in action_ids {
-			activations.push(self.activate_runtime_action(Some(&action_id), None, None, None, None)?);
+			activations.push(self.activate_runtime_action_with_restore_snapshot(
+				Some(&action_id),
+				None,
+				None,
+				None,
+				None,
+				Some(&actions_snapshot),
+			)?);
 		}
 		Ok(activations)
 	}
@@ -9428,11 +9429,23 @@ impl GpuState {
 		parameter_name: Option<&str>,
 		parameter_value: Option<f32>,
 	) -> Result<RuntimeActionActivation, String> {
+		self.activate_runtime_action_with_restore_snapshot(action_id, command, expression_menu_path, parameter_name, parameter_value, None)
+	}
+
+	fn activate_runtime_action_with_restore_snapshot(
+		&mut self,
+		action_id: Option<&str>,
+		command: Option<&str>,
+		expression_menu_path: Option<&str>,
+		parameter_name: Option<&str>,
+		parameter_value: Option<f32>,
+		restore_snapshot: Option<&un_avatar_core::UnaRuntimeActionSet>,
+	) -> Result<RuntimeActionActivation, String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not attached".to_string());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (resolved_action_id, parameter_values, action_effects, actions_snapshot) = {
+		let (resolved_action_id, parameter_values, action_effects, owned_actions_snapshot) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let Some(actions) = doc.runtime_model().runtime_actions() else {
 				return Err("document has no runtime actions".to_string());
@@ -9450,9 +9463,12 @@ impl GpuState {
 				action.id.clone(),
 				action.parameter_assignments(),
 				action.effects.clone(),
-				actions.restore_effect_snapshot(),
+				restore_snapshot.is_none().then(|| actions.restore_effect_snapshot()),
 			)
 		};
+		let actions_snapshot = restore_snapshot
+			.or(owned_actions_snapshot.as_ref())
+			.ok_or_else(|| "runtime action restore snapshot missing".to_string())?;
 		{
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			doc.runtime_model_mut()
