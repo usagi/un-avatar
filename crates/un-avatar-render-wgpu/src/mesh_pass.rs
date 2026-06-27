@@ -3201,8 +3201,8 @@ pub(crate) struct SceneMeshes {
 	image_texture_slots: Vec<SceneImageTextureSlot>,
 	cube_texture_slots: Vec<Option<SceneCubeTextureSlot>>,
 	#[allow(dead_code)]
-	_samplers: Vec<wgpu::Sampler>,
-	image_sampler_indices: Vec<usize>,
+	_samplers: Box<[wgpu::Sampler]>,
+	image_sampler_indices: Box<[usize]>,
 	#[allow(dead_code)]
 	_textures: Vec<wgpu::Texture>,
 	#[allow(dead_code)]
@@ -10828,8 +10828,8 @@ impl SceneMeshes {
 			texture_views,
 			image_texture_slots,
 			cube_texture_slots,
-			_samplers: samplers,
-			image_sampler_indices,
+			_samplers: samplers.into_boxed_slice(),
+			image_sampler_indices: image_sampler_indices.into_boxed_slice(),
 			_textures: textures,
 			_cube_textures: cube_textures,
 			draws,
