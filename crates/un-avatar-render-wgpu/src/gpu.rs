@@ -9221,7 +9221,7 @@ impl GpuState {
 			return Ok(Vec::new());
 		};
 		let doc_arc = Arc::clone(doc_arc);
-		let (parameter_values, action_ids, actions_snapshot) = {
+		let (parameter_values, action_ids) = {
 			let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime = doc.runtime_model();
 			let parameter_values = runtime.runtime_parameter_values();
@@ -9234,10 +9234,17 @@ impl GpuState {
 				return Ok(Vec::new());
 			};
 			let action_ids = runtime_action_ids_for_parameter_values(actions, runtime.scene(), &parameter_values);
-			(parameter_values, action_ids, actions.clone())
+			(parameter_values, action_ids)
 		};
 		self.last_runtime_parameter_action_values = parameter_values;
 		if action_ids.is_empty() {
+			let actions_snapshot = {
+				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
+				let Some(actions) = doc.runtime_model().runtime_actions() else {
+					return Ok(Vec::new());
+				};
+				actions.clone()
+			};
 			let mut doc = doc_arc.write().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let restored = doc.runtime_model_mut().restore_inactive_runtime_action_effects(&actions_snapshot)?;
 			drop(doc);
