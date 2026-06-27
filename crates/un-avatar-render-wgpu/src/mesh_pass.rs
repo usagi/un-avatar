@@ -2230,7 +2230,6 @@ struct ComputeFurCardsDrawResources {
 	card_count: u32,
 	generated_index_count: u32,
 	dispatch_workgroups: u32,
-	source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 }
 
 #[derive(Default)]
@@ -3163,6 +3162,7 @@ pub(crate) struct SceneMeshes {
 	visibility_scratch: Vec<bool>,
 	expression_names: Vec<String>,
 	expression_value_scratch: Vec<f32>,
+	fur_source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 	fur_palette_matrix_scratch: Vec<Mat4>,
 	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
@@ -6704,7 +6704,6 @@ fn create_compute_fur_cards_draw_resources(
 		card_count: generated_requirements.card_count,
 		generated_index_count: generated_requirements.index_count,
 		dispatch_workgroups: compute_fur_cards_dispatch_workgroups(card_count),
-		source_vertex_scratch: Vec::with_capacity(verts.len()),
 	})
 }
 
@@ -10743,6 +10742,7 @@ impl SceneMeshes {
 			visibility_scratch: Vec::new(),
 			expression_names,
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
+			fur_source_vertex_scratch: Vec::new(),
 			fur_palette_matrix_scratch: Vec::new(),
 			has_morph_draws,
 			opts,
@@ -11051,6 +11051,7 @@ impl SceneMeshes {
 	fn update_compute_fur_cards_source_vertices(&mut self, queue: &wgpu::Queue) {
 		let draws = &mut self.draws;
 		let skin_palettes = &self.skin_palettes;
+		let source_vertex_scratch = &mut self.fur_source_vertex_scratch;
 		let palette_matrix_scratch = &mut self.fur_palette_matrix_scratch;
 		for &draw_index in &self.fur_draw_indices {
 			let Some(draw) = draws.get_mut(draw_index) else {
@@ -11072,16 +11073,16 @@ impl SceneMeshes {
 			compute_fur_cards_skinned_source_vertices_from_mesh(
 				base_vertices,
 				&palette.uploaded,
-				&mut compute_fur_cards.source_vertex_scratch,
+				source_vertex_scratch,
 				palette_matrix_scratch,
 			);
-			if compute_fur_cards.source_vertex_scratch.len() != base_vertices.len() {
+			if source_vertex_scratch.len() != base_vertices.len() {
 				continue;
 			}
 			queue.write_buffer(
 				&compute_fur_cards.source_vertex_buffer,
 				0,
-				bytemuck::cast_slice(&compute_fur_cards.source_vertex_scratch),
+				bytemuck::cast_slice(source_vertex_scratch),
 			);
 		}
 	}
