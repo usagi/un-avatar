@@ -11595,6 +11595,7 @@ impl SceneMeshes {
 		timings.expression_values_ms = t_expression0.elapsed().as_secs_f32() * 1000.0;
 		let t_skin0 = Instant::now();
 		let mut skin_palette_write_ms = 0.0;
+		let mut skin_palette_uploaded_changed = false;
 		if !self.active_skin_palette_indices.is_empty() {
 			for &palette_index in &self.active_skin_palette_indices {
 				let Some(palette) = self.skin_palettes.get_mut(palette_index) else {
@@ -11604,12 +11605,13 @@ impl SceneMeshes {
 				let t_write0 = Instant::now();
 				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 				if palette.uploaded_changed {
+					skin_palette_uploaded_changed = true;
 					skin_palette_write_ms += t_write0.elapsed().as_secs_f32() * 1000.0;
 				}
 			}
 			timings.skin_palette_ms = t_skin0.elapsed().as_secs_f32() * 1000.0;
 			timings.skin_palette_write_ms = skin_palette_write_ms;
-			if !self.fur_draw_indices.is_empty() {
+			if skin_palette_uploaded_changed && !self.fur_draw_indices.is_empty() {
 				let t_fur0 = Instant::now();
 				self.update_compute_fur_cards_source_vertices(queue);
 				timings.fur_source_vertices_ms = t_fur0.elapsed().as_secs_f32() * 1000.0;
