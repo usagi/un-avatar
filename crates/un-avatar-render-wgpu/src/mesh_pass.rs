@@ -6337,7 +6337,7 @@ fn compute_fur_cards_buffer_requirements(card_count: u32) -> Option<ComputeFurCa
 }
 
 #[allow(dead_code)]
-fn compute_fur_cards_source_vertex_from_vertex(vertex: Vertex) -> ComputeFurCardsSourceVertexGpu {
+fn compute_fur_cards_source_vertex_from_vertex(vertex: &Vertex) -> ComputeFurCardsSourceVertexGpu {
 	ComputeFurCardsSourceVertexGpu {
 		position: [vertex.pos[0], vertex.pos[1], vertex.pos[2], 1.0],
 		normal: [vertex.norm[0], vertex.norm[1], vertex.norm[2], 0.0],
@@ -6356,7 +6356,7 @@ fn compute_fur_cards_source_vertex_from_vertex(vertex: Vertex) -> ComputeFurCard
 
 #[allow(dead_code)]
 fn compute_fur_cards_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<ComputeFurCardsSourceVertexGpu> {
-	verts.iter().copied().map(compute_fur_cards_source_vertex_from_vertex).collect()
+	verts.iter().map(compute_fur_cards_source_vertex_from_vertex).collect()
 }
 
 fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
@@ -6367,7 +6367,7 @@ fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
 	}
 }
 
-fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_matrices: &[Mat4]) -> ComputeFurCardsSourceVertexGpu {
+fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: &Vertex, palette_matrices: &[Mat4]) -> ComputeFurCardsSourceVertexGpu {
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
 	let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
@@ -6423,7 +6423,6 @@ fn compute_fur_cards_skinned_source_vertices_from_matrices(
 	out.extend(
 		verts
 			.iter()
-			.copied()
 			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_matrices)),
 	);
 }
