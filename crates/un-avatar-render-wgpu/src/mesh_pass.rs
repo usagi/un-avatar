@@ -3301,13 +3301,13 @@ fn primitive_expand_cache_safe(buf: &UnaMeshBuffers) -> bool {
 }
 
 #[cfg(test)]
-fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSet<usize>>) -> Option<ExpandedPrimitive> {
+fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&[usize]>) -> Option<ExpandedPrimitive> {
 	expand_primitive_with_cached_morph(buf, dynamic_morph_targets, None)
 }
 
 fn expand_primitive_with_cached_morph(
 	buf: &UnaMeshBuffers,
-	dynamic_morph_targets: Option<&BTreeSet<usize>>,
+	dynamic_morph_targets: Option<&[usize]>,
 	cached_morph_payload: Option<&ExpandedMorphPayload>,
 ) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
@@ -3359,7 +3359,7 @@ fn expand_primitive_with_cached_morph(
 				.iter()
 				.enumerate()
 				.filter_map(|(target_index, target)| {
-					if dynamic_morph_targets.contains(&target_index) {
+					if dynamic_morph_targets.binary_search(&target_index).is_ok() {
 						return None;
 					}
 					let weight = default_morph_weight_for(buf, target_index);
@@ -3487,27 +3487,27 @@ fn dynamic_morph_target_indices(
 	bindings: &[ExpressionBinding],
 	dynamic_morph_target_names: &BTreeSet<String>,
 	include_all: bool,
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	if include_all {
 		return (0..buf.morph_targets.len()).collect();
 	}
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	for (index, &weight) in buf.default_morph_weights.iter().enumerate() {
 		if index < buf.morph_targets.len() && weight.abs() > 0.000001 {
-			indices.insert(index);
+			push_unique_index(&mut indices, index);
 		}
 	}
 	for binding in bindings {
 		if binding.morph_target_index < buf.morph_targets.len() {
-			indices.insert(binding.morph_target_index);
+			push_unique_index(&mut indices, binding.morph_target_index);
 		}
 	}
 	for (index, name) in buf.morph_target_names.iter().enumerate() {
 		if index < buf.morph_targets.len() && dynamic_morph_target_names.contains(name) {
-			indices.insert(index);
+			push_unique_index(&mut indices, index);
 		}
 	}
-	indices
+	sorted_unique_indices(indices)
 }
 
 fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indices: &[usize]) -> Vec<ExpressionBinding> {
@@ -13462,7 +13462,7 @@ mod tests {
 
 		let indices = dynamic_morph_target_indices(&buf, &bindings, &BTreeSet::new(), false);
 
-		assert_eq!(indices, BTreeSet::from([0, 1, 2]));
+		assert_eq!(indices, vec![0, 1, 2]);
 	}
 
 	#[test]
@@ -13499,7 +13499,7 @@ mod tests {
 
 		let indices = dynamic_morph_target_indices(&buf, &[], &names, false);
 
-		assert_eq!(indices, BTreeSet::from([1]));
+		assert_eq!(indices, vec![1]);
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
@@ -13971,7 +13971,7 @@ mod tests {
 			default_morph_weights: vec![0.5],
 		};
 
-		let static_morph_targets = BTreeSet::new();
+		let static_morph_targets = Vec::new();
 		let baked = expand_primitive(&buf, Some(&static_morph_targets)).expect("expanded primitive");
 		assert_eq!(baked.verts[0].pos, [2.0, 2.0, 2.5]);
 		assert!(baked.default_morph_weights.is_empty());
