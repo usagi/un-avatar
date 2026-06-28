@@ -10507,15 +10507,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.audio_link.local_map_params_factor = value;
 	}
 
-	out.outline.enabled_factor = unavatar_material_float_param(extras, "_UseOutline")
-		.unwrap_or_else(|| {
-			if source_shader.to_ascii_lowercase().contains("outline") {
-				1.0
-			} else {
-				0.0
-			}
-		})
-		.clamp(0.0, 1.0);
+	let source_shader_has_outline_pass = source_shader.to_ascii_lowercase().contains("outline");
+	out.outline.enabled_factor = if source_shader_has_outline_pass {
+		1.0
+	} else {
+		unavatar_material_float_param(extras, "_UseOutline").unwrap_or(0.0).clamp(0.0, 1.0)
+	};
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_OutlineColor") {
 		out.outline.color_factor = value;
 	}
@@ -10533,11 +10530,18 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.outline.width_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon
-		.and_then(|m| json_f32(m.get("outlineWidthFactor").or_else(|| m.get("outline_width_factor"))))
-		.or_else(|| unavatar_material_float_param(extras, "_OutlineWidth"))
-	{
-		out.outline.width_factor = value * liltoon_outline_width_scale;
+	let mtoon_outline_width = mtoon.and_then(|m| json_f32(m.get("outlineWidthFactor").or_else(|| m.get("outline_width_factor"))));
+	let source_outline_width = unavatar_material_float_param(extras, "_OutlineWidth");
+	let outline_width = match (mtoon_outline_width, source_outline_width) {
+		(Some(value), Some(source_value)) if source_shader_has_outline_pass && value <= 0.0 && source_value > 0.0 => {
+			Some(source_value * 0.01)
+		}
+		(Some(value), _) => Some(value * liltoon_outline_width_scale),
+		(None, Some(source_value)) => Some(source_value * 0.01),
+		(None, None) => None,
+	};
+	if let Some(value) = outline_width {
+		out.outline.width_factor = value;
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_OutlineFixWidth") {
 		out.outline.fix_width_factor = value.clamp(0.0, 1.0);
@@ -16791,6 +16795,31 @@ mod tests {
 			mtoon.parametric_rim_color_factor,
 			UnaMtoonMaterial::default().parametric_rim_color_factor
 		);
+	}
+
+	#[test]
+	fn hidden_liltoon_outline_shader_enables_outline_pass_even_when_toggle_is_zero() {
+		let extras = serde_json::json!({
+			"family": "liltoon",
+			"sourceShader": "Hidden/lilToonOutline",
+			"floatParams": {
+				"_UseOutline": 0.0,
+				"_OutlineWidth": 0.2
+			},
+			"colorParams": {
+				"_OutlineColor": [0.3, 0.3, 0.3, 1.0]
+			},
+			"mtoon": {
+				"outlineWidthFactor": 0.0,
+				"outlineWidthFactorUnit": "meters"
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
+
+		assert_eq!(liltoon_like.outline.enabled_factor, 1.0);
+		assert!((liltoon_like.outline.width_factor - 0.002).abs() < 0.000001);
+		assert_eq!(liltoon_like.outline.color_factor, [0.3, 0.3, 0.3, 1.0]);
 	}
 
 	#[test]

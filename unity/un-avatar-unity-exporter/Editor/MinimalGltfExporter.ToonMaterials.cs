@@ -161,7 +161,7 @@ namespace UNAvatar.UnityExporter
                 AddTextureIndex(mtoon, "anisotropyScaleMaskTextureIndex", useAnisotropy ? ReadTexture(material, "_AnisotropyScaleMask") : null);
                 AddTextureIndex(mtoon, "anisotropyShiftNoiseMaskTextureIndex", useAnisotropy ? ReadTexture(material, "_AnisotropyShiftNoiseMask") : null);
 
-                var useOutline = IsMaterialFeatureEnabled(material, "_UseOutline", lowerShader.Contains("outline"));
+                var useOutline = lowerShader.Contains("outline") || IsMaterialFeatureEnabled(material, "_UseOutline", false);
                 var outlineWidth = useOutline ? ReadFloat(material, "_OutlineWidth", 0.0f) : 0.0f;
                 var outlineWidthFactor = lowerShader.Contains("liltoon") ? outlineWidth * 0.01f : outlineWidth;
                 mtoon["outlineWidthMode"] = outlineWidthFactor > 0.0f ? "world_coordinates" : "none";
