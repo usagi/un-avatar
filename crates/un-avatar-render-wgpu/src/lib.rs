@@ -100,6 +100,7 @@ const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 3600;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
+const WINDOW_TITLE_REFRESH_FRAMES: u32 = 60;
 const DEFAULT_TARGET_FPS: f32 = 60.0;
 const MIN_TARGET_FPS: f32 = 30.0;
 const MAX_TARGET_FPS: f32 = 300.0;
@@ -2295,6 +2296,9 @@ impl AvatarApp {
 		}
 		self.frame_rate_limit = next_limit;
 		self.opts.target_fps = self.frame_rate_limit.target_fps;
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.set_target_fps(self.frame_rate_limit.target_fps);
+		}
 		let now = Instant::now();
 		if self.next_frame_at <= now {
 			self.next_frame_at = now + self.effective_preview_frame_interval();
@@ -2425,7 +2429,7 @@ impl AvatarApp {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
-		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+		let Ok(snapshot) = status.try_lock().map(|status| status.clone()) else {
 			return;
 		};
 		match renderer_tray::RendererTray::new(&self.opts, &snapshot, self.event_proxy.clone()) {
@@ -2452,7 +2456,7 @@ impl AvatarApp {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
-		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+		let Ok(snapshot) = status.try_lock().map(|status| status.clone()) else {
 			return;
 		};
 		tray.refresh(&self.opts, &snapshot);
@@ -3352,7 +3356,7 @@ impl AvatarApp {
 			return;
 		};
 		let status_arc = Arc::clone(status);
-		if let Ok(mut status) = status.lock() {
+		if let Ok(mut status) = status.try_lock() {
 			let gpu = self.gpu.as_ref();
 			let runtime_status_frame_seq = self.runtime_status_frame_seq.get().wrapping_add(1);
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
@@ -3411,26 +3415,26 @@ impl AvatarApp {
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
 				spawn_runtime_memory_refresh(Arc::clone(&status_arc), Arc::clone(&self.memory_stats_refresh_pending));
 			}
-			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
-			if status.expression_presets.as_slice() != presets {
-				status.expression_presets = presets.to_vec();
-			}
-			let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
-			status.look_at_enabled = clamp.is_some();
-			status.look_at_clamp_deg = clamp;
-			status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
 			status.unmotion_zenoh_enabled = gpu.is_some_and(|g| g.unmotion_zenoh_live());
 			if status.unmotion_zenoh_key != self.opts.unmotion_zenoh.base_key_expr {
 				status.unmotion_zenoh_key.clone_from(&self.opts.unmotion_zenoh.base_key_expr);
 			}
 			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
 			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
-			status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
-			let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
-			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
-			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
-			status.runtime_requires_fur = runtime_requirements.fur;
 			if refresh_runtime_metadata {
+				let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
+				if status.expression_presets.as_slice() != presets {
+					status.expression_presets = presets.to_vec();
+				}
+				let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
+				status.look_at_enabled = clamp.is_some();
+				status.look_at_clamp_deg = clamp;
+				status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
+				status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
+				let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
+				status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
+				status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
+				status.runtime_requires_fur = runtime_requirements.fur;
 				status.base_wardrobe_set = gpu.and_then(|g| g.base_wardrobe_set());
 				status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 				status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
@@ -3451,16 +3455,14 @@ impl AvatarApp {
 				status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 				status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
 				status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
-			}
-			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
-			status.show_axes = gpu.is_some_and(|g| g.show_axes());
-			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
-			status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
-			let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
-			if status.bone_collider_source != bone_collider_source {
-				status.bone_collider_source = bone_collider_source.to_string();
-			}
-			if refresh_runtime_metadata {
+				status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
+				status.show_axes = gpu.is_some_and(|g| g.show_axes());
+				status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
+				status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
+				let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
+				if status.bone_collider_source != bone_collider_source {
+					status.bone_collider_source = bone_collider_source.to_string();
+				}
 				let dynamics = gpu.map_or(Default::default(), |g| g.dynamics_counts());
 				status.dynamics_group_count = dynamics.groups;
 				status.dynamics_enabled_group_count = dynamics.enabled_groups;
@@ -4259,9 +4261,6 @@ impl AvatarApp {
 		for activation in &runtime_parameter_activations {
 			self.apply_runtime_activation_status(activation);
 		}
-		if !runtime_parameter_activations.is_empty() {
-			self.request_redraw();
-		}
 		let inst_fps = if timings.wall_since_last_ms > 0.05 {
 			1000.0 / timings.wall_since_last_ms
 		} else {
@@ -4295,7 +4294,7 @@ impl AvatarApp {
 			}
 		} else if self.opts.show_fps_in_title {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
-			if self.title_refresh.is_multiple_of(16) {
+			if self.title_refresh.is_multiple_of(WINDOW_TITLE_REFRESH_FRAMES) {
 				win.set_title(&format!(
 					"{}{} — {:.0}/{:.0} FPS  wall {:.1}/{:.1} ms s{}  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
 					self.title_base,
@@ -4478,11 +4477,13 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			self.opts.render_backend,
 			self.opts.gpu_adapter.as_deref(),
 			self.opts.texture_compression,
+			self.frame_rate_limit.target_fps,
 			self.opts.debug.clone(),
 			self.opts.disable_expression_morphs,
 			self.opts.disable_vmc_eye_look,
 			self.opts.eye_look_at_clamp_deg,
 			self.opts.apply_vmc_root_translation,
+			self.opts.synthetic_head_motion,
 			mesh_diagnostics,
 		) {
 			Ok(mut gpu) => {
@@ -6281,7 +6282,7 @@ fn spawn_runtime_memory_refresh(status: Arc<Mutex<RendererRuntimeSnapshot>>, pen
 	let pending_for_worker = Arc::clone(&pending);
 	let spawn_result = thread::Builder::new().name("un-avatar-memory-stats".to_string()).spawn(move || {
 		let ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
-		if let Ok(mut status) = status.lock() {
+		if let Ok(mut status) = status.try_lock() {
 			status.ram_mb = ram_mb;
 		}
 		pending_for_worker.store(false, Ordering::Release);
@@ -6821,7 +6822,7 @@ fn runtime_status_stream_requested(stream: &std::net::TcpStream) -> bool {
 
 fn write_runtime_status_snapshot(stream: &mut std::net::TcpStream, status: &Arc<Mutex<RendererRuntimeSnapshot>>) -> std::io::Result<()> {
 	let snapshot = status
-		.lock()
+		.try_lock()
 		.map_err(|_| std::io::Error::other("runtime status lock poisoned"))?
 		.clone();
 	let json = serde_json::to_string(&snapshot).map_err(std::io::Error::other)?;
@@ -6884,9 +6885,12 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 	let mut last_json = String::new();
 	let mut last_publish = Instant::now() - STATUS_KEEPALIVE_INTERVAL;
 	loop {
-		let snapshot = match status.lock() {
+		let snapshot = match status.try_lock() {
 			Ok(status) => status.clone(),
-			Err(_) => return,
+			Err(_) => {
+				thread::sleep(STATUS_PUBLISH_INTERVAL);
+				continue;
+			}
 		};
 		if let Ok(json) = serde_json::to_string(&snapshot) {
 			let should_publish = json != last_json || last_publish.elapsed() >= STATUS_KEEPALIVE_INTERVAL;
@@ -7597,6 +7601,12 @@ pub fn run_cli() -> Result<(), RunError> {
 			help = "VMC と UNMotion 同時受信時の primary 選択 (既定 vmc)。"
 		)]
 		primary_motion_source: Option<crate::options::PrimaryMotionSource>,
+		#[arg(long, help = "診断用: renderer 内で Head を sin 波 yaw 駆動する。UNMF/Z を経由しない")]
+		debug_synthetic_head_motion: bool,
+		#[arg(long, default_value_t = 45.0, value_name = "DEG", help = "診断用 Head sin yaw 振幅")]
+		debug_synthetic_head_amplitude_deg: f32,
+		#[arg(long, default_value_t = 0.5, value_name = "HZ", help = "診断用 Head sin yaw 周波数")]
+		debug_synthetic_head_frequency_hz: f32,
 		#[arg(long, help = "XYZ デバッグ軸を表示（既定は非表示）")]
 		show_axes: bool,
 		#[arg(long, help = "起動直後にウィンドウを最小化する（既定は非最小化）")]
@@ -7702,6 +7712,11 @@ pub fn run_cli() -> Result<(), RunError> {
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
+		},
+		synthetic_head_motion: crate::options::SyntheticHeadMotionOptions {
+			enabled: cli.debug_synthetic_head_motion,
+			amplitude_deg: cli.debug_synthetic_head_amplitude_deg,
+			frequency_hz: cli.debug_synthetic_head_frequency_hz,
 		},
 		audio_link: Default::default(),
 		primary_motion_source: cli.primary_motion_source.unwrap_or_default(),
@@ -8077,6 +8092,11 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.unmotion_zenoh.base_key_expr != default.unmotion_zenoh.base_key_expr {
 		opts.unmotion_zenoh.base_key_expr = cli.unmotion_zenoh.base_key_expr;
+	}
+	if cli.synthetic_head_motion.enabled {
+		opts.synthetic_head_motion = cli.synthetic_head_motion;
+		opts.vmc_address = None;
+		opts.unmotion_zenoh.enabled = false;
 	}
 	if cli.primary_motion_source != default.primary_motion_source {
 		opts.primary_motion_source = cli.primary_motion_source;

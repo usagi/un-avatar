@@ -6,13 +6,13 @@ use std::{
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
-		atomic::{AtomicU64, AtomicU8, Ordering},
+		atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
 		Arc, Mutex, RwLock,
 	},
-	time::{Duration, Instant},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use glam::{Mat4, Quat, Vec3, Vec4};
+use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
 	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
@@ -40,7 +40,7 @@ use crate::{
 	model_loader,
 	options::{
 		AudioLinkOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, ColorGradingLook, ContactShadowOptions,
-		EnvironmentColorOptions, LightingOptions,
+		EnvironmentColorOptions, LightingOptions, SyntheticHeadMotionOptions,
 	},
 	pipeline_cache::PersistentPipelineCache,
 	post_process::PostProcess,
@@ -5355,6 +5355,14 @@ fn surface_frame_latency_from_env() -> Option<u32> {
 	Some(parsed.clamp(1, 8))
 }
 
+fn surface_present_mode(present_modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+	present_modes
+		.iter()
+		.copied()
+		.find(|mode| *mode == wgpu::PresentMode::Fifo)
+		.unwrap_or(wgpu::PresentMode::Fifo)
+}
+
 fn gpu_backend_label(backend: wgpu::Backend) -> &'static str {
 	match backend {
 		wgpu::Backend::Noop => "noop",
@@ -5830,6 +5838,8 @@ fn primary_motion_source_from_u8(value: u8) -> crate::options::PrimaryMotionSour
 struct MotionControlBuffer {
 	started_at: Instant,
 	state: Mutex<MotionControlBufferState>,
+	trace: Option<Arc<Mutex<MotionTraceBuffer>>>,
+	trace_written: AtomicBool,
 }
 
 impl Default for MotionControlBuffer {
@@ -5837,6 +5847,8 @@ impl Default for MotionControlBuffer {
 		Self {
 			started_at: Instant::now(),
 			state: Mutex::new(MotionControlBufferState::default()),
+			trace: MotionTraceBuffer::from_env().map(|trace| Arc::new(Mutex::new(trace))),
+			trace_written: AtomicBool::new(false),
 		}
 	}
 }
@@ -5844,6 +5856,11 @@ impl Default for MotionControlBuffer {
 impl MotionControlBuffer {
 	fn push_frame(&self, frame: un_motion_frame::UNMotionFrame) {
 		let receive_time_ns = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+		if let Some(trace) = &self.trace {
+			if let Ok(mut trace) = trace.try_lock() {
+				trace.push_raw(&frame, receive_time_ns);
+			}
+		}
 		if let Ok(mut state) = self.state.lock() {
 			state.push_history_sample(&frame, receive_time_ns);
 			let write_idx = state.write_idx;
@@ -5862,6 +5879,179 @@ impl MotionControlBuffer {
 		state.buffers[next_write_idx].clear();
 		state.buffers[read_idx].take_frames_into(out);
 		state.apply_interpolation(out);
+		if let Some(trace) = &self.trace {
+			let apply_time_ns = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+			if let Ok(mut trace) = trace.try_lock() {
+				for frame in out.iter() {
+					trace.push_applied(frame, apply_time_ns);
+				}
+			}
+		}
+	}
+
+	fn write_trace(&self) {
+		if self.trace_written.swap(true, Ordering::AcqRel) {
+			return;
+		}
+		let Some(trace) = &self.trace else {
+			return;
+		};
+		let Ok(trace) = trace.lock() else {
+			return;
+		};
+		if let Err(error) = trace.write_json() {
+			eprintln!("un-avatar-renderer: motion trace write failed: {error}");
+		}
+	}
+}
+
+impl Drop for MotionControlBuffer {
+	fn drop(&mut self) {
+		self.write_trace();
+	}
+}
+
+const MOTION_TRACE_ENV: &str = "UN_AVATAR_MOTION_TRACE_JSON";
+const MOTION_TRACE_WINDOW_SAMPLES: usize = 20_000;
+
+struct MotionTraceBuffer {
+	path: std::path::PathBuf,
+	raw: VecDeque<MotionTraceSample>,
+	applied: VecDeque<MotionTraceSample>,
+}
+
+#[derive(serde::Serialize)]
+struct MotionTraceFile<'a> {
+	version: u32,
+	window_samples: usize,
+	raw_count: usize,
+	applied_count: usize,
+	raw: &'a VecDeque<MotionTraceSample>,
+	applied: &'a VecDeque<MotionTraceSample>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct MotionTraceSample {
+	t_ms: f32,
+	sequence: u64,
+	coordinate_space: &'static str,
+	stream_id: Option<String>,
+	producer: Option<String>,
+	capture_timestamp_ns: u64,
+	frame_timestamp_ns: u64,
+	processed_timestamp_ns: u64,
+	expected_dt_ns: Option<u64>,
+	has_face_head: bool,
+	face_head_yaw_deg: Option<f32>,
+	face_head_quat_xyzw: Option<[f32; 4]>,
+	face_head_translation_xyz: Option<[f32; 3]>,
+	has_body_head: bool,
+	body_head_yaw_deg: Option<f32>,
+	body_head_quat_xyzw: Option<[f32; 4]>,
+	body_head_translation_xyz: Option<[f32; 3]>,
+}
+
+impl MotionTraceBuffer {
+	fn from_env() -> Option<Self> {
+		let raw = std::env::var_os(MOTION_TRACE_ENV)?;
+		let raw = raw.to_string_lossy().trim().to_string();
+		if raw.is_empty() || raw.eq_ignore_ascii_case("0") || raw.eq_ignore_ascii_case("false") || raw.eq_ignore_ascii_case("off") {
+			return None;
+		}
+		let path = if raw.eq_ignore_ascii_case("1") || raw.eq_ignore_ascii_case("true") || raw.eq_ignore_ascii_case("on") {
+			let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+			std::env::temp_dir().join(format!("un-avatar-motion-trace-{stamp}.json"))
+		} else {
+			std::path::PathBuf::from(raw)
+		};
+		eprintln!("un-avatar-renderer: motion trace enabled path={}", path.display());
+		Some(Self {
+			path,
+			raw: VecDeque::with_capacity(MOTION_TRACE_WINDOW_SAMPLES),
+			applied: VecDeque::with_capacity(MOTION_TRACE_WINDOW_SAMPLES),
+		})
+	}
+
+	fn push_raw(&mut self, frame: &un_motion_frame::UNMotionFrame, time_ns: u64) {
+		push_trace_sample(&mut self.raw, motion_trace_sample(frame, time_ns));
+	}
+
+	fn push_applied(&mut self, frame: &un_motion_frame::UNMotionFrame, time_ns: u64) {
+		push_trace_sample(&mut self.applied, motion_trace_sample(frame, time_ns));
+	}
+
+	fn write_json(&self) -> Result<(), String> {
+		if let Some(parent) = self.path.parent() {
+			std::fs::create_dir_all(parent).map_err(|e| format!("create motion trace dir {}: {e}", parent.display()))?;
+		}
+		let file = MotionTraceFile {
+			version: 1,
+			window_samples: MOTION_TRACE_WINDOW_SAMPLES,
+			raw_count: self.raw.len(),
+			applied_count: self.applied.len(),
+			raw: &self.raw,
+			applied: &self.applied,
+		};
+		let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize motion trace: {e}"))?;
+		std::fs::write(&self.path, json).map_err(|e| format!("write motion trace {}: {e}", self.path.display()))?;
+		eprintln!("un-avatar-renderer: motion trace written path={}", self.path.display());
+		Ok(())
+	}
+}
+
+fn push_trace_sample(samples: &mut VecDeque<MotionTraceSample>, sample: MotionTraceSample) {
+	samples.push_back(sample);
+	while samples.len() > MOTION_TRACE_WINDOW_SAMPLES {
+		samples.pop_front();
+	}
+}
+
+fn motion_trace_sample(frame: &un_motion_frame::UNMotionFrame, time_ns: u64) -> MotionTraceSample {
+	let face_head = frame.face.as_ref().and_then(|face| face.head.as_ref());
+	let body_head = body_head_transform_sample(frame);
+	let (face_head_quat_xyzw, face_head_yaw_deg, face_head_translation_xyz) = trace_transform_parts(face_head);
+	let (body_head_quat_xyzw, body_head_yaw_deg, body_head_translation_xyz) = trace_transform_parts(body_head);
+	MotionTraceSample {
+		t_ms: time_ns as f32 / 1_000_000.0,
+		sequence: frame.header.sequence,
+		coordinate_space: motion_coordinate_space_label(frame.header.coordinate_space),
+		stream_id: frame.header.stream_id.clone(),
+		producer: frame.metadata.producer.clone(),
+		capture_timestamp_ns: frame.header.capture_timestamp_ns,
+		frame_timestamp_ns: frame.header.frame_timestamp_ns,
+		processed_timestamp_ns: frame.header.processed_timestamp_ns,
+		expected_dt_ns: frame.header.expected_dt_ns,
+		has_face_head: face_head.is_some(),
+		face_head_yaw_deg,
+		face_head_quat_xyzw,
+		face_head_translation_xyz,
+		has_body_head: body_head.is_some(),
+		body_head_yaw_deg,
+		body_head_quat_xyzw,
+		body_head_translation_xyz,
+	}
+}
+
+fn trace_transform_parts(transform: Option<&un_motion_frame::TransformSample>) -> (Option<[f32; 4]>, Option<f32>, Option<[f32; 3]>) {
+	let quat = transform.and_then(|head| head.rotation).map(|q| [q.x, q.y, q.z, q.w]);
+	let translation = transform.and_then(|head| head.translation).map(|t| [t.x, t.y, t.z]);
+	let yaw_deg = quat.map(|q| {
+		let rotation = normalize_quat_or_identity(Quat::from_xyzw(q[0], q[1], q[2], q[3]));
+		let (yaw, _, _) = rotation.to_euler(EulerRot::YXZ);
+		yaw.to_degrees()
+	});
+	(quat, yaw_deg, translation)
+}
+
+fn motion_coordinate_space_label(space: un_motion_frame::CoordinateSpace) -> &'static str {
+	match space {
+		un_motion_frame::CoordinateSpace::Camera => "camera",
+		un_motion_frame::CoordinateSpace::NormalizedImage => "normalized_image",
+		un_motion_frame::CoordinateSpace::ModelLocal => "model_local",
+		un_motion_frame::CoordinateSpace::ModelWorld => "model_world",
+		un_motion_frame::CoordinateSpace::Vmc => "vmc",
+		un_motion_frame::CoordinateSpace::UNMotion => "unmotion",
+		un_motion_frame::CoordinateSpace::Unknown => "unknown",
 	}
 }
 
@@ -7214,6 +7404,9 @@ pub(crate) struct GpuState {
 	motion_apply_opts: un_avatar_skeleton::ApplyUnMotionFrameOpts,
 	motion_buffer: Arc<MotionControlBuffer>,
 	pending_motion_frames: Vec<un_motion_frame::UNMotionFrame>,
+	synthetic_head_motion: SyntheticHeadMotionOptions,
+	synthetic_head_motion_start: Instant,
+	synthetic_head_motion_sequence: u64,
 	motion_runtime_parameter_names: Box<[String]>,
 	runtime_scene_node_paths_by_index: Box<[Option<String>]>,
 	runtime_center_peak_angle_parameters: Box<[String]>,
@@ -7239,6 +7432,12 @@ pub(crate) struct GpuState {
 	bone_collider_source: BoneColliderSource,
 }
 
+impl Drop for GpuState {
+	fn drop(&mut self) {
+		self.motion_buffer.write_trace();
+	}
+}
+
 impl GpuState {
 	#[allow(clippy::too_many_arguments)]
 	pub fn new_shell(
@@ -7255,11 +7454,13 @@ impl GpuState {
 		render_backend: RenderBackend,
 		gpu_adapter: Option<&str>,
 		texture_compression: TextureCompressionMode,
+		target_fps: f32,
 		debug: WindowDebugOptions,
 		disable_expression_morphs: bool,
 		disable_vmc_eye_look: bool,
 		eye_look_at_clamp_deg: Option<f32>,
 		apply_vmc_root_translation: bool,
+		synthetic_head_motion: SyntheticHeadMotionOptions,
 		mesh_diagnostics: SceneMeshLoadOpts,
 	) -> Result<Self, String> {
 		let debug_log = DebugLog::from_options(&debug).map_err(|e| e.to_string())?;
@@ -7349,15 +7550,10 @@ impl GpuState {
 			caps.alpha_modes[0]
 		};
 
-		let present_mode = caps
-			.present_modes
-			.iter()
-			.copied()
-			.find(|m| *m == wgpu::PresentMode::Fifo)
-			.unwrap_or(caps.present_modes[0]);
-		let desired_maximum_frame_latency = surface_frame_latency_from_env().unwrap_or(2);
+		let present_mode = surface_present_mode(&caps.present_modes);
+		let desired_maximum_frame_latency = surface_frame_latency_from_env().unwrap_or(1);
 		eprintln!(
-			"un-avatar-renderer: surface config present_mode={present_mode:?} desired_maximum_frame_latency={desired_maximum_frame_latency}"
+			"un-avatar-renderer: surface config present_mode={present_mode:?} target_fps={target_fps:.1} desired_maximum_frame_latency={desired_maximum_frame_latency}"
 		);
 
 		let config = wgpu::SurfaceConfiguration {
@@ -7598,6 +7794,9 @@ impl GpuState {
 			motion_apply_opts,
 			motion_buffer,
 			pending_motion_frames: Vec::new(),
+			synthetic_head_motion,
+			synthetic_head_motion_start: Instant::now(),
+			synthetic_head_motion_sequence: 0,
 			motion_runtime_parameter_names: Box::default(),
 			runtime_scene_node_paths_by_index: Box::default(),
 			runtime_center_peak_angle_parameters: Box::default(),
@@ -7623,6 +7822,11 @@ impl GpuState {
 
 	pub fn expression_presets(&self) -> &[String] {
 		&self.expression_presets
+	}
+
+	pub fn set_target_fps(&mut self, _target_fps: f32) {
+		// Visible preview presentation remains vsync/FIFO. Target FPS changes frame pacing,
+		// but should not silently switch the user into tearing-prone no-vsync presentation.
 	}
 
 	pub fn set_expression_override(&mut self, name: &str, weight: f32) {
@@ -10425,6 +10629,45 @@ impl GpuState {
 		Ok(())
 	}
 
+	fn push_synthetic_head_motion_frame(&mut self) {
+		if !self.synthetic_head_motion.enabled || self.motion_retarget_runtime.is_none() {
+			return;
+		}
+		let amplitude_deg = self.synthetic_head_motion.amplitude_deg.clamp(0.0, 180.0);
+		let frequency_hz = self.synthetic_head_motion.frequency_hz.clamp(0.001, 30.0);
+		let elapsed = self.synthetic_head_motion_start.elapsed();
+		let elapsed_secs = elapsed.as_secs_f32();
+		let yaw = (std::f32::consts::TAU * frequency_hz * elapsed_secs).sin() * amplitude_deg.to_radians();
+		let rotation = Quat::from_rotation_y(yaw);
+		self.synthetic_head_motion_sequence = self.synthetic_head_motion_sequence.wrapping_add(1);
+		let mut frame = un_motion_frame::UNMotionFrame::new(self.synthetic_head_motion_sequence);
+		frame.header.timestamp_basis = un_motion_frame::TimestampBasis::Monotonic;
+		frame.header.frame_timestamp_ns = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+		frame.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+		frame.header.handedness = un_motion_frame::Handedness::RightHanded;
+		frame.header.length_unit = un_motion_frame::LengthUnit::Meter;
+		frame.header.stream_id = Some("debug.synthetic.head".to_string());
+		frame.metadata.producer = Some("un-avatar-renderer.synthetic-head".to_string());
+		frame.face = Some(un_motion_frame::FaceMotion {
+			tracking_state: un_motion_frame::TrackingState::Valid,
+			confidence: 1.0,
+			head: Some(un_motion_frame::TransformSample {
+				translation: None,
+				rotation: Some(un_motion_frame::Quatf {
+					x: rotation.x,
+					y: rotation.y,
+					z: rotation.z,
+					w: rotation.w,
+				}),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			}),
+			expressions: Vec::new(),
+		});
+		self.motion_buffer.push_frame(frame);
+	}
+
 	fn apply_pending_motion_frames(&mut self) {
 		self.motion_buffer.take_pending_frames_into(&mut self.pending_motion_frames);
 		if self.pending_motion_frames.is_empty() {
@@ -10753,6 +10996,7 @@ impl GpuState {
 		let dt = wall_since_last.as_secs_f32();
 		let t_motion0 = Instant::now();
 		if !wardrobe_transition_only {
+			self.push_synthetic_head_motion_frame();
 			self.apply_pending_motion_frames();
 		}
 		let motion_apply_ms = t_motion0.elapsed().as_secs_f32() * 1000.0;

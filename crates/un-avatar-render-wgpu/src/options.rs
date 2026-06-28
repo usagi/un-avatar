@@ -69,6 +69,23 @@ impl Default for UnmotionZenohOptions {
 	}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SyntheticHeadMotionOptions {
+	pub enabled: bool,
+	pub amplitude_deg: f32,
+	pub frequency_hz: f32,
+}
+
+impl Default for SyntheticHeadMotionOptions {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			amplitude_deg: 45.0,
+			frequency_hz: 0.5,
+		}
+	}
+}
+
 /// Renderer anti-aliasing mode.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -557,6 +574,8 @@ pub struct AvatarWindowOptions {
 	pub vmc_address: Option<SocketAddr>,
 	/// UNMotion/Zenoh 経由でのモーションフレーム受信設定 (Phase 2)。
 	pub unmotion_zenoh: UnmotionZenohOptions,
+	/// Diagnostic synthetic Head motion generated inside the renderer after transport.
+	pub synthetic_head_motion: SyntheticHeadMotionOptions,
 	/// AudioLink texture generation source. `None` keeps shader fallback only.
 	pub audio_link: AudioLinkOptions,
 	/// 旧 manifest / CLI 互換の primary source。現在の姿勢適用は key 単位の後着優先。
@@ -756,6 +775,7 @@ impl Default for AvatarWindowOptions {
 			bench_frames: None,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),
+			synthetic_head_motion: SyntheticHeadMotionOptions::default(),
 			audio_link: AudioLinkOptions::default(),
 			primary_motion_source: PrimaryMotionSource::default(),
 			spout: SpoutWindowOptions::default(),
