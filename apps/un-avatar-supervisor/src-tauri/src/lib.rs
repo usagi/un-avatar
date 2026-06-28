@@ -16381,6 +16381,37 @@ display_name = "Mizuki"
 	}
 
 	#[test]
+	fn static_profile_setting_edits_are_coalesced_for_high_frequency_controls() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src");
+		let app_svelte = fs::read_to_string(supervisor_src.join("App.svelte")).expect("App.svelte should be readable");
+		let range_field = fs::read_to_string(supervisor_src.join("lib").join("RangeNumberField.svelte"))
+			.expect("RangeNumberField.svelte should be readable");
+
+		assert!(
+			app_svelte.contains("const profileSettingUpdateCoalesceMs = 80")
+				&& app_svelte.contains("type PendingProfileSettingUpdate")
+				&& app_svelte.contains("pendingProfileSettingUpdates")
+				&& app_svelte.contains("scheduleCoalescedProfileSettingUpdate")
+				&& app_svelte.contains("flushCoalescedProfileSettingUpdate"),
+			"high-frequency profile setting edits should be coalesced before supervisor IPC"
+		);
+		assert!(
+			app_svelte.contains("isCoalescibleProfileSettingValue(value)")
+				&& app_svelte.contains("scheduleCoalescedProfileSettingUpdate(targetSetting, field, value)")
+				&& app_svelte.contains("replaceAvatarSetting(setting, selectedSettingId === pending.settingId)"),
+			"numeric/vector edits should use last-write-wins without stealing profile selection after delayed flush"
+		);
+		assert!(
+			range_field.contains("const inputCoalesceMs = 80")
+				&& range_field.contains("queueRangeInput")
+				&& range_field.contains("flushRangeInput")
+				&& range_field.contains("oninput={(event) => queueRangeInput(finiteNumberFromInput(event))}")
+				&& range_field.contains("onchange={(event) => flushRangeInput(finiteNumberFromInput(event))}"),
+			"range sliders should debounce drag input and flush the final value on change"
+		);
+	}
+
+	#[test]
 	fn static_unavatar_review_workflow_keeps_selected_wardrobe_and_icon_save_order() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");

@@ -286,6 +286,7 @@
 	let startupAutoLaunchAttempted = false;
 
 	const deleteHoldDurationMs = 1200;
+	const profileSettingUpdateCoalesceMs = 80;
 	const motionLookAtFields = ["motion.look_at.enabled", "motion.look_at.clamp_deg"] as const;
 	const motionReceiverFields = [
 		"motion.vmc_udp.enabled",
@@ -743,12 +744,14 @@
 		}
 	}
 
-	function replaceAvatarSetting(setting: AvatarSetting): void {
+	function replaceAvatarSetting(setting: AvatarSetting, selectSetting = true): void {
 		const next = avatarSettings.filter((item) => item.id !== setting.id && item.manifest_path !== setting.manifest_path);
 		next.push(setting);
 		next.sort(compareAvatarSettings);
 		avatarSettings = next;
-		selectedSettingId = setting.id;
+		if (selectSetting) {
+			selectedSettingId = setting.id;
+		}
 		launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, next);
 	}
 
@@ -2346,6 +2349,93 @@
 		await applyRuntimeProfileUpdates([[field, value]], setting, previousSetting);
 	}
 
+	type PendingProfileSettingUpdate = {
+		settingId: string;
+		field: string;
+		value: ProfileSettingValue;
+		timer: number | null;
+		inFlight: boolean;
+		generation: number;
+	};
+
+	const pendingProfileSettingUpdates = new Map<string, PendingProfileSettingUpdate>();
+
+	function profileSettingUpdateKey(settingId: string, field: string): string {
+		return `${settingId}\n${field}`;
+	}
+
+	function isCoalescibleProfileSettingValue(value: ProfileSettingValue): boolean {
+		return typeof value === "number" || (Array.isArray(value) && value.every((item) => typeof item === "number"));
+	}
+
+	function scheduleCoalescedProfileSettingUpdate(setting: AvatarSetting, field: string, value: ProfileSettingValue): void {
+		const key = profileSettingUpdateKey(setting.id, field);
+		const pending = pendingProfileSettingUpdates.get(key) ?? {
+			settingId: setting.id,
+			field,
+			value,
+			timer: null,
+			inFlight: false,
+			generation: 0,
+		};
+		pending.value = value;
+		pending.generation += 1;
+		if (pending.timer !== null) {
+			window.clearTimeout(pending.timer);
+		}
+		pending.timer = window.setTimeout(() => {
+			pending.timer = null;
+			void flushCoalescedProfileSettingUpdate(key);
+		}, profileSettingUpdateCoalesceMs);
+		pendingProfileSettingUpdates.set(key, pending);
+	}
+
+	async function flushCoalescedProfileSettingUpdate(key: string): Promise<void> {
+		const pending = pendingProfileSettingUpdates.get(key);
+		if (!pending || pending.inFlight) return;
+		if (pending.timer !== null) {
+			window.clearTimeout(pending.timer);
+			pending.timer = null;
+		}
+		const previousSetting =
+			avatarSettingBySelectedId(pending.settingId) ?? avatarSettings.find((setting) => setting.id === pending.settingId) ?? null;
+		if (!previousSetting) {
+			pendingProfileSettingUpdates.delete(key);
+			return;
+		}
+		const value = pending.value;
+		const generation = pending.generation;
+		const rendererToRestart = canApplyWithoutRestart(pending.field)
+			? null
+			: isLaunchTimeRendererField(pending.field)
+				? rendererForSetting(previousSetting)
+				: null;
+		pending.inFlight = true;
+		try {
+			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
+				settingId: pending.settingId,
+				field: pending.field,
+				value,
+			});
+			message = $_("profiles.messages.updated_setting");
+			replaceAvatarSetting(setting, selectedSettingId === pending.settingId);
+			await applyRuntimeProfileUpdate(pending.field, value, setting, previousSetting);
+			queueRendererRestart(rendererToRestart, pending.field);
+		} catch (error) {
+			message = String(error);
+		} finally {
+			pending.inFlight = false;
+			if (pending.generation === generation) {
+				pendingProfileSettingUpdates.delete(key);
+			} else if (pending.timer === null) {
+				pending.timer = window.setTimeout(() => {
+					pending.timer = null;
+					void flushCoalescedProfileSettingUpdate(key);
+				}, profileSettingUpdateCoalesceMs);
+			}
+		}
+	}
+
 	async function updateSettingValue(field: string, value: ProfileSettingValue): Promise<void> {
 		const targetSetting = selectedSetting;
 		if (!targetSetting) return;
@@ -2362,6 +2452,11 @@
 			} finally {
 				busy = false;
 			}
+			return;
+		}
+
+		if (isCoalescibleProfileSettingValue(value)) {
+			scheduleCoalescedProfileSettingUpdate(targetSetting, field, value);
 			return;
 		}
 
