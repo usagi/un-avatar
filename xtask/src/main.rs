@@ -582,18 +582,29 @@ fn resolve_renderer_profile_manifest(repo: &Path, profile: &str) -> Result<PathB
 	let mut matches = Vec::new();
 	for dir in [user_profiles_dir(repo), repo.join("profiles")] {
 		let Ok(entries) = fs::read_dir(&dir) else { continue };
+		let mut exact_file_matches = Vec::new();
+		let mut metadata_matches = Vec::new();
 		for entry in entries.flatten() {
 			let path = entry.path();
-			if path
+			if !path
 				.extension()
 				.and_then(|e| e.to_str())
 				.is_some_and(|e| e.eq_ignore_ascii_case("toml"))
-				&& profile_manifest_matches(&path, &wanted)
 			{
-				matches.push(path);
+				continue;
+			}
+			if profile_manifest_filename_matches(&path, &wanted) {
+				exact_file_matches.push(path);
+			} else if profile_manifest_metadata_matches(&path, &wanted) {
+				metadata_matches.push(path);
 			}
 		}
-		if !matches.is_empty() {
+		if !exact_file_matches.is_empty() {
+			matches = exact_file_matches;
+			break;
+		}
+		if !metadata_matches.is_empty() {
+			matches = metadata_matches;
 			break;
 		}
 	}
@@ -628,11 +639,12 @@ fn user_profiles_dir(repo: &Path) -> PathBuf {
 	repo.join("target").join("tmp").join("un-avatar-config").join("profiles")
 }
 
-fn profile_manifest_matches(path: &Path, wanted: &str) -> bool {
+fn profile_manifest_filename_matches(path: &Path, wanted: &str) -> bool {
 	let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
-	if normalize_profile_key(stem) == wanted || normalize_profile_key(strip_timestamp_prefix(stem)) == wanted {
-		return true;
-	}
+	normalize_profile_key(stem) == wanted || normalize_profile_key(strip_timestamp_prefix(stem)) == wanted
+}
+
+fn profile_manifest_metadata_matches(path: &Path, wanted: &str) -> bool {
 	let Ok(text) = fs::read_to_string(path) else { return false };
 	let Ok(value) = toml::from_str::<toml::Value>(&text) else {
 		return false;
