@@ -3250,6 +3250,10 @@ impl AvatarApp {
 	}
 
 	fn update_runtime_profile_animator_actions(&self) {
+		self.update_runtime_action_metadata();
+	}
+
+	fn update_runtime_action_metadata(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
@@ -3258,6 +3262,7 @@ impl AvatarApp {
 				.active_profile_animator_actions
 				.clone_from(&self.active_profile_animator_actions);
 			if let Some(gpu) = self.gpu.as_ref() {
+				status.wardrobe_actions = gpu.wardrobe_actions();
 				status.runtime_actions = gpu.runtime_actions();
 				status.menu_action_candidates = gpu.menu_action_candidates();
 				status.menu_wardrobe_candidates = gpu.menu_wardrobe_candidates();
@@ -5310,6 +5315,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							let step_start = Instant::now();
 							self.apply_runtime_activation_status(activation);
 							log_slow_renderer_step("startup status runtime activation", step_start.elapsed());
+						}
+						let step_start = Instant::now();
+						self.update_runtime_action_metadata();
+						log_slow_renderer_step("startup status runtime action metadata", step_start.elapsed());
+						#[cfg(windows)]
+						{
+							self.last_renderer_tray_refresh_at = None;
+							self.refresh_renderer_tray();
 						}
 						let step_start = Instant::now();
 						self.update_runtime_spout(self.opts.spout.enabled);
@@ -8392,6 +8405,27 @@ mod tests {
 		assert!(
 			startup < redraw,
 			"startup state must be established before the first redraw so Spout2 never receives a pre-startup runtime frame"
+		);
+	}
+
+	#[test]
+	fn startup_ready_publishes_runtime_action_metadata_before_redraw() {
+		let source = include_str!("lib.rs");
+		let anchor = "RendererControlEvent::StartupSceneReady { result } =>";
+		let startup_ready = source.split(anchor).nth(1).expect("startup ready handler exists");
+		let metadata = startup_ready
+			.find("self.update_runtime_action_metadata();")
+			.expect("startup ready publishes runtime action metadata");
+		let tray_refresh = startup_ready
+			.find("self.refresh_renderer_tray();")
+			.expect("startup ready refreshes renderer tray");
+		let spout = startup_ready
+			.find("self.update_runtime_spout(self.opts.spout.enabled);")
+			.expect("startup ready updates spout status");
+		let redraw = startup_ready.find("self.request_redraw();").expect("startup ready requests redraw");
+		assert!(
+			metadata < tray_refresh && tray_refresh < spout && metadata < redraw,
+			"tray-visible wardrobe/runtime actions must be in the runtime snapshot before startup redraw and tray refresh"
 		);
 	}
 
