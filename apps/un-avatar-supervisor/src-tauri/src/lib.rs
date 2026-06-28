@@ -249,7 +249,12 @@ struct RendererRuntimeStatus {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	target_fps: Option<f32>,
+	frame_target_ms: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_wall_ms: Option<f32>,
+	frame_wall_max_recent_ms: Option<f32>,
+	frame_wall_spike_count_recent: Option<u32>,
 	frame_cpu_total_ms: Option<f32>,
 	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
@@ -656,7 +661,17 @@ struct RendererRuntimeTelemetry {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	#[serde(default)]
+	target_fps: Option<f32>,
+	#[serde(default)]
+	frame_target_ms: Option<f32>,
 	cpu_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_max_recent_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_spike_count_recent: Option<u32>,
 	#[serde(default)]
 	frame_cpu_total_ms: Option<f32>,
 	#[serde(default)]
@@ -1392,6 +1407,9 @@ enum RendererControlCommand {
 		wardrobe_bindings: Vec<WardrobeBindingSetting>,
 		animator_bindings: Vec<AnimatorBindingSetting>,
 	},
+	SetTargetFps {
+		target_fps: f32,
+	},
 	SetWardrobeTransition {
 		billboard_anchor: String,
 		billboard_y_offset_mm: f32,
@@ -1520,6 +1538,7 @@ struct AvatarSetting {
 	spout_name: Option<String>,
 	spout_width: Option<u32>,
 	spout_height: Option<u32>,
+	target_fps: f32,
 	aa: String,
 	texture_resolution_limit: String,
 	texture_compression: String,
@@ -1987,6 +2006,12 @@ struct ManifestUnmotionZenoh {
 #[serde(default)]
 struct ManifestOutput {
 	spout2: Option<ManifestSpout>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestRuntime {
+	target_fps: Option<f32>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2476,6 +2501,7 @@ struct AvatarManifestSummary {
 	audio_link: Option<ManifestAudioLink>,
 	physics: Option<ManifestPhysics>,
 	output: Option<ManifestOutput>,
+	runtime: Option<ManifestRuntime>,
 	aa: Option<String>,
 	render_quality: Option<ManifestRenderQuality>,
 	transparent: Option<bool>,
@@ -5892,6 +5918,11 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			"apply Spout2 output settings to running renderers",
 			apply_spout_output_to_matching_renderers,
 		),
+		(
+			"runtime.target_fps",
+			"apply target FPS to running renderers",
+			apply_target_fps_to_matching_renderers,
+		),
 	];
 
 	for (prefix, label, apply) in RUNTIME_SIDE_EFFECTS {
@@ -5937,6 +5968,9 @@ fn apply_avatar_setting_value(
 		AvatarSettingFieldDomain::RenderQuality => {
 			apply_render_quality_setting_value(manifest, field, value)?;
 		}
+		AvatarSettingFieldDomain::Runtime => {
+			apply_runtime_setting_value(manifest, field, value)?;
+		}
 		AvatarSettingFieldDomain::ContactShadow => {
 			apply_contact_shadow_setting_value(manifest, field, value)?;
 		}
@@ -5980,6 +6014,7 @@ enum AvatarSettingFieldDomain {
 	Motion,
 	AudioLink,
 	RenderQuality,
+	Runtime,
 	ContactShadow,
 	AvatarEffect,
 	Environment,
@@ -6003,6 +6038,7 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 		_ if field.starts_with("motion.") => Some(AvatarSettingFieldDomain::Motion),
 		_ if field.starts_with("audio_link.") => Some(AvatarSettingFieldDomain::AudioLink),
 		_ if field.starts_with("render_quality.") => Some(AvatarSettingFieldDomain::RenderQuality),
+		_ if field.starts_with("runtime.") => Some(AvatarSettingFieldDomain::Runtime),
 		_ if field.starts_with("effects.avatar.contact_shadow.") => Some(AvatarSettingFieldDomain::ContactShadow),
 		_ if field.starts_with("effects.avatar.") => Some(AvatarSettingFieldDomain::AvatarEffect),
 		_ if field.starts_with("environment.") => Some(AvatarSettingFieldDomain::Environment),
@@ -6987,6 +7023,16 @@ fn apply_render_quality_setting_value(manifest: &mut toml::Value, field: &str, v
 		}
 		"render_quality.skin_tone_matching" => set_nested_json_bool(manifest, &["render_quality", "skin_tone_matching"], &value, field),
 		_ => Err(format!("unsupported setting field: {field}")),
+	}
+}
+
+fn apply_runtime_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"runtime.target_fps" => {
+			let fps = json_f32(&value, field)?;
+			set_nested_float(manifest, &["runtime", "target_fps"], clamp_target_fps(fps))
+		}
+		_ => Err(format!("unsupported runtime setting field: {field}")),
 	}
 }
 
@@ -8564,7 +8610,12 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.unwrap_or_else(|| "unknown".to_string()),
 		uptime_secs: telemetry.as_ref().map_or(info.uptime_secs, |telemetry| telemetry.uptime_secs),
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
+		target_fps: telemetry.as_ref().and_then(|telemetry| telemetry.target_fps),
+		frame_target_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_target_ms),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
+		frame_wall_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_ms),
+		frame_wall_max_recent_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_max_recent_ms),
+		frame_wall_spike_count_recent: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_spike_count_recent),
 		frame_cpu_total_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_cpu_total_ms),
 		frame_motion_apply_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_motion_apply_ms),
 		frame_dynamics_step_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_dynamics_step_ms),
@@ -9512,6 +9563,16 @@ fn apply_spout_output_to_matching_renderers(setting: &AvatarSetting, state: &Mut
 	)
 }
 
+fn apply_target_fps_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetTargetFps {
+			target_fps: clamp_target_fps(setting.target_fps),
+		},
+	)
+}
+
 fn drop_renderer_control_session(renderer: &ManagedRenderer) {
 	let _ = renderer;
 }
@@ -9859,6 +9920,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let motion = motion_settings(manifest.motion.unwrap_or_default(), manifest.vmc_address, manifest.vmc_port);
 	let audio_link = audio_link_settings(manifest.audio_link.unwrap_or_default());
 	let output = output_settings(manifest.output, manifest.spout);
+	let target_fps = runtime_target_fps(manifest.runtime);
 	let avatar_path_for_dynamics = manifest.avatar_path.clone();
 	let window = window_settings(
 		manifest.window.unwrap_or_default(),
@@ -9931,6 +9993,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		spout_name: output.spout_name,
 		spout_width: output.spout_width,
 		spout_height: output.spout_height,
+		target_fps,
 		aa: render_quality.aa,
 		texture_resolution_limit: render_quality.texture_resolution_limit,
 		texture_compression: render_quality.texture_compression,
@@ -10851,6 +10914,19 @@ fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
 		.and_then(toml::Value::as_table_mut)
 	{
 		profile.remove("scene_cache");
+	}
+	if let Some(root) = normalized.as_table_mut() {
+		let runtime_empty = root
+			.get_mut("runtime")
+			.and_then(toml::Value::as_table_mut)
+			.map(|runtime| {
+				runtime.remove("target_fps");
+				runtime.is_empty()
+			})
+			.unwrap_or(false);
+		if runtime_empty {
+			root.remove("runtime");
+		}
 	}
 	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
 	format!("{:016x}", fnv1a64(serialized.as_bytes()))
@@ -12031,6 +12107,18 @@ fn render_quality_settings(render_quality: ManifestRenderQuality, legacy_aa: Opt
 		processed_texture_cache: render_quality.processed_texture_cache.unwrap_or(true),
 		skin_tone_matching: render_quality.skin_tone_matching.unwrap_or(false),
 	}
+}
+
+fn clamp_target_fps(value: f32) -> f32 {
+	if value.is_finite() {
+		value.clamp(30.0, 300.0)
+	} else {
+		60.0
+	}
+}
+
+fn runtime_target_fps(runtime: Option<ManifestRuntime>) -> f32 {
+	runtime.and_then(|runtime| runtime.target_fps).map(clamp_target_fps).unwrap_or(60.0)
 }
 
 fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, legacy_vmc_port: Option<u16>) -> MotionSettings {
@@ -13848,7 +13936,12 @@ mod tests {
 			scene_state: "avatar_scene".to_string(),
 			uptime_secs: 1,
 			fps: Some(60.0),
+			target_fps: Some(60.0),
+			frame_target_ms: Some(16.666_666),
 			cpu_ms: Some(1.0),
+			frame_wall_ms: Some(16.6),
+			frame_wall_max_recent_ms: Some(16.9),
+			frame_wall_spike_count_recent: Some(1),
 			frame_cpu_total_ms: Some(1.4),
 			frame_motion_apply_ms: None,
 			frame_dynamics_step_ms: Some(0.2),
@@ -18002,6 +18095,40 @@ processed_texture_cache = true
 	}
 
 	#[test]
+	fn runtime_target_fps_setting_clamps_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "runtime.target_fps", serde_json::json!(500)).unwrap();
+		assert_eq!(
+			manifest
+				.get("runtime")
+				.and_then(toml::Value::as_table)
+				.and_then(|runtime| runtime.get("target_fps"))
+				.and_then(toml::Value::as_float),
+			Some(300.0)
+		);
+
+		apply_avatar_setting_value(&mut manifest, &setting, "runtime.target_fps", serde_json::json!(12)).unwrap();
+		assert_eq!(
+			manifest
+				.get("runtime")
+				.and_then(toml::Value::as_table)
+				.and_then(|runtime| runtime.get("target_fps"))
+				.and_then(toml::Value::as_float),
+			Some(30.0)
+		);
+	}
+
+	#[test]
 	fn render_quality_advanced_texture_preferences_save_normalized_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -18133,6 +18260,31 @@ prewarmed_at = "20260614T000000Z"
 		assert_eq!(
 			crate::scene_cache_manifest_fingerprint(&base),
 			crate::scene_cache_manifest_fingerprint(&warmed)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_ignores_runtime_target_fps() {
+		let base: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+"#,
+		)
+		.unwrap();
+		let with_target_fps: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[runtime]
+target_fps = 300
+"#,
+		)
+		.unwrap();
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&base),
+			crate::scene_cache_manifest_fingerprint(&with_target_fps)
 		);
 	}
 

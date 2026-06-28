@@ -1,8 +1,4 @@
-import {
-	DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
-	DYNAMICS_ENABLED_FIELD,
-	DYNAMICS_OVERRIDE_FIELD_PREFIX,
-} from "./dynamicsPresets";
+import { DYNAMICS_BONE_COLLIDER_FIELD_PREFIX, DYNAMICS_ENABLED_FIELD, DYNAMICS_OVERRIDE_FIELD_PREFIX } from "./dynamicsPresets";
 
 export function isLaunchTimeRendererField(field: string): boolean {
 	return (
@@ -32,6 +28,7 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field === "wardrobe.bindings" ||
 		field.startsWith("animator.") ||
 		field.startsWith("output.spout2.") ||
+		field.startsWith("runtime.") ||
 		field.startsWith("motion.") ||
 		field === DYNAMICS_ENABLED_FIELD ||
 		field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
@@ -55,6 +52,7 @@ export function profileFieldLabel(field: string, translate: (key: string) => str
 	if (field === "profile.gpu_adapter") return translate("profiles.fields.gpu_adapter");
 	if (field === "render_quality.render_backend") return translate("profiles.fields.render_backend");
 	if (field.startsWith("render_quality.")) return translate("profiles.fields.render_quality");
+	if (field.startsWith("runtime.")) return translate("profiles.fields.render_quality");
 	if (field.startsWith("effects.")) return translate("profiles.fields.avatar_effects");
 	if (field.startsWith("expression.")) return translate("profiles.fields.expression_settings");
 	if (field.startsWith("window.")) return translate("profiles.fields.window_settings");

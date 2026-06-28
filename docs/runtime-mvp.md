@@ -150,6 +150,9 @@ texture_resolution_limit = "off"
 texture_compression = "source"
 processed_texture_cache = true
 
+[runtime]
+target_fps = 60
+
 [spout]
 enabled = true
 name = "UN Avatar Spout"
@@ -162,4 +165,4 @@ scene = true
 morph = true
 ```
 
-CLIは当面 `--manifest path` で `.toml` を読み、明示されたCLIオプションで上書きできる。Tauri Supervisorはこのmanifestを生成してrenderer子プロセスへ渡す。
+CLIは当面 `--manifest path` で `.toml` を読み、明示されたCLIオプションで上書きできる。Tauri Supervisorはこのmanifestを生成してrenderer子プロセスへ渡す。`[runtime].target_fps` は30..300へclampされ、実行中Rendererには `set_target_fps` control command でも反映できる。開発時だけ `UN_AVATAR_TARGET_FPS` でprofileを汚さず上書きできる。可視preview windowはvsync/FIFOを維持し、要求FPSが実モニター更新周期を超える場合の有効frame pacingは表示可能周期へ丸める。`target_fps` は起動時scene/cache内容を変えないため、scene cache fingerprintには含めない。

@@ -37,6 +37,7 @@ pub(crate) struct RendererManifest {
 	pub physics: Option<PhysicsManifest>,
 	pub aa: Option<AaMode>,
 	pub render_quality: Option<RenderQualityManifest>,
+	pub runtime: Option<RuntimeManifest>,
 	pub environment: Option<EnvironmentManifest>,
 	/// 旧 manifest 互換。新規 profile は `[output.spout2]` を使う。
 	pub spout: Option<SpoutManifest>,
@@ -52,6 +53,20 @@ pub(crate) struct RendererManifest {
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
 	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct RuntimeManifest {
+	pub target_fps: Option<f32>,
+}
+
+impl RuntimeManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(target_fps) = self.target_fps {
+			opts.target_fps = target_fps;
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -647,6 +662,9 @@ impl RendererManifest {
 		}
 		if let Some(render_quality) = self.render_quality {
 			render_quality.apply_to(opts);
+		}
+		if let Some(runtime) = self.runtime {
+			runtime.apply_to(opts);
 		}
 		if let Some(spout) = self.spout {
 			spout.apply_to(&mut opts.spout);
@@ -1554,6 +1572,9 @@ mipmap_filter = "lanczos3"
 processed_texture_cache = false
 skin_tone_matching = true
 
+[runtime]
+target_fps = 144
+
 [render_quality.texture_compression_advanced]
 face = "source"
 eyes = "source"
@@ -1813,6 +1834,7 @@ drag_scale = 1.4
 		);
 		assert!(!opts.processed_texture_cache);
 		assert!(opts.skin_tone_matching);
+		assert_eq!(opts.target_fps, 144.0);
 		assert_eq!(
 			opts.animator_action_ids,
 			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]

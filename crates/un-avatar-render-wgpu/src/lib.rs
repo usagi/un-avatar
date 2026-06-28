@@ -100,11 +100,13 @@ const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 3600;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
-const TARGET_FRAME_FPS: f32 = 60.0;
-const TARGET_FRAME_MS: f32 = 1000.0 / TARGET_FRAME_FPS;
-const TARGET_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const DEFAULT_TARGET_FPS: f32 = 60.0;
+const MIN_TARGET_FPS: f32 = 30.0;
+const MAX_TARGET_FPS: f32 = 300.0;
+const TARGET_FPS_ENV: &str = "UN_AVATAR_TARGET_FPS";
 const DEFAULT_FRAME_POLL_MARGIN: Duration = Duration::from_micros(500);
 const FRAME_POLL_MARGIN_ENV: &str = "UN_AVATAR_FRAME_POLL_MARGIN_US";
+const FRAME_PACING_RESYNC_AFTER_LATE: Duration = Duration::from_millis(1);
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 700;
 const WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 700;
@@ -144,6 +146,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_bloom",
 	"set_ssao",
 	"set_contact_shadow",
+	"set_target_fps",
 	"scene_state",
 	"dump_scene_nodes",
 	"dump_runtime_state",
@@ -203,6 +206,50 @@ fn frame_poll_margin_from_env() -> Duration {
 		return DEFAULT_FRAME_POLL_MARGIN;
 	};
 	Duration::from_micros(micros.min(5_000))
+}
+
+fn clamp_target_fps(value: f32) -> f32 {
+	if value.is_finite() {
+		value.clamp(MIN_TARGET_FPS, MAX_TARGET_FPS)
+	} else {
+		DEFAULT_TARGET_FPS
+	}
+}
+
+fn target_fps_from_env() -> Option<f32> {
+	let raw = std::env::var_os(TARGET_FPS_ENV)?;
+	let raw = raw.to_string_lossy();
+	raw.trim().parse::<f32>().ok().map(clamp_target_fps)
+}
+
+fn target_frame_interval(target_fps: f32) -> Duration {
+	Duration::from_secs_f64(1.0 / f64::from(clamp_target_fps(target_fps)))
+}
+
+fn frame_interval_from_hz(hz: f32) -> Option<Duration> {
+	if hz.is_finite() && hz > 0.0 {
+		Some(Duration::from_secs_f64(1.0 / f64::from(hz)))
+	} else {
+		None
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FrameRateLimit {
+	target_fps: f32,
+	frame_interval: Duration,
+	poll_margin: Duration,
+}
+
+impl FrameRateLimit {
+	fn new(target_fps: f32, poll_margin: Duration) -> Self {
+		let target_fps = clamp_target_fps(target_fps);
+		Self {
+			target_fps,
+			frame_interval: target_frame_interval(target_fps),
+			poll_margin,
+		}
+	}
 }
 
 fn renderer_startup_frame_role(
@@ -424,6 +471,10 @@ enum RendererControlEvent {
 	SetParameter {
 		name: String,
 		value: f32,
+		result: CommandResultSlot,
+	},
+	SetTargetFps {
+		target_fps: f32,
 		result: CommandResultSlot,
 	},
 	SetDynamicsEnabled {
@@ -651,6 +702,10 @@ enum RendererControlCommand {
 		name: String,
 		#[serde(alias = "parameterValue")]
 		value: f32,
+	},
+	SetTargetFps {
+		#[serde(alias = "targetFps")]
+		target_fps: f32,
 	},
 	SetDynamicsEnabled {
 		#[serde(alias = "sourceId")]
@@ -899,6 +954,7 @@ impl RendererControlCommand {
 			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
 			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
 			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
+			Self::SetTargetFps { .. } => unreachable!("SetTargetFps は runtime_control_response で個別に処理する"),
 			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
 			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
@@ -1594,7 +1650,7 @@ struct AvatarApp {
 	runtime_status: Option<Arc<Mutex<RendererRuntimeSnapshot>>>,
 	last_wall: Instant,
 	next_frame_at: Instant,
-	frame_poll_margin: Duration,
+	frame_rate_limit: FrameRateLimit,
 	started_at: Instant,
 	fps_smooth: f32,
 	runtime_status_frame_seq: Cell<u32>,
@@ -1695,12 +1751,12 @@ struct FramePacingState {
 }
 
 const FRAME_PACING_WINDOW_FRAMES: usize = 120;
-const FRAME_PACING_SPIKE_MS: f32 = TARGET_FRAME_MS;
+const FRAME_PACING_SPIKE_TOLERANCE_MS: f32 = 1.0;
 const FRAME_TRACE_ENV: &str = "UN_AVATAR_FRAME_TRACE_JSON";
 const FRAME_TRACE_WINDOW_FRAMES: usize = 600;
 
 impl FramePacingState {
-	fn push(&mut self, wall_ms: f32, frame_target_late_ms: f32) -> FramePacingSnapshot {
+	fn push(&mut self, wall_ms: f32, frame_target_late_ms: f32, spike_threshold_ms: f32) -> FramePacingSnapshot {
 		self.wall_ms.push_back(wall_ms);
 		while self.wall_ms.len() > FRAME_PACING_WINDOW_FRAMES {
 			self.wall_ms.pop_front();
@@ -1709,7 +1765,7 @@ impl FramePacingState {
 		let mut wall_spike_count_recent = 0u32;
 		for value in &self.wall_ms {
 			wall_max_recent_ms = wall_max_recent_ms.max(*value);
-			if *value > FRAME_PACING_SPIKE_MS {
+			if *value > spike_threshold_ms + FRAME_PACING_SPIKE_TOLERANCE_MS {
 				wall_spike_count_recent = wall_spike_count_recent.saturating_add(1);
 			}
 		}
@@ -1873,14 +1929,14 @@ impl FrameTraceState {
 		}
 	}
 
-	fn write_json(&self) -> Result<(), String> {
+	fn write_json_with_threshold(&self, spike_threshold_ms: f32) -> Result<(), String> {
 		if let Some(parent) = self.path.parent() {
 			std::fs::create_dir_all(parent).map_err(|e| format!("create frame trace dir {}: {e}", parent.display()))?;
 		}
 		let file = FrameTraceFile {
 			version: 1,
 			window_frames: FRAME_TRACE_WINDOW_FRAMES,
-			spike_threshold_ms: FRAME_PACING_SPIKE_MS,
+			spike_threshold_ms,
 			frame_count: self.frames.len(),
 			frames: &self.frames,
 		};
@@ -2098,6 +2154,7 @@ impl AvatarApp {
 			opts.clear_color.a = 1.0;
 		}
 		let title_base = opts.title.clone();
+		opts.target_fps = clamp_target_fps(opts.target_fps);
 		let runtime_status = if let Some(base_key) = opts.runtime_bus_key.clone() {
 			Some(start_runtime_bus(base_key, &opts, event_proxy.clone()))
 		} else {
@@ -2115,6 +2172,7 @@ impl AvatarApp {
 		let camera_locked = opts.camera_locked;
 		let frame_bench = opts.bench_frames.map(FrameBenchState::new);
 		let preview_window_enabled = !(opts.spout.enabled && opts.start_minimized);
+		let frame_rate_limit = FrameRateLimit::new(opts.target_fps, frame_poll_margin_from_env());
 		Self {
 			opts,
 			title_base,
@@ -2128,7 +2186,7 @@ impl AvatarApp {
 			runtime_status,
 			last_wall: Instant::now(),
 			next_frame_at: Instant::now(),
-			frame_poll_margin: frame_poll_margin_from_env(),
+			frame_rate_limit,
 			started_at: Instant::now(),
 			fps_smooth: 60.0,
 			runtime_status_frame_seq: Cell::new(0),
@@ -2173,11 +2231,75 @@ impl AvatarApp {
 	}
 
 	fn schedule_next_window_frame_after_render(&mut self, now: Instant) {
-		let mut next = self.next_frame_at + TARGET_FRAME_INTERVAL;
+		let frame_interval = self.effective_preview_frame_interval();
+		let mut next = if now > self.next_frame_at + FRAME_PACING_RESYNC_AFTER_LATE {
+			now + frame_interval
+		} else {
+			self.next_frame_at + frame_interval
+		};
 		if next <= now {
-			next = now + TARGET_FRAME_INTERVAL;
+			next = now + frame_interval;
 		}
 		self.next_frame_at = next;
+	}
+
+	fn monitor_refresh_interval(&self) -> Option<Duration> {
+		let Some(window) = self.window.as_ref() else {
+			return None;
+		};
+		window
+			.current_monitor()
+			.and_then(|monitor| monitor.refresh_rate_millihertz())
+			.map(|millihertz| millihertz as f32 / 1000.0)
+			.and_then(frame_interval_from_hz)
+	}
+
+	fn effective_preview_frame_interval(&self) -> Duration {
+		let Some(refresh_interval) = self.monitor_refresh_interval() else {
+			return self.frame_rate_limit.frame_interval;
+		};
+		self.frame_rate_limit.frame_interval.max(refresh_interval)
+	}
+
+	fn should_defer_early_redraw(&self, now: Instant) -> bool {
+		self.preview_window_enabled
+			&& self.startup_progress.is_none()
+			&& self.startup_failed.is_none()
+			&& self
+				.wardrobe_transition
+				.as_ref()
+				.is_none_or(|transition| !matches!(transition.phase, WardrobeTransitionPhase::Applying))
+			&& now + Duration::from_micros(250) < self.next_frame_at
+	}
+
+	fn wait_until_next_frame(&self, event_loop: &ActiveEventLoop, now: Instant) {
+		let poll_at = self
+			.next_frame_at
+			.checked_sub(self.frame_rate_limit.poll_margin)
+			.unwrap_or(self.next_frame_at);
+		if self.frame_rate_limit.poll_margin > Duration::ZERO && now >= poll_at {
+			event_loop.set_control_flow(ControlFlow::Poll);
+		} else {
+			event_loop.set_control_flow(ControlFlow::WaitUntil(poll_at));
+		}
+	}
+
+	fn effective_preview_frame_target_ms(&self) -> f32 {
+		self.effective_preview_frame_interval().as_secs_f32() * 1000.0
+	}
+
+	fn set_target_fps(&mut self, target_fps: f32) {
+		let next_limit = FrameRateLimit::new(target_fps, self.frame_rate_limit.poll_margin);
+		if (next_limit.target_fps - self.frame_rate_limit.target_fps).abs() <= f32::EPSILON {
+			return;
+		}
+		self.frame_rate_limit = next_limit;
+		self.opts.target_fps = self.frame_rate_limit.target_fps;
+		let now = Instant::now();
+		if self.next_frame_at <= now {
+			self.next_frame_at = now + self.effective_preview_frame_interval();
+		}
+		self.request_redraw();
 	}
 
 	fn reconfigure(&mut self, width: u32, height: u32) {
@@ -3236,6 +3358,8 @@ impl AvatarApp {
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
+			status.target_fps = self.frame_rate_limit.target_fps;
+			status.frame_target_ms = self.effective_preview_frame_target_ms();
 			status.cpu_ms = Some(frame_cpu_busy_ms(timings));
 			status.frame_wall_ms = Some(pacing.wall_ms);
 			status.frame_wall_max_recent_ms = Some(pacing.wall_max_recent_ms);
@@ -4023,6 +4147,7 @@ impl AvatarApp {
 	fn render_frame(&mut self) -> bool {
 		let now = Instant::now();
 		let wall = now.saturating_duration_since(self.last_wall);
+		let effective_frame_target_ms = self.effective_preview_frame_target_ms();
 		let frame_target_late_ms = if now > self.next_frame_at {
 			now.saturating_duration_since(self.next_frame_at).as_secs_f32() * 1000.0
 		} else {
@@ -4143,7 +4268,9 @@ impl AvatarApp {
 			self.fps_smooth
 		};
 		self.fps_smooth = self.fps_smooth * 0.9 + inst_fps * 0.1;
-		let pacing = self.frame_pacing.push(timings.wall_since_last_ms, frame_target_late_ms);
+		let pacing = self
+			.frame_pacing
+			.push(timings.wall_since_last_ms, frame_target_late_ms, effective_frame_target_ms);
 		if let Some(trace) = self.frame_trace.as_mut() {
 			let (unmotion_received_frames, motion_applied_frames) = self
 				.gpu
@@ -4170,10 +4297,11 @@ impl AvatarApp {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
 			if self.title_refresh.is_multiple_of(16) {
 				win.set_title(&format!(
-					"{}{} — {:.0} FPS  wall {:.1}/{:.1} ms s{}  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
+					"{}{} — {:.0}/{:.0} FPS  wall {:.1}/{:.1} ms s{}  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
 					self.title_base,
 					self.title_diagnostic_suffix(),
 					self.fps_smooth,
+					self.frame_rate_limit.target_fps,
 					pacing.wall_ms,
 					pacing.wall_max_recent_ms,
 					pacing.wall_spike_count_recent,
@@ -4216,7 +4344,7 @@ impl AvatarApp {
 impl Drop for AvatarApp {
 	fn drop(&mut self) {
 		if let Some(trace) = self.frame_trace.as_ref() {
-			match trace.write_json() {
+			match trace.write_json_with_threshold(self.effective_preview_frame_target_ms()) {
 				Ok(()) => eprintln!("un-avatar-renderer: frame trace written path={}", trace.path.display()),
 				Err(error) => eprintln!("un-avatar-renderer: frame trace write failed: {error}"),
 			}
@@ -4405,12 +4533,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				window.request_redraw();
 				event_loop.set_control_flow(ControlFlow::Wait);
 			} else {
-				let poll_at = self.next_frame_at.checked_sub(self.frame_poll_margin).unwrap_or(self.next_frame_at);
-				if self.frame_poll_margin > Duration::ZERO && now >= poll_at {
-					event_loop.set_control_flow(ControlFlow::Poll);
-				} else {
-					event_loop.set_control_flow(ControlFlow::WaitUntil(poll_at));
-				}
+				self.wait_until_next_frame(event_loop, now);
 			}
 		}
 	}
@@ -4443,6 +4566,11 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.update_runtime_focus_status();
 			}
 			WindowEvent::RedrawRequested => {
+				let now = Instant::now();
+				if self.should_defer_early_redraw(now) {
+					self.wait_until_next_frame(event_loop, now);
+					return;
+				}
 				if self.render_frame() {
 					event_loop.exit();
 				}
@@ -4721,6 +4849,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome.map(|_| ()));
+				}
+			}
+			RendererControlEvent::SetTargetFps { target_fps, result } => {
+				self.set_target_fps(target_fps);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(Ok(()));
 				}
 			}
 			RendererControlEvent::SetDynamicsEnabled {
@@ -6168,6 +6302,8 @@ struct RendererRuntimeSnapshot {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	target_fps: f32,
+	frame_target_ms: f32,
 	cpu_ms: Option<f32>,
 	frame_wall_ms: Option<f32>,
 	frame_wall_max_recent_ms: Option<f32>,
@@ -6460,6 +6596,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		scene_state: SCENE_STATE_STARTUP_PROGRESS.to_string(),
 		uptime_secs: 0,
 		fps: None,
+		target_fps: clamp_target_fps(opts.target_fps),
+		frame_target_ms: 1000.0 / clamp_target_fps(opts.target_fps),
 		cpu_ms: None,
 		frame_wall_ms: None,
 		frame_wall_max_recent_ms: None,
@@ -6881,6 +7019,7 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			parameter_value,
 		),
 		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
+		Ok(RendererControlCommand::SetTargetFps { target_fps }) => dispatch_set_target_fps_command(proxy, target_fps),
 		Ok(RendererControlCommand::SetDynamicsEnabled { source_id, enabled }) => {
 			dispatch_set_dynamics_enabled_command(proxy, source_id, enabled)
 		}
@@ -6918,6 +7057,21 @@ fn dispatch_set_parameter_command(proxy: &EventLoopProxy<RendererControlEvent>, 
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_parameter")
+}
+
+fn dispatch_set_target_fps_command(proxy: &EventLoopProxy<RendererControlEvent>, target_fps: f32) -> String {
+	if !target_fps.is_finite() {
+		return "err target_fps must be finite".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetTargetFps {
+		target_fps,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_target_fps")
 }
 
 fn dispatch_set_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlEvent>, source_id: String, enabled: bool) -> String {
@@ -7529,6 +7683,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		// CLI からは位置指定なし。manifest 経由で指定された場合のみ apply される。
 		window_position: None,
 		show_fps_in_title: !cli.no_fps_title,
+		target_fps: AvatarWindowOptions::default().target_fps,
 		bench_frames: cli.bench_frames,
 		gltf_path: cli.gltf,
 		manifest_path: None,
@@ -7682,6 +7837,9 @@ pub fn run_cli() -> Result<(), RunError> {
 	}
 	if cli.debug_base_texture_only {
 		opts.debug_base_texture_only = true;
+	}
+	if let Some(target_fps) = target_fps_from_env() {
+		opts.target_fps = target_fps;
 	}
 	if cli.validate_startup {
 		validate_startup_options(&opts).map_err(RunError::EventLoop)?;
@@ -8180,15 +8338,20 @@ mod tests {
 	#[test]
 	fn frame_pacing_tracks_recent_wall_spikes() {
 		let mut pacing = super::FramePacingState::default();
+		let spike_threshold_ms = 16.7;
 		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
-			let snapshot = pacing.push(16.6, 0.0);
+			let snapshot = pacing.push(16.6, 0.0, spike_threshold_ms);
 			assert_eq!(snapshot.wall_spike_count_recent, 0);
 		}
-		let snapshot = pacing.push(super::FRAME_PACING_SPIKE_MS + 0.1, 0.0);
+		let snapshot = pacing.push(
+			spike_threshold_ms + super::FRAME_PACING_SPIKE_TOLERANCE_MS + 0.1,
+			0.0,
+			spike_threshold_ms,
+		);
 		assert_eq!(snapshot.wall_spike_count_recent, 1);
-		assert!(snapshot.wall_max_recent_ms > super::FRAME_PACING_SPIKE_MS);
+		assert!(snapshot.wall_max_recent_ms > spike_threshold_ms);
 		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
-			let snapshot = pacing.push(16.6, 0.0);
+			let snapshot = pacing.push(16.6, 0.0, spike_threshold_ms);
 			if snapshot.wall_spike_count_recent == 0 {
 				assert_eq!(snapshot.wall_max_recent_ms, 16.6);
 				return;
@@ -9857,6 +10020,15 @@ mod tests {
 		};
 		assert_eq!(billboard_anchor, "spine");
 		assert_eq!(billboard_y_offset_mm, 42.0);
+	}
+
+	#[test]
+	fn parses_json_set_target_fps_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"set_target_fps","target_fps":144}"#).unwrap();
+		let RendererControlCommand::SetTargetFps { target_fps } = command else {
+			panic!("expected set_target_fps command");
+		};
+		assert_eq!(target_fps, 144.0);
 	}
 
 	#[test]

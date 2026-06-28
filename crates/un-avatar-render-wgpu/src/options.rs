@@ -549,6 +549,8 @@ pub struct AvatarWindowOptions {
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
+	/// Renderer frame pacing target. Values are clamped at runtime; manifest default is 60 fps.
+	pub target_fps: f32,
 	/// CLI benchmark: after startup completes, collect this many rendered frames, print timing summary, then exit.
 	pub bench_frames: Option<u32>,
 	/// VMC Marionette 待受 UDP アドレス。`Humanoid` とシーンがあるモデルで骨・式（名前一致時）を更新。
@@ -750,6 +752,7 @@ impl Default for AvatarWindowOptions {
 			icon_path: None,
 			app_user_model_id: None,
 			show_fps_in_title: true,
+			target_fps: 60.0,
 			bench_frames: None,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),

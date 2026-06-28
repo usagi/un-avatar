@@ -527,6 +527,8 @@ export type RendererRuntimeStatus = {
 	control_capabilities: string[];
 	uptime_secs: number;
 	fps: number | null;
+	target_fps?: number | null;
+	frame_target_ms?: number | null;
 	cpu_ms: number | null;
 	frame_wall_ms?: number | null;
 	frame_wall_max_recent_ms?: number | null;

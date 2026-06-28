@@ -3228,6 +3228,30 @@ dd {
 	color: var(--muted);
 }
 
+.quality-fieldset {
+	grid-column: 1 / -1;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 8px 12px;
+	min-width: 0;
+	margin: 0;
+	padding: 10px;
+	border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--panel-subtle) 34%, transparent);
+}
+
+.quality-fieldset > legend {
+	padding: 0 6px;
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.quality-fieldset > label,
+.quality-fieldset > .toggle-field {
+	min-width: 0;
+}
+
 .range-number-field {
 	display: grid;
 	grid-template-columns: minmax(120px, 1fr) 76px;

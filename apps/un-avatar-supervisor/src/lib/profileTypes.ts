@@ -43,6 +43,7 @@ export type PreviewWindowPreset = "compact" | "half_hd" | "hd";
 export type AudioLinkSource = "none" | "input_device";
 
 export type QualitySetting = {
+	target_fps: number;
 	aa: string;
 	texture_resolution_limit: string;
 	texture_compression: TextureCompressionMode;
@@ -136,6 +137,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	spout_name: string | null;
 	spout_width: number | null;
 	spout_height: number | null;
+	target_fps: number;
 	aa: string;
 	texture_resolution_limit: string;
 	texture_compression: TextureCompressionMode;

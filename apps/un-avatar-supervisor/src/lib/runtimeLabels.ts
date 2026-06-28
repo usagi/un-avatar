@@ -87,6 +87,8 @@ export type RuntimeStageStatusData = RuntimeQualityStatusLabelData & RendererHea
 export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 	RendererHealthStatusData & {
 		fps: number | null;
+		target_fps?: number | null;
+		frame_target_ms?: number | null;
 		cpu_ms: number | null;
 		frame_wall_ms?: number | null;
 		frame_wall_max_recent_ms?: number | null;
