@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, HashMap},
+	collections::{BTreeMap, HashMap, VecDeque},
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -5827,14 +5827,25 @@ fn primary_motion_source_from_u8(value: u8) -> crate::options::PrimaryMotionSour
 	}
 }
 
-#[derive(Default)]
 struct MotionControlBuffer {
+	started_at: Instant,
 	state: Mutex<MotionControlBufferState>,
+}
+
+impl Default for MotionControlBuffer {
+	fn default() -> Self {
+		Self {
+			started_at: Instant::now(),
+			state: Mutex::new(MotionControlBufferState::default()),
+		}
+	}
 }
 
 impl MotionControlBuffer {
 	fn push_frame(&self, frame: un_motion_frame::UNMotionFrame) {
+		let receive_time_ns = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
 		if let Ok(mut state) = self.state.lock() {
+			state.push_history_sample(&frame, receive_time_ns);
 			let write_idx = state.write_idx;
 			state.buffers[write_idx].push_frame(frame);
 		}
@@ -5850,6 +5861,7 @@ impl MotionControlBuffer {
 		state.write_idx = next_write_idx;
 		state.buffers[next_write_idx].clear();
 		state.buffers[read_idx].take_frames_into(out);
+		state.apply_interpolation(out);
 	}
 }
 
@@ -5857,6 +5869,274 @@ impl MotionControlBuffer {
 struct MotionControlBufferState {
 	write_idx: usize,
 	buffers: [MotionFrameAccumulator; 2],
+	histories: Vec<MotionFrameHistoryBucket>,
+}
+
+impl MotionControlBufferState {
+	fn push_history_sample(&mut self, frame: &un_motion_frame::UNMotionFrame, receive_time_ns: u64) {
+		let key = MotionFrameBucketKey::from_frame(frame);
+		if let Some(history) = self.histories.iter_mut().find(|history| history.key == key) {
+			history.push_frame(frame, receive_time_ns);
+			self.prune_history_buckets(receive_time_ns);
+			return;
+		}
+		let mut history = MotionFrameHistoryBucket::new(key);
+		history.push_frame(frame, receive_time_ns);
+		self.histories.push(history);
+		self.prune_history_buckets(receive_time_ns);
+	}
+
+	fn apply_interpolation(&self, frames: &mut [un_motion_frame::UNMotionFrame]) {
+		for frame in frames {
+			let key = MotionFrameBucketKey::from_frame(frame);
+			if let Some(history) = self.histories.iter().find(|history| history.key == key) {
+				history.apply_to_frame(frame);
+			}
+		}
+	}
+
+	fn prune_history_buckets(&mut self, receive_time_ns: u64) {
+		self.histories
+			.retain(|history| receive_time_ns.saturating_sub(history.last_receive_time_ns) <= MOTION_HISTORY_BUCKET_RETAIN_NS);
+		if self.histories.len() <= MOTION_HISTORY_BUCKET_LIMIT {
+			return;
+		}
+		self.histories
+			.sort_by_key(|history| std::cmp::Reverse(history.last_receive_time_ns));
+		self.histories.truncate(MOTION_HISTORY_BUCKET_LIMIT);
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MotionFrameBucketKey {
+	coordinate_space: un_motion_frame::CoordinateSpace,
+	handedness: un_motion_frame::Handedness,
+	length_unit: un_motion_frame::LengthUnit,
+	stream_id: Option<String>,
+	producer: Option<String>,
+}
+
+impl MotionFrameBucketKey {
+	fn from_frame(frame: &un_motion_frame::UNMotionFrame) -> Self {
+		Self {
+			coordinate_space: frame.header.coordinate_space,
+			handedness: frame.header.handedness,
+			length_unit: frame.header.length_unit,
+			stream_id: frame.header.stream_id.clone(),
+			producer: frame.metadata.producer.clone(),
+		}
+	}
+}
+
+struct MotionFrameHistoryBucket {
+	key: MotionFrameBucketKey,
+	last_receive_time_ns: u64,
+	body_head: TransformSampleHistory,
+	face_head: TransformSampleHistory,
+}
+
+impl MotionFrameHistoryBucket {
+	fn new(key: MotionFrameBucketKey) -> Self {
+		Self {
+			key,
+			last_receive_time_ns: 0,
+			body_head: TransformSampleHistory::default(),
+			face_head: TransformSampleHistory::default(),
+		}
+	}
+
+	fn push_frame(&mut self, frame: &un_motion_frame::UNMotionFrame, receive_time_ns: u64) {
+		self.last_receive_time_ns = receive_time_ns;
+		if let Some(head) = body_head_transform_sample(frame) {
+			self.body_head.push(receive_time_ns, frame.header.expected_dt_ns, head);
+		}
+		let Some(face) = frame.face.as_ref() else {
+			return;
+		};
+		let Some(head) = face.head.as_ref() else {
+			return;
+		};
+		self.face_head.push(receive_time_ns, frame.header.expected_dt_ns, head);
+	}
+
+	fn apply_to_frame(&self, frame: &mut un_motion_frame::UNMotionFrame) {
+		if let Some(head) = body_head_transform_sample_mut(frame) {
+			if let Some(interpolated) = self.body_head.interpolated_sample() {
+				*head = interpolated;
+			}
+		}
+		let Some(face) = frame.face.as_mut() else {
+			return;
+		};
+		if face.head.is_some() {
+			face.head = self.face_head.interpolated_sample();
+		}
+	}
+}
+
+fn body_head_transform_sample(frame: &un_motion_frame::UNMotionFrame) -> Option<&un_motion_frame::TransformSample> {
+	frame
+		.body
+		.as_ref()
+		.and_then(|body| body.humanoid.as_ref())
+		.and_then(|humanoid| humanoid.bones.iter().find(|bone| bone.bone == un_motion_frame::HumanoidBone::Head))
+		.map(|bone| &bone.transform)
+}
+
+fn body_head_transform_sample_mut(frame: &mut un_motion_frame::UNMotionFrame) -> Option<&mut un_motion_frame::TransformSample> {
+	frame
+		.body
+		.as_mut()
+		.and_then(|body| body.humanoid.as_mut())
+		.and_then(|humanoid| {
+			humanoid
+				.bones
+				.iter_mut()
+				.find(|bone| bone.bone == un_motion_frame::HumanoidBone::Head)
+		})
+		.map(|bone| &mut bone.transform)
+}
+
+#[derive(Default)]
+struct TransformSampleHistory {
+	samples: VecDeque<TimedTransformSample>,
+	expected_dt_ns: Option<u64>,
+}
+
+#[derive(Clone)]
+struct TimedTransformSample {
+	time_ns: u64,
+	sample: un_motion_frame::TransformSample,
+}
+
+const MOTION_SAMPLE_HISTORY_LIMIT: usize = 8;
+const FALLBACK_MOTION_SAMPLE_DT_NS: u64 = 16_666_667;
+const MOTION_HISTORY_BUCKET_LIMIT: usize = 8;
+const MOTION_HISTORY_BUCKET_RETAIN_NS: u64 = 5_000_000_000;
+
+impl TransformSampleHistory {
+	fn push(&mut self, time_ns: u64, expected_dt_ns: Option<u64>, sample: &un_motion_frame::TransformSample) {
+		if let Some(expected_dt_ns) = expected_dt_ns.filter(|value| *value > 0) {
+			self.expected_dt_ns = Some(expected_dt_ns);
+		}
+		if let Some(back) = self.samples.back_mut() {
+			if time_ns <= back.time_ns {
+				back.time_ns = time_ns;
+				back.sample = sample.clone();
+				return;
+			}
+		}
+		self.samples.push_back(TimedTransformSample {
+			time_ns,
+			sample: sample.clone(),
+		});
+		while self.samples.len() > MOTION_SAMPLE_HISTORY_LIMIT {
+			self.samples.pop_front();
+		}
+	}
+
+	fn interpolated_sample(&self) -> Option<un_motion_frame::TransformSample> {
+		let latest = self.samples.back()?;
+		if self.samples.len() < 2 {
+			return Some(latest.sample.clone());
+		}
+		let sample_dt_ns = self.expected_dt_ns.unwrap_or_else(|| estimate_sample_dt_ns(&self.samples));
+		let interpolation_delay_ns = sample_dt_ns.saturating_add(sample_dt_ns / 2).max(FALLBACK_MOTION_SAMPLE_DT_NS);
+		let target_ns = latest.time_ns.saturating_sub(interpolation_delay_ns);
+		let mut previous = self.samples.front()?;
+		for next in self.samples.iter().skip(1) {
+			if target_ns <= next.time_ns {
+				let span = next.time_ns.saturating_sub(previous.time_ns);
+				let alpha = if span == 0 {
+					1.0
+				} else {
+					target_ns.saturating_sub(previous.time_ns) as f32 / span as f32
+				}
+				.clamp(0.0, 1.0);
+				return Some(interpolate_transform_sample(&previous.sample, &next.sample, alpha));
+			}
+			previous = next;
+		}
+		Some(latest.sample.clone())
+	}
+}
+
+fn estimate_sample_dt_ns(samples: &VecDeque<TimedTransformSample>) -> u64 {
+	let mut total = 0u64;
+	let mut count = 0u64;
+	let mut previous = None;
+	for sample in samples {
+		if let Some(previous_time_ns) = previous {
+			let dt = sample.time_ns.saturating_sub(previous_time_ns);
+			if dt > 0 {
+				total = total.saturating_add(dt);
+				count = count.saturating_add(1);
+			}
+		}
+		previous = Some(sample.time_ns);
+	}
+	if count == 0 {
+		FALLBACK_MOTION_SAMPLE_DT_NS
+	} else {
+		(total / count).max(1)
+	}
+}
+
+fn interpolate_transform_sample(
+	a: &un_motion_frame::TransformSample,
+	b: &un_motion_frame::TransformSample,
+	alpha: f32,
+) -> un_motion_frame::TransformSample {
+	un_motion_frame::TransformSample {
+		translation: interpolate_vec3f(a.translation, b.translation, alpha),
+		rotation: interpolate_quatf(a.rotation, b.rotation, alpha),
+		scale: interpolate_vec3f(a.scale, b.scale, alpha),
+		linear_velocity: b.linear_velocity,
+		angular_velocity: b.angular_velocity,
+	}
+}
+
+fn interpolate_vec3f(a: Option<un_motion_frame::Vec3f>, b: Option<un_motion_frame::Vec3f>, alpha: f32) -> Option<un_motion_frame::Vec3f> {
+	match (a, b) {
+		(Some(a), Some(b)) => Some(un_motion_frame::Vec3f {
+			x: a.x + (b.x - a.x) * alpha,
+			y: a.y + (b.y - a.y) * alpha,
+			z: a.z + (b.z - a.z) * alpha,
+		}),
+		(None, Some(b)) => Some(b),
+		(Some(a), None) => Some(a),
+		(None, None) => None,
+	}
+}
+
+fn interpolate_quatf(a: Option<un_motion_frame::Quatf>, b: Option<un_motion_frame::Quatf>, alpha: f32) -> Option<un_motion_frame::Quatf> {
+	match (a, b) {
+		(Some(a), Some(b)) => {
+			let qa = normalize_quat_or_identity(Quat::from_xyzw(a.x, a.y, a.z, a.w));
+			let mut qb = normalize_quat_or_identity(Quat::from_xyzw(b.x, b.y, b.z, b.w));
+			if qa.dot(qb) < 0.0 {
+				qb = Quat::from_xyzw(-qb.x, -qb.y, -qb.z, -qb.w);
+			}
+			let q = normalize_quat_or_identity(qa.slerp(qb, alpha));
+			Some(un_motion_frame::Quatf {
+				x: q.x,
+				y: q.y,
+				z: q.z,
+				w: q.w,
+			})
+		}
+		(None, Some(b)) => Some(b),
+		(Some(a), None) => Some(a),
+		(None, None) => None,
+	}
+}
+
+fn normalize_quat_or_identity(q: Quat) -> Quat {
+	if q.is_finite() && q.length_squared() > 1e-12 {
+		q.normalize()
+	} else {
+		Quat::IDENTITY
+	}
 }
 
 #[derive(Default)]
@@ -5905,6 +6185,7 @@ impl MotionFrameAccumulator {
 
 struct MotionFrameBucket {
 	header: un_motion_frame::MotionHeader,
+	producer: Option<String>,
 	sources: Vec<un_motion_frame::MotionSourceInfo>,
 	metadata: un_motion_frame::MotionMetadata,
 	body_tracking_state: un_motion_frame::TrackingState,
@@ -5939,6 +6220,7 @@ impl MotionFrameBucket {
 		let right_finger_capacity = frame.right_hand.as_ref().map_or(0, |hand| hand.fingers.len());
 		Self {
 			header: un_motion_frame::MotionHeader::new(0),
+			producer: frame.metadata.producer.clone(),
 			sources: Vec::with_capacity(frame.sources.len()),
 			metadata: un_motion_frame::MotionMetadata::default(),
 			body_tracking_state: un_motion_frame::TrackingState::Unknown,
@@ -5966,11 +6248,14 @@ impl MotionFrameBucket {
 		self.header.coordinate_space == frame.header.coordinate_space
 			&& self.header.handedness == frame.header.handedness
 			&& self.header.length_unit == frame.header.length_unit
+			&& self.header.stream_id == frame.header.stream_id
+			&& self.producer == frame.metadata.producer
 	}
 
 	fn merge_frame(&mut self, frame: un_motion_frame::UNMotionFrame) {
 		self.header = frame.header;
 		self.metadata = frame.metadata;
+		self.producer = self.metadata.producer.clone();
 		self.sources.extend(frame.sources);
 		if let Some(body) = frame.body {
 			self.body_tracking_state = body.tracking_state;
@@ -6226,6 +6511,36 @@ mod motion_buffer_tests {
 		frame
 	}
 
+	fn head_translation_sample(x: f32) -> un_motion_frame::TransformSample {
+		un_motion_frame::TransformSample {
+			translation: Some(un_motion_frame::Vec3f { x, y: 0.0, z: 0.0 }),
+			rotation: None,
+			scale: None,
+			linear_velocity: None,
+			angular_velocity: None,
+		}
+	}
+
+	fn body_head_translation_frame(sequence: u64, x: f32) -> un_motion_frame::UNMotionFrame {
+		let mut frame = un_motion_frame::UNMotionFrame::new(sequence);
+		frame.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+		frame.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: un_motion_frame::TrackingState::Valid,
+			confidence: 1.0,
+			humanoid: Some(un_motion_frame::HumanoidPose {
+				root: None,
+				bones: vec![un_motion_frame::BoneSample {
+					bone: un_motion_frame::HumanoidBone::Head,
+					transform: head_translation_sample(x),
+					confidence: 1.0,
+					source_index: None,
+					state: un_motion_frame::SampleState::Valid,
+				}],
+			}),
+		});
+		frame
+	}
+
 	fn signal_frame(
 		sequence: u64,
 		name: &str,
@@ -6274,6 +6589,67 @@ mod motion_buffer_tests {
 		assert!((expressions[0].value - 0.75).abs() < f32::EPSILON);
 		buffer.take_pending_frames_into(&mut frames);
 		assert!(frames.is_empty());
+	}
+
+	#[test]
+	fn transform_history_interpolates_face_head_from_receive_times() {
+		let mut history = TransformSampleHistory::default();
+		let dt = 11_111_111;
+		history.push(0, Some(dt), &head_translation_sample(0.0));
+		history.push(dt, Some(dt), &head_translation_sample(1.0));
+		history.push(dt * 2, Some(dt), &head_translation_sample(2.0));
+		history.push(dt * 3, Some(dt), &head_translation_sample(3.0));
+
+		let x = history
+			.interpolated_sample()
+			.and_then(|head| head.translation)
+			.map(|translation| translation.x)
+			.expect("face head translation");
+		assert!(
+			(x - 1.5).abs() < 0.001,
+			"expected delayed interpolation between the surrounding head samples, got {x}"
+		);
+	}
+
+	#[test]
+	fn motion_history_interpolates_body_head_bone() {
+		let mut history = MotionFrameHistoryBucket::new(MotionFrameBucketKey::from_frame(&body_head_translation_frame(0, 0.0)));
+		let dt = 11_111_111;
+		history.push_frame(&body_head_translation_frame(1, 0.0), 0);
+		history.push_frame(&body_head_translation_frame(2, 1.0), dt);
+		history.push_frame(&body_head_translation_frame(3, 2.0), dt * 2);
+		history.push_frame(&body_head_translation_frame(4, 3.0), dt * 3);
+
+		let mut frame = body_head_translation_frame(5, 3.0);
+		history.apply_to_frame(&mut frame);
+
+		let x = body_head_transform_sample(&frame)
+			.and_then(|head| head.translation)
+			.map(|translation| translation.x)
+			.expect("body head translation");
+		assert!(
+			(x - 1.5).abs() < 0.001,
+			"expected delayed interpolation between body head samples, got {x}"
+		);
+	}
+
+	#[test]
+	fn motion_history_prunes_old_and_excess_source_buckets() {
+		let mut state = MotionControlBufferState::default();
+		for i in 0..(MOTION_HISTORY_BUCKET_LIMIT + 3) {
+			let mut frame = body_head_translation_frame(i as u64, i as f32);
+			frame.header.stream_id = Some(format!("source-{i}"));
+			state.push_history_sample(&frame, i as u64);
+		}
+		assert_eq!(state.histories.len(), MOTION_HISTORY_BUCKET_LIMIT);
+		assert!(state.histories.iter().all(|history| history.last_receive_time_ns >= 3));
+
+		let stale = MOTION_HISTORY_BUCKET_RETAIN_NS + 100;
+		let mut current = body_head_translation_frame(100, 0.0);
+		current.header.stream_id = Some("current".to_string());
+		state.push_history_sample(&current, stale);
+		assert_eq!(state.histories.len(), 1);
+		assert_eq!(state.histories[0].key.stream_id.as_deref(), Some("current"));
 	}
 
 	#[test]
@@ -10007,9 +10383,8 @@ impl GpuState {
 								const MAX_ZENOH_APPLY_BATCH: usize = 64;
 								let mut received = 0u64;
 								while receiver_generation.load(Ordering::Acquire) == generation {
-									let frames = receiver.drain_available(MAX_ZENOH_APPLY_BATCH);
+									let frames = receiver.recv_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
 									if frames.is_empty() {
-										std::thread::sleep(std::time::Duration::from_millis(8));
 										continue;
 									}
 									let batch_len = frames.len();
