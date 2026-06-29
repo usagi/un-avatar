@@ -4,7 +4,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::{debug_log::WindowDebugOptions, mesh_pass::SceneMeshLoadOpts};
-use un_avatar_skeleton::{BoneColliderConfig, SpringBonePhysicsConfig};
+use un_avatar_skeleton::{BoneColliderConfig, DynamicsPhysicsConfig};
 
 /// 旧プロファイル互換の primary motion source。
 ///
@@ -65,6 +65,23 @@ impl Default for UnmotionZenohOptions {
 		Self {
 			enabled: false,
 			base_key_expr: "un-motion/frame".to_string(),
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SyntheticHeadMotionOptions {
+	pub enabled: bool,
+	pub amplitude_deg: f32,
+	pub frequency_hz: f32,
+}
+
+impl Default for SyntheticHeadMotionOptions {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			amplitude_deg: 45.0,
+			frequency_hz: 0.5,
 		}
 	}
 }
@@ -341,7 +358,7 @@ impl Default for EnvironmentColorOptions {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EnvironmentLightOptions {
 	pub enabled: bool,
 	pub color: [f32; 3],
@@ -358,7 +375,7 @@ impl Default for EnvironmentLightOptions {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DirectionalLightOptions {
 	pub enabled: bool,
 	pub color: [f32; 3],
@@ -377,13 +394,13 @@ impl Default for DirectionalLightOptions {
 			intensity: 1.0,
 			azimuth_deg: 0.0,
 			elevation_deg: 33.84,
-			follow_camera_yaw: true,
+			follow_camera_yaw: false,
 			follow_camera_pitch: false,
 		}
 	}
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct LightingOptions {
 	pub environment: EnvironmentLightOptions,
 	pub directional: DirectionalLightOptions,
@@ -549,12 +566,16 @@ pub struct AvatarWindowOptions {
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
+	/// Renderer frame pacing target. Values are clamped at runtime; manifest default is 60 fps.
+	pub target_fps: f32,
 	/// CLI benchmark: after startup completes, collect this many rendered frames, print timing summary, then exit.
 	pub bench_frames: Option<u32>,
 	/// VMC Marionette 待受 UDP アドレス。`Humanoid` とシーンがあるモデルで骨・式（名前一致時）を更新。
 	pub vmc_address: Option<SocketAddr>,
 	/// UNMotion/Zenoh 経由でのモーションフレーム受信設定 (Phase 2)。
 	pub unmotion_zenoh: UnmotionZenohOptions,
+	/// Diagnostic synthetic Head motion generated inside the renderer after transport.
+	pub synthetic_head_motion: SyntheticHeadMotionOptions,
 	/// AudioLink texture generation source. `None` keeps shader fallback only.
 	pub audio_link: AudioLinkOptions,
 	/// 旧 manifest / CLI 互換の primary source。現在の姿勢適用は key 単位の後着優先。
@@ -583,6 +604,8 @@ pub struct AvatarWindowOptions {
 	pub mipmap_filter: TextureMipmapFilter,
 	/// WGPU backend preference. Vulkan is the default for cross-platform behavior and BC7 compute stability.
 	pub render_backend: RenderBackend,
+	/// Optional WGPU adapter selector. `None`/`auto` keeps wgpu's HighPerformance selection.
+	pub gpu_adapter: Option<String>,
 	/// BCn encoder used when textures are uploaded as BC1/BC5/BC7.
 	pub block_compression_encoder: BlockCompressionEncoder,
 	/// CPU BCn worker count. Clamped to the system logical CPU count at use sites.
@@ -606,7 +629,7 @@ pub struct AvatarWindowOptions {
 	pub bone_colliders: BoneColliderConfig,
 	/// UNDynamics solver backend / time model / category override 設定。
 	/// Type name is kept for the current skeleton crate API; runtime input is normalized UNDynamics.
-	pub spring_bone_physics: SpringBonePhysicsConfig,
+	pub dynamics_physics: DynamicsPhysicsConfig,
 	/// 調査用ログ（`run_cli` の `--debug-*` と対応）。
 	pub debug: WindowDebugOptions,
 	/// 式プリセット（VMC Blend 等）をモーフ合成に使わない（目まわりの切り分け用）。
@@ -640,12 +663,13 @@ pub struct AvatarWindowOptions {
 	/// 一部 VRM モデルで `_OutlineColor` が肌色寄りに設定されていると、目周辺の outline が
 	/// 「太い肌色のリング」として目立つ場合がある（VSeeFace では薄く出るが、UN Avatar の
 	/// 単純 mix(1, lighting, mix_factor) 式では明るすぎる傾向）。この toggle で outline 描画を
-	/// バイパスして原因切り分けに使う。manifest key は legacy 互換で `[debug] disable_mtoon_outlines = true`。
-	pub disable_mtoon_outlines: bool,
+	/// バイパスして原因切り分けに使う。manifest key は `[debug] disable_geometry_outlines = true`。
+	/// `[debug] disable_mtoon_outlines = true` は legacy alias としてだけ読む。
+	pub disable_geometry_outlines: bool,
 	/// UNToon rim lighting 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_rim_lighting = true`。
 	pub debug_disable_rim_lighting: bool,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断フラグ。
+	/// v1 MToon 診断キーの互換 no-op。v2-UNToon shader では shading shift をこの経路で制御しない。
 	/// manifest `[debug] force_shading_shift_zero = true`。
 	pub debug_force_shading_shift_zero: bool,
 	/// matcap (sphere add) 寄与を 0 にする診断フラグ。
@@ -748,9 +772,11 @@ impl Default for AvatarWindowOptions {
 			icon_path: None,
 			app_user_model_id: None,
 			show_fps_in_title: true,
+			target_fps: 60.0,
 			bench_frames: None,
 			vmc_address: None,
 			unmotion_zenoh: UnmotionZenohOptions::default(),
+			synthetic_head_motion: SyntheticHeadMotionOptions::default(),
 			audio_link: AudioLinkOptions::default(),
 			primary_motion_source: PrimaryMotionSource::default(),
 			spout: SpoutWindowOptions::default(),
@@ -765,6 +791,7 @@ impl Default for AvatarWindowOptions {
 			texture_compression: TextureCompressionMode::Balanced,
 			mipmap_filter: TextureMipmapFilter::default(),
 			render_backend: RenderBackend::Vulkan,
+			gpu_adapter: None,
 			block_compression_encoder: BlockCompressionEncoder::Gpu,
 			block_compression_cpu_threads: 4,
 			texture_compression_advanced: TextureCompressionAdvancedOptions::default(),
@@ -775,7 +802,7 @@ impl Default for AvatarWindowOptions {
 			runtime_bus_key: None,
 			dynamics_enabled: true,
 			bone_colliders: BoneColliderConfig::default(),
-			spring_bone_physics: SpringBonePhysicsConfig::default(),
+			dynamics_physics: DynamicsPhysicsConfig::default(),
 			debug: WindowDebugOptions::default(),
 			disable_expression_morphs: false,
 			disable_vmc_eye_look: false,
@@ -786,7 +813,7 @@ impl Default for AvatarWindowOptions {
 			debug_material_dump: false,
 			show_axes: false,
 			show_bone_colliders: false,
-			disable_mtoon_outlines: false,
+			disable_geometry_outlines: false,
 			debug_disable_rim_lighting: false,
 			debug_force_shading_shift_zero: false,
 			debug_disable_matcap: false,
@@ -804,7 +831,7 @@ impl Default for AvatarWindowOptions {
 
 #[cfg(test)]
 mod tests {
-	use super::{ColorGradingLook, TextureCompressionMode};
+	use super::{ColorGradingLook, DirectionalLightOptions, TextureCompressionMode};
 
 	#[test]
 	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {
@@ -851,5 +878,13 @@ mod tests {
 		}
 		assert_eq!("cinematic".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Film);
 		assert_eq!("vivid".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Pop);
+	}
+
+	#[test]
+	fn default_directional_light_is_world_referenced() {
+		let light = DirectionalLightOptions::default();
+
+		assert!(!light.follow_camera_yaw);
+		assert!(!light.follow_camera_pitch);
 	}
 }

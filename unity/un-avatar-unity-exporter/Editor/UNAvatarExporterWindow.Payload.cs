@@ -19,6 +19,7 @@ namespace UNAvatar.UnityExporter
             bool bakeAttempted,
             bool bakeSucceeded,
             GameObject registryRoot,
+            List<object> nodeConstraintsPayload,
             List<object> dynamicsPayload,
             List<object> contactsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
@@ -40,9 +41,11 @@ namespace UNAvatar.UnityExporter
                 },
                 ["humanoid"] = humanoid,
                 ["nodes"] = BuildNodeRegistryPayload(registryRoot),
+                ["nodeConstraints"] = nodeConstraintsPayload ?? new List<object>(),
                 ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["contacts"] = contactsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
+                ["sceneLighting"] = BuildSceneLightingPayload(),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets, dynamicsPayload),
                 ["animator"] = BuildAnimatorPayload(registryRoot),
@@ -66,6 +69,107 @@ namespace UNAvatar.UnityExporter
             };
         }
 
+        private static Dictionary<string, object> BuildSceneLightingPayload()
+        {
+            var json = new Dictionary<string, object>
+            {
+                ["source"] = "unity_scene"
+            };
+
+            var sky = RenderSettings.ambientSkyColor;
+            var equator = RenderSettings.ambientEquatorColor;
+            var ground = RenderSettings.ambientGroundColor;
+            var flatAmbient = (sky + equator + ground) / 3.0f * Mathf.Max(0.0f, RenderSettings.ambientIntensity);
+            var flatIntensity = Mathf.Max(flatAmbient.r, Mathf.Max(flatAmbient.g, flatAmbient.b));
+            var flatColor = flatIntensity > 0.000001f
+                ? new Color(flatAmbient.r / flatIntensity, flatAmbient.g / flatIntensity, flatAmbient.b / flatIntensity, 1.0f)
+                : Color.black;
+            json["environment"] = new Dictionary<string, object>
+            {
+                ["mode"] = RenderSettings.ambientMode.ToString(),
+                ["color"] = FloatArray(flatColor.r, flatColor.g, flatColor.b),
+                ["intensity"] = flatIntensity,
+                ["skyColor"] = FloatArray(sky.r, sky.g, sky.b),
+                ["equatorColor"] = FloatArray(equator.r, equator.g, equator.b),
+                ["groundColor"] = FloatArray(ground.r, ground.g, ground.b),
+                ["ambientIntensity"] = RenderSettings.ambientIntensity,
+                ["sphericalHarmonics"] = BuildUnitySphericalHarmonicsPayload()
+            };
+
+            var directional = FindSceneDirectionalLight();
+            if (directional != null)
+            {
+                var color = directional.color;
+                var direction = UnityDirectionToUnAvatar(-directional.transform.forward).normalized;
+                json["directional"] = new Dictionary<string, object>
+                {
+                    ["name"] = directional.name,
+                    ["color"] = FloatArray(color.r, color.g, color.b),
+                    ["intensity"] = Mathf.Max(0.0f, directional.intensity),
+                    ["direction"] = FloatArray(direction.x, direction.y, direction.z)
+                };
+            }
+
+            return json;
+        }
+
+        private static Dictionary<string, object> BuildUnitySphericalHarmonicsPayload()
+        {
+            var probe = RenderSettings.ambientProbe;
+            return new Dictionary<string, object>
+            {
+                ["source"] = "unity_render_settings_ambient_probe",
+                ["ar"] = SphericalHarmonicsL2UnityAr(probe, 0),
+                ["ag"] = SphericalHarmonicsL2UnityAr(probe, 1),
+                ["ab"] = SphericalHarmonicsL2UnityAr(probe, 2),
+                ["br"] = SphericalHarmonicsL2UnityBr(probe, 0),
+                ["bg"] = SphericalHarmonicsL2UnityBr(probe, 1),
+                ["bb"] = SphericalHarmonicsL2UnityBr(probe, 2),
+                ["c"] = FloatArray(probe[0, 8], probe[1, 8], probe[2, 8], 1.0f)
+            };
+        }
+
+        private static List<object> SphericalHarmonicsL2UnityAr(UnityEngine.Rendering.SphericalHarmonicsL2 sh, int channel)
+        {
+            return FloatArray(sh[channel, 3], sh[channel, 1], sh[channel, 2], sh[channel, 0] - sh[channel, 6]);
+        }
+
+        private static List<object> SphericalHarmonicsL2UnityBr(UnityEngine.Rendering.SphericalHarmonicsL2 sh, int channel)
+        {
+            return FloatArray(sh[channel, 4], sh[channel, 5], sh[channel, 6] * 3.0f, sh[channel, 7]);
+        }
+
+        private static Light FindSceneDirectionalLight()
+        {
+            if (RenderSettings.sun != null &&
+                RenderSettings.sun.type == LightType.Directional &&
+                RenderSettings.sun.enabled &&
+                RenderSettings.sun.intensity > 0.0f)
+            {
+                return RenderSettings.sun;
+            }
+
+            var lights = UnityEngine.Object.FindObjectsOfType<Light>();
+            Light fallback = null;
+            foreach (var light in lights)
+            {
+                if (light == null || light.type != LightType.Directional || !light.enabled || light.intensity <= 0.0f)
+                {
+                    continue;
+                }
+                if (fallback == null || light.intensity > fallback.intensity)
+                {
+                    fallback = light;
+                }
+            }
+            return fallback;
+        }
+
+        private static Vector3 UnityDirectionToUnAvatar(Vector3 value)
+        {
+            return new Vector3(-value.x, value.y, value.z);
+        }
+
         private Dictionary<string, object> BuildReportPayload(
             ExportValidation validation,
             List<VariantRecord> variants,
@@ -73,6 +177,7 @@ namespace UNAvatar.UnityExporter
             string output,
             bool bakeAttempted,
             bool bakeSucceeded,
+            List<object> nodeConstraintsPayload,
             List<object> dynamicsPayload,
             List<object> contactsPayload,
             WardrobeSnapshotDraft exportBaseSnapshot,
@@ -123,8 +228,10 @@ namespace UNAvatar.UnityExporter
                 ["wardrobeAssetOwnershipDiagnostics"] = BuildWardrobeAssetOwnershipDiagnostics(rendererAssets),
                 ["wardrobePreviewDiagnostics"] = BuildWardrobePreviewDiagnostics(exportWardrobeSets),
                 ["modularAvatar"] = BuildModularAvatarReportSummary(avatarRoot),
+                ["nodeConstraints"] = BuildNodeConstraintsReportSummary(nodeConstraintsPayload),
                 ["dynamics"] = BuildDynamicsReportSummary(dynamicsPayload),
                 ["contacts"] = BuildContactsReportSummary(contactsPayload),
+                ["sceneLighting"] = BuildSceneLightingPayload(),
                 ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
                 ["unityExporter"] = new Dictionary<string, object>
                 {
@@ -164,6 +271,57 @@ namespace UNAvatar.UnityExporter
                 ["rendererAssetCount"] = rendererCount,
                 ["itemLimit"] = 96,
                 ["items"] = items
+            };
+        }
+
+        private static Dictionary<string, object> BuildNodeConstraintsReportSummary(List<object> nodeConstraintsPayload)
+        {
+            var constraints = nodeConstraintsPayload ?? new List<object>();
+            var parentCount = 0;
+            var parentSourceCount = 0;
+            var parentMultiSourceCount = 0;
+            foreach (var item in constraints)
+            {
+                if (!(item is Dictionary<string, object> constraint))
+                {
+                    continue;
+                }
+                var kind = "";
+                if (constraint.TryGetValue("kind", out var rawKind) && rawKind is string kindValue)
+                {
+                    kind = kindValue;
+                }
+                else if (constraint.TryGetValue("type", out var rawType) && rawType is string typeValue)
+                {
+                    kind = typeValue;
+                }
+                if (!string.Equals(kind, "parent", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                parentCount++;
+                var sourceCount = 0;
+                if (constraint.TryGetValue("sources", out var rawSources) && rawSources is List<object> sources)
+                {
+                    sourceCount = sources.Count;
+                }
+                if (sourceCount == 0)
+                {
+                    sourceCount = 1;
+                }
+                parentSourceCount += sourceCount;
+                if (sourceCount > 1)
+                {
+                    parentMultiSourceCount++;
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                ["count"] = constraints.Count,
+                ["parentCount"] = parentCount,
+                ["parentSourceCount"] = parentSourceCount,
+                ["parentMultiSourceCount"] = parentMultiSourceCount
             };
         }
 
@@ -473,8 +631,100 @@ namespace UNAvatar.UnityExporter
             {
                 ["baseSet"] = full.TryGetValue("baseSet", out var baseSet) ? baseSet : "base",
                 ["setCount"] = sets.Count,
-                ["sets"] = sets
+                ["sets"] = sets,
+                ["assetGroupDiagnostics"] = BuildWardrobeAssetGroupDiagnostics(sets)
             };
+        }
+
+        private static Dictionary<string, object> BuildWardrobeAssetGroupDiagnostics(List<object> sets)
+        {
+            var multiGroupSets = new List<object>();
+            var cumulativeGroups = new List<object>();
+            var previousSetId = "";
+            var previousGroups = new List<string>();
+            if (sets != null)
+            {
+                foreach (var item in sets)
+                {
+                    if (!(item is Dictionary<string, object> set))
+                    {
+                        continue;
+                    }
+                    var isDefault = set.TryGetValue("default", out var rawDefault) && rawDefault is bool defaultValue && defaultValue;
+                    if (isDefault)
+                    {
+                        continue;
+                    }
+                    var id = set.TryGetValue("id", out var rawId) ? rawId as string ?? "" : "";
+                    var displayName = set.TryGetValue("displayName", out var rawDisplayName) ? rawDisplayName as string ?? "" : "";
+                    var groups = AssetGroupsFromReportSet(set);
+                    if (groups.Count > 1)
+                    {
+                        multiGroupSets.Add(new Dictionary<string, object>
+                        {
+                            ["id"] = id,
+                            ["displayName"] = displayName,
+                            ["assetGroupCount"] = groups.Count,
+                            ["assetGroups"] = StringsToObjectList(groups)
+                        });
+                    }
+                    if (previousGroups.Count > 0 && groups.Count > previousGroups.Count && ContainsAllGroups(groups, previousGroups))
+                    {
+                        cumulativeGroups.Add(new Dictionary<string, object>
+                        {
+                            ["previousSet"] = previousSetId,
+                            ["set"] = id,
+                            ["previousAssetGroups"] = StringsToObjectList(previousGroups),
+                            ["assetGroups"] = StringsToObjectList(groups)
+                        });
+                    }
+                    previousSetId = id;
+                    previousGroups = groups;
+                }
+            }
+            return new Dictionary<string, object>
+            {
+                ["multiGroupSetCount"] = multiGroupSets.Count,
+                ["multiGroupSets"] = multiGroupSets,
+                ["cumulativeGroupStepCount"] = cumulativeGroups.Count,
+                ["cumulativeGroupSteps"] = cumulativeGroups
+            };
+        }
+
+        private static List<string> AssetGroupsFromReportSet(Dictionary<string, object> set)
+        {
+            var result = new List<string>();
+            if (set == null || !set.TryGetValue("assetGroups", out var rawGroups) || !(rawGroups is List<object> groups))
+            {
+                return result;
+            }
+            foreach (var rawGroup in groups)
+            {
+                var group = rawGroup as string;
+                if (string.IsNullOrWhiteSpace(group))
+                {
+                    continue;
+                }
+                group = group.Trim();
+                if (!result.Contains(group))
+                {
+                    result.Add(group);
+                }
+            }
+            result.Sort(StringComparer.Ordinal);
+            return result;
+        }
+
+        private static bool ContainsAllGroups(List<string> groups, List<string> required)
+        {
+            foreach (var group in required)
+            {
+                if (!groups.Contains(group))
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
         private static Dictionary<string, object> CountOperationTypes(List<object> operations)
@@ -768,17 +1018,8 @@ namespace UNAvatar.UnityExporter
                     {
                         continue;
                     }
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilRef", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilReadMask", 255.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilWriteMask", 255.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilComp", 8.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilPass", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilFail", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_StencilZFail", 0.0f, "stencil");
-                    AddUnsupportedMaterialFloat(reports, material, "_ColorMask", 15.0f, "color_mask");
                     AddUnsupportedMaterialFloat(reports, material, "_OffsetFactor", 0.0f, "depth_offset");
                     AddUnsupportedMaterialFloat(reports, material, "_OffsetUnits", 0.0f, "depth_offset");
-                    AddUnsupportedMaterialFloat(reports, material, "_OutlineColorMask", 15.0f, "outline_color_mask");
                     AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetFactor", 0.0f, "outline_depth_offset");
                     AddUnsupportedMaterialFloat(reports, material, "_OutlineOffsetUnits", 0.0f, "outline_depth_offset");
                 }

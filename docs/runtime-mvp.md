@@ -1,6 +1,6 @@
 # UN Avatar Runtime MVP
 
-この文書は、現在の実装で先に厚くなっている **VRM / VMC / MToon / wgpu / Spout2** の垂直スライスを、当面の製品中核として固定するための正本である。
+この文書は、現在の実装で先に厚くなっている **VRM / VMC / v2-UNToon / wgpu / Spout2** の垂直スライスを、当面の製品中核として固定するための正本である。
 
 この文書は、v1 の安定対象になった **VRM / VMC / MToon / wgpu / Spout2** runtime の境界をまとめる。
 
@@ -10,10 +10,10 @@
 
 MVPで保証したいこと。
 
-- VRM0 / VRM1 を読み込み、Humanoid・表情・MToon・SpringBone情報を保持できる
+- VRM0 / VRM1 を読み込み、Humanoid・表情・MToon source profile・SpringBone情報を保持できる
 - SpringBone の体幹・頭部・腕・手への明らかなめり込みは、[`bone-based-colliders-v1.md`](bone-based-colliders-v1.md) のボーンベースコライダー方針で軽減できる
 - VMC Marionette入力を受け、UNMotionFrame経由でHumanoid姿勢と表情を適用できる
-- MToonをSimple/Unlit代替ではなく、MToonパラメータ駆動の専用シェーダで描画する
+- lilToon / MToon / 将来のtoon入力をロード時に v2-UNToon semantic material へ正規化し、実行時はUNToonとして描画する
 - UN Avatar内部表示座標系を **右手座標 / Y-up / +Z-front** に固定する
 - WindowsではSpout2へ送出できる
 - 診断CLIとdebug flagsで、モデル・材質・VMC・モーフ・スキニングを切り分けられる
@@ -50,11 +50,11 @@ VMC入力適用時に行うこと。
 - Humanoid bone rotationはrest poseを消さず、rest local rotationに入力rotationを掛ける
 - VRM1 node constraintはHumanoid適用後にrest pose基準で評価する
 
-## 4. MToonポリシー
+## 4. v2-UNToon / MToon互換ロードポリシー
 
-VRMは既定でMToonLikeとして描画する。
+VRM の MToon 入力は、ロード時に v2-UNToon の semantic material へ変換して描画する。実行時の通常パスは MToon 専用ではなく UNToon であり、MToon は source profile / 診断 / 互換ロード境界の情報として扱う。
 
-MToonで保持・反映するもの。
+MToon source profile から UNToon semantic material へ保持・反映するもの。
 
 - shade color / shade texture
 - shading shift / toony / GI equalization
@@ -70,7 +70,7 @@ MToonで保持・反映するもの。
 - VRM0 `_OutlineWidth` はメートル換算として `0.01` を掛ける
 - MToon MASK discardはRGBではなくalphaのみで判定する
 - 目・虹彩・ハイライトらしい材質名は、モデル差異によりMASKで消えやすいため緩和対象にする
-- `KHR_materials_unlit` のまま残ったVRM材質も、VRM文脈ではMToonLikeへ寄せる
+- `KHR_materials_unlit` のまま残ったVRM材質も、VRM文脈では UNToon semantic material へ寄せる
 
 ## 5. Spout2ポリシー
 
@@ -118,7 +118,7 @@ MVP完了は、機能追加量ではなく以下の受け入れ条件で判定�
 - `model1.vrm` / `model2.vrm` / `vrm1.vrm` が +Z-front の正面向きで表示される
 - VRM0 / VRM1 の腕、前腕、手首がVMCポージング後も消失・左右反転・Z反転しない
 - 瞳、虹彩、ハイライトがMToon描画で消えない
-- VRM材質がSimple/Unlit fallbackではなくMToonLike専用パイプラインで描画される
+- VRM材質がSimple/Unlit fallbackではなく v2-UNToon パイプラインで描画される
 - VRM0 outline widthが過大なリングや全身アーティファクトを出さない
 - VMC Marionette入力でHumanoid poseと表情weightが更新される
 - ボーンベースコライダーが未設定 VRM でも自動生成され、SpringBone の明らかな体めり込みが軽減される
@@ -150,6 +150,9 @@ texture_resolution_limit = "off"
 texture_compression = "source"
 processed_texture_cache = true
 
+[runtime]
+target_fps = 60
+
 [spout]
 enabled = true
 name = "UN Avatar Spout"
@@ -162,4 +165,4 @@ scene = true
 morph = true
 ```
 
-CLIは当面 `--manifest path` で `.toml` を読み、明示されたCLIオプションで上書きできる。Tauri Supervisorはこのmanifestを生成してrenderer子プロセスへ渡す。
+CLIは当面 `--manifest path` で `.toml` を読み、明示されたCLIオプションで上書きできる。Tauri Supervisorはこのmanifestを生成してrenderer子プロセスへ渡す。`[runtime].target_fps` は30..300へclampされ、実行中Rendererには `set_target_fps` control command でも反映できる。開発時だけ `UN_AVATAR_TARGET_FPS` でprofileを汚さず上書きできる。可視preview windowはvsync/FIFOを維持し、要求FPSが実モニター更新周期を超える場合の有効frame pacingは表示可能周期へ丸める。`target_fps` は起動時scene/cache内容を変えないため、scene cache fingerprintには含めない。

@@ -7,7 +7,7 @@ UN Avatar は VRM 専用アプリではなく、glTF 汎用ランタイムに将
 ## 目的
 
 - 一般的な VRM に collider が入っていない現状を前提に、UN Avatar 側で簡易 collider を生成する。
-- v1 では生成した collider を SpringBone solver のめり込み抑制に使う。
+- v1 では生成した collider を揺れもの solver のめり込み抑制に使う。v2.1 以降は UNPhysics / UNDynamics の collider primitive として扱う。
 - 将来は cloth、accessory、plugin physics、UNA physics などにも流用できる設計名と schema にする。
 - 既存 VRM collider がある場合は将来的に尊重できる余地を残す。ただし v1 の主役は自動生成 collider とする。
 
@@ -15,10 +15,10 @@ UN Avatar は VRM 専用アプリではなく、glTF 汎用ランタイムに将
 
 - 正確な人体衝突判定や mesh collider。
 - 手指、衣装、スカート、髪束単位の細かい collider editor。
-- VRChat PhysBone 互換の完全再現。
+- VRChat PhysBone の公開仕様や作者向け設定項目を超える内部実装再現、または VRChat SDK / client の数値互換。
 - renderer の可視 mesh に影響する collision。
 
-v1 の目的は、髪、耳、衣装、アクセサリなどの SpringBone が Head / Torso / Arm / Hand に明らかにめり込む状態を軽減すること。
+v1 の目的は、髪、耳、衣装、アクセサリなどの揺れものが Head / Torso / Arm / Hand に明らかにめり込む状態を軽減すること。VRC 由来 collider を扱う場合も、保存済み source metadata と公開されている作者向けパラメーターを UNPhysics / UNDynamics の独自 primitive へ lower する方針であり、SDK 内部 solver の再現を前提にしない。
 
 ## Profile schema
 
@@ -79,10 +79,10 @@ Legs / feet / skirt は v1 では扱わない。スカートは必要 collider �
 
 ## Solver integration
 
-v1 では SpringBone solver の tail 更新後に collider constraint を適用する。
+v1 では揺れもの solver の tail 更新後に collider constraint を適用する。現行 v2.1 runtime では同じ collider primitive を UNDynamics の constraint として使う。
 
 - sphere / capsule のみ。
-- collider は SpringBone tail point を外へ押し戻す。
+- collider は dynamics tail point を外へ押し戻す。
 - 長さ拘束は維持する。押し戻し後も joint からの距離を chain length に戻す。
 - collider 適用は固定 substep 内で行う。
 - collider が原因で NaN や過大 displacement が出た場合は、その collider constraint を無視して frame を継続する。
@@ -157,7 +157,7 @@ dynamics_constraint_refs: RuntimeDynamicsConstraintRefStatus[]
 
 `bone_collider_source` は v1 では `"off"` / `"auto"` のみでよい。将来 VRM collider 読み込みを足す時に値を拡張する。
 `dynamics_*` は renderer が正規化後に保持している runtime dynamics group / collider / contact / constraint ref の件数であり、raw `.unavatar` `dynamics` entry 数ではない。bounded list は Supervisor diagnostics pass-through でも同じ JSON field として扱う。`dynamics_enabled_group_count` は wardrobe / action 適用後に solver 対象として残っている group 数、`dynamics_source_enabled_group_count` は authored default、`dynamics_enabled_override_count` は runtime state override 数。limit / grabbing / posing は metadata count であり、stretch / interaction 挙動の solver 反映を意味しない。raw entry と runtime group の食い違いは `un-avatar-cli diagnose` の warning で検出する。
-`.unavatar` / VRC PhysBone source collider は import 時に local sphere / capsule collider として正規化し、SpringBone solver と debug draw の collider list に結合する。`insideBounds` collider は外側へ押し出す collider ではなく、tail を collider 内側へ留める制約として近似する。
+`.unavatar` / VRC PhysBone source collider は import 時に local sphere / capsule collider として正規化し、UNPhysics dynamics solver と debug draw の collider list に結合する。`insideBounds` collider は外側へ押し出す collider ではなく、tail を collider 内側へ留める制約として近似する。
 
 Diagnostics には profile 値、生成 collider 数、part ごとの有効/無効と scale を出す。
 
@@ -182,6 +182,6 @@ Diagnostics には profile 値、生成 collider 数、part ごとの有効/無�
 
 - VRM0 / VRM1 collider group の読み込みと統合。
 - skirt / legs 向け collider preset。
-- model-specific collider editor。
+- profile-side explicit collider tuning UI。特定モデル名の固定分岐ではなく、作者/ユーザーが確認できる bone part / collider intent / scale を明示編集する面として扱う。
 - plugin physics / UNA physics との共有。
 - collider debug draw の見た目と操作 UI の整理。

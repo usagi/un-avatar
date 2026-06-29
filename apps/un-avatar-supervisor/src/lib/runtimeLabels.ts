@@ -87,7 +87,12 @@ export type RuntimeStageStatusData = RuntimeQualityStatusLabelData & RendererHea
 export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 	RendererHealthStatusData & {
 		fps: number | null;
+		target_fps?: number | null;
+		frame_target_ms?: number | null;
 		cpu_ms: number | null;
+		frame_wall_ms?: number | null;
+		frame_wall_max_recent_ms?: number | null;
+		frame_wall_spike_count_recent?: number | null;
 		frame_cpu_total_ms?: number | null;
 		frame_motion_apply_ms?: number | null;
 		frame_dynamics_step_ms?: number | null;
@@ -155,7 +160,11 @@ export function texturePolicyLabel(status: RuntimeQualityStatusLabelData | null,
 	const limit = textureModeLabel(status.texture_resolution_limit);
 	const compression = textureModeLabel(status.texture_compression);
 	const cache =
-		status.processed_texture_cache == null ? (labels.cacheUnknown ?? "cache --") : status.processed_texture_cache ? (labels.cacheOn ?? "cache on") : (labels.cacheOff ?? "cache off");
+		status.processed_texture_cache == null
+			? (labels.cacheUnknown ?? "cache --")
+			: status.processed_texture_cache
+				? (labels.cacheOn ?? "cache on")
+				: (labels.cacheOff ?? "cache off");
 	return `${limit} / ${compression} / ${cache}`;
 }
 
@@ -164,7 +173,8 @@ export function textureSummaryLabel(status: RuntimeQualityStatusLabelData | null
 	if (!summary) return "--";
 	const resized = summary.resized_count > 0 ? `, ${summary.resized_count} ${labels.textureResized ?? "resized"}` : "";
 	const compressed = summary.compressed_count > 0 ? `, ${summary.compressed_count} ${labels.textureCompressed ?? "compressed"}` : "";
-	const fallback = summary.compression_fallback_count > 0 ? `, ${summary.compression_fallback_count} ${labels.textureFallback ?? "fallback"}` : "";
+	const fallback =
+		summary.compression_fallback_count > 0 ? `, ${summary.compression_fallback_count} ${labels.textureFallback ?? "fallback"}` : "";
 	return `${summary.image_count} ${labels.textureImages ?? "images"}${resized}${compressed}${fallback}, ${formatBytes(summary.uploaded_mip_bytes)} ${labels.textureUploaded ?? "uploaded"}`;
 }
 

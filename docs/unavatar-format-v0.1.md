@@ -224,19 +224,21 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 }
 ```
 
-`floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `mtoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `mtoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。
+`floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `untoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `untoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。旧 exporter の `mtoon` payload は importer 側の legacy fallback として読むが、新規 `.unavatar` では MToon source profile ではなく UNToon semantic payload を `untoon` に保存する。`sourceProfile` は入力元の provenance に限り、実行時 shader 分岐には使わない。lilToonGem / lilToonRefraction などの特殊形は loader が `runtimeVariant` (`untoon` / `gem` / `refraction`) へ正規化し、Renderer はこの UNToon runtime variant だけを見る。Unity material color property の保存色空間は loader が UNToon material の color-factor color space へ正規化し、Renderer は `sourceShader` / `family` ではなく正規化済み値だけを使う。
 
 lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は raw `_SrcBlend` / `_DstBlend` / `_AlphaToMask` を source blend state として最優先し、これが取れない場合に Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。raw alpha params の `Mask` / `Blend` は明示値として優先するが、`Opaque` 相当値は shader variant hint を潰さない。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は source blend state が無い場合の cutout hint として扱う。
 
 lilToon source の `_UseEmission`、`_EmissionColor`、`_EmissionMainStrength` は UNToon emission の source hint として読む。`_UseEmission = 0` は texture / color が残っていても emission 寄与を 0 とし、feature toggle を優先する。
 
+MatCap / Rim は UNToon 正規化 payload では enable、color、main strength を分離して保持する。`untoon.matcapEnabledFactor` / `untoon.rimEnabledFactor` は feature toggle、`untoon.matcapFactor` / `untoon.parametricRimColorFactor` は Unity material color property、`untoon.matcapMainStrengthFactor` / `untoon.rimMainStrengthFactor` は strength である。Importer は `untoon` payload を優先し、raw `floatParams` / `colorParams` は legacy fallback としてだけ参照する。Exporter は色へ strength を事前乗算しない。
+
 Cull mode は material 共通値として Cull Off / Front / Back を保持する。glTF `doubleSided` は Cull Off / Back しか直接表現できないため、`.unavatar` では `UN_avatar_material.floatParams` の `_Cull` / `_CullMode` を読み、Unity/lilToon の `0=Off`、`1=Front`、`2=Back` を Runtime の `cull_mode` へ正規化する。
 
-UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `mtoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
+UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `untoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
 
-Unity の Mesh UV と glTF の texture coordinate convention は V 方向の扱いが異なるため、Unity Exporter は `.unavatar` 出力時に `TEXCOORD_0.y = 1 - unityUv.y` へ変換する。Unity material の Tiling / Offset も同じ座標系へ変換し、`offset_y = 1 - scale_y - unity_offset_y` として `KHR_texture_transform` / `mtoon.uvOffsetScale` に書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
+Unity の Mesh UV と glTF の texture coordinate convention は V 方向の扱いが異なるため、Unity Exporter は `.unavatar` 出力時に `TEXCOORD_0.y = 1 - unityUv.y` へ変換する。Unity material の Tiling / Offset も同じ座標系へ変換し、`offset_y = 1 - scale_y - unity_offset_y` として `KHR_texture_transform` / `untoon.uvOffsetScale` に書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
 
-UV animation は `mtoon.uvAnimationScrollXSpeedFactor`、`mtoon.uvAnimationScrollYSpeedFactor`、`mtoon.uvAnimationRotationSpeedFactor`、`mtoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
+UV animation は `untoon.uvAnimationScrollXSpeedFactor`、`untoon.uvAnimationScrollYSpeedFactor`、`untoon.uvAnimationRotationSpeedFactor`、`untoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
 
 ### Texture Storage
 
@@ -492,6 +494,8 @@ Unity Exporter は次の出力モードを持つ。
 
 `dynamics` は VRM SpringBone と VRC PhysBone の source payload を保持し、Runtime はこれを UNPhysics umbrella 下の UNDynamics primitive へ正規化する。
 
+`.unavatar` 内の `dynamics[]` はモデル作者が持つ source intent と stable source id の正本であり、ユーザー profile の調整値ではない。v2.1 の `physics.dynamics.solver.overrides` / `match_overrides` / `group_overrides` は `.unavatar` payload を直接書き換えず、Runtime が source intent を UNPhysics response terms へ lower した後に適用する profile-side tuning として扱う。
+
 ```json
 {
   "dynamics": [
@@ -560,6 +564,37 @@ Unity Exporter は次の出力モードを持つ。
       "position": [0.0, 0.0, 0.0]
     }
   ],
+  "nodeConstraints": [
+    {
+      "id": "unity_constraint:parent:Cloth_PB_GRP/Cloth_01_Const_L",
+      "source": "unity_parent_constraint",
+      "type": "parent",
+      "target": {
+        "nodeId": "node-cloth-01-const-l",
+        "path": "Armature/Hips/Spine/Chest/Cloth_Root/Cloth_01_Const_L"
+      },
+      "weight": 1.0,
+      "translationAtRest": [0.0, 0.0, 0.0],
+      "rotationAtRest": [0.0, 0.0, 0.0],
+      "translateX": true,
+      "translateY": true,
+      "translateZ": true,
+      "rotateX": true,
+      "rotateY": true,
+      "rotateZ": true,
+      "sources": [
+        {
+          "node": {
+            "nodeId": "node-cloth-source",
+            "path": "Armature/Hips/Spine/Chest/SourceGrp_Chest/SourceCloth_L"
+          },
+          "weight": 1.0,
+          "translationOffset": [0.0, 0.0, 0.0],
+          "rotationOffset": [0.0, 0.0, 0.0]
+        }
+      ]
+    }
+  ],
   "constraintRefs": [
     {
       "id": "constraint_world_fixed",
@@ -573,14 +608,15 @@ Unity Exporter は次の出力モードを持つ。
 }
 ```
 
-v0.1 は完全な PhysBone 再現を狙わない。まず UNDynamics の SpringBone-like runtime primitive へ近似変換する。
+v0.1 / v2.1 は PhysBone 内部 solver の再現や数値互換を目標にしない。VRC PhysBone / VRM SpringBone の authored term を保持し、UNDynamics の source-neutral runtime group と UNPhysics response terms へ lower する。
 `roots` は glTF node index、`nodeId` / `path` object、または exporter node id 文字列を受け付ける。`enabled:false` の dynamics entry も runtime group として lower し、authored default disabled として保持する。runtime override が無い場合は solver 対象外だが、wardrobe / action の `dynamicsEnable` で同じ stable id を有効化できる。
 `ignoreTransforms` は root traversal から除外する。`multiChildType:"Ignore"` は分岐 root を最初の有効 child chain だけへ近似する。
-`sourceParams.endpointPosition` は child を持たない root に synthetic endpoint child を追加して通常 chain へ正規化する。
+`sourceParams.endpointPosition` は child を持たない root では synthetic endpoint child、child を持つ root では各 terminal leaf から root-local endpoint world position へ向かう synthetic endpoint tail として通常 chain へ正規化する。
 `sourceParams.colliders` は VRC PhysBone Collider の保存情報であり、Sphere / Capsule は UNDynamics collider として solver / debug draw へ接続する。`insideBounds:true` collider は tail を collider 内側へ留める制約として近似する。
-`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、angle limit は SpringBone-like solver の cone constraint として近似反映する。runtime group の `writeback_mode` は既定 `rotation_only` であり、solver が tail 解をボーン local rotation へ書き戻すことを明示する。`writebackMode:"rotation_translation"` は PhysBone stretch / squish intent を保持するために lower する。互換性のため、明示 `writebackMode` が無い旧 export でも `sourceParams.maxStretch` / `maxSquish` / `stretchMotion` または対応 curve が authored されていれば `rotation_translation` として lower する。現 solver backend は safe target がある multi-node chain の next chain node だけ `maxStretch` を tail length upper bound として local translation へ書き戻す。2-node leaf chain / terminal imaginary tail は実 node へ割り当てず、target の無い group は diagnostics metadata に留める。`maxSquish` / `stretchMotion` curve の忠実再現は未対応。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
-`contacts[]` は VRC Contact Sender / Receiver を UNDynamics metadata として保持する。`kind` は `sender` / `receiver` / `unknown`、`parameter` は Receiver parameter、`collisionTags` は contact tag list、shape / radius / height / position / rotation は proximity volume の source-neutral view とする。v0.1 初期では contact evaluation は行わず、runtime counts / diagnostics / future action hooks の対象にする。Contacts の runtime parameter emission は [`unevaluation-v2.md`](unevaluation-v2.md) の Phase A-D に従い、v2 初期は metadata と parameter declaration までを標準とする。overlap probe は diagnostics-only、実 parameter emission は明示 opt-in とする。
-`constraintRefs[]` は VRC Constraints または Modular Avatar resolver が保持すべき constraint 参照を UNDynamics metadata として保存する。v0.1 初期では solver 入力ではなく、bone dynamics rebuild / reset / diagnostics の判断材料にする。
+`sourceParams.allowCollision:false` は source collider を solver へ渡さない。limits は runtime dynamics group の `limit` に正規化して保持し、angle limit は UNPhysics solver の cone / polar constraint として反映する。`maxAngleXCurve` / `maxAngleZCurve` は base angle の倍率として chain tail ごとに sample し、runtime group の `max_angle_x_samples` / `max_angle_z_samples` へ lower する。`maxStretchCurve` / `maxSquishCurve` / `stretchMotionCurve` は base scalar の倍率として runtime limit の per-joint samples へ lower する。runtime group の `writeback_mode` は既定 `rotation_only` であり、solver が tail 解をボーン local rotation へ書き戻すことを明示する。`writebackMode:"rotation_translation"` は stretch / squish intent を保持するために lower する。互換性のため、明示 `writebackMode` が無い旧 export でも `sourceParams.maxStretch` / `maxSquish` / `stretchMotion` または対応 curve が authored されていれば `rotation_translation` として lower する。現 solver backend は `maxStretch` / `maxSquish` を tail simulation の length range として反映し、scalar / curve `stretchMotion` はその range の参加率として扱う。safe target がある group だけ伸縮後の tail 距離を local translation へも書き戻す。target の無い group は node translation を維持したまま simulation stretch / squish として扱う。grabbing / posing は runtime dynamics group の `interaction` metadata に正規化して保持し、source feature count と group diagnostics にも出すが、v0.1 初期の interaction 挙動にはまだ反映しない。
+`contacts[]` は VRC Contact Sender / Receiver を UNDynamics metadata として保持する。`kind` は `sender` / `receiver` / `unknown`、`parameter` は Receiver parameter、`collisionTags` は contact tag list、shape / radius / height / position / rotation は proximity volume の source-neutral view とする。v2.1 では current runtime scene pose の overlap probe、runtime counts、parameter declaration、diagnostics までを標準経路にする。Contacts の runtime parameter emission は [`unevaluation-v2.md`](unevaluation-v2.md) の Phase A-D に従い、overlap probe は diagnostics-only、実 parameter emission は明示 opt-in とする。
+`nodeConstraints[]` は scene transform evaluation へ直接 lower される source-neutral constraint であり、Unity `ParentConstraint` などの authored transform relation を runtime node graph に反映する。`parent` constraint は target node、source node 群、全体 weight、source ごとの weight / translationOffset / rotationOffset、translate / rotate axis flags、at-rest 値を保持する。source が複数ある場合も `.unavatar` では単一 target に対する weighted source list として保存し、Modular Avatar Merge Armature 後も target/source node 参照を remap して維持する。
+`constraintRefs[]` は VRC Constraints または Modular Avatar resolver が保持すべき constraint 参照を UNDynamics metadata として保存する。v0.1 初期では solver 入力ではなく、bone dynamics rebuild / reset / diagnostics の判断材料にする。実際に scene node transform を駆動する constraint は `nodeConstraints[]` に正規化する。
 `dynamics[].id` は lower された runtime dynamics group の `source_id` として保持し、wardrobe / action state が dynamics enable state を参照するための stable key として使う。`name` は表示用 comment として扱う。wardrobe / action の `dynamicsEnable` target は lower 済み runtime dynamics group の `source_id` に一致しなければならない。CLI diagnose / renderer runtime status は source dynamics が存在しても effective enabled group が 0 の場合、現在の runtime state では solver 対象が無いことを warning として出す。
 
 ## 10. Provenance And License

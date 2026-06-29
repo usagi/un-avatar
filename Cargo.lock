@@ -5390,7 +5390,7 @@ dependencies = [
 
 [[package]]
 name = "sample-io-plugin"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -7088,9 +7088,10 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "clap",
+ "glam",
  "serde",
  "serde_json",
  "un-avatar-core",
@@ -7106,7 +7107,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "half",
  "serde",
@@ -7116,7 +7117,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-io"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "serde",
  "un-avatar-core",
@@ -7125,7 +7126,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-io-gltf"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "exr",
  "glam",
@@ -7140,7 +7141,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-io-vrm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "glam",
  "gltf",
@@ -7154,7 +7155,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-material"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "un-avatar-core",
  "un-avatar-types",
@@ -7162,7 +7163,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-motion"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "un-avatar-core",
  "un-avatar-types",
@@ -7172,7 +7173,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-optimizer"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "clap",
  "image",
@@ -7181,7 +7182,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-plugin-host"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "sample-io-plugin",
  "serde",
@@ -7192,7 +7193,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-render-wgpu"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "block_compression",
  "bytemuck",
@@ -7233,9 +7234,10 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-skeleton"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "glam",
+ "regex",
  "serde",
  "serde_json",
  "un-avatar-core",
@@ -7245,7 +7247,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-supervisor"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
@@ -7253,6 +7255,8 @@ dependencies = [
  "image",
  "jiff",
  "midir",
+ "pollster",
+ "regex",
  "rfd",
  "rust-i18n",
  "serde",
@@ -7264,22 +7268,26 @@ dependencies = [
  "toml 1.1.2+spec-1.1.0",
  "tracing",
  "un-avatar-core",
+ "un-avatar-io",
+ "un-avatar-io-gltf",
  "un-avatar-io-vrm",
+ "un-avatar-skeleton",
  "un-i18n",
+ "wgpu",
  "windows 0.61.3",
  "zenoh",
 ]
 
 [[package]]
 name = "un-avatar-types"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "un-avatar-vmc"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "rosc",
  "serde",
@@ -7288,7 +7296,7 @@ dependencies = [
 
 [[package]]
 name = "un-avatar-zenoh"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "crossbeam-channel",
  "un-motion-frame",
@@ -9016,7 +9024,7 @@ checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "xtask"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "glam",
  "serde_json",

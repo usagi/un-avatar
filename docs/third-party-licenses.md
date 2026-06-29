@@ -26,7 +26,7 @@ U.N. Avatar の toon rendering / UNToon / Wardrobe 実装は Rust / wgpu / WGSL 
 
 - Project: Modular Avatar
 - Repository: <https://github.com/bdunderscore/modular-avatar>
-- Use in UN Avatar: `.unavatar` Wardrobe / MergeArmature / BoneProxy / ObjectToggle / VRC menu-compatible behavior reference
+- Use in UN Avatar: `.unavatar` Wardrobe / MergeArmature / BoneProxy / ObjectToggle / expression-menu metadata assembly reference
 - License: MIT License for all files except official `Editor/images` assets.
 - Note: Upstream `COPYING.md` restricts redistribution of `Editor/images` to official Modular Avatar packages only; modified redistributions should replace or remove those assets.
 - Copyright: Copyright (c) 2022 bd_

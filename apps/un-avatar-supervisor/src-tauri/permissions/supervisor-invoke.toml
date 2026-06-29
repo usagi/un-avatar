@@ -15,6 +15,7 @@ commands.allow = [
 	"get_native_notification_status",
 	"list_app_notifications",
 	"list_avatar_settings",
+	"list_gpu_adapters",
 	"list_diagnostics_exports",
 	"list_renderers",
 	"launch_renderer",

@@ -96,6 +96,7 @@ export type DiagnosticsRendererSnapshot = DiagnosticsRendererSnapshotLabelData &
 	state: string;
 	protocol: string | null;
 	fps: number | null;
+	targetFps: number | null;
 	gpuMs: number | null;
 	surface: string;
 	textureNote: string | null;
@@ -305,6 +306,7 @@ export function diagnosticsRendererSnapshot(
 		connected: booleanField(runtimeStatus, "connected") === true,
 		protocol: stringField(runtimeStatus, "protocol"),
 		fps: numberField(runtimeStatus, "fps"),
+		targetFps: numberField(runtimeStatus, "target_fps"),
 		gpuMs: numberField(runtimeStatus, "gpu_ms"),
 		surface: width && height ? `${width} x ${height}` : "--",
 		aa: stringField(runtimeStatus, "aa"),
@@ -632,7 +634,7 @@ export function diagnosticsRendererInsight(
 		level: diagnosticsRendererLevel(snapshot),
 		state: snapshot.state,
 		runtime: snapshot.connected ? labels.connected : labels.disconnected,
-		frame: `FPS ${runtimeMetric(snapshot.fps)} / GPU ${runtimeMetric(snapshot.gpuMs, " ms")} / ${snapshot.surface}`,
+		frame: `FPS ${runtimeMetric(snapshot.fps)} / target ${runtimeMetric(snapshot.targetFps)} / GPU ${runtimeMetric(snapshot.gpuMs, " ms")} / ${snapshot.surface}`,
 		texture: `AA ${aaModeLabel(snapshot.aa)} / ${snapshot.texturePolicy} / ${snapshot.textureSummary}`,
 		output: diagnosticsRendererSpoutLabel(snapshot),
 		note: snapshot.note,

@@ -43,6 +43,7 @@
 		RendererRuntimeStatus,
 		RendererState,
 	} from "./lib/rendererTypes";
+	import type { DynamicsGroupOverrideSeed } from "./lib/rendererPaneActions";
 	import { fallbackVrmMetadata, looksLikeVrmPath, type VrmMetadataDialogState, type VrmMetadataInfo } from "./lib/vrmMetadata";
 	import {
 		looksLikeUnavatarPath,
@@ -110,8 +111,11 @@
 	import {
 		DYNAMICS_BONE_COLLIDER_FIELD_PREFIX,
 		DYNAMICS_ENABLED_FIELD,
+		DYNAMICS_MATCH_OVERRIDE_FIELD,
 		DYNAMICS_OVERRIDE_FIELD_PREFIX,
 		defaultDynamicsCategoryOverrides,
+		type DynamicsGroupOverrideSetting,
+		type DynamicsMatchOverrideSetting,
 	} from "./lib/dynamicsPresets";
 	import {
 		loadColorDisplayMode,
@@ -282,6 +286,7 @@
 	let startupAutoLaunchAttempted = false;
 
 	const deleteHoldDurationMs = 1200;
+	const profileSettingUpdateCoalesceMs = 80;
 	const motionLookAtFields = ["motion.look_at.enabled", "motion.look_at.clamp_deg"] as const;
 	const motionReceiverFields = [
 		"motion.vmc_udp.enabled",
@@ -450,6 +455,10 @@
 			dynamics_simulation_hz: 60,
 			dynamics_substeps: 1,
 			dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
+			dynamics_match_overrides: [],
+			dynamics_collider_augment_overrides: [],
+			dynamics_group_overrides: [],
+			dynamics_mesh_cloth_assist: null,
 			apply_vmc_root_translation: false,
 			camera_target: null,
 			camera_longitude_deg: null,
@@ -460,6 +469,7 @@
 			spout_name: "UN Avatar Spout",
 			spout_width: 1280,
 			spout_height: 720,
+			target_fps: 60,
 			aa: "off",
 			texture_resolution_limit: "off",
 			texture_compression: "balanced",
@@ -538,6 +548,7 @@
 			window_y: null,
 			icon_path: null,
 			allow_multiple_renderers: false,
+			gpu_adapter: "auto",
 			notes: "OBS main streaming setup",
 			group: "Main",
 			scene_cache_fingerprint: "preview-main-v1",
@@ -576,6 +587,10 @@
 			dynamics_simulation_hz: 60,
 			dynamics_substeps: 1,
 			dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
+			dynamics_match_overrides: [],
+			dynamics_collider_augment_overrides: [],
+			dynamics_group_overrides: [],
+			dynamics_mesh_cloth_assist: null,
 			apply_vmc_root_translation: false,
 			camera_target: null,
 			camera_longitude_deg: null,
@@ -586,6 +601,7 @@
 			spout_name: null,
 			spout_width: null,
 			spout_height: null,
+			target_fps: 60,
 			aa: "off",
 			texture_resolution_limit: "off",
 			texture_compression: "balanced",
@@ -664,6 +680,7 @@
 			window_y: null,
 			icon_path: null,
 			allow_multiple_renderers: false,
+			gpu_adapter: "auto",
 			notes: "Diagnostics profile",
 			group: "Debug",
 			scene_cache_fingerprint: "preview-debug-v1",
@@ -727,12 +744,14 @@
 		}
 	}
 
-	function replaceAvatarSetting(setting: AvatarSetting): void {
+	function replaceAvatarSetting(setting: AvatarSetting, selectSetting = true): void {
 		const next = avatarSettings.filter((item) => item.id !== setting.id && item.manifest_path !== setting.manifest_path);
 		next.push(setting);
 		next.sort(compareAvatarSettings);
 		avatarSettings = next;
-		selectedSettingId = setting.id;
+		if (selectSetting) {
+			selectedSettingId = setting.id;
+		}
 		launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, next);
 	}
 
@@ -2330,6 +2349,93 @@
 		await applyRuntimeProfileUpdates([[field, value]], setting, previousSetting);
 	}
 
+	type PendingProfileSettingUpdate = {
+		settingId: string;
+		field: string;
+		value: ProfileSettingValue;
+		timer: number | null;
+		inFlight: boolean;
+		generation: number;
+	};
+
+	const pendingProfileSettingUpdates = new Map<string, PendingProfileSettingUpdate>();
+
+	function profileSettingUpdateKey(settingId: string, field: string): string {
+		return `${settingId}\n${field}`;
+	}
+
+	function isCoalescibleProfileSettingValue(value: ProfileSettingValue): boolean {
+		return typeof value === "number" || (Array.isArray(value) && value.every((item) => typeof item === "number"));
+	}
+
+	function scheduleCoalescedProfileSettingUpdate(setting: AvatarSetting, field: string, value: ProfileSettingValue): void {
+		const key = profileSettingUpdateKey(setting.id, field);
+		const pending = pendingProfileSettingUpdates.get(key) ?? {
+			settingId: setting.id,
+			field,
+			value,
+			timer: null,
+			inFlight: false,
+			generation: 0,
+		};
+		pending.value = value;
+		pending.generation += 1;
+		if (pending.timer !== null) {
+			window.clearTimeout(pending.timer);
+		}
+		pending.timer = window.setTimeout(() => {
+			pending.timer = null;
+			void flushCoalescedProfileSettingUpdate(key);
+		}, profileSettingUpdateCoalesceMs);
+		pendingProfileSettingUpdates.set(key, pending);
+	}
+
+	async function flushCoalescedProfileSettingUpdate(key: string): Promise<void> {
+		const pending = pendingProfileSettingUpdates.get(key);
+		if (!pending || pending.inFlight) return;
+		if (pending.timer !== null) {
+			window.clearTimeout(pending.timer);
+			pending.timer = null;
+		}
+		const previousSetting =
+			avatarSettingBySelectedId(pending.settingId) ?? avatarSettings.find((setting) => setting.id === pending.settingId) ?? null;
+		if (!previousSetting) {
+			pendingProfileSettingUpdates.delete(key);
+			return;
+		}
+		const value = pending.value;
+		const generation = pending.generation;
+		const rendererToRestart = canApplyWithoutRestart(pending.field)
+			? null
+			: isLaunchTimeRendererField(pending.field)
+				? rendererForSetting(previousSetting)
+				: null;
+		pending.inFlight = true;
+		try {
+			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
+				settingId: pending.settingId,
+				field: pending.field,
+				value,
+			});
+			message = $_("profiles.messages.updated_setting");
+			replaceAvatarSetting(setting, selectedSettingId === pending.settingId);
+			await applyRuntimeProfileUpdate(pending.field, value, setting, previousSetting);
+			queueRendererRestart(rendererToRestart, pending.field);
+		} catch (error) {
+			message = String(error);
+		} finally {
+			pending.inFlight = false;
+			if (pending.generation === generation) {
+				pendingProfileSettingUpdates.delete(key);
+			} else if (pending.timer === null) {
+				pending.timer = window.setTimeout(() => {
+					pending.timer = null;
+					void flushCoalescedProfileSettingUpdate(key);
+				}, profileSettingUpdateCoalesceMs);
+			}
+		}
+	}
+
 	async function updateSettingValue(field: string, value: ProfileSettingValue): Promise<void> {
 		const targetSetting = selectedSetting;
 		if (!targetSetting) return;
@@ -2346,6 +2452,11 @@
 			} finally {
 				busy = false;
 			}
+			return;
+		}
+
+		if (isCoalescibleProfileSettingValue(value)) {
+			scheduleCoalescedProfileSettingUpdate(targetSetting, field, value);
 			return;
 		}
 
@@ -2742,6 +2853,121 @@
 				enabled,
 			});
 			await refreshRendererRuntimeView();
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function addRendererDynamicsMatchOverride(renderer: RendererInstance | null, seed: DynamicsMatchOverrideSetting): Promise<void> {
+		if (!renderer?.manifest_path) return;
+		if (!hasTauriRuntime()) return;
+		const previousSetting = settingForRenderer(renderer);
+		if (!previousSetting) return;
+		const source_id_contains = (seed.source_id_contains ?? []).map((value) => value.trim()).filter(Boolean);
+		if (source_id_contains.length === 0 && !seed.source_id?.trim()) return;
+		const existing = previousSetting.dynamics_match_overrides ?? [];
+		const normalizedContains = source_id_contains[0]?.toLowerCase() ?? "";
+		const normalizedSourceId = seed.source_id?.trim().toLowerCase() ?? "";
+		if (
+			(normalizedContains &&
+				existing.some((override) =>
+					(override.source_id_contains ?? []).some((value) => value.trim().toLowerCase() === normalizedContains)
+				)) ||
+			(normalizedSourceId && existing.some((override) => override.source_id?.trim().toLowerCase() === normalizedSourceId))
+		) {
+			selectedSettingId = previousSetting.id;
+			setActiveTab("settings", "rendererDetails:existingDynamicsMatchOverride");
+			message = $_("profiles.messages.updated_setting");
+			return;
+		}
+		const clampedRestResponse = seed.rest_response == null ? undefined : Math.max(0, Math.min(1, seed.rest_response));
+		const clampedShapePreservation = seed.shape_preservation == null ? undefined : Math.max(0, Math.min(1, seed.shape_preservation));
+		const clampedDampingHalfLife =
+			seed.damping_half_life_ms == null ? undefined : Math.max(1, Math.min(10000, seed.damping_half_life_ms));
+		const clampedBounceScale = seed.bounce_scale == null ? undefined : Math.max(0, Math.min(4, seed.bounce_scale));
+		const clampedMotionCoupling = seed.motion_coupling == null ? undefined : Math.max(0, Math.min(1, seed.motion_coupling));
+		const clampedStretchRangeScale = seed.stretch_range_scale == null ? undefined : Math.max(0, Math.min(4, seed.stretch_range_scale));
+		const clampedStretchMotion = seed.stretch_motion == null ? undefined : Math.max(0, Math.min(1, seed.stretch_motion));
+		const clampedXpbdCompliance = seed.xpbd_compliance == null ? undefined : Math.max(0, Math.min(10, seed.xpbd_compliance));
+		const solver = seed.solver === "xpbd" ? "xpbd" : "verlet";
+		const override: DynamicsMatchOverrideSetting = {
+			name: seed.name?.trim() || source_id_contains[0] || seed.source_id?.trim(),
+			...(seed.source_id?.trim() ? { source_id: seed.source_id.trim() } : {}),
+			...(source_id_contains.length > 0 ? { source_id_contains } : {}),
+			solver,
+			...(clampedDampingHalfLife == null ? {} : { damping_half_life_ms: clampedDampingHalfLife }),
+			...(clampedRestResponse == null ? {} : { rest_response: clampedRestResponse }),
+			...(clampedShapePreservation == null ? {} : { shape_preservation: clampedShapePreservation }),
+			...(clampedBounceScale == null ? {} : { bounce_scale: clampedBounceScale }),
+			...(clampedMotionCoupling == null ? {} : { motion_coupling: clampedMotionCoupling }),
+			...(clampedStretchRangeScale == null ? {} : { stretch_range_scale: clampedStretchRangeScale }),
+			...(clampedStretchMotion == null ? {} : { stretch_motion: clampedStretchMotion }),
+			...(solver === "xpbd" && clampedXpbdCompliance != null ? { xpbd_compliance: clampedXpbdCompliance } : {}),
+		};
+		const value: ProfileSettingValue = [...existing, override];
+		try {
+			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
+				settingId: previousSetting.id,
+				field: DYNAMICS_MATCH_OVERRIDE_FIELD,
+				value,
+			});
+			message = $_("profiles.messages.updated_setting");
+			replaceAvatarSetting(setting);
+			await applyRuntimeProfileUpdate(DYNAMICS_MATCH_OVERRIDE_FIELD, value, setting, previousSetting);
+			setActiveTab("settings", "rendererDetails:addDynamicsMatchOverride");
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function addRendererDynamicsGroupOverride(
+		renderer: RendererInstance | null,
+		sourceId: string,
+		seed: DynamicsGroupOverrideSeed | null
+	): Promise<void> {
+		if (!renderer?.manifest_path) return;
+		if (!hasTauriRuntime()) return;
+		const previousSetting = settingForRenderer(renderer);
+		if (!previousSetting) return;
+		const source_id = sourceId.trim();
+		if (!source_id) return;
+		const existing = previousSetting.dynamics_group_overrides ?? [];
+		const normalizedSource = source_id.toLowerCase();
+		if (existing.some((override) => override.source_id.trim().toLowerCase() === normalizedSource)) {
+			selectedSettingId = previousSetting.id;
+			setActiveTab("settings", "rendererDetails:existingDynamicsGroupOverride");
+			message = $_("profiles.messages.updated_setting");
+			return;
+		}
+		const clampedRestResponse = seed?.rest_response == null ? undefined : Math.max(0, Math.min(1, seed.rest_response));
+		const clampedShapePreservation = seed?.shape_preservation == null ? undefined : Math.max(0, Math.min(1, seed.shape_preservation));
+		const clampedDampingHalfLife =
+			seed?.damping_half_life_ms == null ? undefined : Math.max(1, Math.min(10000, seed.damping_half_life_ms));
+		const clampedBounceScale = seed?.bounce_scale == null ? undefined : Math.max(0, Math.min(4, seed.bounce_scale));
+		const clampedMotionCoupling = seed?.motion_coupling == null ? undefined : Math.max(0, Math.min(1, seed.motion_coupling));
+		const clampedXpbdCompliance = seed?.xpbd_compliance == null ? undefined : Math.max(0, Math.min(10, seed.xpbd_compliance));
+		const solver = seed?.solver === "xpbd" ? "xpbd" : "verlet";
+		const override: DynamicsGroupOverrideSetting = {
+			source_id,
+			solver,
+			...(clampedDampingHalfLife == null ? {} : { damping_half_life_ms: clampedDampingHalfLife }),
+			...(clampedRestResponse == null ? {} : { rest_response: clampedRestResponse }),
+			...(clampedShapePreservation == null ? {} : { shape_preservation: clampedShapePreservation }),
+			...(clampedBounceScale == null ? {} : { bounce_scale: clampedBounceScale }),
+			...(clampedMotionCoupling == null ? {} : { motion_coupling: clampedMotionCoupling }),
+			...(solver === "xpbd" && clampedXpbdCompliance != null ? { xpbd_compliance: clampedXpbdCompliance } : {}),
+		};
+		const value: ProfileSettingValue = [...existing, override];
+		try {
+			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
+				settingId: previousSetting.id,
+				field: "physics.dynamics.solver.group_overrides",
+				value,
+			});
+			message = $_("profiles.messages.updated_setting");
+			replaceAvatarSetting(setting);
+			await applyRuntimeProfileUpdate("physics.dynamics.solver.group_overrides", value, setting, previousSetting);
+			setActiveTab("settings", "rendererDetails:addDynamicsGroupOverride");
 		} catch (error) {
 			message = String(error);
 		}
@@ -3222,6 +3448,14 @@
 						onSetDynamicsEnabled={(rendererId, sourceId, enabled) => {
 							const renderer = selectedRendererById(rendererId);
 							return setRendererDynamicsEnabled(renderer, sourceId, enabled);
+						}}
+						onAddDynamicsMatchOverride={(rendererId, seed) => {
+							const renderer = selectedRendererById(rendererId);
+							return addRendererDynamicsMatchOverride(renderer, seed);
+						}}
+						onAddDynamicsGroupOverride={(rendererId, sourceId, seed) => {
+							const renderer = selectedRendererById(rendererId);
+							return addRendererDynamicsGroupOverride(renderer, sourceId, seed);
 						}}
 						onOpenProfile={() => {
 							if (!launchTargetSetting) return;

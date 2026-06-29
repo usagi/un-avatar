@@ -97,6 +97,7 @@ pub(crate) struct PostProcess {
 	source_view: wgpu::TextureView,
 	depth_texture: wgpu::Texture,
 	depth_view: wgpu::TextureView,
+	depth_sample_view: wgpu::TextureView,
 	smaa_targets: Option<SmaaTargets>,
 	bloom_targets: Option<BloomTargets>,
 	outline_targets: Option<OutlineTargets>,
@@ -158,7 +159,7 @@ impl PostProcess {
 		let width = width.max(1);
 		let height = height.max(1);
 		let (source_texture, source_view) = create_source_texture(device, width, height, format);
-		let (depth_texture, depth_view) = create_depth_texture(device, width, height, 1);
+		let (depth_texture, depth_view, depth_sample_view) = create_post_depth_texture(device, width, height);
 		let one_texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
 			label: Some("post-process"),
 			entries: &[
@@ -274,7 +275,7 @@ impl PostProcess {
 			device,
 			&one_texture_layout,
 			&source_view,
-			&depth_view,
+			&depth_sample_view,
 			&source_view,
 			&sampler,
 			&post_uniform,
@@ -288,6 +289,7 @@ impl PostProcess {
 			source_view,
 			depth_texture,
 			depth_view,
+			depth_sample_view,
 			smaa_targets: None,
 			bloom_targets: None,
 			outline_targets: None,
@@ -322,7 +324,7 @@ impl PostProcess {
 		self.source_texture.destroy();
 		self.depth_texture.destroy();
 		let (source_texture, source_view) = create_source_texture(device, width, height, format);
-		let (depth_texture, depth_view) = create_depth_texture(device, width, height, 1);
+		let (depth_texture, depth_view, depth_sample_view) = create_post_depth_texture(device, width, height);
 		self.width = width;
 		self.height = height;
 		self.format = format;
@@ -330,6 +332,7 @@ impl PostProcess {
 		self.source_view = source_view;
 		self.depth_texture = depth_texture;
 		self.depth_view = depth_view;
+		self.depth_sample_view = depth_sample_view;
 		self.smaa_targets = None;
 		self.bloom_targets = None;
 		self.outline_targets = None;
@@ -346,7 +349,7 @@ impl PostProcess {
 			device,
 			&self.one_texture_layout,
 			&self.source_view,
-			&self.depth_view,
+			&self.depth_sample_view,
 			&self.source_view,
 			&self.sampler,
 			&self.post_uniform,
@@ -503,7 +506,7 @@ impl PostProcess {
 				&self.two_texture_layout,
 				&self.source_view,
 				&self.source_view,
-				&self.depth_view,
+				&self.depth_sample_view,
 				&self.source_view,
 				&self.sampler,
 				&self.post_uniform,
@@ -514,7 +517,7 @@ impl PostProcess {
 				&self.two_texture_layout,
 				&edge_view,
 				&edge_view,
-				&self.depth_view,
+				&self.depth_sample_view,
 				&self.source_view,
 				&self.nearest_sampler,
 				&self.post_uniform,
@@ -525,7 +528,7 @@ impl PostProcess {
 				&self.two_texture_layout,
 				&self.source_view,
 				&blend_view,
-				&self.depth_view,
+				&self.depth_sample_view,
 				&self.source_view,
 				&self.sampler,
 				&self.post_uniform,
@@ -552,7 +555,7 @@ impl PostProcess {
 					&self.two_texture_layout,
 					&self.source_view,
 					&targets.blend_view,
-					&self.depth_view,
+					&self.depth_sample_view,
 					bloom_view,
 					&self.sampler,
 					&self.post_uniform,
@@ -572,7 +575,7 @@ impl PostProcess {
 			device,
 			&self.one_texture_layout,
 			&self.source_view,
-			&self.depth_view,
+			&self.depth_sample_view,
 			&self.source_view,
 			&self.sampler,
 			&self.post_uniform,
@@ -582,7 +585,7 @@ impl PostProcess {
 			device,
 			&self.one_texture_layout,
 			&a_view,
-			&self.depth_view,
+			&self.depth_sample_view,
 			&a_view,
 			&self.sampler,
 			&self.post_uniform,
@@ -592,7 +595,7 @@ impl PostProcess {
 			device,
 			&self.one_texture_layout,
 			&b_view,
-			&self.depth_view,
+			&self.depth_sample_view,
 			&b_view,
 			&self.sampler,
 			&self.post_uniform,
@@ -602,7 +605,7 @@ impl PostProcess {
 			device,
 			&self.one_texture_layout,
 			&self.source_view,
-			&self.depth_view,
+			&self.depth_sample_view,
 			&a_view,
 			&self.sampler,
 			&self.post_uniform,
@@ -1095,12 +1098,23 @@ fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32, sample_c
 		mip_level_count: 1,
 		sample_count,
 		dimension: wgpu::TextureDimension::D2,
-		format: wgpu::TextureFormat::Depth24Plus,
+		format: wgpu::TextureFormat::Depth24PlusStencil8,
 		usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
 		view_formats: &[],
 	});
 	let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 	(texture, view)
+}
+
+fn create_post_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView, wgpu::TextureView) {
+	let (texture, attachment_view) = create_depth_texture(device, width, height, 1);
+	let sample_view = texture.create_view(&wgpu::TextureViewDescriptor {
+		label: Some("post-depth-sample"),
+		dimension: Some(wgpu::TextureViewDimension::D2),
+		aspect: wgpu::TextureAspect::DepthOnly,
+		..Default::default()
+	});
+	(texture, attachment_view, sample_view)
 }
 
 fn texture_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {

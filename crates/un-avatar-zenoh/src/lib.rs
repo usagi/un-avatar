@@ -21,7 +21,7 @@ use std::{
 	time::Duration,
 };
 
-use crossbeam_channel::{Receiver, TryRecvError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 use un_motion_frame::UNMotionFrame;
 use un_motion_frame_zenoh::{Error, Subscriber, SubscriberBackend, ZenohTopicStrategy};
 
@@ -148,6 +148,28 @@ impl UnAvatarZenohReceiver {
 		}
 		frames
 	}
+
+	/// 最初の 1 件だけ timeout 付きで待ち、続くフレームは受信順に即時 drain する。
+	///
+	/// 呼び出し側で固定 sleep polling を行うと、入力 FPS と表示 FPS の位相差が粗いバッチ間隔として
+	/// 表面化しやすい。受信チャネル側で待つことで、無音時だけ低負荷にしつつ入力到着時は即座に渡す。
+	pub fn recv_batch_timeout(&self, max_frames: usize, timeout: Duration) -> Vec<UNMotionFrame> {
+		if max_frames == 0 {
+			return Vec::new();
+		}
+		let mut frames = Vec::with_capacity(max_frames);
+		match self.rx.recv_timeout(timeout) {
+			Ok(frame) => frames.push(frame),
+			Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => return frames,
+		}
+		while frames.len() < max_frames {
+			match self.rx.try_recv() {
+				Ok(frame) => frames.push(frame),
+				Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+			}
+		}
+		frames
+	}
 }
 
 impl Drop for UnAvatarZenohReceiver {
@@ -250,5 +272,27 @@ mod tests {
 			}
 		}
 		panic!("drain_available did not converge to 5 frames");
+	}
+
+	#[test]
+	fn recv_batch_timeout_waits_for_first_frame_then_drains_available() {
+		let backend = InMemoryBackend::new();
+		let strategy = ZenohTopicStrategy::default();
+		let receiver = UnAvatarZenohReceiver::declare_with_backend(backend.clone(), strategy.clone()).expect("receiver");
+		let mut publisher = Publisher::new(backend.clone()).with_strategy(strategy);
+
+		publisher.send(&make_frame(1)).expect("publish 1");
+		publisher.send(&make_frame(2)).expect("publish 2");
+
+		let mut seqs = Vec::new();
+		for _ in 0..20 {
+			let frames = receiver.recv_batch_timeout(8, Duration::from_millis(50));
+			seqs.extend(frames.into_iter().map(|f| f.header.sequence));
+			if seqs.len() >= 2 {
+				assert_eq!(seqs, vec![1, 2]);
+				return;
+			}
+		}
+		panic!("recv_batch_timeout did not collect published frames");
 	}
 }

@@ -13,12 +13,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
+use glam::{Mat4, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
 	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count,
 	una_dynamics_translation_writeback_target_count, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat,
-	UnaMaterialPbr, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel,
-	UnaSceneSnapshot, UnaShadingModel,
+	UnaMaterialPbr, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey,
+	UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
 };
 use un_avatar_io::{
 	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
@@ -27,9 +28,37 @@ use un_avatar_io::{
 use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer, WardrobeApplyReport};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
+use un_avatar_skeleton::{
+	annotate_dynamics_response_group_visibility, apply_dynamics_mesh_cloth_assist_to_vertices, build_dynamics_bone_colliders_with_sources,
+	classify_dynamics_group_category, distance_point_segment, dynamics_mesh_cloth_assist_deforming_nodes,
+	dynamics_mesh_cloth_assist_joint_roles,
+	dynamics_mesh_cloth_assist_mesh_matches_with_categories as skeleton_mesh_cloth_assist_mesh_matches_with_categories,
+	dynamics_mesh_cloth_assist_transfer_candidate, for_each_dynamics_mesh_cloth_assist_neighbor, local_capsule_world, local_plane_world,
+	local_sphere_world, BoneColliderConfig, BoneColliderPrimitive, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig,
+	DynamicsMeshClothAssistJointRole, DynamicsMeshClothAssistTransferKind, DynamicsMeshClothAssistVertex, DynamicsPhysicsConfig,
+	DynamicsPhysicsParams, DynamicsResponseCategorySummary, DynamicsResponseGroupSummary, DynamicsSimulator, DynamicsStepProfile,
+	DynamicsTailSample, DynamicsVisualTargetContext,
+};
 
 const DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT: usize = 24;
 const DIAGNOSE_TEXT_LIST_LIMIT: usize = 16;
+const DYNAMICS_SCAN_REQUIRED_SOURCE_PARAM_KEYS: &[&str] = &[
+	"pull",
+	"pullCurve",
+	"spring",
+	"springCurve",
+	"momentum",
+	"momentumCurve",
+	"stiffness",
+	"stiffnessCurve",
+	"gravityFalloff",
+	"gravityFalloffCurve",
+	"immobile",
+	"immobileCurve",
+	"immobileType",
+	"integrationType",
+	"limitRotation",
+];
 
 #[derive(Serialize)]
 struct ConvertJsonReport {
@@ -76,6 +105,8 @@ struct InspectDocumentSummary {
 	has_scene: bool,
 	has_vrm: bool,
 	has_unavatar: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	scene_lighting: Option<InspectSceneLightingSummary>,
 	node_count: usize,
 	root_count: usize,
 	mesh_count: usize,
@@ -84,6 +115,453 @@ struct InspectDocumentSummary {
 	image_count: usize,
 	skin_count: usize,
 	morph_target_count: usize,
+}
+
+#[derive(Serialize)]
+struct InspectSceneLightingSummary {
+	has_environment: bool,
+	has_directional: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	environment_color: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	environment_intensity: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_color: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_intensity: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_azimuth_deg: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_elevation_deg: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct DynamicsScanReport {
+	path: String,
+	file_bytes: u64,
+	json_bytes: usize,
+	extension_keys: Vec<String>,
+	source_params_count: usize,
+	required_source_param_counts: BTreeMap<String, usize>,
+	missing_required_source_params: Vec<String>,
+	source_param_key_counts: BTreeMap<String, usize>,
+	numeric_ranges: BTreeMap<String, DynamicsScanNumericRange>,
+	curve_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct DynamicsScanNumericRange {
+	count: usize,
+	min: f64,
+	max: f64,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportAuditReport {
+	path: String,
+	import_format_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	import_provider_plugin_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	active_wardrobe_set: Option<String>,
+	import_report: ImportReport,
+	source_params_count: usize,
+	group_count: usize,
+	source_kind_counts: BTreeMap<String, usize>,
+	enabled_group_count: usize,
+	chain_joint_count: usize,
+	collider_count: usize,
+	contact_count: usize,
+	constraint_ref_count: usize,
+	node_constraint_count: usize,
+	parent_node_constraint_count: usize,
+	parent_node_constraint_source_count: usize,
+	parent_node_constraint_multi_source_count: usize,
+	source_angle_limit_group_count: usize,
+	active_angle_limit_group_count: usize,
+	cloth_angle_limit_metadata_only_count: usize,
+	hard_angle_constraint_group_count: usize,
+	response_category_count: usize,
+	response_group_count: usize,
+	runtime_ranges: BTreeMap<String, DynamicsScanNumericRange>,
+	sample_counts: BTreeMap<String, usize>,
+	group_samples: Vec<DynamicsImportGroupSample>,
+	node_samples: Vec<DynamicsImportNodeSample>,
+	skin_samples: Vec<DynamicsImportSkinSample>,
+	mesh_cloth_assist_samples: Vec<DynamicsImportMeshClothAssistSample>,
+	missing_runtime_evidence: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportGroupSample {
+	source_id: String,
+	category: String,
+	enabled: bool,
+	source_kind: String,
+	chain_len: usize,
+	root_path: Option<String>,
+	tip_path: Option<String>,
+	chain_paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportNodeSample {
+	index: usize,
+	name: Option<String>,
+	path: Option<String>,
+	parent_index: Option<usize>,
+	parent_path: Option<String>,
+	mesh: Option<usize>,
+	skin: Option<usize>,
+	children: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportSkinSample {
+	node_index: usize,
+	node_path: Option<String>,
+	skin_index: usize,
+	skeleton_node: Option<usize>,
+	skeleton_path: Option<String>,
+	joint_count: usize,
+	joints: Vec<DynamicsImportSkinJointSample>,
+	region_samples: Vec<DynamicsImportSkinRegionSample>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportSkinJointSample {
+	joint_index: usize,
+	node_index: usize,
+	name: Option<String>,
+	path: Option<String>,
+	parent_index: Option<usize>,
+	parent_path: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportSkinRegionSample {
+	primitive_index: usize,
+	primitive_name: Option<String>,
+	region: String,
+	vertex_count: usize,
+	dominant_counts: Vec<DynamicsImportSkinInfluenceSample>,
+	weight_sums: Vec<DynamicsImportSkinInfluenceSample>,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportSkinInfluenceSample {
+	joint_index: usize,
+	node_index: usize,
+	name: Option<String>,
+	path: Option<String>,
+	value: f32,
+}
+
+#[derive(Serialize)]
+struct DynamicsImportMeshClothAssistSample {
+	node_index: usize,
+	node_path: Option<String>,
+	mesh_index: usize,
+	primitive_index: usize,
+	primitive_name: Option<String>,
+	region: String,
+	vertex_count: usize,
+	candidate_count: usize,
+	existing_dynamic_candidate_count: usize,
+	static_cloth_bridge_candidate_count: usize,
+	seed_candidate_count: usize,
+	body_weight_sum: f32,
+	dynamic_weight_sum: f32,
+	static_cloth_weight_sum: f32,
+	suggested_assist_weight_sum: f32,
+	seeded_assist_weight_sum: f32,
+	body_sources: Vec<DynamicsImportSkinInfluenceSample>,
+	dynamic_targets: Vec<DynamicsImportSkinInfluenceSample>,
+}
+
+#[derive(Serialize)]
+struct DynamicsResponseAuditReport {
+	path: String,
+	import_format_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	import_provider_plugin_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	active_wardrobe_set: Option<String>,
+	import_report: ImportReport,
+	group_count: usize,
+	joint_count: usize,
+	modes: Vec<DynamicsResponseAuditMode>,
+	missing_response_evidence: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsResponseAuditMode {
+	name: String,
+	group_count: usize,
+	joint_count: usize,
+	average_rest_response: f32,
+	average_shape_preservation: f32,
+	average_bounce_response: f32,
+	average_max_stretch_response: f32,
+	average_max_squish_response: f32,
+	average_stretch_motion_response: f32,
+	average_damping_half_life_ms: Option<f32>,
+	average_parent_motion_follow: f32,
+	average_orientation_follow: f32,
+	xpbd_group_count: usize,
+	category_count: usize,
+	categories: Vec<DynamicsResponseCategorySummary>,
+	groups: Vec<DynamicsResponseGroupSummary>,
+}
+
+#[derive(Serialize)]
+struct DynamicsMotionTraceAuditReport {
+	path: String,
+	import_format_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	import_provider_plugin_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	active_wardrobe_set: Option<String>,
+	import_report: ImportReport,
+	frame_count: usize,
+	recovery_frame_count: usize,
+	tuning: String,
+	group_count: usize,
+	joint_count: usize,
+	categories: Vec<DynamicsMotionTraceCategorySummary>,
+	groups: Vec<DynamicsMotionTraceGroupSummary>,
+	findings: Vec<String>,
+	finding_details: Vec<DynamicsMotionTraceFindingDetail>,
+	finding_kind_counts: BTreeMap<String, usize>,
+	missing_motion_evidence: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsMotionTraceFindingDetail {
+	kind: String,
+	message: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_id: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	category: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	visual_target: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	skinned_joint_count: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	mesh_subtree_node_count: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	interaction_metadata_only: Option<bool>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	tuning_hint: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	response_override_hint: Option<DynamicsMotionTraceResponseOverrideHint>,
+}
+
+#[derive(Serialize)]
+struct DynamicsMotionTraceResponseOverrideHint {
+	source_id: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	rest_response: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	damping_half_life_ms: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stretch_range_scale: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stretch_motion: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeReport {
+	path: String,
+	wardrobe_set: Option<String>,
+	tuning: String,
+	node_index: usize,
+	node_path: String,
+	mesh_index: usize,
+	skin_index: Option<usize>,
+	settle_frames: usize,
+	authored_colliders_ignored: bool,
+	runtime_collider_count: usize,
+	solve_collision_projection_count: u32,
+	solve_collision_projection_source_ids: Vec<String>,
+	solve_collision_projection_source_counts: BTreeMap<String, u32>,
+	probe_dynamic_source_ids: Vec<String>,
+	probe_dynamic_source_weight_sums: BTreeMap<String, f32>,
+	probe_collision_projection_count: u32,
+	probe_collision_projection_source_ids: Vec<String>,
+	probe_collision_projection_source_counts: BTreeMap<String, u32>,
+	solve_collision_projection_collider_paths: Vec<String>,
+	solve_collision_projection_collider_path_counts: BTreeMap<String, u32>,
+	solve_collision_projection_source_collider_path_counts: BTreeMap<String, BTreeMap<String, u32>>,
+	collider_path_summaries: Vec<DynamicsVertexProbeColliderPathSummary>,
+	probe_collision_projection_collider_path_counts: BTreeMap<String, u32>,
+	probe_collider_path_summaries: Vec<DynamicsVertexProbeColliderPathSummary>,
+	mesh_cloth_assist_applied: bool,
+	mesh_cloth_assist_changed_vertices: usize,
+	node_samples: Vec<DynamicsVertexProbeNodeSample>,
+	joint_weight_summaries: Vec<DynamicsVertexProbeJointWeightSummary>,
+	regions: Vec<DynamicsVertexProbeRegionReport>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeColliderPathSummary {
+	collider_path: String,
+	collider_shape: String,
+	inside_bounds: bool,
+	candidate_count: usize,
+	penetrating_count: usize,
+	projection_count: u32,
+	source_count: usize,
+	min_margin: f32,
+	min_distance: f32,
+	min_threshold: f32,
+	sample_source_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeNodeSample {
+	node_index: usize,
+	path: String,
+	rest_translation: [f32; 3],
+	settled_translation: [f32; 3],
+	delta: [f32; 3],
+	displacement: f32,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeRegionReport {
+	name: String,
+	vertex_count: usize,
+	dominant_joints: Vec<DynamicsVertexProbeJointCount>,
+	morph_targets: Vec<DynamicsVertexProbeMorphTargetRegionSummary>,
+	average_displacement: f32,
+	max_displacement: f32,
+	average_delta: [f32; 3],
+	least_moved_samples: Vec<DynamicsVertexProbeVertexSample>,
+	most_moved_samples: Vec<DynamicsVertexProbeVertexSample>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeMorphTargetRegionSummary {
+	index: usize,
+	name: String,
+	default_weight: f32,
+	affected_vertices: usize,
+	average_delta: f32,
+	max_delta: f32,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeJointCount {
+	joint: String,
+	count: usize,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeJointWeightSummary {
+	joint: String,
+	node_index: Option<usize>,
+	vertex_count: usize,
+	dominant_vertex_count: usize,
+	weight_sum: f32,
+	max_weight: f32,
+	average_weight: f32,
+	average_position: [f32; 3],
+	bounds_min: [f32; 3],
+	bounds_max: [f32; 3],
+}
+
+#[derive(Clone, Serialize)]
+struct DynamicsVertexProbeVertexSample {
+	vertex_index: usize,
+	position: [f32; 3],
+	settled_position: [f32; 3],
+	delta: [f32; 3],
+	displacement: f32,
+	dominant_joint: String,
+	dominant_weight: f32,
+	influences: Vec<DynamicsVertexProbeInfluence>,
+}
+
+#[derive(Clone, Serialize)]
+struct DynamicsVertexProbeInfluence {
+	joint: String,
+	weight: f32,
+}
+
+#[derive(Serialize, Clone)]
+struct DynamicsMotionTraceCategorySummary {
+	category: String,
+	group_count: usize,
+	joint_count: usize,
+	visual_target_group_count: usize,
+	nonvisual_group_count: usize,
+	visible_skinned_joint_count: usize,
+	visible_mesh_subtree_node_count: usize,
+	average_chain_rest_length: f32,
+	max_lag: f32,
+	max_lag_chain_ratio: f32,
+	average_lag: f32,
+	final_lag: f32,
+	final_lag_chain_ratio: f32,
+	recovery_final_lag: f32,
+	recovery_ratio: f32,
+	initial_stable_offset: f32,
+	settled_recovery_lag: f32,
+	stable_offset: f32,
+	stable_offset_chain_ratio: f32,
+	stable_offset_ratio: f32,
+	recovery_state: String,
+	settled_recovery_ratio: f32,
+	residual_motion: f32,
+	residual_motion_chain_ratio: f32,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	recovery_half_life_frames: Option<f32>,
+	average_rest_response: f32,
+	average_shape_preservation: f32,
+	average_bounce_response: f32,
+	average_parent_motion_follow: f32,
+	average_orientation_follow: f32,
+	average_max_stretch_response: f32,
+	average_stretch_motion_response: f32,
+}
+
+#[derive(Serialize, Clone)]
+struct DynamicsMotionTraceGroupSummary {
+	source_id: String,
+	category: String,
+	joint_count: usize,
+	visual_target: bool,
+	skinned_joint_count: usize,
+	mesh_subtree_node_count: usize,
+	interaction_metadata_only: bool,
+	chain_rest_length: f32,
+	max_lag: f32,
+	max_lag_chain_ratio: f32,
+	average_lag: f32,
+	final_lag: f32,
+	final_lag_chain_ratio: f32,
+	recovery_final_lag: f32,
+	recovery_ratio: f32,
+	initial_stable_offset: f32,
+	settled_recovery_lag: f32,
+	stable_offset: f32,
+	stable_offset_chain_ratio: f32,
+	stable_offset_ratio: f32,
+	recovery_state: String,
+	settled_recovery_ratio: f32,
+	residual_motion: f32,
+	residual_motion_chain_ratio: f32,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	recovery_half_life_frames: Option<f32>,
+	average_rest_response: f32,
+	average_shape_preservation: f32,
+	average_bounce_response: f32,
+	average_parent_motion_follow: f32,
+	average_orientation_follow: f32,
+	average_max_stretch_response: f32,
+	average_stretch_motion_response: f32,
 }
 
 #[derive(Serialize)]
@@ -166,6 +644,9 @@ struct DiagnoseSceneSummary {
 	material_count: usize,
 	liltoon_feature_counts: BTreeMap<String, usize>,
 	node_constraint_count: usize,
+	node_constraint_kind_counts: BTreeMap<String, usize>,
+	parent_node_constraint_source_count: usize,
+	parent_node_constraint_multi_source_count: usize,
 	asset_group_ownership_count: usize,
 	asset_group_owned_mesh_primitive_count: usize,
 	asset_group_owned_material_count: usize,
@@ -187,6 +668,15 @@ struct DiagnoseSceneSummary {
 	skins: Vec<DiagnoseSkinSummary>,
 	materials: Vec<DiagnoseMaterialSummary>,
 	visible_mesh_nodes: Vec<DiagnoseVisibleMeshNodeSummary>,
+}
+
+fn diagnose_node_constraint_kind(kind: &UnaNodeConstraintKind) -> &'static str {
+	match kind {
+		UnaNodeConstraintKind::Roll { .. } => "roll",
+		UnaNodeConstraintKind::Aim { .. } => "aim",
+		UnaNodeConstraintKind::Rotation => "rotation",
+		UnaNodeConstraintKind::Parent { .. } => "parent",
+	}
 }
 
 #[derive(Serialize)]
@@ -625,6 +1115,10 @@ struct DiagnoseDynamicsSummary {
 	interaction_hooks: Vec<DiagnoseDynamicsInteractionHookSummary>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	groups: Vec<DiagnoseDynamicsGroupSummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	response_categories: Vec<DynamicsResponseCategorySummary>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	response_groups: Vec<DynamicsResponseGroupSummary>,
 }
 
 #[derive(Serialize)]
@@ -633,6 +1127,8 @@ struct DiagnoseDynamicsColliderSummary {
 	source_kind: UnaDynamicsSourceKind,
 	#[serde(skip_serializing_if = "String::is_empty")]
 	source_id: String,
+	#[serde(skip_serializing_if = "String::is_empty")]
+	collider_path: String,
 	node: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	node_path: Option<String>,
@@ -662,6 +1158,24 @@ struct DynamicsSourceFeatureCounts {
 	interaction_parameter_count: usize,
 }
 
+#[derive(Default)]
+struct DynamicsSourceColliderAudit {
+	collision_enabled_empty_collider_count: usize,
+	collision_enabled_empty_collider_source_ids: Vec<String>,
+	collision_enabled_empty_collider_samples: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DynamicsSourceColliderSummary {
+	component_path: Option<String>,
+	root_paths: Vec<String>,
+	allow_collision: Option<bool>,
+	collider_count: usize,
+	unknown_shape_collider_count: usize,
+	inside_bounds_collider_count: usize,
+	collider_paths: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct DiagnoseDynamicsGroupSummary {
 	index: usize,
@@ -678,6 +1192,23 @@ struct DiagnoseDynamicsGroupSummary {
 	category: String,
 	bone_count: usize,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	source_component_path: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	source_root_paths: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	source_allow_collision: Option<bool>,
+	source_collider_count: usize,
+	source_unknown_shape_collider_count: usize,
+	source_inside_bounds_collider_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	source_collider_paths: Vec<String>,
+	runtime_collider_count: usize,
+	selected_runtime_collider_count: usize,
+	selected_global_collider_count: usize,
+	selected_authored_collider_count: usize,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	selected_runtime_collider_paths: Vec<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	root_node: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	root_path: Option<String>,
@@ -685,18 +1216,39 @@ struct DiagnoseDynamicsGroupSummary {
 	tip_node: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	tip_path: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	center_node: Option<usize>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	center_path: Option<String>,
 	stiffness: f32,
+	pull: f32,
+	spring: f32,
+	integration_type: un_avatar_core::UnaDynamicsIntegrationType,
 	drag_force: f32,
 	gravity_power: f32,
+	gravity_falloff: f32,
+	immobile: f32,
+	immobile_type: un_avatar_core::UnaDynamicsImmobileType,
 	gravity_dir: [f32; 3],
+	gravity_target_max_angle_deg: f32,
+	gravity_target_max_amount: f32,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	limit_type: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	limit_rotation: Option<[f32; 3]>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	max_angle_x: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	max_angle_z: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	max_stretch: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	max_squish: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stretch_motion: Option<f32>,
+	max_stretch_sample_has_positive: bool,
+	max_squish_sample_has_positive: bool,
+	stretch_motion_sample_has_positive: bool,
 	writeback_mode: un_avatar_core::UnaDynamicsWritebackMode,
 	translation_writeback_candidate_count: usize,
 	translation_writeback_target_count: usize,
@@ -1356,6 +1908,143 @@ enum Commands {
 		#[arg(long)]
 		json: bool,
 	},
+	/// .unavatar / glTF の UNPhysics sourceParams だけを高速に検査する
+	DynamicsScan {
+		path: PathBuf,
+		/// 現行 exporter が出すべき UNPhysics sourceParams が欠けていたら失敗する
+		#[arg(long)]
+		require_current_exporter: bool,
+		#[arg(long)]
+		json: bool,
+	},
+	/// Importer/lowering 後の UNPhysics runtime dynamics を監査する
+	DynamicsImportAudit {
+		path: PathBuf,
+		/// 使う importer の FormatId。省略時はパスから probe
+		#[arg(long, value_name = "FORMAT_ID")]
+		input_format: Option<String>,
+		/// Base 適用後に重ねる `.unavatar` wardrobe set id
+		#[arg(long, value_name = "SET_ID")]
+		wardrobe_set: Option<String>,
+		/// sourceParams があるのに runtime dynamics が無いなど、必須の lowering evidence 欠落で失敗する
+		#[arg(long)]
+		require_runtime_evidence: bool,
+		#[arg(long)]
+		json: bool,
+	},
+	/// UNPhysics response terms が profile override で実際に変化するか監査する
+	DynamicsResponseAudit {
+		path: PathBuf,
+		/// 使う importer の FormatId。省略時はパスから probe
+		#[arg(long, value_name = "FORMAT_ID")]
+		input_format: Option<String>,
+		/// Base 適用後に重ねる `.unavatar` wardrobe set id
+		#[arg(long, value_name = "SET_ID")]
+		wardrobe_set: Option<String>,
+		/// soft/firm override が runtime response に効いていなければ失敗する
+		#[arg(long)]
+		require_override_effect: bool,
+		#[arg(long)]
+		json: bool,
+	},
+	/// 実アバターに簡易motionを流し、カテゴリ別のUNPhysics lagを監査する
+	DynamicsMotionTraceAudit {
+		path: PathBuf,
+		/// 使う importer の FormatId。省略時はパスから probe
+		#[arg(long, value_name = "FORMAT_ID")]
+		input_format: Option<String>,
+		/// Base 適用後に重ねる `.unavatar` wardrobe set id
+		#[arg(long, value_name = "SET_ID")]
+		wardrobe_set: Option<String>,
+		/// カテゴリ別 lag が得られなければ失敗する
+		#[arg(long)]
+		require_motion_evidence: bool,
+		#[arg(long, default_value_t = 24)]
+		frames: usize,
+		/// 入力停止後に自然回復を観測する frame 数。省略時は長い cloth / tail / cable の収束確認向けに 240
+		#[arg(long)]
+		recovery_frames: Option<usize>,
+		/// 監査時だけ適用する物理tuning。authored はモデル由来値、soft/firm と単一term tuning は全カテゴリoverride
+		#[arg(
+			long,
+			default_value = "authored",
+			value_parser = [
+				"authored",
+				"soft",
+				"firm",
+				"rest-low",
+				"rest-high",
+				"shape-low",
+				"shape-high",
+				"bounce-low",
+				"bounce-high",
+				"follow-low",
+				"follow-high",
+				"gravity-off",
+				"gravity-low",
+				"gravity-high",
+				"stretch-off",
+				"stretch-low",
+				"stretch-high",
+				"damping-long",
+				"damping-short"
+			]
+		)]
+		tuning: String,
+		#[arg(long)]
+		json: bool,
+	},
+	/// 実アバター上で物理 settle 後の skinned vertex 変位を調査する
+	DynamicsVertexProbe {
+		path: PathBuf,
+		/// 使う importer の FormatId。省略時はパスから probe
+		#[arg(long, value_name = "FORMAT_ID")]
+		input_format: Option<String>,
+		/// Base 適用後に重ねる `.unavatar` wardrobe set id
+		#[arg(long, value_name = "SET_ID")]
+		wardrobe_set: Option<String>,
+		/// 対象 node path に含まれる文字列。空なら dynamics joint を含む skinned mesh を自動選択する
+		#[arg(long, default_value = "")]
+		node_contains: String,
+		/// settle させる frame 数
+		#[arg(long, default_value_t = 240)]
+		settle_frames: usize,
+		/// Renderer の mesh cloth assist と同じ補正を適用した頂点ウェイトで probe する
+		#[arg(long)]
+		apply_mesh_cloth_assist: bool,
+		/// Authored PhysBone collider を外して settle する
+		#[arg(long)]
+		ignore_authored_colliders: bool,
+		/// 監査時だけ適用する物理tuning。dynamics-motion-trace-audit と同じ値
+		#[arg(
+			long,
+			default_value = "authored",
+			value_parser = [
+				"authored",
+				"soft",
+				"firm",
+				"rest-low",
+				"rest-high",
+				"shape-low",
+				"shape-high",
+				"bounce-low",
+				"bounce-high",
+				"follow-low",
+				"follow-high",
+				"gravity-off",
+				"gravity-low",
+				"gravity-high",
+				"stretch-off",
+				"stretch-low",
+				"stretch-high",
+				"damping-long",
+				"damping-short"
+			]
+		)]
+		tuning: String,
+		#[arg(long)]
+		json: bool,
+	},
 	/// Importer 経由でモデルを読み、材質・Humanoid・表情・VRM ヒントを診断する
 	Diagnose {
 		/// 入力ファイル
@@ -1425,7 +2114,17 @@ fn main() {
 fn is_known_command(arg: &OsStr) -> bool {
 	matches!(
 		arg.to_string_lossy().as_ref(),
-		"formats" | "convert" | "validate" | "inspect" | "diagnose" | "vmc" | "help"
+		"formats"
+			| "convert"
+			| "validate"
+			| "inspect"
+			| "dynamics-scan"
+			| "dynamics-import-audit"
+			| "dynamics-response-audit"
+			| "dynamics-motion-trace-audit"
+			| "dynamics-vertex-probe"
+			| "diagnose"
+			| "vmc" | "help"
 	)
 }
 
@@ -1499,6 +2198,67 @@ fn run(cli: Cli) -> Result<(), String> {
 		} => run_convert(&plugin_dirs, input, output, input_format, output_format, json_report),
 		Commands::Validate { path, input_format, json } => run_validate(&plugin_dirs, path, input_format, json),
 		Commands::Inspect { path, json } => run_inspect(&plugin_dirs, path, json),
+		Commands::DynamicsScan {
+			path,
+			require_current_exporter,
+			json,
+		} => run_dynamics_scan(path, require_current_exporter, json),
+		Commands::DynamicsImportAudit {
+			path,
+			input_format,
+			wardrobe_set,
+			require_runtime_evidence,
+			json,
+		} => run_dynamics_import_audit(&plugin_dirs, path, input_format, wardrobe_set, require_runtime_evidence, json),
+		Commands::DynamicsResponseAudit {
+			path,
+			input_format,
+			wardrobe_set,
+			require_override_effect,
+			json,
+		} => run_dynamics_response_audit(&plugin_dirs, path, input_format, wardrobe_set, require_override_effect, json),
+		Commands::DynamicsMotionTraceAudit {
+			path,
+			input_format,
+			wardrobe_set,
+			require_motion_evidence,
+			frames,
+			recovery_frames,
+			tuning,
+			json,
+		} => run_dynamics_motion_trace_audit(
+			&plugin_dirs,
+			path,
+			input_format,
+			wardrobe_set,
+			require_motion_evidence,
+			frames,
+			recovery_frames,
+			&tuning,
+			json,
+		),
+		Commands::DynamicsVertexProbe {
+			path,
+			input_format,
+			wardrobe_set,
+			node_contains,
+			settle_frames,
+			apply_mesh_cloth_assist,
+			ignore_authored_colliders,
+			tuning,
+			json,
+		} => run_dynamics_vertex_probe(
+			&plugin_dirs,
+			path,
+			input_format,
+			wardrobe_set,
+			&node_contains,
+			settle_frames,
+			apply_mesh_cloth_assist,
+			ignore_authored_colliders,
+			&tuning,
+			json,
+		),
 		Commands::Diagnose {
 			path,
 			input_format,
@@ -1714,6 +2474,7 @@ fn inspect_document_summary(document: &UnaDocument) -> InspectDocumentSummary {
 			has_scene: false,
 			has_vrm: document.vrm.is_some(),
 			has_unavatar: document.unavatar.is_some(),
+			scene_lighting: None,
 			node_count: 0,
 			root_count: 0,
 			mesh_count: 0,
@@ -1726,10 +2487,21 @@ fn inspect_document_summary(document: &UnaDocument) -> InspectDocumentSummary {
 	};
 	let mesh_primitive_count = scene.meshes.iter().map(Vec::len).sum();
 	let morph_target_count = scene.meshes.iter().flatten().map(|primitive| primitive.morph_targets.len()).sum();
+	let scene_lighting = scene.lighting.as_ref().map(|lighting| InspectSceneLightingSummary {
+		has_environment: lighting.environment.is_some(),
+		has_directional: lighting.directional.is_some(),
+		environment_color: lighting.environment.as_ref().map(|light| light.color),
+		environment_intensity: lighting.environment.as_ref().map(|light| light.intensity),
+		directional_color: lighting.directional.as_ref().map(|light| light.color),
+		directional_intensity: lighting.directional.as_ref().map(|light| light.intensity),
+		directional_azimuth_deg: lighting.directional.as_ref().map(|light| light.azimuth_deg),
+		directional_elevation_deg: lighting.directional.as_ref().map(|light| light.elevation_deg),
+	});
 	InspectDocumentSummary {
 		has_scene: true,
 		has_vrm: document.vrm.is_some(),
 		has_unavatar: document.unavatar.is_some(),
+		scene_lighting,
 		node_count: scene.nodes.len(),
 		root_count: scene.roots.len(),
 		mesh_count: scene.meshes.len(),
@@ -1788,7 +2560,3886 @@ fn run_inspect(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Result<(),
 		summary.skin_count,
 		summary.morph_target_count
 	);
+	if let Some(lighting) = &summary.scene_lighting {
+		println!(
+			"scene_lighting: environment={} directional={} env_intensity={:?} dir_intensity={:?} dir_azimuth_deg={:?} dir_elevation_deg={:?}",
+			lighting.has_environment,
+			lighting.has_directional,
+			lighting.environment_intensity,
+			lighting.directional_intensity,
+			lighting.directional_azimuth_deg,
+			lighting.directional_elevation_deg
+		);
+	} else {
+		println!("scene_lighting: none");
+	}
 	Ok(())
+}
+
+fn read_gltf_json_value(path: &Path) -> Result<(serde_json::Value, usize), String> {
+	let bytes = fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+	if bytes.starts_with(b"glTF") {
+		if bytes.len() < 12 {
+			return Err(format!("{} is too short for GLB header", path.display()));
+		}
+		let total_len = u32::from_le_bytes(bytes[8..12].try_into().expect("slice length checked")) as usize;
+		let mut offset = 12usize;
+		let scan_len = total_len.min(bytes.len());
+		while offset + 8 <= scan_len {
+			let chunk_len = u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("slice length checked")) as usize;
+			let chunk_type = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().expect("slice length checked"));
+			offset += 8;
+			let end = offset.saturating_add(chunk_len).min(scan_len);
+			if chunk_type == 0x4E4F534A {
+				let chunk = &bytes[offset..end];
+				let text = std::str::from_utf8(chunk)
+					.map_err(|e| format!("{} JSON chunk is not valid UTF-8: {e}", path.display()))?
+					.trim_matches(|c: char| c == '\0' || c.is_ascii_whitespace());
+				let value = serde_json::from_str(text).map_err(|e| format!("{} JSON chunk parse failed: {e}", path.display()))?;
+				return Ok((value, chunk.len()));
+			}
+			offset = end;
+		}
+		return Err(format!("{} has no GLB JSON chunk", path.display()));
+	}
+	let text = std::str::from_utf8(&bytes).map_err(|e| format!("{} is neither GLB nor UTF-8 glTF JSON: {e}", path.display()))?;
+	let value = serde_json::from_str(text).map_err(|e| format!("{} JSON parse failed: {e}", path.display()))?;
+	Ok((value, bytes.len()))
+}
+
+fn dynamics_scan_bump_numeric(ranges: &mut BTreeMap<String, DynamicsScanNumericRange>, key: &str, value: &serde_json::Value) {
+	let Some(number) = value.as_f64() else {
+		return;
+	};
+	ranges
+		.entry(key.to_string())
+		.and_modify(|range| {
+			range.count += 1;
+			range.min = range.min.min(number);
+			range.max = range.max.max(number);
+		})
+		.or_insert(DynamicsScanNumericRange {
+			count: 1,
+			min: number,
+			max: number,
+		});
+}
+
+fn dynamics_scan_visit_value(
+	value: &serde_json::Value,
+	source_params_count: &mut usize,
+	source_param_key_counts: &mut BTreeMap<String, usize>,
+	numeric_ranges: &mut BTreeMap<String, DynamicsScanNumericRange>,
+	curve_counts: &mut BTreeMap<String, usize>,
+) {
+	match value {
+		serde_json::Value::Object(object) => {
+			if let Some(serde_json::Value::Object(source_params)) = object.get("sourceParams").or_else(|| object.get("source_params")) {
+				*source_params_count += 1;
+				for (key, field_value) in source_params {
+					bump_count(source_param_key_counts, key);
+					dynamics_scan_bump_numeric(numeric_ranges, key, field_value);
+					if key.ends_with("Curve") || key.ends_with("_curve") {
+						if field_value.is_array() || field_value.is_object() {
+							bump_count(curve_counts, key);
+						}
+					}
+				}
+			}
+			for child in object.values() {
+				dynamics_scan_visit_value(child, source_params_count, source_param_key_counts, numeric_ranges, curve_counts);
+			}
+		}
+		serde_json::Value::Array(values) => {
+			for child in values {
+				dynamics_scan_visit_value(child, source_params_count, source_param_key_counts, numeric_ranges, curve_counts);
+			}
+		}
+		_ => {}
+	}
+}
+
+fn dynamics_scan_report(path: &Path) -> Result<DynamicsScanReport, String> {
+	let (json_value, json_bytes) = read_gltf_json_value(path)?;
+	let file_bytes = fs::metadata(path)
+		.map_err(|e| format!("failed to stat {}: {e}", path.display()))?
+		.len();
+	let extension_keys = json_value
+		.get("extensions")
+		.and_then(serde_json::Value::as_object)
+		.map(|object| object.keys().cloned().collect())
+		.unwrap_or_default();
+	let mut source_params_count = 0;
+	let mut source_param_key_counts = BTreeMap::new();
+	let mut numeric_ranges = BTreeMap::new();
+	let mut curve_counts = BTreeMap::new();
+	dynamics_scan_visit_value(
+		&json_value,
+		&mut source_params_count,
+		&mut source_param_key_counts,
+		&mut numeric_ranges,
+		&mut curve_counts,
+	);
+	let required_source_param_counts: BTreeMap<String, usize> = DYNAMICS_SCAN_REQUIRED_SOURCE_PARAM_KEYS
+		.iter()
+		.copied()
+		.map(|key| (key.to_string(), source_param_key_counts.get(key).copied().unwrap_or(0)))
+		.collect();
+	let missing_required_source_params = required_source_param_counts
+		.iter()
+		.filter_map(|(key, count)| (*count != source_params_count).then(|| format!("{key}={count}/{source_params_count}")))
+		.collect();
+	Ok(DynamicsScanReport {
+		path: path.display().to_string(),
+		file_bytes,
+		json_bytes,
+		extension_keys,
+		source_params_count,
+		required_source_param_counts,
+		missing_required_source_params,
+		source_param_key_counts,
+		numeric_ranges,
+		curve_counts,
+	})
+}
+
+fn require_current_exporter_dynamics_scan(report: &DynamicsScanReport) -> Result<(), String> {
+	if report.missing_required_source_params.is_empty() {
+		Ok(())
+	} else {
+		Err(format!(
+			"UNPhysics sourceParams missing required current-exporter fields: {}",
+			report.missing_required_source_params.join(", ")
+		))
+	}
+}
+
+fn run_dynamics_scan(path: PathBuf, require_current_exporter: bool, json: bool) -> Result<(), String> {
+	let report = dynamics_scan_report(&path)?;
+	let required = if require_current_exporter {
+		require_current_exporter_dynamics_scan(&report)
+	} else {
+		Ok(())
+	};
+	if json {
+		write_json_stdout(&report)?;
+		return required;
+	}
+	println!("path: {}", report.path);
+	println!("file_bytes: {}", report.file_bytes);
+	println!("json_bytes: {}", report.json_bytes);
+	println!("extensions: {:?}", report.extension_keys);
+	println!("source_params: {}", report.source_params_count);
+	println!("required sourceParams:");
+	for (key, count) in &report.required_source_param_counts {
+		println!("  {key}: {count}/{}", report.source_params_count);
+	}
+	if !report.missing_required_source_params.is_empty() {
+		println!(
+			"missing required sourceParams: {}",
+			report.missing_required_source_params.join(", ")
+		);
+	}
+	if !report.numeric_ranges.is_empty() {
+		println!("numeric ranges:");
+		for (key, range) in &report.numeric_ranges {
+			println!("  {key}: count={} min={} max={}", range.count, range.min, range.max);
+		}
+	}
+	required
+}
+
+fn dynamics_audit_bump_numeric(ranges: &mut BTreeMap<String, DynamicsScanNumericRange>, key: &str, value: f32) {
+	if !value.is_finite() {
+		return;
+	}
+	let value = value as f64;
+	ranges
+		.entry(key.to_string())
+		.and_modify(|range| {
+			range.count += 1;
+			range.min = range.min.min(value);
+			range.max = range.max.max(value);
+		})
+		.or_insert(DynamicsScanNumericRange {
+			count: 1,
+			min: value,
+			max: value,
+		});
+}
+
+fn dynamics_audit_bump_samples(sample_counts: &mut BTreeMap<String, usize>, key: &str, count: usize) {
+	if count > 0 {
+		*sample_counts.entry(key.to_string()).or_default() += count;
+	}
+}
+
+fn import_document_for_cli(
+	plugin_dirs: &[PathBuf],
+	path: &Path,
+	input_format: Option<&str>,
+) -> Result<(UnaDocument, ImportReport, FormatDescriptor), String> {
+	let reg = io_registry_for_cli(plugin_dirs)?;
+	let cached_bytes = cached_binary_import_bytes(path);
+	let importer: &dyn AvatarImporter = if let Some(input_format) = input_format {
+		let id = FormatId::new(input_format);
+		reg.importer_by_id(&id)
+			.ok_or_else(|| format!("指定の importer が登録されていません: {input_format}"))?
+	} else {
+		let probe = import_probe_for_path(path, cached_bytes.clone());
+		reg.best_importer_for(&probe).ok_or_else(|| {
+			"入力に合う importer が見つかりません（VRM / glTF / .unavatar、`--plugin-dir`、または --input-format を確認）".to_string()
+		})?
+	};
+	let desc = importer.descriptor();
+	let mut ictx = ImportContext {
+		asset_root: path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")),
+		temp_dir: std::env::temp_dir(),
+		..ImportContext::dummy()
+	};
+	let imported = importer
+		.import(&mut ictx, import_input_for_path(path, &desc.id, cached_bytes), ImportOptions)
+		.map_err(|e| e.to_string())?;
+	Ok((imported.document, imported.report, desc))
+}
+
+fn dynamics_import_audit_report(
+	plugin_dirs: &[PathBuf],
+	path: &Path,
+	input_format: Option<&str>,
+	wardrobe_set: Option<&str>,
+) -> Result<DynamicsImportAuditReport, String> {
+	let source_params_count = dynamics_scan_report(path).map(|report| report.source_params_count).unwrap_or(0);
+	let (mut doc, import_report, desc) = import_document_for_cli(plugin_dirs, path, input_format)?;
+	let active_wardrobe_set = wardrobe_set.filter(|set_id| !set_id.trim().is_empty()).map(str::to_string);
+	if let Some(set_id) = active_wardrobe_set.as_deref() {
+		apply_unavatar_wardrobe_set(&mut doc, set_id)?;
+	}
+	let settings = doc.dynamics();
+	let raw_groups = settings.map(|settings| settings.groups.as_slice()).unwrap_or(&[]);
+	let scoped_groups = active_wardrobe_set
+		.as_ref()
+		.map(|_| {
+			let runtime_model = doc.runtime_model();
+			let runtime_dynamics = runtime_model.dynamics();
+			let scene = doc.scene.as_ref();
+			let active_source_ids = runtime_dynamics
+				.dynamics_groups()
+				.filter(|group| {
+					group.effective_enabled
+						&& scene.is_none_or(|scene| runtime_dynamics.source_id_resident_in_scene(scene, group.source_id))
+				})
+				.map(|group| group.source_id.to_string())
+				.collect::<BTreeSet<_>>();
+			raw_groups
+				.iter()
+				.filter(|group| active_source_ids.contains(&group.source_id))
+				.cloned()
+				.collect::<Vec<_>>()
+		})
+		.unwrap_or_default();
+	let groups = if active_wardrobe_set.is_some() {
+		scoped_groups.as_slice()
+	} else {
+		raw_groups
+	};
+	let node_paths_by_index = doc.scene.as_ref().map(scene_node_paths_by_index).unwrap_or_default();
+	let (node_samples, skin_samples, mesh_cloth_assist_samples) = doc
+		.scene
+		.as_ref()
+		.map(|scene| dynamics_import_scene_samples(scene, groups, &node_paths_by_index))
+		.unwrap_or_default();
+	let mut source_kind_counts = BTreeMap::new();
+	let mut runtime_ranges = BTreeMap::new();
+	let mut sample_counts = BTreeMap::new();
+	let mut group_sample_candidates = Vec::new();
+	let mut enabled_group_count = 0usize;
+	let mut chain_joint_count = 0usize;
+	let mut source_angle_limit_group_count = 0usize;
+	let mut angle_limit_by_source_id = BTreeMap::new();
+	for (group_index, group) in groups.iter().enumerate() {
+		bump_count(&mut source_kind_counts, &format!("{:?}", group.source_kind));
+		if group.enabled {
+			enabled_group_count += 1;
+		}
+		chain_joint_count += group.bone_node_indices.len().saturating_sub(1);
+		let has_angle_limit = dynamics_group_has_angle_constraint(group);
+		if has_angle_limit {
+			source_angle_limit_group_count += 1;
+		}
+		angle_limit_by_source_id.insert(group.source_id.clone(), has_angle_limit);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "stiffness", group.stiffness);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "pull", group.pull);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "spring", group.spring);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "dragForce", group.drag_force);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "gravityPower", group.gravity_power);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "gravityFalloff", group.gravity_falloff);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "immobile", group.immobile);
+		dynamics_audit_bump_numeric(&mut runtime_ranges, "hitRadius", group.hit_radius);
+		dynamics_audit_bump_samples(&mut sample_counts, "stiffnessSamples", group.stiffness_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "pullSamples", group.pull_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "springSamples", group.spring_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "gravityPowerSamples", group.gravity_power_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "gravityFalloffSamples", group.gravity_falloff_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "immobileSamples", group.immobile_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "maxAngleXSamples", group.max_angle_x_samples.len());
+		dynamics_audit_bump_samples(&mut sample_counts, "maxAngleZSamples", group.max_angle_z_samples.len());
+		if let Some(limit) = &group.limit {
+			dynamics_audit_bump_samples(&mut sample_counts, "maxStretchSamples", limit.max_stretch_samples.len());
+			dynamics_audit_bump_samples(&mut sample_counts, "maxSquishSamples", limit.max_squish_samples.len());
+			dynamics_audit_bump_samples(&mut sample_counts, "stretchMotionSamples", limit.stretch_motion_samples.len());
+		}
+		dynamics_audit_bump_samples(&mut sample_counts, "hitRadiusSamples", group.hit_radius_samples.len());
+		group_sample_candidates.push((
+			dynamics_import_group_sample_score(group, has_angle_limit),
+			group_index,
+			dynamics_import_group_sample(group, &node_paths_by_index),
+		));
+	}
+	group_sample_candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+	let group_samples = group_sample_candidates
+		.into_iter()
+		.take(64)
+		.map(|(_, _, sample)| sample)
+		.collect::<Vec<_>>();
+	let response_category_count = dynamics_response_category_summaries(&doc).len();
+	let response_groups = dynamics_response_group_summaries(&doc);
+	let response_group_count = response_groups.len();
+	let mut active_angle_limit_group_count = 0usize;
+	let mut cloth_angle_limit_metadata_only_count = 0usize;
+	let mut hard_angle_constraint_group_count = 0usize;
+	for response_group in &response_groups {
+		if !angle_limit_by_source_id.get(&response_group.source_id).copied().unwrap_or(false) {
+			continue;
+		}
+		active_angle_limit_group_count += 1;
+		if response_group.category == "cloth" {
+			cloth_angle_limit_metadata_only_count += 1;
+		} else {
+			hard_angle_constraint_group_count += 1;
+		}
+	}
+	let missing_runtime_evidence = dynamics_import_missing_runtime_evidence(
+		source_params_count,
+		raw_groups.len(),
+		groups.len(),
+		chain_joint_count,
+		response_group_count,
+	);
+	let (collider_count, contact_count, constraint_ref_count) = settings
+		.map(|settings| (settings.colliders.len(), settings.contacts.len(), settings.constraint_refs.len()))
+		.unwrap_or_default();
+	let (
+		node_constraint_count,
+		parent_node_constraint_count,
+		parent_node_constraint_source_count,
+		parent_node_constraint_multi_source_count,
+	) = dynamics_import_node_constraint_counts(doc.scene.as_ref());
+	Ok(DynamicsImportAuditReport {
+		path: path.display().to_string(),
+		import_format_id: desc.id.0,
+		import_provider_plugin_id: desc.provider_plugin_id,
+		active_wardrobe_set,
+		import_report,
+		source_params_count,
+		group_count: groups.len(),
+		source_kind_counts,
+		enabled_group_count,
+		chain_joint_count,
+		collider_count,
+		contact_count,
+		constraint_ref_count,
+		node_constraint_count,
+		parent_node_constraint_count,
+		parent_node_constraint_source_count,
+		parent_node_constraint_multi_source_count,
+		source_angle_limit_group_count,
+		active_angle_limit_group_count,
+		cloth_angle_limit_metadata_only_count,
+		hard_angle_constraint_group_count,
+		response_category_count,
+		response_group_count,
+		runtime_ranges,
+		sample_counts,
+		group_samples,
+		node_samples,
+		skin_samples,
+		mesh_cloth_assist_samples,
+		missing_runtime_evidence,
+	})
+}
+
+fn dynamics_import_node_constraint_counts(scene: Option<&UnaSceneSnapshot>) -> (usize, usize, usize, usize) {
+	let Some(scene) = scene else {
+		return (0, 0, 0, 0);
+	};
+	let mut parent_count = 0usize;
+	let mut parent_source_count = 0usize;
+	let mut parent_multi_source_count = 0usize;
+	for constraint in &scene.node_constraints {
+		if matches!(constraint.kind, UnaNodeConstraintKind::Parent { .. }) {
+			parent_count += 1;
+			let source_count = if constraint.sources.is_empty() {
+				1
+			} else {
+				constraint.sources.len()
+			};
+			parent_source_count += source_count;
+			if source_count > 1 {
+				parent_multi_source_count += 1;
+			}
+		}
+	}
+	(
+		scene.node_constraints.len(),
+		parent_count,
+		parent_source_count,
+		parent_multi_source_count,
+	)
+}
+
+fn dynamics_import_missing_runtime_evidence(
+	source_params_count: usize,
+	raw_group_count: usize,
+	scoped_group_count: usize,
+	chain_joint_count: usize,
+	response_group_count: usize,
+) -> Vec<String> {
+	let mut missing_runtime_evidence = Vec::new();
+	if source_params_count > 0 && raw_group_count == 0 {
+		missing_runtime_evidence.push(format!("sourceParams={source_params_count} but imported runtime dynamics groups=0"));
+	}
+	if scoped_group_count > 0 && chain_joint_count == 0 {
+		missing_runtime_evidence.push(format!("imported dynamics groups={scoped_group_count} but chain_joint_count=0"));
+	}
+	if scoped_group_count > 0 && response_group_count == 0 {
+		missing_runtime_evidence.push(format!(
+			"imported dynamics groups={scoped_group_count} but simulator response_group_count=0"
+		));
+	}
+	missing_runtime_evidence
+}
+
+fn dynamics_import_group_sample_score(group: &un_avatar_core::UnaDynamicsSourceGroup, has_angle_limit: bool) -> usize {
+	let sample_count = group.stiffness_samples.len()
+		+ group.pull_samples.len()
+		+ group.spring_samples.len()
+		+ group.gravity_power_samples.len()
+		+ group.gravity_falloff_samples.len()
+		+ group.immobile_samples.len()
+		+ group.max_angle_x_samples.len()
+		+ group.max_angle_z_samples.len()
+		+ group.hit_radius_samples.len()
+		+ group
+			.limit
+			.as_ref()
+			.map(|limit| limit.max_stretch_samples.len() + limit.max_squish_samples.len() + limit.stretch_motion_samples.len())
+			.unwrap_or_default();
+	let has_stretch_limit = group.limit.as_ref().is_some_and(|limit| {
+		limit.max_stretch.abs() > 0.0
+			|| limit.max_squish.abs() > 0.0
+			|| limit.stretch_motion.unwrap_or(0.0).abs() > 0.0
+			|| !limit.max_stretch_samples.is_empty()
+			|| !limit.max_squish_samples.is_empty()
+			|| !limit.stretch_motion_samples.is_empty()
+	});
+	usize::from(group.enabled) * 10_000
+		+ usize::from(has_angle_limit) * 4_000
+		+ usize::from(has_stretch_limit) * 4_000
+		+ sample_count * 32
+		+ group.bone_node_indices.len().min(255)
+}
+
+fn dynamics_import_group_sample(
+	group: &un_avatar_core::UnaDynamicsSourceGroup,
+	node_paths_by_index: &[Option<String>],
+) -> DynamicsImportGroupSample {
+	let chain_paths = group
+		.bone_node_indices
+		.iter()
+		.filter_map(|node| node_paths_by_index.get(*node).cloned().flatten())
+		.collect::<Vec<_>>();
+	DynamicsImportGroupSample {
+		source_id: group.source_id.clone(),
+		category: group.category.clone(),
+		enabled: group.enabled,
+		source_kind: format!("{:?}", group.source_kind),
+		chain_len: group.bone_node_indices.len(),
+		root_path: group
+			.bone_node_indices
+			.first()
+			.and_then(|node| node_paths_by_index.get(*node).cloned().flatten()),
+		tip_path: group
+			.bone_node_indices
+			.last()
+			.and_then(|node| node_paths_by_index.get(*node).cloned().flatten()),
+		chain_paths,
+	}
+}
+
+fn dynamics_import_scene_samples(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	groups: &[un_avatar_core::UnaDynamicsSourceGroup],
+	node_paths_by_index: &[Option<String>],
+) -> (
+	Vec<DynamicsImportNodeSample>,
+	Vec<DynamicsImportSkinSample>,
+	Vec<DynamicsImportMeshClothAssistSample>,
+) {
+	let parents = scene_parent_indices(scene);
+	let dynamic_nodes = groups
+		.iter()
+		.flat_map(|group| group.bone_node_indices.iter().copied())
+		.collect::<BTreeSet<_>>();
+	let mut sampled_node_indices = dynamic_nodes.clone();
+	for &node_index in &dynamic_nodes {
+		if let Some(parent) = parents.get(node_index).copied().flatten() {
+			sampled_node_indices.insert(parent);
+		}
+		if let Some(node) = scene.nodes.get(node_index) {
+			sampled_node_indices.extend(node.children.iter().copied());
+		}
+	}
+	for (node_index, node) in scene.nodes.iter().enumerate() {
+		if let Some(skin_index) = node.skin {
+			if scene
+				.skins
+				.get(skin_index)
+				.is_some_and(|skin| skin.joint_nodes.iter().any(|joint_node| dynamic_nodes.contains(joint_node)))
+			{
+				sampled_node_indices.insert(node_index);
+			}
+		}
+	}
+	let node_samples = sampled_node_indices
+		.into_iter()
+		.filter_map(|index| {
+			let node = scene.nodes.get(index)?;
+			let path = node_paths_by_index.get(index).and_then(|path| path.as_deref());
+			let parent_index = parents.get(index).copied().flatten();
+			Some(DynamicsImportNodeSample {
+				index,
+				name: node.name.clone(),
+				path: path.map(str::to_string),
+				parent_index,
+				parent_path: parent_index.and_then(|parent| node_paths_by_index.get(parent).cloned().flatten()),
+				mesh: node.mesh,
+				skin: node.skin,
+				children: node.children.clone(),
+			})
+		})
+		.take(160)
+		.collect::<Vec<_>>();
+	let skin_samples = scene
+		.nodes
+		.iter()
+		.enumerate()
+		.filter_map(|(node_index, node)| {
+			let path = node_paths_by_index.get(node_index).cloned().flatten();
+			let skin_index = node.skin?;
+			let skin = scene.skins.get(skin_index)?;
+			if !skin.joint_nodes.iter().any(|joint_node| dynamic_nodes.contains(joint_node)) {
+				return None;
+			}
+			let joints = skin
+				.joint_nodes
+				.iter()
+				.enumerate()
+				.filter_map(|(joint_index, &joint_node)| {
+					let joint = scene.nodes.get(joint_node)?;
+					let joint_path = node_paths_by_index.get(joint_node).cloned().flatten();
+					if !dynamic_nodes.contains(&joint_node)
+						&& !parents
+							.get(joint_node)
+							.copied()
+							.flatten()
+							.is_some_and(|parent| dynamic_nodes.contains(&parent))
+					{
+						return None;
+					}
+					let parent_index = parents.get(joint_node).copied().flatten();
+					Some(DynamicsImportSkinJointSample {
+						joint_index,
+						node_index: joint_node,
+						name: joint.name.clone(),
+						path: joint_path,
+						parent_index,
+						parent_path: parent_index.and_then(|parent| node_paths_by_index.get(parent).cloned().flatten()),
+					})
+				})
+				.take(48)
+				.collect::<Vec<_>>();
+			let region_samples = dynamics_import_skin_region_samples(scene, node.mesh, skin, node_paths_by_index);
+			Some(DynamicsImportSkinSample {
+				node_index,
+				node_path: path,
+				skin_index,
+				skeleton_node: skin.skeleton_node,
+				skeleton_path: skin.skeleton_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				joint_count: skin.joint_nodes.len(),
+				joints,
+				region_samples,
+			})
+		})
+		.take(32)
+		.collect::<Vec<_>>();
+	let mesh_cloth_assist_samples = dynamics_import_mesh_cloth_assist_samples(scene, groups, node_paths_by_index);
+	(node_samples, skin_samples, mesh_cloth_assist_samples)
+}
+
+fn dynamics_group_has_angle_constraint(group: &un_avatar_core::UnaDynamicsSourceGroup) -> bool {
+	let Some(limit) = group.limit.as_ref() else {
+		return !group.max_angle_x_samples.is_empty() || !group.max_angle_z_samples.is_empty();
+	};
+	let limit_type = limit.limit_type.trim();
+	!limit_type.is_empty()
+		|| limit.max_angle_x.abs() > 0.0
+		|| limit.max_angle_z.abs() > 0.0
+		|| limit.limit_rotation.iter().any(|value| value.abs() > 0.0)
+		|| !group.max_angle_x_samples.is_empty()
+		|| !group.max_angle_z_samples.is_empty()
+}
+
+fn dynamics_import_skin_region_samples(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	mesh_index: Option<usize>,
+	skin: &un_avatar_core::UnaSkin,
+	node_paths_by_index: &[Option<String>],
+) -> Vec<DynamicsImportSkinRegionSample> {
+	let Some(mesh_index) = mesh_index else {
+		return Vec::new();
+	};
+	let Some(primitives) = scene.meshes.get(mesh_index) else {
+		return Vec::new();
+	};
+	let mut out = Vec::new();
+	for (primitive_index, primitive) in primitives.iter().enumerate() {
+		let Some(joints) = primitive.joints.as_ref() else {
+			continue;
+		};
+		let Some(weights) = primitive.weights.as_ref() else {
+			continue;
+		};
+		let count = primitive.positions.len().min(joints.len()).min(weights.len());
+		let bounds = dynamics_import_position_bounds(&primitive.positions[..count]);
+		for region in DYNAMICS_IMPORT_SPATIAL_REGIONS {
+			let mut vertex_count = 0usize;
+			let mut dominant_counts = BTreeMap::<usize, f32>::new();
+			let mut weight_sums = BTreeMap::<usize, f32>::new();
+			for vertex_index in 0..count {
+				let position = primitive.positions[vertex_index];
+				if !dynamics_import_spatial_region_matches(region, position, bounds) {
+					continue;
+				}
+				vertex_count += 1;
+				let vertex_joints = joints[vertex_index];
+				let vertex_weights = weights[vertex_index];
+				let mut dominant_joint = None;
+				let mut dominant_weight = f32::NEG_INFINITY;
+				for lane in 0..4 {
+					let joint_index = vertex_joints[lane] as usize;
+					let weight = vertex_weights[lane];
+					if weight <= 0.0 || !weight.is_finite() {
+						continue;
+					}
+					*weight_sums.entry(joint_index).or_default() += weight;
+					if weight > dominant_weight {
+						dominant_weight = weight;
+						dominant_joint = Some(joint_index);
+					}
+				}
+				if let Some(joint_index) = dominant_joint {
+					*dominant_counts.entry(joint_index).or_default() += 1.0;
+				}
+			}
+			if vertex_count == 0 {
+				continue;
+			}
+			out.push(DynamicsImportSkinRegionSample {
+				primitive_index,
+				primitive_name: primitive.name.clone(),
+				region: (*region).to_string(),
+				vertex_count,
+				dominant_counts: dynamics_import_skin_influence_samples(&dominant_counts, skin, node_paths_by_index, 12),
+				weight_sums: dynamics_import_skin_influence_samples(&weight_sums, skin, node_paths_by_index, 12),
+			});
+		}
+	}
+	out
+}
+
+const DYNAMICS_IMPORT_SPATIAL_REGIONS: &[&str] = &["all", "upper", "lower", "left", "right", "center_x", "front", "back"];
+
+#[derive(Clone, Copy)]
+struct DynamicsImportPositionBounds {
+	min: Vec3,
+	max: Vec3,
+	center: Vec3,
+}
+
+fn dynamics_import_position_bounds(positions: &[[f32; 3]]) -> DynamicsImportPositionBounds {
+	let mut min = Vec3::splat(f32::INFINITY);
+	let mut max = Vec3::splat(f32::NEG_INFINITY);
+	for position in positions {
+		let p = Vec3::from_array(*position);
+		min = min.min(p);
+		max = max.max(p);
+	}
+	if !min.is_finite() || !max.is_finite() {
+		min = Vec3::ZERO;
+		max = Vec3::ZERO;
+	}
+	DynamicsImportPositionBounds {
+		min,
+		max,
+		center: (min + max) * 0.5,
+	}
+}
+
+fn dynamics_import_spatial_region_matches(region: &str, position: [f32; 3], bounds: DynamicsImportPositionBounds) -> bool {
+	let p = Vec3::from_array(position);
+	let size = (bounds.max - bounds.min).max(Vec3::splat(1e-5));
+	match region {
+		"all" => true,
+		"upper" => p.y >= bounds.center.y,
+		"lower" => p.y < bounds.center.y,
+		"left" => p.x < bounds.center.x - size.x * 0.15,
+		"right" => p.x > bounds.center.x + size.x * 0.15,
+		"center_x" => (p.x - bounds.center.x).abs() <= size.x * 0.15,
+		"front" => p.z >= bounds.center.z,
+		"back" => p.z < bounds.center.z,
+		_ => false,
+	}
+}
+
+fn dynamics_import_skin_influence_samples(
+	values: &BTreeMap<usize, f32>,
+	skin: &un_avatar_core::UnaSkin,
+	node_paths_by_index: &[Option<String>],
+	limit: usize,
+) -> Vec<DynamicsImportSkinInfluenceSample> {
+	let mut items = values.iter().map(|(&joint_index, &value)| (joint_index, value)).collect::<Vec<_>>();
+	items.sort_by(|a, b| {
+		b.1.partial_cmp(&a.1)
+			.unwrap_or(std::cmp::Ordering::Equal)
+			.then_with(|| a.0.cmp(&b.0))
+	});
+	items
+		.into_iter()
+		.take(limit)
+		.map(|(joint_index, value)| {
+			let node_index = skin.joint_nodes.get(joint_index).copied().unwrap_or(usize::MAX);
+			let node_path = node_paths_by_index.get(node_index).cloned().flatten();
+			let name = node_path.as_deref().and_then(|path| path.rsplit('/').next()).map(str::to_string);
+			DynamicsImportSkinInfluenceSample {
+				joint_index,
+				node_index,
+				name,
+				path: node_path,
+				value,
+			}
+		})
+		.collect()
+}
+
+fn dynamics_import_mesh_cloth_assist_samples(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	groups: &[un_avatar_core::UnaDynamicsSourceGroup],
+	node_paths_by_index: &[Option<String>],
+) -> Vec<DynamicsImportMeshClothAssistSample> {
+	let physics_config = DynamicsPhysicsConfig::default().normalized();
+	let config = &physics_config.mesh_cloth_assist;
+	let dynamic_nodes = dynamics_mesh_cloth_assist_source_dynamic_nodes(scene, groups);
+	if dynamic_nodes.is_empty() {
+		return Vec::new();
+	}
+	let mut out = Vec::new();
+	for (node_index, node) in scene.nodes.iter().enumerate() {
+		let Some(mesh_index) = node.mesh else {
+			continue;
+		};
+		let Some(skin_index) = node.skin else {
+			continue;
+		};
+		let Some(skin) = scene.skins.get(skin_index) else {
+			continue;
+		};
+		let node_path = node_paths_by_index.get(node_index).cloned().flatten();
+		if !dynamics_mesh_cloth_assist_mesh_matches(node_path.as_deref(), &config.mesh_path_contains, &physics_config.categories) {
+			continue;
+		}
+		let Some(primitives) = scene.meshes.get(mesh_index) else {
+			continue;
+		};
+		let joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len());
+		let joint_roles = dynamics_mesh_cloth_assist_joint_roles(skin, joint_count, Some(&dynamic_nodes), |joint_index| {
+			dynamics_mesh_cloth_assist_joint_leaf(skin, node_paths_by_index, joint_index)
+		});
+		if !joint_roles.iter().any(|role| *role == DynamicsMeshClothAssistJointRole::Dynamic) {
+			continue;
+		}
+		for (primitive_index, primitive) in primitives.iter().enumerate() {
+			let Some(joints) = primitive.joints.as_ref() else {
+				continue;
+			};
+			let Some(weights) = primitive.weights.as_ref() else {
+				continue;
+			};
+			let count = primitive.positions.len().min(joints.len()).min(weights.len());
+			let bounds = dynamics_import_position_bounds(&primitive.positions[..count]);
+			let profiles = (0..count)
+				.map(|vertex_index| {
+					dynamics_import_mesh_cloth_assist_vertex_profile(joints[vertex_index], weights[vertex_index], &joint_roles)
+				})
+				.collect::<Vec<_>>();
+			let (neighbor_dynamic_max, neighbor_dynamic_joint) =
+				dynamics_import_mesh_cloth_assist_neighbor_dynamic(count, primitive.indices.as_deref(), &profiles);
+			for region in DYNAMICS_IMPORT_SPATIAL_REGIONS {
+				let mut vertex_count = 0usize;
+				let mut candidate_count = 0usize;
+				let mut existing_dynamic_candidate_count = 0usize;
+				let mut static_cloth_bridge_candidate_count = 0usize;
+				let mut seed_candidate_count = 0usize;
+				let mut body_weight_sum = 0.0_f32;
+				let mut dynamic_weight_sum = 0.0_f32;
+				let mut static_cloth_weight_sum = 0.0_f32;
+				let mut suggested_assist_weight_sum = 0.0_f32;
+				let mut seeded_assist_weight_sum = 0.0_f32;
+				let mut body_sources = BTreeMap::<usize, f32>::new();
+				let mut dynamic_targets = BTreeMap::<usize, f32>::new();
+				for vertex_index in 0..count {
+					let position = primitive.positions[vertex_index];
+					if !dynamics_import_spatial_region_matches(region, position, bounds) {
+						continue;
+					}
+					vertex_count += 1;
+					let vertex_joints = joints[vertex_index];
+					let vertex_weights = weights[vertex_index];
+					let profile = profiles[vertex_index];
+					let body_weight = profile.body_weight;
+					let dynamic_weight = profile.dynamic_weight;
+					let static_cloth_weight = profile.static_cloth_weight;
+					let has_dynamic_lane = profile.strongest_dynamic_joint.is_some();
+					let Some(candidate) = dynamics_mesh_cloth_assist_transfer_candidate(
+						config,
+						has_dynamic_lane,
+						body_weight,
+						dynamic_weight,
+						static_cloth_weight,
+						neighbor_dynamic_max[vertex_index],
+						0.0,
+					) else {
+						continue;
+					};
+					if candidate.kind == DynamicsMeshClothAssistTransferKind::SeedMissingDynamicLane {
+						let Some(seed_target) = neighbor_dynamic_joint[vertex_index] else {
+							continue;
+						};
+						candidate_count += 1;
+						seed_candidate_count += 1;
+						static_cloth_bridge_candidate_count += 1;
+						body_weight_sum += body_weight;
+						dynamic_weight_sum += dynamic_weight;
+						static_cloth_weight_sum += static_cloth_weight;
+						let assist_weight = candidate.transfer_weight;
+						suggested_assist_weight_sum += assist_weight;
+						seeded_assist_weight_sum += assist_weight;
+						for lane in 0..4 {
+							let joint_index = vertex_joints[lane] as usize;
+							let weight = vertex_weights[lane];
+							if weight <= 0.0 || !weight.is_finite() {
+								continue;
+							}
+							if joint_roles.get(joint_index).copied() == Some(DynamicsMeshClothAssistJointRole::Body) {
+								*body_sources.entry(joint_index).or_default() += weight;
+							}
+						}
+						*dynamic_targets.entry(seed_target).or_default() += assist_weight;
+						continue;
+					}
+					if candidate.kind != DynamicsMeshClothAssistTransferKind::ExistingDynamicLane {
+						continue;
+					}
+					candidate_count += 1;
+					existing_dynamic_candidate_count += 1;
+					if static_cloth_weight >= config.min_existing_dynamic_weight {
+						static_cloth_bridge_candidate_count += 1;
+					}
+					body_weight_sum += body_weight;
+					dynamic_weight_sum += dynamic_weight;
+					static_cloth_weight_sum += static_cloth_weight;
+					let assist_weight = candidate.transfer_weight;
+					suggested_assist_weight_sum += assist_weight;
+					for lane in 0..4 {
+						let joint_index = vertex_joints[lane] as usize;
+						let weight = vertex_weights[lane];
+						if weight <= 0.0 || !weight.is_finite() {
+							continue;
+						}
+						if joint_roles.get(joint_index).copied() == Some(DynamicsMeshClothAssistJointRole::Body) {
+							*body_sources.entry(joint_index).or_default() += weight;
+						}
+					}
+					if let Some(joint_index) = profile.strongest_dynamic_joint {
+						*dynamic_targets.entry(joint_index).or_default() += assist_weight;
+					}
+				}
+				if candidate_count == 0 {
+					continue;
+				}
+				out.push(DynamicsImportMeshClothAssistSample {
+					node_index,
+					node_path: node_path.clone(),
+					mesh_index,
+					primitive_index,
+					primitive_name: primitive.name.clone(),
+					region: (*region).to_string(),
+					vertex_count,
+					candidate_count,
+					existing_dynamic_candidate_count,
+					static_cloth_bridge_candidate_count,
+					seed_candidate_count,
+					body_weight_sum,
+					dynamic_weight_sum,
+					static_cloth_weight_sum,
+					suggested_assist_weight_sum,
+					seeded_assist_weight_sum,
+					body_sources: dynamics_import_skin_influence_samples(&body_sources, skin, node_paths_by_index, 8),
+					dynamic_targets: dynamics_import_skin_influence_samples(&dynamic_targets, skin, node_paths_by_index, 8),
+				});
+			}
+		}
+	}
+	out
+}
+
+fn dynamics_mesh_cloth_assist_mesh_matches(node_path: Option<&str>, filters: &[String], categories: &[DynamicsCategoryDefinition]) -> bool {
+	let Some(node_path) = node_path else {
+		return false;
+	};
+	skeleton_mesh_cloth_assist_mesh_matches_with_categories(node_path, filters, categories)
+}
+
+fn dynamics_mesh_cloth_assist_source_group_is_cloth(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	group: &un_avatar_core::UnaDynamicsSourceGroup,
+	categories: &[DynamicsCategoryDefinition],
+) -> bool {
+	if group.category.trim().eq_ignore_ascii_case("cloth") {
+		return true;
+	}
+	let mut text = String::new();
+	text.push_str(&group.comment);
+	text.push(' ');
+	text.push_str(&group.source_id);
+	for &node_index in &group.bone_node_indices {
+		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
+			text.push(' ');
+			text.push_str(name);
+		}
+	}
+	dynamics_mesh_cloth_assist_mesh_matches(Some(&text), &[], categories)
+}
+
+fn dynamics_mesh_cloth_assist_source_dynamic_nodes(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	groups: &[un_avatar_core::UnaDynamicsSourceGroup],
+) -> Vec<usize> {
+	let physics_config = DynamicsPhysicsConfig::default().normalized();
+	let mut nodes = groups
+		.iter()
+		.filter(|group| group.enabled && dynamics_mesh_cloth_assist_source_group_is_cloth(scene, group, &physics_config.categories))
+		.flat_map(|group| dynamics_mesh_cloth_assist_deforming_nodes(&group.bone_node_indices, group.interaction_chain_start_index))
+		.collect::<Vec<_>>();
+	nodes.sort_unstable();
+	nodes.dedup();
+	nodes
+}
+
+fn dynamics_mesh_cloth_assist_runtime_dynamic_nodes(
+	scene: &un_avatar_core::UnaSceneSnapshot,
+	runtime_dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
+	categories: &[un_avatar_skeleton::DynamicsCategoryDefinition],
+) -> Vec<usize> {
+	let mut nodes = runtime_dynamics
+		.dynamics_groups()
+		.filter(|group| {
+			group.effective_enabled
+				&& runtime_dynamics.source_id_resident_in_scene(scene, group.source_id)
+				&& classify_dynamics_group_category(scene, *group, &categories) == "cloth"
+		})
+		.flat_map(|group| dynamics_mesh_cloth_assist_deforming_nodes(group.chain.bone_node_indices, group.chain.interaction_start_index))
+		.collect::<Vec<_>>();
+	nodes.sort_unstable();
+	nodes.dedup();
+	nodes
+}
+
+#[derive(Clone, Copy, Default)]
+struct DynamicsImportMeshClothAssistVertexProfile {
+	body_weight: f32,
+	dynamic_weight: f32,
+	static_cloth_weight: f32,
+	strongest_dynamic_joint: Option<usize>,
+	strongest_dynamic_weight: f32,
+}
+
+fn dynamics_import_mesh_cloth_assist_vertex_profile(
+	vertex_joints: [u16; 4],
+	vertex_weights: [f32; 4],
+	joint_roles: &[DynamicsMeshClothAssistJointRole],
+) -> DynamicsImportMeshClothAssistVertexProfile {
+	let mut profile = DynamicsImportMeshClothAssistVertexProfile::default();
+	for lane in 0..4 {
+		let joint_index = vertex_joints[lane] as usize;
+		let weight = vertex_weights[lane];
+		if weight <= 0.0 || !weight.is_finite() {
+			continue;
+		}
+		match joint_roles
+			.get(joint_index)
+			.copied()
+			.unwrap_or(DynamicsMeshClothAssistJointRole::Other)
+		{
+			DynamicsMeshClothAssistJointRole::Dynamic => {
+				profile.dynamic_weight += weight;
+				if weight > profile.strongest_dynamic_weight {
+					profile.strongest_dynamic_weight = weight;
+					profile.strongest_dynamic_joint = Some(joint_index);
+				}
+			}
+			DynamicsMeshClothAssistJointRole::Body => {
+				profile.body_weight += weight;
+			}
+			DynamicsMeshClothAssistJointRole::StaticCloth => {
+				profile.static_cloth_weight += weight;
+			}
+			DynamicsMeshClothAssistJointRole::Other => {}
+		}
+	}
+	profile
+}
+
+fn dynamics_import_mesh_cloth_assist_neighbor_dynamic(
+	vertex_count: usize,
+	indices: Option<&[u32]>,
+	profiles: &[DynamicsImportMeshClothAssistVertexProfile],
+) -> (Vec<f32>, Vec<Option<usize>>) {
+	let mut neighbor_dynamic_max = vec![0.0_f32; vertex_count];
+	let mut neighbor_dynamic_joint = vec![None::<usize>; vertex_count];
+	let Some(indices) = indices else {
+		return (neighbor_dynamic_max, neighbor_dynamic_joint);
+	};
+	for_each_dynamics_mesh_cloth_assist_neighbor(indices, vertex_count, |vertex_index, neighbor_index| {
+		dynamics_import_mesh_cloth_assist_neighbor(
+			vertex_index,
+			profiles[neighbor_index],
+			&mut neighbor_dynamic_max,
+			&mut neighbor_dynamic_joint,
+		);
+	});
+	(neighbor_dynamic_max, neighbor_dynamic_joint)
+}
+
+fn dynamics_import_mesh_cloth_assist_neighbor(
+	vertex_index: usize,
+	neighbor: DynamicsImportMeshClothAssistVertexProfile,
+	neighbor_dynamic_max: &mut [f32],
+	neighbor_dynamic_joint: &mut [Option<usize>],
+) {
+	if neighbor.strongest_dynamic_weight <= neighbor_dynamic_max[vertex_index] {
+		return;
+	}
+	let Some(joint_index) = neighbor.strongest_dynamic_joint else {
+		return;
+	};
+	neighbor_dynamic_max[vertex_index] = neighbor.strongest_dynamic_weight;
+	neighbor_dynamic_joint[vertex_index] = Some(joint_index);
+}
+
+fn dynamics_mesh_cloth_assist_joint_leaf<'a>(
+	skin: &un_avatar_core::UnaSkin,
+	node_paths_by_index: &'a [Option<String>],
+	joint_index: usize,
+) -> &'a str {
+	let Some(node_index) = skin.joint_nodes.get(joint_index).copied() else {
+		return "";
+	};
+	node_paths_by_index
+		.get(node_index)
+		.and_then(|path| path.as_deref())
+		.unwrap_or("")
+		.rsplit('/')
+		.next()
+		.unwrap_or("")
+}
+
+fn require_dynamics_runtime_evidence(report: &DynamicsImportAuditReport) -> Result<(), String> {
+	if report.missing_runtime_evidence.is_empty() {
+		Ok(())
+	} else {
+		Err(format!(
+			"UNPhysics importer/runtime evidence is missing: {}",
+			report.missing_runtime_evidence.join(", ")
+		))
+	}
+}
+
+fn run_dynamics_import_audit(
+	plugin_dirs: &[PathBuf],
+	path: PathBuf,
+	input_format: Option<String>,
+	wardrobe_set: Option<String>,
+	require_runtime_evidence: bool,
+	json: bool,
+) -> Result<(), String> {
+	let report = dynamics_import_audit_report(plugin_dirs, &path, input_format.as_deref(), wardrobe_set.as_deref())?;
+	let required = if require_runtime_evidence {
+		require_dynamics_runtime_evidence(&report)
+	} else {
+		Ok(())
+	};
+	if json {
+		write_json_stdout(&report)?;
+		return required;
+	}
+	println!("path: {}", report.path);
+	let plug = report
+		.import_provider_plugin_id
+		.as_ref()
+		.map(|p| format!(" ({p})"))
+		.unwrap_or_default();
+	println!("importer: {}{}", report.import_format_id, plug);
+	if let Some(set_id) = &report.active_wardrobe_set {
+		println!("active_wardrobe_set: {set_id}");
+	}
+	println!(
+		"dynamics: sourceParams={} groups={} enabled={} joints={} colliders={} contacts={} constraints={}",
+		report.source_params_count,
+		report.group_count,
+		report.enabled_group_count,
+		report.chain_joint_count,
+		report.collider_count,
+		report.contact_count,
+		report.constraint_ref_count
+	);
+	println!(
+		"node_constraints: total={} parent={} parent_sources={} parent_multi_source={}",
+		report.node_constraint_count,
+		report.parent_node_constraint_count,
+		report.parent_node_constraint_source_count,
+		report.parent_node_constraint_multi_source_count
+	);
+	println!(
+		"response: categories={} groups={}",
+		report.response_category_count, report.response_group_count
+	);
+	println!(
+		"limit policy: source_angle_groups={} active_angle_groups={} hard_angle_constraints={} cloth_angle_metadata_only={}",
+		report.source_angle_limit_group_count,
+		report.active_angle_limit_group_count,
+		report.hard_angle_constraint_group_count,
+		report.cloth_angle_limit_metadata_only_count
+	);
+	println!("source_kinds: {:?}", report.source_kind_counts);
+	if !report.runtime_ranges.is_empty() {
+		println!("runtime ranges:");
+		for (key, range) in &report.runtime_ranges {
+			println!("  {key}: count={} min={} max={}", range.count, range.min, range.max);
+		}
+	}
+	if !report.sample_counts.is_empty() {
+		println!("sample counts: {:?}", report.sample_counts);
+	}
+	if !report.missing_runtime_evidence.is_empty() {
+		println!("missing runtime evidence: {}", report.missing_runtime_evidence.join(", "));
+	}
+	required
+}
+
+fn dynamics_response_audit_config(params: DynamicsPhysicsParams) -> DynamicsPhysicsConfig {
+	let categories = DynamicsPhysicsConfig::default().categories;
+	let overrides = categories
+		.iter()
+		.map(|category| un_avatar_skeleton::DynamicsCategoryOverride {
+			category: category.id.clone(),
+			params,
+		})
+		.collect();
+	DynamicsPhysicsConfig {
+		categories,
+		overrides,
+		..Default::default()
+	}
+}
+
+fn dynamics_soft_audit_params() -> DynamicsPhysicsParams {
+	DynamicsPhysicsParams {
+		rest_response: Some(0.04),
+		shape_preservation: Some(0.02),
+		bounce_scale: Some(0.45),
+		stretch_range_scale: Some(0.5),
+		stretch_motion: Some(0.05),
+		motion_coupling: Some(0.25),
+		damping_half_life_ms: Some(95.0),
+		..Default::default()
+	}
+}
+
+fn dynamics_firm_audit_params() -> DynamicsPhysicsParams {
+	DynamicsPhysicsParams {
+		rest_response: Some(0.28),
+		shape_preservation: Some(0.22),
+		bounce_scale: Some(0.35),
+		stretch_range_scale: Some(1.5),
+		stretch_motion: Some(0.85),
+		motion_coupling: Some(0.82),
+		damping_half_life_ms: Some(80.0),
+		..Default::default()
+	}
+}
+
+fn dynamics_motion_trace_tuning_config(tuning: &str) -> Result<(String, DynamicsPhysicsConfig), String> {
+	match tuning {
+		"authored" => Ok(("authored".to_string(), DynamicsPhysicsConfig::default())),
+		"soft" => Ok(("soft".to_string(), dynamics_response_audit_config(dynamics_soft_audit_params()))),
+		"firm" => Ok(("firm".to_string(), dynamics_response_audit_config(dynamics_firm_audit_params()))),
+		"rest-low" => Ok((
+			"rest-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				rest_response: Some(0.04),
+				..Default::default()
+			}),
+		)),
+		"rest-high" => Ok((
+			"rest-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				rest_response: Some(0.28),
+				..Default::default()
+			}),
+		)),
+		"shape-low" => Ok((
+			"shape-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				shape_preservation: Some(0.02),
+				..Default::default()
+			}),
+		)),
+		"shape-high" => Ok((
+			"shape-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				shape_preservation: Some(0.22),
+				..Default::default()
+			}),
+		)),
+		"bounce-low" => Ok((
+			"bounce-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				bounce_scale: Some(0.35),
+				..Default::default()
+			}),
+		)),
+		"bounce-high" => Ok((
+			"bounce-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				bounce_scale: Some(0.55),
+				..Default::default()
+			}),
+		)),
+		"follow-low" => Ok((
+			"follow-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				motion_coupling: Some(0.25),
+				..Default::default()
+			}),
+		)),
+		"follow-high" => Ok((
+			"follow-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				motion_coupling: Some(0.82),
+				..Default::default()
+			}),
+		)),
+		"gravity-off" => Ok((
+			"gravity-off".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				gravity_scale: Some(0.0),
+				..Default::default()
+			}),
+		)),
+		"gravity-low" => Ok((
+			"gravity-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				gravity_scale: Some(0.35),
+				..Default::default()
+			}),
+		)),
+		"gravity-high" => Ok((
+			"gravity-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				gravity_scale: Some(1.6),
+				..Default::default()
+			}),
+		)),
+		"stretch-off" => Ok((
+			"stretch-off".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				stretch_range_scale: Some(0.0),
+				stretch_motion: Some(0.0),
+				..Default::default()
+			}),
+		)),
+		"stretch-low" => Ok((
+			"stretch-low".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				stretch_range_scale: Some(0.25),
+				stretch_motion: Some(0.1),
+				..Default::default()
+			}),
+		)),
+		"stretch-high" => Ok((
+			"stretch-high".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				stretch_range_scale: Some(1.5),
+				stretch_motion: Some(0.85),
+				..Default::default()
+			}),
+		)),
+		"damping-long" => Ok((
+			"damping-long".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				damping_half_life_ms: Some(220.0),
+				..Default::default()
+			}),
+		)),
+		"damping-short" => Ok((
+			"damping-short".to_string(),
+			dynamics_response_audit_config(DynamicsPhysicsParams {
+				damping_half_life_ms: Some(80.0),
+				..Default::default()
+			}),
+		)),
+		other => Err(format!("unsupported dynamics motion trace tuning: {other}")),
+	}
+}
+
+fn dynamics_response_audit_mode(name: &str, doc: &UnaDocument, config: DynamicsPhysicsConfig) -> Result<DynamicsResponseAuditMode, String> {
+	let scene = doc.scene.as_ref().ok_or_else(|| "document has no scene".to_string())?;
+	let settings = doc.dynamics().ok_or_else(|| "document has no dynamics settings".to_string())?;
+	let runtime_model = doc.runtime_model();
+	let runtime_dynamics = runtime_model
+		.scene_profile_dynamics()
+		.map(|runtime| runtime.dynamics)
+		.unwrap_or_else(|| settings.runtime_dynamics());
+	let category_definitions = config.categories.clone();
+	let sim = DynamicsSimulator::new_with_runtime_dynamics(scene, runtime_dynamics, Vec::new(), config)
+		.ok_or_else(|| "UNPhysics simulator could not be created".to_string())?;
+	let mut categories = sim.response_category_summaries();
+	let mut groups = sim.response_group_summaries();
+	let visual_target_context = DynamicsVisualTargetContext::for_scene(scene);
+	annotate_dynamics_response_group_visibility(&mut groups, scene, runtime_dynamics);
+	for group in runtime_dynamics
+		.dynamics_groups()
+		.filter(|group| group.effective_enabled && runtime_dynamics.source_id_resident_in_scene(scene, group.source_id))
+	{
+		let category_name = classify_dynamics_group_category(scene, group, &category_definitions);
+		let (skinned_joint_count, mesh_subtree_node_count) = visual_target_context.group_counts(group.chain.bone_node_indices);
+		let Some(category) = categories.iter_mut().find(|category| category.category == category_name) else {
+			continue;
+		};
+		if skinned_joint_count > 0 || mesh_subtree_node_count > 0 {
+			category.visual_target_group_count += 1;
+		} else {
+			category.nonvisual_group_count += 1;
+		}
+		category.visible_skinned_joint_count += skinned_joint_count;
+		category.visible_mesh_subtree_node_count += mesh_subtree_node_count;
+	}
+	let mut joint_count = 0usize;
+	let mut group_count = 0usize;
+	let mut rest = 0.0f32;
+	let mut shape = 0.0f32;
+	let mut bounce = 0.0f32;
+	let mut max_stretch = 0.0f32;
+	let mut max_squish = 0.0f32;
+	let mut stretch_motion = 0.0f32;
+	let mut damping = 0.0f32;
+	let mut damping_weight = 0usize;
+	let mut motion = 0.0f32;
+	let mut orientation = 0.0f32;
+	let mut xpbd_group_count = 0usize;
+	for category in &categories {
+		let weight = category.joint_count as f32;
+		joint_count += category.joint_count;
+		group_count += category.group_count;
+		xpbd_group_count += category.xpbd_group_count;
+		rest += category.average_rest_response * weight;
+		shape += category.average_shape_preservation * weight;
+		bounce += category.average_bounce_response * weight;
+		max_stretch += category.average_max_stretch_response * weight;
+		max_squish += category.average_max_squish_response * weight;
+		stretch_motion += category.average_stretch_motion_response * weight;
+		if let Some(half_life) = category.average_damping_half_life_ms {
+			damping += half_life * weight;
+			damping_weight += category.joint_count;
+		}
+		motion += category.average_parent_motion_follow * weight;
+		orientation += category.average_orientation_follow * weight;
+	}
+	let denom = joint_count.max(1) as f32;
+	Ok(DynamicsResponseAuditMode {
+		name: name.to_string(),
+		group_count,
+		joint_count,
+		average_rest_response: rest / denom,
+		average_shape_preservation: shape / denom,
+		average_bounce_response: bounce / denom,
+		average_max_stretch_response: max_stretch / denom,
+		average_max_squish_response: max_squish / denom,
+		average_stretch_motion_response: stretch_motion / denom,
+		average_damping_half_life_ms: (damping_weight > 0).then_some(damping / damping_weight as f32),
+		average_parent_motion_follow: motion / denom,
+		average_orientation_follow: orientation / denom,
+		xpbd_group_count,
+		category_count: categories.len(),
+		categories,
+		groups,
+	})
+}
+
+fn dynamics_response_value_in_range(value: f32, min: f32, max: f32) -> bool {
+	value.is_finite() && value >= min && value <= max
+}
+
+fn collect_dynamics_response_bounds_evidence(mode: &DynamicsResponseAuditMode, out: &mut Vec<String>) {
+	let check = |out: &mut Vec<String>, key: &str, value: f32, min: f32, max: f32| {
+		if !dynamics_response_value_in_range(value, min, max) {
+			out.push(format!("{} {key} out of range [{min}, {max}]: {value}", mode.name));
+		}
+	};
+	check(out, "average_rest_response", mode.average_rest_response, 0.0, 1.0);
+	check(out, "average_shape_preservation", mode.average_shape_preservation, 0.0, 1.0);
+	check(out, "average_bounce_response", mode.average_bounce_response, 0.0, 1.0);
+	check(out, "average_parent_motion_follow", mode.average_parent_motion_follow, 0.0, 1.0);
+	check(out, "average_orientation_follow", mode.average_orientation_follow, 0.0, 1.0);
+	check(
+		out,
+		"average_max_stretch_response",
+		mode.average_max_stretch_response,
+		0.0,
+		f32::MAX,
+	);
+	check(out, "average_max_squish_response", mode.average_max_squish_response, 0.0, 0.95);
+	check(
+		out,
+		"average_stretch_motion_response",
+		mode.average_stretch_motion_response,
+		0.0,
+		1.0,
+	);
+	if let Some(half_life) = mode.average_damping_half_life_ms {
+		check(out, "average_damping_half_life_ms", half_life, 0.0, f32::MAX);
+	}
+	for category in &mode.categories {
+		let prefix = format!("{} category {}", mode.name, category.category);
+		let check_category = |out: &mut Vec<String>, key: &str, value: f32, min: f32, max: f32| {
+			if !dynamics_response_value_in_range(value, min, max) {
+				out.push(format!("{prefix} {key} out of range [{min}, {max}]: {value}"));
+			}
+		};
+		check_category(out, "min_rest_response", category.min_rest_response, 0.0, 1.0);
+		check_category(out, "max_rest_response", category.max_rest_response, 0.0, 1.0);
+		check_category(out, "min_shape_preservation", category.min_shape_preservation, 0.0, 1.0);
+		check_category(out, "max_shape_preservation", category.max_shape_preservation, 0.0, 1.0);
+		check_category(out, "min_bounce_response", category.min_bounce_response, 0.0, 1.0);
+		check_category(out, "max_bounce_response", category.max_bounce_response, 0.0, 1.0);
+		check_category(out, "min_parent_motion_follow", category.min_parent_motion_follow, 0.0, 1.0);
+		check_category(out, "max_parent_motion_follow", category.max_parent_motion_follow, 0.0, 1.0);
+		check_category(out, "min_max_stretch_response", category.min_max_stretch_response, 0.0, f32::MAX);
+		check_category(out, "max_max_stretch_response", category.max_max_stretch_response, 0.0, f32::MAX);
+		check_category(out, "min_max_squish_response", category.min_max_squish_response, 0.0, 0.95);
+		check_category(out, "max_max_squish_response", category.max_max_squish_response, 0.0, 0.95);
+		check_category(out, "min_stretch_motion_response", category.min_stretch_motion_response, 0.0, 1.0);
+		check_category(out, "max_stretch_motion_response", category.max_stretch_motion_response, 0.0, 1.0);
+	}
+}
+
+fn dynamics_response_audit_report(
+	plugin_dirs: &[PathBuf],
+	path: &Path,
+	input_format: Option<&str>,
+	wardrobe_set: Option<&str>,
+) -> Result<DynamicsResponseAuditReport, String> {
+	let (mut doc, import_report, desc) = import_document_for_cli(plugin_dirs, path, input_format)?;
+	let active_wardrobe_set = wardrobe_set.filter(|set_id| !set_id.trim().is_empty()).map(str::to_string);
+	if let Some(set_id) = active_wardrobe_set.as_deref() {
+		apply_unavatar_wardrobe_set(&mut doc, set_id)?;
+	}
+	let runtime_model = doc.runtime_model();
+	let scene = doc.scene.as_ref();
+	let runtime_dynamics = runtime_model.dynamics();
+	let active_groups = runtime_dynamics
+		.dynamics_groups()
+		.filter(|group| {
+			group.effective_enabled && scene.is_none_or(|scene| runtime_dynamics.source_id_resident_in_scene(scene, group.source_id))
+		})
+		.collect::<Vec<_>>();
+	let group_count = active_groups.len();
+	let joint_count = active_groups
+		.iter()
+		.map(|group| group.chain.bone_node_indices.len().saturating_sub(1))
+		.sum();
+	let authored = dynamics_response_audit_mode("authored", &doc, DynamicsPhysicsConfig::default())?;
+	let soft = dynamics_response_audit_mode("soft_override", &doc, dynamics_response_audit_config(dynamics_soft_audit_params()))?;
+	let firm = dynamics_response_audit_mode("firm_override", &doc, dynamics_response_audit_config(dynamics_firm_audit_params()))?;
+	let mut missing_response_evidence = Vec::new();
+	if group_count > 0 && authored.group_count == 0 {
+		missing_response_evidence.push(format!("dynamics groups={group_count} but authored response groups=0"));
+	}
+	if joint_count > 0 && authored.joint_count == 0 {
+		missing_response_evidence.push(format!("dynamics joints={joint_count} but authored response joints=0"));
+	}
+	for mode in [&authored, &soft, &firm] {
+		collect_dynamics_response_bounds_evidence(mode, &mut missing_response_evidence);
+	}
+	if !(soft.average_rest_response < firm.average_rest_response) {
+		missing_response_evidence.push(format!(
+			"rest_response override did not separate soft={} firm={}",
+			soft.average_rest_response, firm.average_rest_response
+		));
+	}
+	if !(soft.average_shape_preservation < firm.average_shape_preservation) {
+		missing_response_evidence.push(format!(
+			"shape_preservation override did not separate soft={} firm={}",
+			soft.average_shape_preservation, firm.average_shape_preservation
+		));
+	}
+	if !(soft.average_parent_motion_follow < firm.average_parent_motion_follow) {
+		missing_response_evidence.push(format!(
+			"motion_coupling override did not separate soft={} firm={}",
+			soft.average_parent_motion_follow, firm.average_parent_motion_follow
+		));
+	}
+	if !(soft.average_damping_half_life_ms.unwrap_or_default() > firm.average_damping_half_life_ms.unwrap_or(f32::MAX)) {
+		missing_response_evidence.push(format!(
+			"damping_half_life_ms override did not separate soft={:?} firm={:?}",
+			soft.average_damping_half_life_ms, firm.average_damping_half_life_ms
+		));
+	}
+	if !(soft.average_bounce_response > firm.average_bounce_response) {
+		missing_response_evidence.push(format!(
+			"bounce_scale override did not separate soft={} firm={}",
+			soft.average_bounce_response, firm.average_bounce_response
+		));
+	}
+	let has_authored_stretch_range = authored.average_max_stretch_response > 0.0 || authored.average_max_squish_response > 0.0;
+	if has_authored_stretch_range && !(soft.average_max_stretch_response < firm.average_max_stretch_response) {
+		missing_response_evidence.push(format!(
+			"stretch_range_scale override did not separate max_stretch soft={} firm={}",
+			soft.average_max_stretch_response, firm.average_max_stretch_response
+		));
+	}
+	if has_authored_stretch_range && !(soft.average_stretch_motion_response < firm.average_stretch_motion_response) {
+		missing_response_evidence.push(format!(
+			"stretch_motion override did not separate soft={} firm={}",
+			soft.average_stretch_motion_response, firm.average_stretch_motion_response
+		));
+	}
+	Ok(DynamicsResponseAuditReport {
+		path: path.display().to_string(),
+		import_format_id: desc.id.0,
+		import_provider_plugin_id: desc.provider_plugin_id,
+		active_wardrobe_set,
+		import_report,
+		group_count,
+		joint_count,
+		modes: vec![authored, soft, firm],
+		missing_response_evidence,
+	})
+}
+
+fn require_dynamics_response_override_effect(report: &DynamicsResponseAuditReport) -> Result<(), String> {
+	if report.missing_response_evidence.is_empty() {
+		Ok(())
+	} else {
+		Err(format!(
+			"UNPhysics response override evidence is missing: {}",
+			report.missing_response_evidence.join(", ")
+		))
+	}
+}
+
+fn run_dynamics_response_audit(
+	plugin_dirs: &[PathBuf],
+	path: PathBuf,
+	input_format: Option<String>,
+	wardrobe_set: Option<String>,
+	require_override_effect: bool,
+	json: bool,
+) -> Result<(), String> {
+	let report = dynamics_response_audit_report(plugin_dirs, &path, input_format.as_deref(), wardrobe_set.as_deref())?;
+	let required = if require_override_effect {
+		require_dynamics_response_override_effect(&report)
+	} else {
+		Ok(())
+	};
+	if json {
+		write_json_stdout(&report)?;
+		return required;
+	}
+	println!("path: {}", report.path);
+	let plug = report
+		.import_provider_plugin_id
+		.as_ref()
+		.map(|p| format!(" ({p})"))
+		.unwrap_or_default();
+	println!("importer: {}{}", report.import_format_id, plug);
+	if let Some(set_id) = &report.active_wardrobe_set {
+		println!("active_wardrobe_set: {set_id}");
+	}
+	println!("dynamics: groups={} joints={}", report.group_count, report.joint_count);
+	for mode in &report.modes {
+		println!(
+			"response[{name}]: groups={} joints={} categories={} rest={} shape={} bounce={} stretch={} squish={} stretchMotion={} motion={} orientation={} xpbd_groups={}",
+			mode.group_count,
+			mode.joint_count,
+			mode.category_count,
+			mode.average_rest_response,
+			mode.average_shape_preservation,
+			mode.average_bounce_response,
+			mode.average_max_stretch_response,
+			mode.average_max_squish_response,
+			mode.average_stretch_motion_response,
+			mode.average_parent_motion_follow,
+			mode.average_orientation_follow,
+			mode.xpbd_group_count,
+			name = mode.name
+		);
+		for category in mode.categories.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+			println!(
+				"  category[{name}/{}]: groups={} joints={} rest={} shape={} bounce={} stretch={} squish={} stretchMotion={} motion={} orientation={}",
+				category.category,
+				category.group_count,
+				category.joint_count,
+				category.average_rest_response,
+				category.average_shape_preservation,
+				category.average_bounce_response,
+				category.average_max_stretch_response,
+				category.average_max_squish_response,
+				category.average_stretch_motion_response,
+				category.average_parent_motion_follow,
+				category.average_orientation_follow,
+				name = mode.name
+			);
+		}
+	}
+	if !report.missing_response_evidence.is_empty() {
+		println!("missing response evidence: {}", report.missing_response_evidence.join(", "));
+	}
+	required
+}
+
+fn cli_scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
+	let mut out = Vec::new();
+	fill_cli_scene_world_matrices(scene, &mut out);
+	out
+}
+
+fn fill_cli_scene_world_matrices(scene: &UnaSceneSnapshot, out: &mut Vec<Mat4>) {
+	fn visit(scene: &UnaSceneSnapshot, index: usize, parent_world: Mat4, out: &mut [Mat4]) {
+		let Some(node) = scene.nodes.get(index) else {
+			return;
+		};
+		let world = parent_world * Mat4::from_cols_array(&node.transform);
+		if let Some(slot) = out.get_mut(index) {
+			*slot = world;
+		}
+		for &child in &node.children {
+			visit(scene, child, world, out);
+		}
+	}
+
+	if out.len() == scene.nodes.len() {
+		out.fill(Mat4::IDENTITY);
+	} else {
+		out.clear();
+		out.resize(scene.nodes.len(), Mat4::IDENTITY);
+	}
+	for &root in scene.resolved_roots().iter() {
+		visit(scene, root, Mat4::IDENTITY, out);
+	}
+}
+
+fn apply_motion_trace_root_rotation(scene: &mut UnaSceneSnapshot, rest_root_transforms: &[(usize, [f32; 16])], angle: f32) {
+	let rotation = Mat4::from_rotation_z(angle);
+	for &(root, rest_transform) in rest_root_transforms {
+		if let Some(node) = scene.nodes.get_mut(root) {
+			node.transform = (rotation * Mat4::from_cols_array(&rest_transform)).to_cols_array();
+		}
+	}
+}
+
+fn motion_trace_group_chain_rest_length(world: &[Mat4], bone_node_indices: &[usize]) -> f32 {
+	bone_node_indices
+		.windows(2)
+		.filter_map(|pair| {
+			let a = world.get(pair[0])?.transform_point3(Vec3::ZERO);
+			let b = world.get(pair[1])?.transform_point3(Vec3::ZERO);
+			Some(a.distance(b))
+		})
+		.filter(|distance| distance.is_finite())
+		.sum()
+}
+
+fn dynamics_motion_trace_report(
+	plugin_dirs: &[PathBuf],
+	path: &Path,
+	input_format: Option<&str>,
+	wardrobe_set: Option<&str>,
+	frames: usize,
+	recovery_frames: Option<usize>,
+	tuning: &str,
+) -> Result<DynamicsMotionTraceAuditReport, String> {
+	let (mut doc, import_report, desc) = import_document_for_cli(plugin_dirs, path, input_format)?;
+	let active_wardrobe_set = wardrobe_set.filter(|set_id| !set_id.trim().is_empty()).map(str::to_string);
+	if let Some(set_id) = active_wardrobe_set.as_deref() {
+		apply_unavatar_wardrobe_set(&mut doc, set_id)?;
+	}
+	let scene = doc.scene.as_ref().ok_or_else(|| "document has no scene".to_string())?;
+	let settings = doc.dynamics().ok_or_else(|| "document has no dynamics settings".to_string())?;
+	let runtime_model = doc.runtime_model();
+	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
+	let runtime_dynamics = scene_profile_dynamics
+		.as_ref()
+		.map(|runtime| runtime.dynamics)
+		.unwrap_or_else(|| settings.runtime_dynamics());
+	let frames = frames.clamp(2, 240);
+	let recovery_frames = recovery_frames.unwrap_or(240).clamp(2, 480);
+	let (tuning, physics_config) = dynamics_motion_trace_tuning_config(tuning)?;
+	let mut dynamic_scene = scene.clone();
+	let mut rest_scene = scene.clone();
+	let mut baseline_scene = scene.clone();
+	let rest_root_transforms = scene
+		.resolved_roots()
+		.iter()
+		.filter_map(|&root| scene.nodes.get(root).map(|node| (root, node.transform)))
+		.collect::<Vec<_>>();
+	let all_runtime_groups = runtime_dynamics
+		.dynamics_groups()
+		.filter(|group| runtime_dynamics.source_id_resident_in_scene(scene, group.source_id))
+		.collect::<Vec<_>>();
+	let categories = physics_config.categories.clone();
+	let mut sim = DynamicsSimulator::new_with_runtime_dynamics(&dynamic_scene, runtime_dynamics, Vec::new(), physics_config.clone())
+		.ok_or_else(|| "UNPhysics simulator could not be created".to_string())?;
+	let response_by_category = sim
+		.response_category_summaries()
+		.into_iter()
+		.map(|summary| (summary.category.clone(), summary))
+		.collect::<BTreeMap<_, _>>();
+	let response_by_source_id = sim
+		.response_group_summaries()
+		.into_iter()
+		.map(|summary| (summary.source_id.clone(), summary))
+		.collect::<BTreeMap<_, _>>();
+	let runtime_groups = all_runtime_groups
+		.into_iter()
+		.filter(|group| group.effective_enabled && response_by_source_id.contains_key(group.source_id))
+		.collect::<Vec<_>>();
+	let group_categories = runtime_groups
+		.iter()
+		.map(|group| classify_dynamics_group_category(scene, *group, &categories))
+		.collect::<Vec<_>>();
+	let initial_world = cli_scene_world_matrices(scene);
+	let group_chain_lengths = runtime_groups
+		.iter()
+		.map(|group| motion_trace_group_chain_rest_length(&initial_world, group.chain.bone_node_indices))
+		.collect::<Vec<_>>();
+	let mut rest_world = Vec::new();
+	let mut dynamic_world = Vec::new();
+	let mut baseline_world = Vec::new();
+	let mut initial_dynamic_world = Vec::new();
+	let mut final_rest_world = Vec::new();
+	let mut previous_dynamic_world = Vec::new();
+	let visual_target_context = DynamicsVisualTargetContext::for_scene(scene);
+	let group_visual_target_counts = runtime_groups
+		.iter()
+		.map(|group| visual_target_context.group_counts(group.chain.bone_node_indices))
+		.collect::<Vec<_>>();
+	let final_angle = std::f32::consts::FRAC_PI_2;
+	apply_motion_trace_root_rotation(&mut baseline_scene, &rest_root_transforms, final_angle);
+	let mut baseline_sim = DynamicsSimulator::new_with_runtime_dynamics(&baseline_scene, runtime_dynamics, Vec::new(), physics_config)
+		.ok_or_else(|| "UNPhysics baseline simulator could not be created".to_string())?;
+	#[derive(Default)]
+	struct Accum {
+		group_count: usize,
+		joint_count: usize,
+		visual_target_group_count: usize,
+		nonvisual_group_count: usize,
+		visible_skinned_joint_count: usize,
+		visible_mesh_subtree_node_count: usize,
+		chain_length_sum: f32,
+		sample_count: usize,
+		lag_sum: f32,
+		max_lag: f32,
+		max_lag_chain_ratio: f32,
+		final_lag_sum: f32,
+		final_lag_chain_ratio_sum: f32,
+		initial_settled_lag_sum: f32,
+		recovery_final_lag_sum: f32,
+		settled_recovery_lag_sum: f32,
+		stable_offset_chain_ratio_sum: f32,
+		residual_motion_sum: f32,
+		residual_motion_chain_ratio_sum: f32,
+		half_life_frame_sum: f32,
+		half_life_frame_count: usize,
+	}
+	let mut by_category: BTreeMap<String, Accum> = BTreeMap::new();
+	let mut by_group = runtime_groups
+		.iter()
+		.zip(group_chain_lengths.iter())
+		.map(|(group, chain_length)| Accum {
+			group_count: 1,
+			joint_count: group.chain.bone_node_indices.len().saturating_sub(1),
+			chain_length_sum: *chain_length,
+			..Default::default()
+		})
+		.collect::<Vec<_>>();
+	for (((group, category), chain_length), &(skinned_joint_count, mesh_subtree_node_count)) in runtime_groups
+		.iter()
+		.zip(group_categories.iter())
+		.zip(group_chain_lengths.iter())
+		.zip(group_visual_target_counts.iter())
+	{
+		let accum = by_category.entry(category.clone()).or_default();
+		accum.group_count += 1;
+		accum.joint_count += group.chain.bone_node_indices.len().saturating_sub(1);
+		if skinned_joint_count > 0 || mesh_subtree_node_count > 0 {
+			accum.visual_target_group_count += 1;
+		} else {
+			accum.nonvisual_group_count += 1;
+		}
+		accum.visible_skinned_joint_count += skinned_joint_count;
+		accum.visible_mesh_subtree_node_count += mesh_subtree_node_count;
+		accum.chain_length_sum += *chain_length;
+	}
+	for frame in 1..=frames {
+		let t = frame as f32 / frames as f32;
+		let angle = std::f32::consts::FRAC_PI_2 * t;
+		apply_motion_trace_root_rotation(&mut rest_scene, &rest_root_transforms, angle);
+		apply_motion_trace_root_rotation(&mut dynamic_scene, &rest_root_transforms, angle);
+		sim.step_runtime_dynamics(&mut dynamic_scene, runtime_dynamics, 1.0 / 60.0);
+		fill_cli_scene_world_matrices(&rest_scene, &mut rest_world);
+		fill_cli_scene_world_matrices(&dynamic_scene, &mut dynamic_world);
+		for (group_index, (group, category)) in runtime_groups.iter().zip(group_categories.iter()).enumerate() {
+			let Some(&tip_node) = group.chain.bone_node_indices.last() else {
+				continue;
+			};
+			let Some(rest_tip) = rest_world.get(tip_node) else {
+				continue;
+			};
+			let Some(dynamic_tip) = dynamic_world.get(tip_node) else {
+				continue;
+			};
+			let lag = dynamic_tip
+				.transform_point3(Vec3::ZERO)
+				.distance(rest_tip.transform_point3(Vec3::ZERO));
+			let lag_chain_ratio = motion_trace_chain_ratio(lag, group_chain_lengths[group_index]);
+			let accum = by_category.entry(category.clone()).or_default();
+			accum.sample_count += 1;
+			accum.lag_sum += lag;
+			accum.max_lag = accum.max_lag.max(lag);
+			accum.max_lag_chain_ratio = accum.max_lag_chain_ratio.max(lag_chain_ratio);
+			if frame == frames {
+				accum.final_lag_sum += lag;
+				accum.final_lag_chain_ratio_sum += lag_chain_ratio;
+			}
+			if let Some(accum) = by_group.get_mut(group_index) {
+				accum.sample_count += 1;
+				accum.lag_sum += lag;
+				accum.max_lag = accum.max_lag.max(lag);
+				accum.max_lag_chain_ratio = accum.max_lag_chain_ratio.max(lag_chain_ratio);
+				if frame == frames {
+					accum.final_lag_sum += lag;
+					accum.final_lag_chain_ratio_sum += lag_chain_ratio;
+				}
+			}
+		}
+	}
+	apply_motion_trace_root_rotation(&mut rest_scene, &rest_root_transforms, final_angle);
+	apply_motion_trace_root_rotation(&mut dynamic_scene, &rest_root_transforms, final_angle);
+	for _ in 0..(frames + recovery_frames) {
+		baseline_sim.step_runtime_dynamics(&mut baseline_scene, runtime_dynamics, 1.0 / 60.0);
+	}
+	fill_cli_scene_world_matrices(&baseline_scene, &mut baseline_world);
+	fill_cli_scene_world_matrices(&dynamic_scene, &mut initial_dynamic_world);
+	for (group_index, (group, category)) in runtime_groups.iter().zip(group_categories.iter()).enumerate() {
+		let Some(&tip_node) = group.chain.bone_node_indices.last() else {
+			continue;
+		};
+		let Some(dynamic_tip) = initial_dynamic_world.get(tip_node) else {
+			continue;
+		};
+		let Some(baseline_tip) = baseline_world.get(tip_node) else {
+			continue;
+		};
+		let initial_settled_lag = dynamic_tip
+			.transform_point3(Vec3::ZERO)
+			.distance(baseline_tip.transform_point3(Vec3::ZERO));
+		let accum = by_category.entry(category.clone()).or_default();
+		accum.initial_settled_lag_sum += initial_settled_lag;
+		if let Some(accum) = by_group.get_mut(group_index) {
+			accum.initial_settled_lag_sum += initial_settled_lag;
+		}
+	}
+	fill_cli_scene_world_matrices(&rest_scene, &mut final_rest_world);
+	for frame in 1..=recovery_frames {
+		let has_previous_dynamic_world = frame == recovery_frames;
+		if has_previous_dynamic_world {
+			fill_cli_scene_world_matrices(&dynamic_scene, &mut previous_dynamic_world);
+		}
+		sim.step_runtime_dynamics(&mut dynamic_scene, runtime_dynamics, 1.0 / 60.0);
+		fill_cli_scene_world_matrices(&dynamic_scene, &mut dynamic_world);
+		for (group_index, (group, category)) in runtime_groups.iter().zip(group_categories.iter()).enumerate() {
+			let Some(&tip_node) = group.chain.bone_node_indices.last() else {
+				continue;
+			};
+			let Some(dynamic_tip) = dynamic_world.get(tip_node) else {
+				continue;
+			};
+			let Some(baseline_tip) = baseline_world.get(tip_node) else {
+				continue;
+			};
+			let dynamic_tip = dynamic_tip.transform_point3(Vec3::ZERO);
+			let settled_recovery_lag = dynamic_tip.distance(baseline_tip.transform_point3(Vec3::ZERO));
+			if let Some(accum) = by_group.get_mut(group_index) {
+				let initial_settled_lag = motion_trace_group_average(accum.initial_settled_lag_sum, accum.group_count);
+				if initial_settled_lag > 1.0e-5 && accum.half_life_frame_count == 0 && settled_recovery_lag <= initial_settled_lag * 0.5 {
+					accum.half_life_frame_sum += frame as f32;
+					accum.half_life_frame_count += 1;
+					let category_accum = by_category.entry(category.clone()).or_default();
+					category_accum.half_life_frame_sum += frame as f32;
+					category_accum.half_life_frame_count += 1;
+				}
+			}
+			if frame == recovery_frames {
+				let Some(rest_tip) = final_rest_world.get(tip_node) else {
+					continue;
+				};
+				let Some(previous_dynamic_tip) = has_previous_dynamic_world.then(|| previous_dynamic_world.get(tip_node)).flatten() else {
+					continue;
+				};
+				let recovery_lag = dynamic_tip.distance(rest_tip.transform_point3(Vec3::ZERO));
+				let residual_motion = dynamic_tip.distance(previous_dynamic_tip.transform_point3(Vec3::ZERO));
+				let stable_offset_chain_ratio = motion_trace_chain_ratio(settled_recovery_lag, group_chain_lengths[group_index]);
+				let residual_motion_chain_ratio = motion_trace_chain_ratio(residual_motion, group_chain_lengths[group_index]);
+				let accum = by_category.entry(category.clone()).or_default();
+				accum.recovery_final_lag_sum += recovery_lag;
+				accum.settled_recovery_lag_sum += settled_recovery_lag;
+				accum.stable_offset_chain_ratio_sum += stable_offset_chain_ratio;
+				accum.residual_motion_sum += residual_motion;
+				accum.residual_motion_chain_ratio_sum += residual_motion_chain_ratio;
+				if let Some(accum) = by_group.get_mut(group_index) {
+					accum.recovery_final_lag_sum += recovery_lag;
+					accum.settled_recovery_lag_sum += settled_recovery_lag;
+					accum.stable_offset_chain_ratio_sum += stable_offset_chain_ratio;
+					accum.residual_motion_sum += residual_motion;
+					accum.residual_motion_chain_ratio_sum += residual_motion_chain_ratio;
+				}
+			}
+		}
+	}
+	fn motion_trace_average_lag(accum: &Accum) -> f32 {
+		if accum.sample_count > 0 {
+			accum.lag_sum / accum.sample_count as f32
+		} else {
+			0.0
+		}
+	}
+	fn motion_trace_group_average(value_sum: f32, group_count: usize) -> f32 {
+		if group_count > 0 {
+			value_sum / group_count as f32
+		} else {
+			0.0
+		}
+	}
+	fn motion_trace_recovery_ratio(final_lag: f32, recovery_lag: f32) -> f32 {
+		if final_lag > f32::EPSILON {
+			((final_lag - recovery_lag) / final_lag).clamp(-1.0, 1.0)
+		} else {
+			0.0
+		}
+	}
+	fn motion_trace_half_life_frames(accum: &Accum) -> Option<f32> {
+		(accum.half_life_frame_count > 0).then(|| accum.half_life_frame_sum / accum.half_life_frame_count as f32)
+	}
+	fn motion_trace_stable_offset_ratio(initial_stable_offset: f32, stable_offset: f32) -> f32 {
+		if initial_stable_offset > 1.0e-5 {
+			(stable_offset / initial_stable_offset).max(0.0)
+		} else {
+			0.0
+		}
+	}
+	fn motion_trace_chain_ratio(value: f32, chain_length: f32) -> f32 {
+		if chain_length > 1.0e-5 {
+			(value / chain_length).max(0.0)
+		} else {
+			0.0
+		}
+	}
+	fn motion_trace_recovery_state(
+		initial_stable_offset: f32,
+		stable_offset: f32,
+		residual_motion: f32,
+		residual_motion_chain_ratio: f32,
+	) -> String {
+		let ratio = motion_trace_stable_offset_ratio(initial_stable_offset, stable_offset);
+		if residual_motion > 1.0e-3 && residual_motion_chain_ratio > 1.0e-2 {
+			"moving".to_string()
+		} else if stable_offset > 1.0e-3 && ratio > 0.2 {
+			"settled_offset".to_string()
+		} else {
+			"settled".to_string()
+		}
+	}
+	let mut summaries = by_category
+		.into_iter()
+		.map(|(category, accum)| {
+			let response = response_by_category.get(&category);
+			let average_lag = motion_trace_average_lag(&accum);
+			let final_lag = motion_trace_group_average(accum.final_lag_sum, accum.group_count);
+			let recovery_final_lag = motion_trace_group_average(accum.recovery_final_lag_sum, accum.group_count);
+			let recovery_ratio = motion_trace_recovery_ratio(final_lag, recovery_final_lag);
+			let initial_stable_offset = motion_trace_group_average(accum.initial_settled_lag_sum, accum.group_count);
+			let settled_recovery_lag = motion_trace_group_average(accum.settled_recovery_lag_sum, accum.group_count);
+			let settled_recovery_ratio = motion_trace_recovery_ratio(final_lag, settled_recovery_lag);
+			let residual_motion = motion_trace_group_average(accum.residual_motion_sum, accum.group_count);
+			let residual_motion_chain_ratio = motion_trace_group_average(accum.residual_motion_chain_ratio_sum, accum.group_count);
+			let stable_offset_ratio = motion_trace_stable_offset_ratio(initial_stable_offset, settled_recovery_lag);
+			let average_chain_rest_length = motion_trace_group_average(accum.chain_length_sum, accum.group_count);
+			let recovery_state = motion_trace_recovery_state(
+				initial_stable_offset,
+				settled_recovery_lag,
+				residual_motion,
+				residual_motion_chain_ratio,
+			);
+			let recovery_half_life_frames = motion_trace_half_life_frames(&accum);
+			DynamicsMotionTraceCategorySummary {
+				category,
+				group_count: accum.group_count,
+				joint_count: accum.joint_count,
+				visual_target_group_count: accum.visual_target_group_count,
+				nonvisual_group_count: accum.nonvisual_group_count,
+				visible_skinned_joint_count: accum.visible_skinned_joint_count,
+				visible_mesh_subtree_node_count: accum.visible_mesh_subtree_node_count,
+				average_chain_rest_length,
+				max_lag: accum.max_lag,
+				max_lag_chain_ratio: accum.max_lag_chain_ratio,
+				average_lag,
+				final_lag,
+				final_lag_chain_ratio: motion_trace_group_average(accum.final_lag_chain_ratio_sum, accum.group_count),
+				recovery_final_lag,
+				recovery_ratio,
+				initial_stable_offset,
+				settled_recovery_lag,
+				stable_offset: settled_recovery_lag,
+				stable_offset_chain_ratio: motion_trace_group_average(accum.stable_offset_chain_ratio_sum, accum.group_count),
+				stable_offset_ratio,
+				recovery_state,
+				settled_recovery_ratio,
+				residual_motion,
+				residual_motion_chain_ratio,
+				recovery_half_life_frames,
+				average_rest_response: response.map_or(0.0, |summary| summary.average_rest_response),
+				average_shape_preservation: response.map_or(0.0, |summary| summary.average_shape_preservation),
+				average_bounce_response: response.map_or(0.0, |summary| summary.average_bounce_response),
+				average_parent_motion_follow: response.map_or(0.0, |summary| summary.average_parent_motion_follow),
+				average_orientation_follow: response.map_or(0.0, |summary| summary.average_orientation_follow),
+				average_max_stretch_response: response.map_or(0.0, |summary| summary.average_max_stretch_response),
+				average_stretch_motion_response: response.map_or(0.0, |summary| summary.average_stretch_motion_response),
+			}
+		})
+		.collect::<Vec<_>>();
+	let mut group_summaries = runtime_groups
+		.iter()
+		.zip(group_categories.iter())
+		.zip(group_visual_target_counts.iter())
+		.zip(by_group.iter())
+		.map(|(((group, category), &(skinned_joint_count, mesh_subtree_node_count)), accum)| {
+			let response = response_by_source_id.get(group.source_id);
+			let average_lag = motion_trace_average_lag(accum);
+			let final_lag = motion_trace_group_average(accum.final_lag_sum, accum.group_count);
+			let recovery_final_lag = motion_trace_group_average(accum.recovery_final_lag_sum, accum.group_count);
+			let recovery_ratio = motion_trace_recovery_ratio(final_lag, recovery_final_lag);
+			let initial_stable_offset = motion_trace_group_average(accum.initial_settled_lag_sum, accum.group_count);
+			let settled_recovery_lag = motion_trace_group_average(accum.settled_recovery_lag_sum, accum.group_count);
+			let settled_recovery_ratio = motion_trace_recovery_ratio(final_lag, settled_recovery_lag);
+			let residual_motion = motion_trace_group_average(accum.residual_motion_sum, accum.group_count);
+			let residual_motion_chain_ratio = motion_trace_group_average(accum.residual_motion_chain_ratio_sum, accum.group_count);
+			let stable_offset_ratio = motion_trace_stable_offset_ratio(initial_stable_offset, settled_recovery_lag);
+			let chain_rest_length = motion_trace_group_average(accum.chain_length_sum, accum.group_count);
+			let recovery_state = motion_trace_recovery_state(
+				initial_stable_offset,
+				settled_recovery_lag,
+				residual_motion,
+				residual_motion_chain_ratio,
+			);
+			let recovery_half_life_frames = motion_trace_half_life_frames(accum);
+			DynamicsMotionTraceGroupSummary {
+				source_id: group.source_id.to_string(),
+				category: category.clone(),
+				joint_count: group.chain.bone_node_indices.len().saturating_sub(1),
+				visual_target: skinned_joint_count > 0 || mesh_subtree_node_count > 0,
+				skinned_joint_count,
+				mesh_subtree_node_count,
+				interaction_metadata_only: group.interaction.is_some_and(|interaction| {
+					(interaction.allow_grabbing.unwrap_or(false) || interaction.allow_posing.unwrap_or(false))
+						&& interaction.parameter.is_empty()
+				}),
+				chain_rest_length,
+				max_lag: accum.max_lag,
+				max_lag_chain_ratio: accum.max_lag_chain_ratio,
+				average_lag,
+				final_lag,
+				final_lag_chain_ratio: motion_trace_group_average(accum.final_lag_chain_ratio_sum, accum.group_count),
+				recovery_final_lag,
+				recovery_ratio,
+				initial_stable_offset,
+				settled_recovery_lag,
+				stable_offset: settled_recovery_lag,
+				stable_offset_chain_ratio: motion_trace_group_average(accum.stable_offset_chain_ratio_sum, accum.group_count),
+				stable_offset_ratio,
+				recovery_state,
+				settled_recovery_ratio,
+				residual_motion,
+				residual_motion_chain_ratio,
+				recovery_half_life_frames,
+				average_rest_response: response.map_or(0.0, |summary| summary.average_rest_response),
+				average_shape_preservation: response.map_or(0.0, |summary| summary.average_shape_preservation),
+				average_bounce_response: response.map_or(0.0, |summary| summary.average_bounce_response),
+				average_parent_motion_follow: response.map_or(0.0, |summary| summary.average_parent_motion_follow),
+				average_orientation_follow: response.map_or(0.0, |summary| summary.average_orientation_follow),
+				average_max_stretch_response: response.map_or(0.0, |summary| summary.average_max_stretch_response),
+				average_stretch_motion_response: response.map_or(0.0, |summary| summary.average_stretch_motion_response),
+			}
+		})
+		.collect::<Vec<_>>();
+	sort_motion_trace_category_summaries(&mut summaries);
+	sort_motion_trace_group_summaries(&mut group_summaries);
+	let group_count = runtime_groups.len();
+	let joint_count = runtime_groups
+		.iter()
+		.map(|group| group.chain.bone_node_indices.len().saturating_sub(1))
+		.sum();
+	let mut missing_motion_evidence = Vec::new();
+	if group_count > 0 && summaries.is_empty() {
+		missing_motion_evidence.push(format!("dynamics groups={group_count} but no motion trace categories were sampled"));
+	}
+	if group_count > 0 && summaries.iter().all(|summary| summary.max_lag <= 0.0) {
+		missing_motion_evidence.push("motion trace produced zero lag for all categories".to_string());
+	}
+	if group_count > 0 && group_summaries.is_empty() {
+		missing_motion_evidence.push(format!("dynamics groups={group_count} but no motion trace groups were sampled"));
+	}
+	let finding_details = collect_motion_trace_finding_details(&summaries, &group_summaries);
+	let finding_kind_counts = motion_trace_finding_kind_counts(&finding_details);
+	let findings = finding_details.iter().map(|finding| finding.message.clone()).collect();
+	collect_motion_trace_numeric_evidence(&summaries, &group_summaries, &mut missing_motion_evidence);
+	Ok(DynamicsMotionTraceAuditReport {
+		path: path.display().to_string(),
+		import_format_id: desc.id.0,
+		import_provider_plugin_id: desc.provider_plugin_id,
+		active_wardrobe_set,
+		import_report,
+		frame_count: frames,
+		recovery_frame_count: recovery_frames,
+		tuning,
+		group_count,
+		joint_count,
+		categories: summaries,
+		groups: group_summaries,
+		findings,
+		finding_details,
+		finding_kind_counts,
+		missing_motion_evidence,
+	})
+}
+
+fn sort_motion_trace_category_summaries(summaries: &mut [DynamicsMotionTraceCategorySummary]) {
+	summaries.sort_by(|a, b| motion_trace_desc_finite_cmp(a.max_lag, b.max_lag).then_with(|| a.category.cmp(&b.category)));
+}
+
+fn sort_motion_trace_group_summaries(summaries: &mut [DynamicsMotionTraceGroupSummary]) {
+	summaries.sort_by(|a, b| {
+		motion_trace_desc_finite_cmp(a.settled_recovery_lag, b.settled_recovery_lag)
+			.then_with(|| motion_trace_desc_finite_cmp(a.max_lag, b.max_lag))
+			.then_with(|| a.source_id.cmp(&b.source_id))
+	});
+}
+
+fn motion_trace_desc_finite_cmp(left: f32, right: f32) -> std::cmp::Ordering {
+	match (left.is_finite(), right.is_finite()) {
+		(true, true) => right.total_cmp(&left),
+		(true, false) => std::cmp::Ordering::Less,
+		(false, true) => std::cmp::Ordering::Greater,
+		(false, false) => right.total_cmp(&left),
+	}
+}
+
+fn push_motion_trace_finding(out: &mut Vec<DynamicsMotionTraceFindingDetail>, finding: DynamicsMotionTraceFindingDetail) {
+	if out.len() < DIAGNOSE_TEXT_LIST_LIMIT {
+		out.push(finding);
+	}
+}
+
+fn collect_motion_trace_finding_details(
+	categories: &[DynamicsMotionTraceCategorySummary],
+	groups: &[DynamicsMotionTraceGroupSummary],
+) -> Vec<DynamicsMotionTraceFindingDetail> {
+	let mut findings = Vec::new();
+	for group in groups {
+		if !group.visual_target {
+			if group.average_max_stretch_response >= 10.0
+				|| group.max_lag_chain_ratio >= 4.0
+				|| group.recovery_state == "moving"
+				|| group.recovery_state == "settled_offset"
+			{
+				let message = format!(
+					"nonvisual_control_motion: source_id={} category={} skinnedJoints={} meshSubtrees={} interactionMetadataOnly={} stretch={:.3} maxChain={:.3} state={}",
+					group.source_id,
+					group.category,
+					group.skinned_joint_count,
+					group.mesh_subtree_node_count,
+					group.interaction_metadata_only,
+					group.average_max_stretch_response,
+					group.max_lag_chain_ratio,
+					group.recovery_state
+				);
+				push_motion_trace_finding(
+					&mut findings,
+					DynamicsMotionTraceFindingDetail {
+						kind: "nonvisual_control_motion".to_string(),
+						message,
+						source_id: Some(group.source_id.clone()),
+						category: Some(group.category.clone()),
+						visual_target: Some(group.visual_target),
+						skinned_joint_count: Some(group.skinned_joint_count),
+						mesh_subtree_node_count: Some(group.mesh_subtree_node_count),
+						interaction_metadata_only: Some(group.interaction_metadata_only),
+						tuning_hint: Some("verify whether this source drives visible meshes before applying physics overrides".to_string()),
+						response_override_hint: None,
+					},
+				);
+			}
+			continue;
+		}
+		if group.average_max_stretch_response >= 10.0 && group.average_stretch_motion_response > 0.001 {
+			let message = format!(
+				"large_stretch: source_id={} category={} stretch={:.3} stretchMotion={:.3} chain={:.3} maxChain={:.3} state={}",
+				group.source_id,
+				group.category,
+				group.average_max_stretch_response,
+				group.average_stretch_motion_response,
+				group.chain_rest_length,
+				group.max_lag_chain_ratio,
+				group.recovery_state
+			);
+			push_motion_trace_finding(
+				&mut findings,
+				DynamicsMotionTraceFindingDetail {
+					kind: "large_stretch".to_string(),
+					message,
+					source_id: Some(group.source_id.clone()),
+					category: Some(group.category.clone()),
+					visual_target: Some(group.visual_target),
+					skinned_joint_count: Some(group.skinned_joint_count),
+					mesh_subtree_node_count: Some(group.mesh_subtree_node_count),
+					interaction_metadata_only: Some(group.interaction_metadata_only),
+					tuning_hint: Some("compare --tuning stretch-low and --tuning stretch-off before changing response terms".to_string()),
+					response_override_hint: Some(DynamicsMotionTraceResponseOverrideHint {
+						source_id: group.source_id.clone(),
+						rest_response: None,
+						damping_half_life_ms: None,
+						stretch_range_scale: Some(0.25),
+						stretch_motion: Some(0.1),
+					}),
+				},
+			);
+		}
+		if group.max_lag_chain_ratio >= 4.0 {
+			let message = format!(
+				"high_chain_lag: source_id={} category={} maxChain={:.3} chain={:.3} maxLag={:.3} state={}",
+				group.source_id, group.category, group.max_lag_chain_ratio, group.chain_rest_length, group.max_lag, group.recovery_state
+			);
+			push_motion_trace_finding(
+				&mut findings,
+				DynamicsMotionTraceFindingDetail {
+					kind: "high_chain_lag".to_string(),
+					message,
+					source_id: Some(group.source_id.clone()),
+					category: Some(group.category.clone()),
+					visual_target: Some(group.visual_target),
+					skinned_joint_count: Some(group.skinned_joint_count),
+					mesh_subtree_node_count: Some(group.mesh_subtree_node_count),
+					interaction_metadata_only: Some(group.interaction_metadata_only),
+					tuning_hint: Some(
+						"compare response terms with stretch-low/rest-high/follow-low before changing solver defaults".to_string(),
+					),
+					response_override_hint: None,
+				},
+			);
+		}
+		if group.recovery_state == "moving" {
+			let message = format!(
+				"moving_after_recovery: source_id={} category={} residualChain={:.3} stableChain={:.3} halfLife={}",
+				group.source_id,
+				group.category,
+				group.residual_motion_chain_ratio,
+				group.stable_offset_chain_ratio,
+				group
+					.recovery_half_life_frames
+					.map(|value| format!("{value:.1}"))
+					.unwrap_or_else(|| "none".to_string())
+			);
+			push_motion_trace_finding(
+				&mut findings,
+				DynamicsMotionTraceFindingDetail {
+					kind: "moving_after_recovery".to_string(),
+					message,
+					source_id: Some(group.source_id.clone()),
+					category: Some(group.category.clone()),
+					visual_target: Some(group.visual_target),
+					skinned_joint_count: Some(group.skinned_joint_count),
+					mesh_subtree_node_count: Some(group.mesh_subtree_node_count),
+					interaction_metadata_only: Some(group.interaction_metadata_only),
+					tuning_hint: Some(
+						"compare --recovery-frames 96/240 and damping-short/rest-high before changing response terms".to_string(),
+					),
+					response_override_hint: Some(DynamicsMotionTraceResponseOverrideHint {
+						source_id: group.source_id.clone(),
+						rest_response: Some(0.28),
+						damping_half_life_ms: Some(80.0),
+						stretch_range_scale: None,
+						stretch_motion: None,
+					}),
+				},
+			);
+		} else if group.recovery_state == "settled_offset" {
+			let message = format!(
+				"settled_offset_after_recovery: source_id={} category={} stableRatio={:.3} stableChain={:.3}",
+				group.source_id, group.category, group.stable_offset_ratio, group.stable_offset_chain_ratio
+			);
+			push_motion_trace_finding(
+				&mut findings,
+				DynamicsMotionTraceFindingDetail {
+					kind: "settled_offset_after_recovery".to_string(),
+					message,
+					source_id: Some(group.source_id.clone()),
+					category: Some(group.category.clone()),
+					visual_target: Some(group.visual_target),
+					skinned_joint_count: Some(group.skinned_joint_count),
+					mesh_subtree_node_count: Some(group.mesh_subtree_node_count),
+					interaction_metadata_only: Some(group.interaction_metadata_only),
+					tuning_hint: Some(
+						"compare rest-high and gravity-off to separate recovery weakness from natural gravity settle".to_string(),
+					),
+					response_override_hint: None,
+				},
+			);
+		}
+	}
+	for category in categories {
+		if category.recovery_state == "moving" || category.recovery_state == "settled_offset" {
+			let message = format!(
+				"category_recovery_state: category={} state={} groups={} stableRatio={:.3} residualChain={:.3}",
+				category.category,
+				category.recovery_state,
+				category.group_count,
+				category.stable_offset_ratio,
+				category.residual_motion_chain_ratio
+			);
+			push_motion_trace_finding(
+				&mut findings,
+				DynamicsMotionTraceFindingDetail {
+					kind: "category_recovery_state".to_string(),
+					message,
+					source_id: None,
+					category: Some(category.category.clone()),
+					visual_target: Some(category.visual_target_group_count > 0),
+					skinned_joint_count: Some(category.visible_skinned_joint_count),
+					mesh_subtree_node_count: Some(category.visible_mesh_subtree_node_count),
+					interaction_metadata_only: None,
+					tuning_hint: Some("inspect source_id group findings before changing category defaults".to_string()),
+					response_override_hint: None,
+				},
+			);
+		}
+	}
+	findings
+}
+
+fn motion_trace_finding_kind_counts(findings: &[DynamicsMotionTraceFindingDetail]) -> BTreeMap<String, usize> {
+	let mut out = BTreeMap::new();
+	for finding in findings {
+		*out.entry(finding.kind.clone()).or_default() += 1;
+	}
+	out
+}
+
+fn push_motion_trace_nonfinite(out: &mut Vec<String>, scope: &str, key: &str, value: f32) {
+	if !value.is_finite() && out.len() < 64 {
+		out.push(format!("{scope} {key} is not finite: {value}"));
+	}
+}
+
+fn push_motion_trace_optional_nonfinite(out: &mut Vec<String>, scope: &str, key: &str, value: Option<f32>) {
+	if let Some(value) = value {
+		push_motion_trace_nonfinite(out, scope, key, value);
+	}
+}
+
+fn collect_motion_trace_numeric_evidence(
+	categories: &[DynamicsMotionTraceCategorySummary],
+	groups: &[DynamicsMotionTraceGroupSummary],
+	out: &mut Vec<String>,
+) {
+	for category in categories {
+		let scope = format!("motion category {}", category.category);
+		push_motion_trace_nonfinite(out, &scope, "average_chain_rest_length", category.average_chain_rest_length);
+		push_motion_trace_nonfinite(out, &scope, "max_lag", category.max_lag);
+		push_motion_trace_nonfinite(out, &scope, "max_lag_chain_ratio", category.max_lag_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "average_lag", category.average_lag);
+		push_motion_trace_nonfinite(out, &scope, "final_lag", category.final_lag);
+		push_motion_trace_nonfinite(out, &scope, "final_lag_chain_ratio", category.final_lag_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "recovery_final_lag", category.recovery_final_lag);
+		push_motion_trace_nonfinite(out, &scope, "recovery_ratio", category.recovery_ratio);
+		push_motion_trace_nonfinite(out, &scope, "initial_stable_offset", category.initial_stable_offset);
+		push_motion_trace_nonfinite(out, &scope, "settled_recovery_lag", category.settled_recovery_lag);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset", category.stable_offset);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset_chain_ratio", category.stable_offset_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset_ratio", category.stable_offset_ratio);
+		push_motion_trace_nonfinite(out, &scope, "settled_recovery_ratio", category.settled_recovery_ratio);
+		push_motion_trace_nonfinite(out, &scope, "residual_motion", category.residual_motion);
+		push_motion_trace_nonfinite(out, &scope, "residual_motion_chain_ratio", category.residual_motion_chain_ratio);
+		push_motion_trace_optional_nonfinite(out, &scope, "recovery_half_life_frames", category.recovery_half_life_frames);
+		push_motion_trace_nonfinite(out, &scope, "average_rest_response", category.average_rest_response);
+		push_motion_trace_nonfinite(out, &scope, "average_shape_preservation", category.average_shape_preservation);
+		push_motion_trace_nonfinite(out, &scope, "average_bounce_response", category.average_bounce_response);
+		push_motion_trace_nonfinite(out, &scope, "average_parent_motion_follow", category.average_parent_motion_follow);
+		push_motion_trace_nonfinite(out, &scope, "average_orientation_follow", category.average_orientation_follow);
+		push_motion_trace_nonfinite(out, &scope, "average_max_stretch_response", category.average_max_stretch_response);
+		push_motion_trace_nonfinite(
+			out,
+			&scope,
+			"average_stretch_motion_response",
+			category.average_stretch_motion_response,
+		);
+	}
+	for group in groups {
+		let scope = format!("motion group {}", group.source_id);
+		push_motion_trace_nonfinite(out, &scope, "chain_rest_length", group.chain_rest_length);
+		push_motion_trace_nonfinite(out, &scope, "max_lag", group.max_lag);
+		push_motion_trace_nonfinite(out, &scope, "max_lag_chain_ratio", group.max_lag_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "average_lag", group.average_lag);
+		push_motion_trace_nonfinite(out, &scope, "final_lag", group.final_lag);
+		push_motion_trace_nonfinite(out, &scope, "final_lag_chain_ratio", group.final_lag_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "recovery_final_lag", group.recovery_final_lag);
+		push_motion_trace_nonfinite(out, &scope, "recovery_ratio", group.recovery_ratio);
+		push_motion_trace_nonfinite(out, &scope, "initial_stable_offset", group.initial_stable_offset);
+		push_motion_trace_nonfinite(out, &scope, "settled_recovery_lag", group.settled_recovery_lag);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset", group.stable_offset);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset_chain_ratio", group.stable_offset_chain_ratio);
+		push_motion_trace_nonfinite(out, &scope, "stable_offset_ratio", group.stable_offset_ratio);
+		push_motion_trace_nonfinite(out, &scope, "settled_recovery_ratio", group.settled_recovery_ratio);
+		push_motion_trace_nonfinite(out, &scope, "residual_motion", group.residual_motion);
+		push_motion_trace_nonfinite(out, &scope, "residual_motion_chain_ratio", group.residual_motion_chain_ratio);
+		push_motion_trace_optional_nonfinite(out, &scope, "recovery_half_life_frames", group.recovery_half_life_frames);
+		push_motion_trace_nonfinite(out, &scope, "average_rest_response", group.average_rest_response);
+		push_motion_trace_nonfinite(out, &scope, "average_shape_preservation", group.average_shape_preservation);
+		push_motion_trace_nonfinite(out, &scope, "average_bounce_response", group.average_bounce_response);
+		push_motion_trace_nonfinite(out, &scope, "average_parent_motion_follow", group.average_parent_motion_follow);
+		push_motion_trace_nonfinite(out, &scope, "average_orientation_follow", group.average_orientation_follow);
+		push_motion_trace_nonfinite(out, &scope, "average_max_stretch_response", group.average_max_stretch_response);
+		push_motion_trace_nonfinite(
+			out,
+			&scope,
+			"average_stretch_motion_response",
+			group.average_stretch_motion_response,
+		);
+	}
+}
+
+fn require_dynamics_motion_trace_evidence(report: &DynamicsMotionTraceAuditReport) -> Result<(), String> {
+	if report.missing_motion_evidence.is_empty() {
+		Ok(())
+	} else {
+		Err(format!(
+			"UNPhysics motion trace evidence is missing: {}",
+			report.missing_motion_evidence.join(", ")
+		))
+	}
+}
+
+fn push_bounded_unique_string(out: &mut Vec<String>, value: String, limit: usize) {
+	if out.len() < limit && !out.iter().any(|item| item == &value) {
+		out.push(value);
+	}
+}
+
+fn run_dynamics_vertex_probe(
+	plugin_dirs: &[PathBuf],
+	path: PathBuf,
+	input_format: Option<String>,
+	wardrobe_set: Option<String>,
+	node_contains: &str,
+	settle_frames: usize,
+	apply_mesh_cloth_assist: bool,
+	ignore_authored_colliders: bool,
+	tuning: &str,
+	json: bool,
+) -> Result<(), String> {
+	let report = dynamics_vertex_probe_report(
+		plugin_dirs,
+		&path,
+		input_format.as_deref(),
+		wardrobe_set.as_deref(),
+		node_contains,
+		settle_frames,
+		apply_mesh_cloth_assist,
+		ignore_authored_colliders,
+		tuning,
+	)?;
+	if json {
+		write_json_stdout(&report)?;
+	} else {
+		println!(
+			"vertex_probe: node={} mesh={} skin={:?} settle_frames={} tuning={} mesh_cloth_assist={} changed_vertices={} ignore_authored_colliders={} runtime_colliders={} collision_projections={} probe_collision_projections={} probe_dynamic_sources={} projection_collider_paths={}",
+			report.node_path,
+			report.mesh_index,
+			report.skin_index,
+			report.settle_frames,
+			report.tuning,
+			report.mesh_cloth_assist_applied,
+			report.mesh_cloth_assist_changed_vertices,
+			report.authored_colliders_ignored,
+			report.runtime_collider_count,
+			report.solve_collision_projection_count,
+			report.probe_collision_projection_count,
+			report.probe_dynamic_source_weight_sums.len(),
+			report.solve_collision_projection_collider_path_counts.len()
+		);
+		for region in &report.regions {
+			println!(
+				"region {}: vertices={} avg_disp={:.5} max_disp={:.5} avg_delta=({:.5},{:.5},{:.5})",
+				region.name,
+				region.vertex_count,
+				region.average_displacement,
+				region.max_displacement,
+				region.average_delta[0],
+				region.average_delta[1],
+				region.average_delta[2]
+			);
+			let joints = region
+				.dominant_joints
+				.iter()
+				.take(8)
+				.map(|entry| format!("{}={}", entry.joint, entry.count))
+				.collect::<Vec<_>>()
+				.join(", ");
+			println!("  dominant: {joints}");
+			for morph in region
+				.morph_targets
+				.iter()
+				.filter(|morph| morph.affected_vertices > 0 || morph.default_weight.abs() > 0.0001)
+			{
+				println!(
+					"  morph[{}] {:?}: default_weight={:.3} affected={} avg_delta={:.5} max_delta={:.5}",
+					morph.index, morph.name, morph.default_weight, morph.affected_vertices, morph.average_delta, morph.max_delta
+				);
+			}
+		}
+		for summary in report.collider_path_summaries.iter().take(12) {
+			println!(
+				"collider_path {:?}: shape={} inside_bounds={} candidates={} penetrating={} projections={} sources={} min_margin={:.5} min_distance={:.5} threshold={:.5}",
+				summary.collider_path,
+				summary.collider_shape,
+				summary.inside_bounds,
+				summary.candidate_count,
+				summary.penetrating_count,
+				summary.projection_count,
+				summary.source_count,
+				summary.min_margin,
+				summary.min_distance,
+				summary.min_threshold
+			);
+		}
+	}
+	Ok(())
+}
+
+fn dynamics_vertex_probe_report(
+	plugin_dirs: &[PathBuf],
+	path: &Path,
+	input_format: Option<&str>,
+	wardrobe_set: Option<&str>,
+	node_contains: &str,
+	settle_frames: usize,
+	apply_mesh_cloth_assist: bool,
+	ignore_authored_colliders: bool,
+	tuning: &str,
+) -> Result<DynamicsVertexProbeReport, String> {
+	let (mut doc, _import_report, _desc) = import_document_for_cli(plugin_dirs, path, input_format)?;
+	if let Some(set_id) = wardrobe_set.filter(|set_id| !set_id.trim().is_empty()) {
+		apply_unavatar_wardrobe_set(&mut doc, set_id)?;
+	}
+	let scene = doc.scene.as_ref().ok_or_else(|| "document has no scene".to_string())?;
+	let settings = doc.dynamics().ok_or_else(|| "document has no dynamics settings".to_string())?;
+	let runtime_model = doc.runtime_model();
+	let scene_profile_dynamics = runtime_model.scene_profile_dynamics();
+	let runtime_dynamics = scene_profile_dynamics
+		.as_ref()
+		.map(|runtime| runtime.dynamics)
+		.unwrap_or_else(|| settings.runtime_dynamics());
+	let node_paths = scene_node_paths_by_index(scene);
+	let (_, physics_config) = dynamics_motion_trace_tuning_config(tuning)?;
+	let dynamic_nodes = dynamics_mesh_cloth_assist_runtime_dynamic_nodes(scene, runtime_dynamics, &physics_config.categories);
+	let effective_visibility = scene.effective_visibility();
+	let node_filter = node_contains.trim();
+	let (node_index, node_path) = if node_filter.is_empty() {
+		node_paths
+			.iter()
+			.enumerate()
+			.filter_map(|(index, path)| {
+				if !effective_visibility.get(index).copied().unwrap_or(false) {
+					return None;
+				}
+				let node = scene.nodes.get(index)?;
+				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index))?;
+				let mesh = node.mesh.and_then(|mesh_index| scene.meshes.get(mesh_index))?;
+				let path = path.as_ref()?;
+				let (dynamic_vertex_count, dynamic_weight_sum) = dynamics_vertex_probe_dynamic_weight_score(mesh, skin, &dynamic_nodes);
+				if dynamic_vertex_count == 0 {
+					return None;
+				}
+				let cloth_like = dynamics_mesh_cloth_assist_mesh_matches(Some(path), &[], &physics_config.categories);
+				Some((index, path.clone(), cloth_like, dynamic_vertex_count, dynamic_weight_sum))
+			})
+			.max_by(|a, b| {
+				a.2.cmp(&b.2)
+					.then_with(|| a.3.cmp(&b.3))
+					.then_with(|| a.4.total_cmp(&b.4))
+					.then_with(|| b.1.cmp(&a.1))
+			})
+			.map(|(index, path, _, _, _)| (index, path))
+			.ok_or_else(|| "no skinned mesh containing dynamics joints found".to_string())?
+	} else {
+		select_node_path_containing(&node_paths, &effective_visibility, &node_filter)
+			.ok_or_else(|| format!("node containing `{node_contains}` not found"))?
+	};
+	let node = scene
+		.nodes
+		.get(node_index)
+		.ok_or_else(|| format!("node index {node_index} out of range"))?;
+	let mesh_index = node.mesh.ok_or_else(|| format!("node `{node_path}` has no mesh"))?;
+	let skin_index = node.skin;
+	let skin = skin_index.and_then(|index| scene.skins.get(index));
+	let mesh = scene
+		.meshes
+		.get(mesh_index)
+		.ok_or_else(|| format!("mesh index {mesh_index} out of range"))?;
+	let primitive = mesh.first().ok_or_else(|| format!("mesh index {mesh_index} has no primitives"))?;
+	let mut assisted_primitive;
+	let (primitive, mesh_cloth_assist_changed_vertices) = if apply_mesh_cloth_assist {
+		assisted_primitive = primitive.clone();
+		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
+		let changed = dynamics_vertex_probe_apply_mesh_cloth_assist(
+			&mut assisted_primitive,
+			skin,
+			&node_paths,
+			&node_path,
+			&config,
+			&dynamic_nodes,
+			&physics_config.categories,
+		);
+		(&assisted_primitive, changed)
+	} else {
+		(primitive, 0)
+	};
+
+	let mut runtime_colliders = runtime_model
+		.scene_profile_dynamics()
+		.map(|runtime| {
+			build_dynamics_bone_colliders_with_sources(
+				runtime.scene,
+				runtime.humanoid_profile,
+				BoneColliderConfig {
+					enabled: false,
+					..BoneColliderConfig::default()
+				},
+				runtime_dynamics,
+			)
+		})
+		.unwrap_or_default();
+	if ignore_authored_colliders {
+		runtime_colliders.retain(|collider| collider.source_id.is_empty());
+	}
+	let runtime_collider_count = runtime_colliders.len();
+	let mut settled_scene = scene.clone();
+	let mut sim = DynamicsSimulator::new_with_runtime_dynamics_and_collider_sources(
+		&settled_scene,
+		runtime_dynamics,
+		runtime_colliders,
+		physics_config,
+	)
+	.ok_or_else(|| "UNPhysics simulator could not be created".to_string())?;
+	let settle_frames = settle_frames.clamp(1, 1200);
+	let mut step_profile = DynamicsStepProfile::default();
+	for _ in 0..settle_frames {
+		let frame_profile = sim.step_runtime_dynamics_profiled(&mut settled_scene, runtime_dynamics, 1.0 / 60.0);
+		step_profile.fixed_steps = step_profile.fixed_steps.saturating_add(frame_profile.fixed_steps);
+		step_profile.active_groups = frame_profile.active_groups;
+		step_profile.active_joints = frame_profile.active_joints;
+		step_profile.collision_projection_count = step_profile
+			.collision_projection_count
+			.saturating_add(frame_profile.collision_projection_count);
+		for source_id in frame_profile.collision_projection_source_ids {
+			push_bounded_unique_string(&mut step_profile.collision_projection_source_ids, source_id, 16);
+		}
+		for (source_id, count) in frame_profile.collision_projection_source_counts {
+			let entry = step_profile.collision_projection_source_counts.entry(source_id).or_default();
+			*entry = entry.saturating_add(count);
+		}
+		for collider_path in frame_profile.collision_projection_collider_paths {
+			push_bounded_unique_string(&mut step_profile.collision_projection_collider_paths, collider_path, 16);
+		}
+		for (collider_path, count) in frame_profile.collision_projection_collider_path_counts {
+			let entry = step_profile
+				.collision_projection_collider_path_counts
+				.entry(collider_path)
+				.or_default();
+			*entry = entry.saturating_add(count);
+		}
+		for (source_id, path_counts) in frame_profile.collision_projection_source_collider_path_counts {
+			let source_entry = step_profile
+				.collision_projection_source_collider_path_counts
+				.entry(source_id)
+				.or_default();
+			for (collider_path, count) in path_counts {
+				let entry = source_entry.entry(collider_path).or_default();
+				*entry = entry.saturating_add(count);
+			}
+		}
+		step_profile.world_ms += frame_profile.world_ms;
+		step_profile.collider_ms += frame_profile.collider_ms;
+		step_profile.solve_ms += frame_profile.solve_ms;
+		step_profile.solve_collision_ms += frame_profile.solve_collision_ms;
+		step_profile.solve_propagate_ms += frame_profile.solve_propagate_ms;
+	}
+
+	let rest_world = cli_scene_world_matrices(scene);
+	let settled_world = cli_scene_world_matrices(&settled_scene);
+	let rest_positions = skinned_positions_for_primitive(scene, node_index, skin, primitive, &rest_world)?;
+	let settled_positions = skinned_positions_for_primitive(&settled_scene, node_index, skin, primitive, &settled_world)?;
+	let node_samples = dynamics_vertex_probe_node_samples(&node_paths, &rest_world, &settled_world);
+	let joint_weight_summaries = dynamics_vertex_probe_joint_weight_summaries(scene, skin, primitive, &node_paths);
+	let probe_dynamic_source_weight_sums =
+		dynamics_vertex_probe_dynamic_source_weight_sums(runtime_dynamics, skin, primitive, &dynamic_nodes);
+	let probe_dynamic_source_ids = probe_dynamic_source_weight_sums.keys().take(16).cloned().collect::<Vec<_>>();
+	let probe_collision_projection_source_counts =
+		probe_collision_projection_source_counts(&step_profile.collision_projection_source_counts, &probe_dynamic_source_weight_sums);
+	let probe_collision_projection_count = probe_collision_projection_source_counts.values().copied().sum();
+	let probe_collision_projection_source_ids = probe_collision_projection_source_counts
+		.keys()
+		.take(16)
+		.cloned()
+		.collect::<Vec<_>>();
+	let probe_collision_projection_collider_path_counts = probe_collision_projection_collider_path_counts(
+		&step_profile.collision_projection_source_collider_path_counts,
+		&probe_dynamic_source_weight_sums,
+	);
+	let regions = dynamics_vertex_probe_regions(scene, skin, primitive, &node_paths, &rest_positions, &settled_positions);
+	let collider_summary_world = cli_scene_world_matrices(&settled_scene);
+	let collider_tail_samples = sim.tail_samples();
+	let collider_path_summaries = dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
+		&collider_summary_world,
+		sim.bone_colliders(),
+		sim.bone_collider_source_ids(),
+		sim.bone_collider_paths(),
+		&collider_tail_samples,
+		&step_profile.collision_projection_collider_path_counts,
+	);
+	let probe_collider_path_summaries = if probe_dynamic_source_weight_sums.is_empty() {
+		Vec::new()
+	} else {
+		let probe_tail_samples = collider_tail_samples
+			.iter()
+			.filter(|sample| probe_dynamic_source_weight_sums.contains_key(&sample.source_id))
+			.cloned()
+			.collect::<Vec<_>>();
+		dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
+			&collider_summary_world,
+			sim.bone_colliders(),
+			sim.bone_collider_source_ids(),
+			sim.bone_collider_paths(),
+			&probe_tail_samples,
+			&probe_collision_projection_collider_path_counts,
+		)
+	};
+	Ok(DynamicsVertexProbeReport {
+		path: path.display().to_string(),
+		wardrobe_set: wardrobe_set.map(str::to_string),
+		tuning: tuning.to_string(),
+		node_index,
+		node_path,
+		mesh_index,
+		skin_index,
+		settle_frames,
+		authored_colliders_ignored: ignore_authored_colliders,
+		runtime_collider_count,
+		solve_collision_projection_count: step_profile.collision_projection_count,
+		solve_collision_projection_source_ids: step_profile.collision_projection_source_ids,
+		solve_collision_projection_source_counts: step_profile.collision_projection_source_counts,
+		probe_dynamic_source_ids,
+		probe_dynamic_source_weight_sums,
+		probe_collision_projection_count,
+		probe_collision_projection_source_ids,
+		probe_collision_projection_source_counts,
+		solve_collision_projection_collider_paths: step_profile.collision_projection_collider_paths,
+		solve_collision_projection_collider_path_counts: step_profile.collision_projection_collider_path_counts,
+		solve_collision_projection_source_collider_path_counts: step_profile.collision_projection_source_collider_path_counts,
+		collider_path_summaries,
+		probe_collision_projection_collider_path_counts,
+		probe_collider_path_summaries,
+		mesh_cloth_assist_applied: apply_mesh_cloth_assist,
+		mesh_cloth_assist_changed_vertices,
+		node_samples,
+		joint_weight_summaries,
+		regions,
+	})
+}
+
+#[cfg(test)]
+fn dynamics_vertex_probe_collider_path_summaries_for_samples(
+	scene: &UnaSceneSnapshot,
+	colliders: &[BoneColliderPrimitive],
+	collider_source_ids: &[String],
+	collider_paths: &[String],
+	tail_samples: &[DynamicsTailSample],
+	projection_counts: &BTreeMap<String, u32>,
+) -> Vec<DynamicsVertexProbeColliderPathSummary> {
+	let world = cli_scene_world_matrices(scene);
+	dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
+		&world,
+		colliders,
+		collider_source_ids,
+		collider_paths,
+		tail_samples,
+		projection_counts,
+	)
+}
+
+fn dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
+	world: &[Mat4],
+	colliders: &[BoneColliderPrimitive],
+	collider_source_ids: &[String],
+	collider_paths: &[String],
+	tail_samples: &[DynamicsTailSample],
+	projection_counts: &BTreeMap<String, u32>,
+) -> Vec<DynamicsVertexProbeColliderPathSummary> {
+	#[derive(Default)]
+	struct Accum {
+		summary: Option<DynamicsVertexProbeColliderPathSummary>,
+		source_ids: BTreeSet<String>,
+	}
+
+	let all_global = collider_source_ids.iter().all(String::is_empty);
+	let mut global_collider_indices = Vec::new();
+	let mut source_collider_indices = BTreeMap::<&str, Vec<usize>>::new();
+	if !all_global {
+		for collider_index in 0..colliders.len() {
+			let collider_source_id = collider_source_ids.get(collider_index).map(String::as_str).unwrap_or_default();
+			if collider_source_id.is_empty() {
+				global_collider_indices.push(collider_index);
+			} else {
+				source_collider_indices.entry(collider_source_id).or_default().push(collider_index);
+			}
+		}
+	}
+	let mut by_path = BTreeMap::<String, Accum>::new();
+	for tail in tail_samples {
+		let tail_point = Vec3::from_array(tail.curr_tail);
+		let mut visit_collider = |collider_index: usize| {
+			let Some(collider) = colliders.get(collider_index) else {
+				return;
+			};
+			let Some(contact) = dynamics_vertex_probe_collider_contact(&world, tail, tail_point, collider) else {
+				return;
+			};
+			let collider_path = collider_paths
+				.get(collider_index)
+				.cloned()
+				.filter(|path| !path.is_empty())
+				.unwrap_or_else(|| format!("collider_index:{collider_index}"));
+			let accum = by_path.entry(collider_path.clone()).or_default();
+			let summary = accum.summary.get_or_insert_with(|| DynamicsVertexProbeColliderPathSummary {
+				collider_path: collider_path.clone(),
+				collider_shape: contact.collider_shape.clone(),
+				inside_bounds: contact.inside_bounds,
+				candidate_count: 0,
+				penetrating_count: 0,
+				projection_count: projection_counts.get(&collider_path).copied().unwrap_or_default(),
+				source_count: 0,
+				min_margin: contact.margin,
+				min_distance: contact.distance,
+				min_threshold: contact.threshold,
+				sample_source_ids: Vec::new(),
+			});
+			summary.candidate_count += 1;
+			if contact.margin < 0.0 {
+				summary.penetrating_count += 1;
+			}
+			if contact.margin < summary.min_margin {
+				summary.min_margin = contact.margin;
+				summary.min_distance = contact.distance;
+				summary.min_threshold = contact.threshold;
+				summary.collider_shape = contact.collider_shape;
+				summary.inside_bounds = contact.inside_bounds;
+			}
+			if accum.source_ids.insert(tail.source_id.clone()) && summary.sample_source_ids.len() < 8 {
+				summary.sample_source_ids.push(tail.source_id.clone());
+			}
+		};
+		if all_global {
+			for collider_index in 0..colliders.len() {
+				visit_collider(collider_index);
+			}
+		} else {
+			for &collider_index in &global_collider_indices {
+				visit_collider(collider_index);
+			}
+			if let Some(source_indices) = (!tail.source_id.is_empty())
+				.then(|| source_collider_indices.get(tail.source_id.as_str()))
+				.flatten()
+			{
+				for &collider_index in source_indices {
+					visit_collider(collider_index);
+				}
+			}
+		}
+	}
+	let mut summaries = by_path
+		.into_values()
+		.filter_map(|accum| {
+			let mut summary = accum.summary?;
+			summary.source_count = accum.source_ids.len();
+			Some(summary)
+		})
+		.collect::<Vec<_>>();
+	summaries.sort_by(|a, b| {
+		b.penetrating_count
+			.cmp(&a.penetrating_count)
+			.then_with(|| a.min_margin.total_cmp(&b.min_margin))
+			.then_with(|| b.candidate_count.cmp(&a.candidate_count))
+			.then_with(|| a.collider_path.cmp(&b.collider_path))
+	});
+	summaries
+}
+
+struct DynamicsVertexProbeColliderContact {
+	collider_shape: String,
+	inside_bounds: bool,
+	distance: f32,
+	threshold: f32,
+	margin: f32,
+}
+
+fn dynamics_vertex_probe_collider_contact(
+	world: &[Mat4],
+	tail: &DynamicsTailSample,
+	tail_point: Vec3,
+	collider: &BoneColliderPrimitive,
+) -> Option<DynamicsVertexProbeColliderContact> {
+	let (collider_shape, inside_bounds, distance, threshold, margin) = match *collider {
+		BoneColliderPrimitive::Sphere { node, radius } => {
+			let distance = tail_point.distance(world.get(node)?.transform_point3(Vec3::ZERO));
+			let threshold = radius.max(0.0) + tail.hit_radius.max(0.0);
+			("sphere", false, distance, threshold, distance - threshold)
+		}
+		BoneColliderPrimitive::Capsule {
+			start_node,
+			end_node,
+			radius,
+		} => {
+			let a = world.get(start_node)?.transform_point3(Vec3::ZERO);
+			let b = world.get(end_node)?.transform_point3(Vec3::ZERO);
+			let distance = distance_point_segment(tail_point, a, b);
+			let threshold = radius.max(0.0) + tail.hit_radius.max(0.0);
+			("capsule", false, distance, threshold, distance - threshold)
+		}
+		BoneColliderPrimitive::LocalSphere {
+			node,
+			center,
+			radius,
+			inside_bounds,
+		} => {
+			let (center, radius) = local_sphere_world(world, node, center, radius)?;
+			let distance = tail_point.distance(center);
+			let hit_radius = tail.hit_radius.max(0.0);
+			let threshold = if inside_bounds {
+				(radius - hit_radius).max(0.0)
+			} else {
+				radius.max(0.0) + hit_radius
+			};
+			let margin = if inside_bounds {
+				threshold - distance
+			} else {
+				distance - threshold
+			};
+			("local_sphere", inside_bounds, distance, threshold, margin)
+		}
+		BoneColliderPrimitive::LocalCapsule {
+			node,
+			center,
+			axis,
+			half_length,
+			radius,
+			inside_bounds,
+		} => {
+			let (a, b, radius) = local_capsule_world(world, node, center, axis, half_length, radius)?;
+			let distance = distance_point_segment(tail_point, a, b);
+			let hit_radius = tail.hit_radius.max(0.0);
+			let threshold = if inside_bounds {
+				(radius - hit_radius).max(0.0)
+			} else {
+				radius.max(0.0) + hit_radius
+			};
+			let margin = if inside_bounds {
+				threshold - distance
+			} else {
+				distance - threshold
+			};
+			("local_capsule", inside_bounds, distance, threshold, margin)
+		}
+		BoneColliderPrimitive::LocalPlane {
+			node,
+			center,
+			normal,
+			inside_bounds,
+		} => {
+			let (point, normal) = local_plane_world(world, node, center, normal)?;
+			let signed_distance = (tail_point - point).dot(normal);
+			let hit_radius = tail.hit_radius.max(0.0);
+			let margin = if inside_bounds {
+				-hit_radius - signed_distance
+			} else {
+				signed_distance - hit_radius
+			};
+			("local_plane", inside_bounds, signed_distance, hit_radius, margin)
+		}
+	};
+	if !distance.is_finite() {
+		return None;
+	}
+	Some(DynamicsVertexProbeColliderContact {
+		collider_shape: collider_shape.to_string(),
+		inside_bounds,
+		distance,
+		threshold,
+		margin,
+	})
+}
+
+fn dynamics_vertex_probe_node_samples(
+	node_paths: &[Option<String>],
+	rest_world: &[Mat4],
+	settled_world: &[Mat4],
+) -> Vec<DynamicsVertexProbeNodeSample> {
+	let mut out = Vec::<DynamicsVertexProbeNodeSample>::new();
+	for (node_index, path) in node_paths.iter().enumerate() {
+		let Some(path) = path else {
+			continue;
+		};
+		let Some(rest) = rest_world.get(node_index).copied() else {
+			continue;
+		};
+		let Some(settled) = settled_world.get(node_index).copied() else {
+			continue;
+		};
+		let rest_translation = rest.transform_point3(Vec3::ZERO);
+		let settled_translation = settled.transform_point3(Vec3::ZERO);
+		let delta = settled_translation - rest_translation;
+		let displacement = delta.length();
+		if displacement <= 1e-5 {
+			continue;
+		}
+		out.push(DynamicsVertexProbeNodeSample {
+			node_index,
+			path: path.clone(),
+			rest_translation: rest_translation.to_array(),
+			settled_translation: settled_translation.to_array(),
+			delta: delta.to_array(),
+			displacement,
+		});
+	}
+	out.sort_by(|a, b| {
+		b.displacement
+			.partial_cmp(&a.displacement)
+			.unwrap_or(std::cmp::Ordering::Equal)
+			.then_with(|| a.node_index.cmp(&b.node_index))
+	});
+	out.truncate(96);
+	out
+}
+
+fn select_node_path_containing(node_paths: &[Option<String>], effective_visibility: &[bool], node_filter: &str) -> Option<(usize, String)> {
+	let filters = vec![node_filter.to_string()];
+	let mut first_match = None;
+	for (index, path) in node_paths
+		.iter()
+		.enumerate()
+		.filter_map(|(index, path)| path.as_ref().map(|path| (index, path)))
+	{
+		if !skeleton_mesh_cloth_assist_mesh_matches_with_categories(path, &filters, &[]) {
+			continue;
+		}
+		if effective_visibility.get(index).copied().unwrap_or(false) {
+			return Some((index, path.clone()));
+		}
+		first_match.get_or_insert((index, path));
+	}
+	first_match.map(|(index, path)| (index, path.clone()))
+}
+
+fn dynamics_vertex_probe_mesh_cloth_assist_config(physics_config: &DynamicsPhysicsConfig) -> DynamicsMeshClothAssistConfig {
+	let mut config = physics_config.clone().normalized().mesh_cloth_assist;
+	config.enabled = true;
+	config
+}
+
+fn dynamics_vertex_probe_dynamic_weight_score(
+	mesh: &[un_avatar_core::UnaMeshBuffers],
+	skin: &un_avatar_core::UnaSkin,
+	dynamic_nodes: &[usize],
+) -> (usize, f32) {
+	let mut vertex_count = 0usize;
+	let mut weight_sum = 0.0_f32;
+	for primitive in mesh {
+		let Some(joints) = primitive.joints.as_ref() else {
+			continue;
+		};
+		let Some(weights) = primitive.weights.as_ref() else {
+			continue;
+		};
+		for (vertex_joints, vertex_weights) in joints.iter().zip(weights.iter()) {
+			let mut vertex_dynamic_weight = 0.0_f32;
+			for lane in 0..4 {
+				let joint_index = vertex_joints[lane] as usize;
+				let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
+					continue;
+				};
+				if dynamic_nodes.binary_search(&node_index).is_ok() {
+					vertex_dynamic_weight += vertex_weights[lane].max(0.0);
+				}
+			}
+			if vertex_dynamic_weight > 0.001 {
+				vertex_count += 1;
+				weight_sum += vertex_dynamic_weight;
+			}
+		}
+	}
+	(vertex_count, weight_sum)
+}
+
+fn dynamics_vertex_probe_dynamic_source_weight_sums(
+	runtime_dynamics: un_avatar_core::UnaRuntimeDynamics<'_>,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	dynamic_nodes: &[usize],
+) -> BTreeMap<String, f32> {
+	let Some(skin) = skin else {
+		return BTreeMap::new();
+	};
+	let Some(joints) = primitive.joints.as_ref() else {
+		return BTreeMap::new();
+	};
+	let Some(weights) = primitive.weights.as_ref() else {
+		return BTreeMap::new();
+	};
+	let mut source_ids_by_node = BTreeMap::<usize, Vec<&str>>::new();
+	for group in runtime_dynamics.dynamics_groups().filter(|group| group.effective_enabled) {
+		if group.source_id.is_empty() {
+			continue;
+		}
+		for node_index in dynamics_mesh_cloth_assist_deforming_nodes(group.chain.bone_node_indices, group.chain.interaction_start_index) {
+			source_ids_by_node.entry(node_index).or_default().push(group.source_id);
+		}
+	}
+	let mut source_weight_sums = BTreeMap::<String, f32>::new();
+	for (vertex_joints, vertex_weights) in joints.iter().zip(weights.iter()) {
+		for lane in 0..4 {
+			let weight = vertex_weights[lane].max(0.0);
+			if weight <= 0.001 {
+				continue;
+			}
+			let joint_index = vertex_joints[lane] as usize;
+			let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
+				continue;
+			};
+			if dynamic_nodes.binary_search(&node_index).is_err() {
+				continue;
+			}
+			let Some(source_ids) = source_ids_by_node.get(&node_index) else {
+				continue;
+			};
+			for source_id in source_ids {
+				let entry = source_weight_sums.entry((*source_id).to_string()).or_default();
+				*entry += weight;
+			}
+		}
+	}
+	source_weight_sums.retain(|_, weight_sum| *weight_sum > 0.001);
+	source_weight_sums
+}
+
+fn probe_collision_projection_source_counts(
+	all_projection_source_counts: &BTreeMap<String, u32>,
+	probe_dynamic_source_weight_sums: &BTreeMap<String, f32>,
+) -> BTreeMap<String, u32> {
+	probe_dynamic_source_weight_sums
+		.keys()
+		.filter_map(|source_id| {
+			all_projection_source_counts
+				.get(source_id)
+				.copied()
+				.filter(|count| *count > 0)
+				.map(|count| (source_id.clone(), count))
+		})
+		.collect()
+}
+
+fn probe_collision_projection_collider_path_counts(
+	all_source_path_counts: &BTreeMap<String, BTreeMap<String, u32>>,
+	probe_dynamic_source_weight_sums: &BTreeMap<String, f32>,
+) -> BTreeMap<String, u32> {
+	let mut out = BTreeMap::<String, u32>::new();
+	for source_id in probe_dynamic_source_weight_sums.keys() {
+		let Some(path_counts) = all_source_path_counts.get(source_id) else {
+			continue;
+		};
+		for (collider_path, count) in path_counts {
+			let entry = out.entry(collider_path.clone()).or_default();
+			*entry = entry.saturating_add(*count);
+		}
+	}
+	out.retain(|_, count| *count > 0);
+	out
+}
+
+fn dynamics_vertex_probe_apply_mesh_cloth_assist(
+	primitive: &mut un_avatar_core::UnaMeshBuffers,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[Option<String>],
+	node_path: &str,
+	config: &DynamicsMeshClothAssistConfig,
+	dynamic_nodes: &[usize],
+	categories: &[DynamicsCategoryDefinition],
+) -> usize {
+	if !config.enabled || config.max_assist_weight <= 0.0 || primitive.positions.is_empty() {
+		return 0;
+	}
+	let Some(skin) = skin else {
+		return 0;
+	};
+	if !dynamics_mesh_cloth_assist_mesh_matches(Some(node_path), &config.mesh_path_contains, categories) {
+		return 0;
+	}
+	let Some(indices) = primitive.indices.as_deref() else {
+		return 0;
+	};
+	if indices.is_empty() {
+		return 0;
+	}
+	let Some(joints) = primitive.joints.as_mut() else {
+		return 0;
+	};
+	let Some(weights) = primitive.weights.as_mut() else {
+		return 0;
+	};
+	let joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len());
+	if joint_count == 0 {
+		return 0;
+	}
+	let joint_roles = dynamics_mesh_cloth_assist_joint_roles(skin, joint_count, Some(dynamic_nodes), |joint_index| {
+		dynamics_mesh_cloth_assist_joint_leaf(skin, node_paths, joint_index)
+	});
+	if !joint_roles.iter().any(|role| *role == DynamicsMeshClothAssistJointRole::Dynamic) {
+		return 0;
+	}
+	let count = primitive.positions.len().min(joints.len()).min(weights.len());
+	let mut vertices = (0..count)
+		.map(|index| DynamicsVertexProbeMeshClothAssistVertex {
+			joints: joints[index],
+			weights: weights[index],
+		})
+		.collect::<Vec<_>>();
+	let changed = apply_dynamics_mesh_cloth_assist_to_vertices(&mut vertices, indices, joint_count, config, |joint_index| {
+		joint_roles
+			.get(joint_index)
+			.copied()
+			.unwrap_or(DynamicsMeshClothAssistJointRole::Other)
+	});
+	for (index, vertex) in vertices.into_iter().enumerate() {
+		joints[index] = vertex.joints;
+		weights[index] = vertex.weights;
+	}
+	changed
+}
+
+struct DynamicsVertexProbeMeshClothAssistVertex {
+	joints: [u16; 4],
+	weights: [f32; 4],
+}
+
+impl DynamicsMeshClothAssistVertex for DynamicsVertexProbeMeshClothAssistVertex {
+	fn joints(&self) -> [u16; 4] {
+		self.joints
+	}
+
+	fn weights(&self) -> [f32; 4] {
+		self.weights
+	}
+
+	fn set_joints(&mut self, joints: [u16; 4]) {
+		self.joints = joints;
+	}
+
+	fn set_weights(&mut self, weights: [f32; 4]) {
+		self.weights = weights;
+	}
+}
+
+fn skinned_positions_for_primitive(
+	_scene: &UnaSceneSnapshot,
+	node_index: usize,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	world: &[Mat4],
+) -> Result<Vec<[f32; 3]>, String> {
+	let Some(skin) = skin else {
+		let node_world = world.get(node_index).copied().unwrap_or(Mat4::IDENTITY);
+		return Ok(primitive
+			.positions
+			.iter()
+			.map(|position| node_world.transform_point3(Vec3::from_array(*position)).to_array())
+			.collect());
+	};
+	let joints = primitive
+		.joints
+		.as_ref()
+		.ok_or_else(|| "selected primitive has a skin but no joints".to_string())?;
+	let weights = primitive
+		.weights
+		.as_ref()
+		.ok_or_else(|| "selected primitive has a skin but no weights".to_string())?;
+	let mesh_world = world.get(node_index).copied().unwrap_or(Mat4::IDENTITY);
+	let inv_mesh = mesh_world.inverse();
+	let mut palette = Vec::with_capacity(skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()));
+	for (joint_index, &node) in skin.joint_nodes.iter().enumerate().take(skin.inverse_bind_matrices.len()) {
+		let joint_world = world.get(node).copied().unwrap_or(Mat4::IDENTITY);
+		let inverse_bind = Mat4::from_cols_array(&skin.inverse_bind_matrices[joint_index]);
+		palette.push(inv_mesh * joint_world * inverse_bind);
+	}
+	let mut out = Vec::with_capacity(primitive.positions.len());
+	for (index, position) in primitive.positions.iter().enumerate() {
+		let joints = joints.get(index).copied().unwrap_or([0; 4]);
+		let weights = weights.get(index).copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
+		let p = Vec4::new(position[0], position[1], position[2], 1.0);
+		let mut skinned = Vec4::ZERO;
+		let mut weight_sum = 0.0;
+		for slot in 0..4 {
+			let weight = weights[slot];
+			if weight <= 0.0 {
+				continue;
+			}
+			let joint = joints[slot] as usize;
+			let matrix = palette.get(joint).copied().unwrap_or(Mat4::IDENTITY);
+			skinned += matrix * p * weight;
+			weight_sum += weight;
+		}
+		if weight_sum <= 0.0 {
+			skinned = p;
+		}
+		out.push([skinned.x, skinned.y, skinned.z]);
+	}
+	Ok(out)
+}
+
+fn dynamics_vertex_probe_regions(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+	rest_positions: &[[f32; 3]],
+	settled_positions: &[[f32; 3]],
+) -> Vec<DynamicsVertexProbeRegionReport> {
+	let regions: [(&str, fn([f32; 3]) -> bool); 5] = [
+		("all_vertices", |_| true),
+		("front_center", |p| p[0].abs() < 0.08 && p[2] > 0.08 && p[1] > 1.0 && p[1] < 1.24),
+		("front_left", |p| {
+			p[0] > 0.08 && p[0] < 0.16 && p[2] > 0.08 && p[1] > 1.0 && p[1] < 1.24
+		}),
+		("front_right", |p| {
+			p[0] < -0.08 && p[0] > -0.16 && p[2] > 0.08 && p[1] > 1.0 && p[1] < 1.24
+		}),
+		("upper_front_all", |p| p[2] > 0.08 && p[1] > 1.0 && p[1] < 1.24),
+	];
+	let mut reports = regions
+		.into_iter()
+		.map(|(name, predicate)| {
+			dynamics_vertex_probe_region(
+				scene,
+				skin,
+				primitive,
+				node_paths,
+				rest_positions,
+				settled_positions,
+				name,
+				predicate,
+			)
+		})
+		.collect::<Vec<_>>();
+	let focused_regions: [(&str, fn([f32; 3]) -> bool); 5] = [
+		("front_upper_center", |p| {
+			p[0].abs() < 0.08 && p[2] > 0.08 && p[1] > 1.12 && p[1] < 1.20
+		}),
+		("front_upper_left", |p| {
+			p[0] > 0.08 && p[0] < 0.16 && p[2] > 0.08 && p[1] > 1.12 && p[1] < 1.20
+		}),
+		("front_upper_right", |p| {
+			p[0] < -0.08 && p[0] > -0.16 && p[2] > 0.08 && p[1] > 1.12 && p[1] < 1.20
+		}),
+		("front_lower_left", |p| {
+			p[0] > 0.08 && p[0] < 0.16 && p[2] > 0.08 && p[1] > 0.98 && p[1] < 1.08
+		}),
+		("front_lower_right", |p| {
+			p[0] < -0.08 && p[0] > -0.16 && p[2] > 0.08 && p[1] > 0.98 && p[1] < 1.08
+		}),
+	];
+	reports.extend(focused_regions.into_iter().map(|(name, predicate)| {
+		dynamics_vertex_probe_region(
+			scene,
+			skin,
+			primitive,
+			node_paths,
+			rest_positions,
+			settled_positions,
+			name,
+			predicate,
+		)
+	}));
+	reports
+}
+
+fn dynamics_vertex_probe_joint_weight_summaries(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+) -> Vec<DynamicsVertexProbeJointWeightSummary> {
+	let Some(skin) = skin else {
+		return Vec::new();
+	};
+	let Some(joints) = primitive.joints.as_ref() else {
+		return Vec::new();
+	};
+	let Some(weights) = primitive.weights.as_ref() else {
+		return Vec::new();
+	};
+	let mut summaries = BTreeMap::<usize, (usize, usize, f32, f32, Vec3, Vec3, Vec3)>::new();
+	for (vertex_index, (vertex_joints, vertex_weights)) in joints.iter().zip(weights.iter()).enumerate() {
+		let position = Vec3::from_array(primitive.positions.get(vertex_index).copied().unwrap_or([0.0; 3]));
+		let dominant_joint = vertex_joints
+			.iter()
+			.copied()
+			.zip(vertex_weights.iter().copied())
+			.filter(|(_, weight)| *weight > 0.001)
+			.max_by(|(_, a), (_, b)| a.total_cmp(b))
+			.map(|(joint, _)| joint as usize);
+		for slot in 0..4 {
+			let weight = vertex_weights[slot];
+			if weight <= 0.001 {
+				continue;
+			}
+			let joint_index = vertex_joints[slot] as usize;
+			let entry = summaries.entry(joint_index).or_insert((
+				0,
+				0,
+				0.0,
+				0.0,
+				Vec3::ZERO,
+				Vec3::splat(f32::INFINITY),
+				Vec3::splat(f32::NEG_INFINITY),
+			));
+			entry.0 += 1;
+			if dominant_joint == Some(joint_index) {
+				entry.1 += 1;
+			}
+			entry.2 += weight;
+			entry.3 = entry.3.max(weight);
+			entry.4 += position;
+			entry.5 = entry.5.min(position);
+			entry.6 = entry.6.max(position);
+		}
+	}
+	let mut out = summaries
+		.into_iter()
+		.map(
+			|(joint_index, (vertex_count, dominant_vertex_count, weight_sum, max_weight, position_sum, bounds_min, bounds_max))| {
+				let node_index = skin.joint_nodes.get(joint_index).copied();
+				let name = node_index
+					.and_then(|node| node_paths.get(node).cloned().flatten())
+					.or_else(|| node_index.and_then(|node| scene.nodes.get(node).and_then(|node| node.name.clone())))
+					.unwrap_or_else(|| format!("joint#{joint_index}"));
+				let leaf = name.rsplit('/').next().unwrap_or(&name).to_string();
+				let average_position = if vertex_count > 0 {
+					position_sum / vertex_count as f32
+				} else {
+					Vec3::ZERO
+				};
+				DynamicsVertexProbeJointWeightSummary {
+					joint: leaf,
+					node_index,
+					vertex_count,
+					dominant_vertex_count,
+					weight_sum,
+					max_weight,
+					average_weight: weight_sum / vertex_count.max(1) as f32,
+					average_position: average_position.to_array(),
+					bounds_min: bounds_min.to_array(),
+					bounds_max: bounds_max.to_array(),
+				}
+			},
+		)
+		.collect::<Vec<_>>();
+	out.sort_by(|a, b| {
+		b.weight_sum
+			.total_cmp(&a.weight_sum)
+			.then_with(|| b.vertex_count.cmp(&a.vertex_count))
+			.then_with(|| a.joint.cmp(&b.joint))
+	});
+	out
+}
+
+fn dynamics_vertex_probe_region(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+	rest_positions: &[[f32; 3]],
+	settled_positions: &[[f32; 3]],
+	name: &str,
+	predicate: fn([f32; 3]) -> bool,
+) -> DynamicsVertexProbeRegionReport {
+	let joints = primitive.joints.as_ref();
+	let weights = primitive.weights.as_ref();
+	let mut samples = Vec::new();
+	let mut joint_counts = BTreeMap::<String, usize>::new();
+	let mut delta_sum = Vec3::ZERO;
+	let mut displacement_sum = 0.0;
+	let mut max_displacement = 0.0_f32;
+	for (index, (&rest, &settled)) in rest_positions.iter().zip(settled_positions.iter()).enumerate() {
+		if !predicate(rest) {
+			continue;
+		}
+		let delta = Vec3::from_array(settled) - Vec3::from_array(rest);
+		let displacement = delta.length();
+		delta_sum += delta;
+		displacement_sum += displacement;
+		max_displacement = max_displacement.max(displacement);
+		let (dominant_joint, dominant_weight, influences) = dynamics_vertex_probe_influences(
+			scene,
+			skin,
+			node_paths,
+			joints.and_then(|j| j.get(index)),
+			weights.and_then(|w| w.get(index)),
+		);
+		*joint_counts.entry(dominant_joint.clone()).or_default() += 1;
+		samples.push(DynamicsVertexProbeVertexSample {
+			vertex_index: index,
+			position: rest,
+			settled_position: settled,
+			delta: delta.to_array(),
+			displacement,
+			dominant_joint,
+			dominant_weight,
+			influences,
+		});
+	}
+	let vertex_count = samples.len();
+	let denom = vertex_count.max(1) as f32;
+	let mut least_moved_samples = samples.clone();
+	least_moved_samples.sort_by(|a, b| a.displacement.total_cmp(&b.displacement));
+	least_moved_samples.truncate(12);
+	let mut most_moved_samples = samples;
+	most_moved_samples.sort_by(|a, b| b.displacement.total_cmp(&a.displacement));
+	most_moved_samples.truncate(12);
+	let mut dominant_joints = joint_counts
+		.into_iter()
+		.map(|(joint, count)| DynamicsVertexProbeJointCount { joint, count })
+		.collect::<Vec<_>>();
+	dominant_joints.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.joint.cmp(&b.joint)));
+	DynamicsVertexProbeRegionReport {
+		name: name.to_string(),
+		vertex_count,
+		dominant_joints,
+		morph_targets: dynamics_vertex_probe_region_morph_targets(primitive, rest_positions, predicate),
+		average_displacement: displacement_sum / denom,
+		max_displacement,
+		average_delta: (delta_sum / denom).to_array(),
+		least_moved_samples,
+		most_moved_samples,
+	}
+}
+
+fn dynamics_vertex_probe_region_morph_targets(
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	rest_positions: &[[f32; 3]],
+	predicate: fn([f32; 3]) -> bool,
+) -> Vec<DynamicsVertexProbeMorphTargetRegionSummary> {
+	const MAX_MORPH_TARGET_REGION_SAMPLES: usize = 12;
+	let mut out = Vec::new();
+	for (target_index, target) in primitive.morph_targets.iter().enumerate() {
+		let name = primitive
+			.morph_target_names
+			.get(target_index)
+			.cloned()
+			.unwrap_or_else(|| format!("morph#{target_index}"));
+		let mut affected_vertices = 0usize;
+		let mut delta_sum = 0.0f32;
+		let mut max_delta = 0.0f32;
+		for (vertex_index, &rest) in rest_positions.iter().enumerate() {
+			if !predicate(rest) {
+				continue;
+			}
+			let delta = target
+				.position_deltas
+				.get(vertex_index)
+				.map(|delta| Vec3::from_array(*delta).length())
+				.unwrap_or(0.0);
+			if delta <= 0.000001 {
+				continue;
+			}
+			affected_vertices += 1;
+			delta_sum += delta;
+			max_delta = max_delta.max(delta);
+		}
+		out.push(DynamicsVertexProbeMorphTargetRegionSummary {
+			index: target_index,
+			name,
+			default_weight: primitive.default_morph_weights.get(target_index).copied().unwrap_or(0.0),
+			affected_vertices,
+			average_delta: if affected_vertices > 0 {
+				delta_sum / affected_vertices as f32
+			} else {
+				0.0
+			},
+			max_delta,
+		});
+	}
+	out.sort_by(|a, b| {
+		b.affected_vertices
+			.cmp(&a.affected_vertices)
+			.then_with(|| b.max_delta.total_cmp(&a.max_delta))
+			.then_with(|| b.average_delta.total_cmp(&a.average_delta))
+			.then_with(|| a.index.cmp(&b.index))
+	});
+	out.truncate(MAX_MORPH_TARGET_REGION_SAMPLES);
+	out
+}
+
+fn dynamics_vertex_probe_influences(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[Option<String>],
+	joints: Option<&[u16; 4]>,
+	weights: Option<&[f32; 4]>,
+) -> (String, f32, Vec<DynamicsVertexProbeInfluence>) {
+	let Some(skin) = skin else {
+		return ("<rigid>".to_string(), 1.0, Vec::new());
+	};
+	let joints = joints.copied().unwrap_or([0; 4]);
+	let weights = weights.copied().unwrap_or([1.0, 0.0, 0.0, 0.0]);
+	let mut dominant = ("<none>".to_string(), 0.0_f32);
+	let mut influences = Vec::new();
+	for slot in 0..4 {
+		let weight = weights[slot];
+		if weight <= 0.001 {
+			continue;
+		}
+		let joint_index = joints[slot] as usize;
+		let node = skin.joint_nodes.get(joint_index).copied();
+		let name = node
+			.and_then(|node| node_paths.get(node).cloned().flatten())
+			.or_else(|| node.and_then(|node| scene.nodes.get(node).and_then(|node| node.name.clone())))
+			.unwrap_or_else(|| format!("joint#{joint_index}"));
+		let leaf = name.rsplit('/').next().unwrap_or(&name).to_string();
+		if weight > dominant.1 {
+			dominant = (leaf.clone(), weight);
+		}
+		influences.push(DynamicsVertexProbeInfluence { joint: leaf, weight });
+	}
+	(dominant.0, dominant.1, influences)
+}
+
+fn run_dynamics_motion_trace_audit(
+	plugin_dirs: &[PathBuf],
+	path: PathBuf,
+	input_format: Option<String>,
+	wardrobe_set: Option<String>,
+	require_motion_evidence: bool,
+	frames: usize,
+	recovery_frames: Option<usize>,
+	tuning: &str,
+	json: bool,
+) -> Result<(), String> {
+	let report = dynamics_motion_trace_report(
+		plugin_dirs,
+		&path,
+		input_format.as_deref(),
+		wardrobe_set.as_deref(),
+		frames,
+		recovery_frames,
+		tuning,
+	)?;
+	let required = if require_motion_evidence {
+		require_dynamics_motion_trace_evidence(&report)
+	} else {
+		Ok(())
+	};
+	if json {
+		write_json_stdout(&report)?;
+		return required;
+	}
+	println!("path: {}", report.path);
+	let plug = report
+		.import_provider_plugin_id
+		.as_ref()
+		.map(|p| format!(" ({p})"))
+		.unwrap_or_default();
+	println!("importer: {}{}", report.import_format_id, plug);
+	if let Some(set_id) = &report.active_wardrobe_set {
+		println!("active_wardrobe_set: {set_id}");
+	}
+	println!(
+		"motion_trace: frames={} recovery_frames={} tuning={} groups={} joints={}",
+		report.frame_count, report.recovery_frame_count, report.tuning, report.group_count, report.joint_count
+	);
+	for category in report.categories.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+		println!(
+			"  motion_category[{}]: groups={} joints={} visualGroups={} nonvisualGroups={} skinnedJoints={} meshSubtrees={} max_lag={} avg_lag={} final_lag={} recovery_lag={} recovery_ratio={} initial_stable_offset={} settled_lag={} stable_offset={} stable_ratio={} recovery_state={} settled_ratio={} residual={} residual_chain={} half_life_frames={} response=rest:{}/shape:{}/bounce:{}/follow:{}/orient:{}/stretch:{}/stretchMotion:{}",
+			category.category,
+			category.group_count,
+			category.joint_count,
+			category.visual_target_group_count,
+			category.nonvisual_group_count,
+			category.visible_skinned_joint_count,
+			category.visible_mesh_subtree_node_count,
+			category.max_lag,
+			category.average_lag,
+			category.final_lag,
+			category.recovery_final_lag,
+			category.recovery_ratio,
+			category.initial_stable_offset,
+			category.settled_recovery_lag,
+			category.stable_offset,
+			category.stable_offset_ratio,
+			category.recovery_state,
+			category.settled_recovery_ratio,
+			category.residual_motion,
+			category.residual_motion_chain_ratio,
+			category
+				.recovery_half_life_frames
+				.map(|value| value.to_string())
+				.unwrap_or_else(|| "none".to_string()),
+			category.average_rest_response,
+			category.average_shape_preservation,
+			category.average_bounce_response,
+			category.average_parent_motion_follow,
+			category.average_orientation_follow,
+			category.average_max_stretch_response,
+			category.average_stretch_motion_response
+		);
+	}
+	print_omitted_text_items("motion categories", report.categories.len(), DIAGNOSE_TEXT_LIST_LIMIT);
+	for group in report.groups.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+		println!(
+			"  motion_group[{}]: category={} joints={} visual={} skinnedJoints={} meshSubtrees={} interactionMetadataOnly={} max_lag={} avg_lag={} final_lag={} recovery_lag={} recovery_ratio={} initial_stable_offset={} settled_lag={} stable_offset={} stable_ratio={} recovery_state={} settled_ratio={} residual={} residual_chain={} half_life_frames={} response=rest:{}/shape:{}/bounce:{}/follow:{}/orient:{}/stretch:{}/stretchMotion:{}",
+			group.source_id,
+			group.category,
+			group.joint_count,
+			group.visual_target,
+			group.skinned_joint_count,
+			group.mesh_subtree_node_count,
+			group.interaction_metadata_only,
+			group.max_lag,
+			group.average_lag,
+			group.final_lag,
+			group.recovery_final_lag,
+			group.recovery_ratio,
+			group.initial_stable_offset,
+			group.settled_recovery_lag,
+			group.stable_offset,
+			group.stable_offset_ratio,
+			group.recovery_state,
+			group.settled_recovery_ratio,
+			group.residual_motion,
+			group.residual_motion_chain_ratio,
+			group
+				.recovery_half_life_frames
+				.map(|value| value.to_string())
+				.unwrap_or_else(|| "none".to_string()),
+			group.average_rest_response,
+			group.average_shape_preservation,
+			group.average_bounce_response,
+			group.average_parent_motion_follow,
+			group.average_orientation_follow,
+			group.average_max_stretch_response,
+			group.average_stretch_motion_response
+		);
+	}
+	print_omitted_text_items("motion groups", report.groups.len(), DIAGNOSE_TEXT_LIST_LIMIT);
+	for finding in report.findings.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+		println!("motion_finding: {finding}");
+	}
+	print_omitted_text_items("motion findings", report.findings.len(), DIAGNOSE_TEXT_LIST_LIMIT);
+	if !report.finding_kind_counts.is_empty() {
+		println!("motion_finding_kind_counts: {:?}", report.finding_kind_counts);
+	}
+	for finding in report.finding_details.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
+		if let Some(hint) = &finding.response_override_hint {
+			println!(
+				"motion_finding_response_hint[{}]: source_id={} rest_response={:?} damping_half_life_ms={:?} stretch_range_scale={:?} stretch_motion={:?}",
+				finding.kind,
+				hint.source_id,
+				hint.rest_response,
+				hint.damping_half_life_ms,
+				hint.stretch_range_scale,
+				hint.stretch_motion
+			);
+		}
+	}
+	print_omitted_text_items(
+		"motion finding response hints",
+		report
+			.finding_details
+			.iter()
+			.filter(|finding| finding.response_override_hint.is_some())
+			.count(),
+		DIAGNOSE_TEXT_LIST_LIMIT,
+	);
+	if !report.missing_motion_evidence.is_empty() {
+		println!("missing motion evidence: {}", report.missing_motion_evidence.join(", "));
+	}
+	required
 }
 
 fn eye_like_material_name(name: Option<&str>) -> bool {
@@ -2047,7 +6698,7 @@ fn material_transparent_with_z_write(material: &UnaMaterialPbr) -> bool {
 		}
 		return material_source_shader_lower(material).contains("twopass");
 	}
-	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
+	material.mtoon_source_profile().is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
 fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f32> {
@@ -2101,7 +6752,7 @@ fn material_summary(
 		.and_then(|v| v.as_i64())
 		.map(|v| v as i32);
 	let liltoon_features = material_liltoon_features(material);
-	let mtoon = material.mtoon_like_runtime().map(|m| DiagnoseMToonSummary {
+	let mtoon = material.mtoon_source_profile().map(|m| DiagnoseMToonSummary {
 		transparent_with_z_write: m.transparent_with_z_write,
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
@@ -2172,6 +6823,18 @@ fn scene_node_paths_by_index(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<Op
 	out
 }
 
+fn scene_parent_indices(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<Option<usize>> {
+	let mut parents = vec![None; scene.nodes.len()];
+	for (parent, node) in scene.nodes.iter().enumerate() {
+		for &child in &node.children {
+			if let Some(slot) = parents.get_mut(child) {
+				*slot = Some(parent);
+			}
+		}
+	}
+	parents
+}
+
 fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<bool> {
 	fn visit(scene: &un_avatar_core::UnaSceneSnapshot, idx: usize, parent_visible: bool, out: &mut [bool]) {
 		let Some(node) = scene.nodes.get(idx) else { return };
@@ -2191,16 +6854,97 @@ fn scene_effective_visibility(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<b
 	out
 }
 
+fn dynamics_selected_runtime_colliders<'a>(
+	runtime_colliders: &'a [&'a un_avatar_core::UnaDynamicsCollider],
+	all_runtime_colliders_global: bool,
+	group_source_id: &str,
+) -> Vec<&'a un_avatar_core::UnaDynamicsCollider> {
+	runtime_colliders
+		.iter()
+		.copied()
+		.filter(|collider| {
+			all_runtime_colliders_global
+				|| collider.source_id.is_empty()
+				|| (!group_source_id.is_empty() && collider.source_id == group_source_id)
+		})
+		.collect()
+}
+
+fn dynamics_group_gravity_target_summary(
+	scene: &UnaSceneSnapshot,
+	world: &[Mat4],
+	group: &un_avatar_core::UnaSpringBoneGroup,
+) -> (f32, f32) {
+	if group.gravity_power.abs() <= f32::EPSILON {
+		return (0.0, 0.0);
+	}
+	let gravity_dir = Vec3::from_array(group.gravity_dir).try_normalize().unwrap_or(Vec3::NEG_Y);
+	if gravity_dir.length_squared() < 1e-12 || group.bone_node_indices.len() < 2 {
+		return (0.0, 0.0);
+	}
+	let mut max_angle = 0.0_f32;
+	let mut max_amount = 0.0_f32;
+	for segment in group.bone_node_indices.windows(2) {
+		let parent = segment[0];
+		let child = segment[1];
+		let Some(parent_world) = world.get(parent).copied() else {
+			continue;
+		};
+		let Some(child_node) = scene.nodes.get(child) else {
+			continue;
+		};
+		let (_, parent_rot, _) = parent_world.to_scale_rotation_translation();
+		let local_child = Mat4::from_cols_array(&child_node.transform);
+		let (_, _, child_local_translation) = local_child.to_scale_rotation_translation();
+		let Some(axis) = (parent_rot.normalize() * child_local_translation).try_normalize() else {
+			continue;
+		};
+		let gravity_amount = dynamics_gravity_falloff_amount(gravity_dir, group.gravity_power.abs(), axis, group.gravity_falloff);
+		let Some(gravity_axis) = axis
+			.lerp(gravity_dir * group.gravity_power.signum(), gravity_amount)
+			.try_normalize()
+		else {
+			continue;
+		};
+		max_angle = max_angle.max(axis.angle_between(gravity_axis).to_degrees());
+		max_amount = max_amount.max(gravity_amount);
+	}
+	(max_angle, max_amount)
+}
+
+fn dynamics_gravity_falloff_amount(gravity_dir: Vec3, gravity_power: f32, target_axis_world: Vec3, gravity_falloff: f32) -> f32 {
+	let gravity_dir = gravity_dir.normalize_or_zero();
+	let target_axis_world = target_axis_world.normalize_or_zero();
+	if gravity_dir.length_squared() < 1e-12 || target_axis_world.length_squared() < 1e-12 {
+		return gravity_power.clamp(0.0, 1.0);
+	}
+	let perpendicularity = (1.0 - target_axis_world.dot(gravity_dir)).clamp(0.0, 1.0);
+	let falloff_min = 1.0 - gravity_falloff.clamp(0.0, 1.0);
+	let falloff = falloff_min + (1.0 - falloff_min) * perpendicularity;
+	(gravity_power * falloff).clamp(0.0, 1.0)
+}
+
 fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSummary> {
 	let runtime_model = doc.runtime_model();
 	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
 		return Vec::new();
 	};
+	let world_matrices = cli_scene_world_matrices(runtime.scene);
 	let groups = runtime.dynamics.groups();
 	if groups.is_empty() {
 		return Vec::new();
 	}
 	let node_paths_by_index = scene_node_paths_by_index(runtime.scene);
+	let categories = DynamicsPhysicsConfig::default().categories;
+	let runtime_colliders = runtime.dynamics.colliders().collect::<Vec<_>>();
+	let mut collider_counts_by_source_id = BTreeMap::<String, usize>::new();
+	for collider in &runtime_colliders {
+		if !collider.source_id.is_empty() {
+			*collider_counts_by_source_id.entry(collider.source_id.clone()).or_default() += 1;
+		}
+	}
+	let all_runtime_colliders_global = runtime_colliders.iter().all(|collider| collider.source_id.is_empty());
+	let source_collider_summaries = dynamics_source_collider_summaries_by_source_id(doc);
 	groups
 		.iter()
 		.enumerate()
@@ -2209,31 +6953,88 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 			let tip_node = group.bone_node_indices.last().copied();
 			let (hit_radius_sample_count, hit_radius_sample_min, hit_radius_sample_max) =
 				dynamics_hit_radius_sample_summary(&group.hit_radius_samples);
+			let resident = runtime.dynamics.source_id_resident_in_scene(runtime.scene, &group.source_id);
+			let source_collider_summary = source_collider_summaries.get(&group.source_id).cloned().unwrap_or_default();
+			let selected_runtime_colliders =
+				dynamics_selected_runtime_colliders(&runtime_colliders, all_runtime_colliders_global, &group.source_id);
+			let (gravity_target_max_angle_deg, gravity_target_max_amount) =
+				dynamics_group_gravity_target_summary(runtime.scene, &world_matrices, group);
 			DiagnoseDynamicsGroupSummary {
 				index,
 				source_kind: group.source_kind,
-				enabled: runtime.dynamics.group_enabled(group),
+				enabled: resident && runtime.dynamics.group_enabled(group),
 				source_enabled: group.enabled,
 				runtime_enabled_override: runtime.dynamics.group_enabled_override(group),
 				source_id: group.source_id.clone(),
 				comment: group.comment.clone(),
-				category: group.category.clone(),
+				category: runtime
+					.dynamics
+					.dynamics_group(index)
+					.map(|group| classify_dynamics_group_category(runtime.scene, group, &categories))
+					.unwrap_or_default(),
 				bone_count: group.bone_node_indices.len(),
+				source_component_path: source_collider_summary.component_path.clone(),
+				source_root_paths: source_collider_summary.root_paths.clone(),
+				source_allow_collision: source_collider_summary.allow_collision,
+				source_collider_count: source_collider_summary.collider_count,
+				source_unknown_shape_collider_count: source_collider_summary.unknown_shape_collider_count,
+				source_inside_bounds_collider_count: source_collider_summary.inside_bounds_collider_count,
+				source_collider_paths: source_collider_summary.collider_paths.clone(),
+				runtime_collider_count: collider_counts_by_source_id.get(&group.source_id).copied().unwrap_or_default(),
+				selected_runtime_collider_count: selected_runtime_colliders.len(),
+				selected_global_collider_count: selected_runtime_colliders
+					.iter()
+					.filter(|collider| collider.source_id.is_empty())
+					.count(),
+				selected_authored_collider_count: selected_runtime_colliders
+					.iter()
+					.filter(|collider| !collider.source_id.is_empty())
+					.count(),
+				selected_runtime_collider_paths: selected_runtime_colliders
+					.iter()
+					.filter_map(|collider| (!collider.collider_path.is_empty()).then(|| collider.collider_path.clone()))
+					.take(16)
+					.collect(),
 				root_node,
 				root_path: root_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
 				tip_node,
 				tip_path: tip_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
+				center_node: group.center_node,
+				center_path: group.center_node.and_then(|node| node_paths_by_index.get(node).cloned().flatten()),
 				stiffness: group.stiffness,
+				pull: group.pull,
+				spring: group.spring,
+				integration_type: group.integration_type,
 				drag_force: group.drag_force,
 				gravity_power: group.gravity_power,
+				gravity_falloff: group.gravity_falloff,
+				immobile: group.immobile,
+				immobile_type: group.immobile_type,
 				gravity_dir: group.gravity_dir,
+				gravity_target_max_angle_deg,
+				gravity_target_max_amount,
 				limit_type: group
 					.limit
 					.as_ref()
 					.and_then(|limit| (!limit.limit_type.is_empty()).then(|| limit.limit_type.clone())),
+				limit_rotation: group.limit.as_ref().map(|limit| limit.limit_rotation),
 				max_angle_x: group.limit.as_ref().map(|limit| limit.max_angle_x),
 				max_angle_z: group.limit.as_ref().map(|limit| limit.max_angle_z),
 				max_stretch: group.limit.as_ref().map(|limit| limit.max_stretch),
+				max_squish: group.limit.as_ref().map(|limit| limit.max_squish),
+				stretch_motion: group.limit.as_ref().and_then(|limit| limit.stretch_motion),
+				max_stretch_sample_has_positive: group
+					.limit
+					.as_ref()
+					.is_some_and(|limit| dynamics_limit_samples_have_positive(&limit.max_stretch_samples)),
+				max_squish_sample_has_positive: group
+					.limit
+					.as_ref()
+					.is_some_and(|limit| dynamics_limit_samples_have_positive(&limit.max_squish_samples)),
+				stretch_motion_sample_has_positive: group
+					.limit
+					.as_ref()
+					.is_some_and(|limit| dynamics_limit_samples_have_positive(&limit.stretch_motion_samples)),
 				writeback_mode: group.writeback_mode,
 				translation_writeback_candidate_count: una_dynamics_translation_writeback_candidate_count(
 					runtime.scene,
@@ -2259,6 +7060,38 @@ fn dynamics_group_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsGroupSumma
 			}
 		})
 		.collect()
+}
+
+fn dynamics_response_category_summaries(doc: &UnaDocument) -> Vec<DynamicsResponseCategorySummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	DynamicsSimulator::new_with_runtime_dynamics_and_collider_sources(
+		runtime.scene,
+		runtime.dynamics,
+		Vec::new(),
+		DynamicsPhysicsConfig::default(),
+	)
+	.map(|sim| sim.response_category_summaries())
+	.unwrap_or_default()
+}
+
+fn dynamics_response_group_summaries(doc: &UnaDocument) -> Vec<DynamicsResponseGroupSummary> {
+	let runtime_model = doc.runtime_model();
+	let Some(runtime) = runtime_model.scene_profile_dynamics() else {
+		return Vec::new();
+	};
+	let mut groups = DynamicsSimulator::new_with_runtime_dynamics_and_collider_sources(
+		runtime.scene,
+		runtime.dynamics,
+		Vec::new(),
+		DynamicsPhysicsConfig::default(),
+	)
+	.map(|sim| sim.response_group_summaries())
+	.unwrap_or_default();
+	annotate_dynamics_response_group_visibility(&mut groups, runtime.scene, runtime.dynamics);
+	groups
 }
 
 fn dynamics_interaction_hook_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsInteractionHookSummary> {
@@ -2301,7 +7134,7 @@ fn dynamics_interaction_hook_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamic
 				allow_posing,
 				parameter: interaction.parameter.clone(),
 				suffix_parameters,
-				metadata_only: true,
+				metadata_only: interaction.parameter.is_empty(),
 			})
 		})
 		.collect()
@@ -2321,6 +7154,7 @@ fn dynamics_collider_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsCollide
 			index,
 			source_kind: collider.source_kind,
 			source_id: collider.source_id.clone(),
+			collider_path: collider.collider_path.clone(),
 			node: collider.node,
 			node_path: node_paths_by_index.get(collider.node).cloned().flatten(),
 			shape: collider.shape.clone(),
@@ -2336,11 +7170,7 @@ fn dynamics_collider_summaries(doc: &UnaDocument) -> Vec<DiagnoseDynamicsCollide
 fn dynamics_stretch_limit_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String> {
 	groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-		})
+		.filter(|group| dynamics_group_has_length_limit(group))
 		.take(4)
 		.map(|group| {
 			let id = if group.source_id.is_empty() {
@@ -2354,6 +7184,63 @@ fn dynamics_stretch_limit_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Ve
 			}
 		})
 		.collect()
+}
+
+fn dynamics_group_has_length_limit(group: &DiagnoseDynamicsGroupSummary) -> bool {
+	let stretch_motion = group
+		.stretch_motion
+		.filter(|value| value.is_finite())
+		.unwrap_or(1.0)
+		.clamp(0.0, 1.0);
+	let has_length_range = group
+		.max_stretch
+		.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch > 0.0)
+		|| group
+			.max_squish
+			.is_some_and(|max_squish| max_squish.is_finite() && max_squish > 0.0)
+		|| group.max_stretch_sample_has_positive
+		|| group.max_squish_sample_has_positive;
+	let has_motion = stretch_motion > 0.0 || group.stretch_motion_sample_has_positive;
+	has_motion && has_length_range
+}
+
+fn dynamics_effective_stretch_motion(group: &DiagnoseDynamicsGroupSummary) -> f32 {
+	group
+		.stretch_motion
+		.filter(|value| value.is_finite())
+		.unwrap_or(1.0)
+		.clamp(0.0, 1.0)
+}
+
+fn dynamics_large_stretch_range_groups(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<&DiagnoseDynamicsGroupSummary> {
+	groups
+		.iter()
+		.filter(|group| {
+			let max_stretch = group.max_stretch.filter(|value| value.is_finite()).unwrap_or(0.0);
+			group.enabled
+				&& max_stretch >= 10.0
+				&& (dynamics_effective_stretch_motion(group) > 0.0 || group.stretch_motion_sample_has_positive)
+		})
+		.collect()
+}
+
+fn dynamics_large_stretch_range_samples(groups: &[&DiagnoseDynamicsGroupSummary]) -> Vec<String> {
+	groups
+		.iter()
+		.take(4)
+		.map(|group| {
+			let max_stretch = group.max_stretch.unwrap_or(0.0);
+			let stretch_motion = dynamics_effective_stretch_motion(group);
+			format!(
+				"{} max_stretch={max_stretch:.3} stretch_motion={stretch_motion:.3}",
+				dynamics_group_sample_label(group)
+			)
+		})
+		.collect()
+}
+
+fn dynamics_limit_samples_have_positive(samples: &[f32]) -> bool {
+	samples.iter().any(|value| value.is_finite() && *value > 0.0)
 }
 
 fn dynamics_group_samples(groups: &[DiagnoseDynamicsGroupSummary]) -> Vec<String> {
@@ -2394,9 +7281,7 @@ fn dynamics_stretch_translation_writeback_group_count(groups: &[DiagnoseDynamics
 	groups
 		.iter()
 		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+			dynamics_group_has_length_limit(group)
 				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
 				&& group.translation_writeback_candidate_count > 0
 		})
@@ -2406,12 +7291,7 @@ fn dynamics_stretch_translation_writeback_group_count(groups: &[DiagnoseDynamics
 fn dynamics_stretch_translation_writeback_target_group_count(groups: &[DiagnoseDynamicsGroupSummary]) -> usize {
 	groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-				&& group.translation_writeback_target_count > 0
-		})
+		.filter(|group| dynamics_group_has_length_limit(group) && group.translation_writeback_target_count > 0)
 		.count()
 }
 
@@ -2430,6 +7310,7 @@ fn dynamics_group_sample_label(group: &DiagnoseDynamicsGroupSummary) -> String {
 fn dynamics_interaction_hook_samples(hooks: &[DiagnoseDynamicsInteractionHookSummary]) -> Vec<String> {
 	hooks
 		.iter()
+		.filter(|hook| hook.metadata_only)
 		.take(4)
 		.map(|hook| {
 			let id = if hook.source_id.is_empty() {
@@ -2703,13 +7584,25 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 		let max_stretch = dynamics_source_value(item, source_params, "maxStretch", "max_stretch")
 			.and_then(json_number_f64)
 			.unwrap_or(0.0);
-		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 || max_stretch.abs() > 0.0 {
+		let max_squish = dynamics_source_value(item, source_params, "maxSquish", "max_squish")
+			.and_then(json_number_f64)
+			.unwrap_or(0.0);
+		let stretch_motion = dynamics_source_value(item, source_params, "stretchMotion", "stretch_motion")
+			.and_then(json_number_f64)
+			.unwrap_or(0.0);
+		if !limit_type.is_empty()
+			|| max_angle_x.abs() > 0.0
+			|| max_angle_z.abs() > 0.0
+			|| max_stretch.abs() > 0.0
+			|| max_squish.abs() > 0.0
+			|| stretch_motion.abs() > 0.0
+		{
 			counts.limit_count += 1;
 		}
 		if !limit_type.is_empty() || max_angle_x.abs() > 0.0 || max_angle_z.abs() > 0.0 {
 			counts.angle_limit_count += 1;
 		}
-		if max_stretch.abs() > 0.0 {
+		if max_stretch.abs() > 0.0 || max_squish.abs() > 0.0 || stretch_motion.abs() > 0.0 {
 			counts.stretch_limit_count += 1;
 		}
 		let radius_curve = dynamics_source_curve_key_count(item, source_params, "radiusCurve", "radius_curve") > 0;
@@ -2773,6 +7666,81 @@ fn dynamics_source_feature_counts(doc: &UnaDocument) -> DynamicsSourceFeatureCou
 	counts
 }
 
+fn dynamics_source_collider_summaries_by_source_id(doc: &UnaDocument) -> BTreeMap<String, DynamicsSourceColliderSummary> {
+	let Some(unavatar) = doc.unavatar.as_ref() else {
+		return BTreeMap::new();
+	};
+	let Some(dynamics) = unavatar.source.get("dynamics").and_then(|value| value.as_array()) else {
+		return BTreeMap::new();
+	};
+	let mut summaries = BTreeMap::<String, DynamicsSourceColliderSummary>::new();
+	for item in dynamics {
+		let source_id = item.get("id").and_then(|value| value.as_str()).unwrap_or_default();
+		if source_id.is_empty() {
+			continue;
+		}
+		let source_params = dynamics_source_params(item);
+		let allow_collision =
+			dynamics_source_value(item, source_params, "allowCollision", "allow_collision").and_then(|value| value.as_bool());
+		let colliders = dynamics_source_value(item, source_params, "colliders", "colliders").and_then(|value| value.as_array());
+		let summary = summaries.entry(source_id.to_string()).or_default();
+		summary.component_path = dynamics_node_ref_path(item.get("component")).or_else(|| summary.component_path.clone());
+		for root_path in dynamics_source_root_paths(item) {
+			if !summary.root_paths.contains(&root_path) {
+				summary.root_paths.push(root_path);
+			}
+		}
+		summary.allow_collision = allow_collision.or(summary.allow_collision);
+		if let Some(colliders) = colliders {
+			summary.collider_count += colliders.len();
+			for collider_path in colliders
+				.iter()
+				.filter_map(|collider| dynamics_node_ref_path(collider.get("component")))
+			{
+				if summary.collider_paths.len() >= 16 {
+					break;
+				}
+				if !summary.collider_paths.contains(&collider_path) {
+					summary.collider_paths.push(collider_path);
+				}
+			}
+			summary.unknown_shape_collider_count += colliders
+				.iter()
+				.filter(|collider| !dynamics_source_collider_shape_known(collider))
+				.count();
+			summary.inside_bounds_collider_count += colliders
+				.iter()
+				.filter(|collider| {
+					collider
+						.get("insideBounds")
+						.or_else(|| collider.get("inside_bounds"))
+						.and_then(|value| value.as_bool())
+						== Some(true)
+				})
+				.count();
+		}
+	}
+	summaries
+}
+
+fn dynamics_node_ref_path(value: Option<&serde_json::Value>) -> Option<String> {
+	value
+		.and_then(|value| value.get("path").and_then(|path| path.as_str()))
+		.filter(|path| !path.is_empty())
+		.map(str::to_string)
+}
+
+fn dynamics_source_root_paths(item: &serde_json::Value) -> Vec<String> {
+	let Some(roots) = item.get("roots").or_else(|| item.get("root")).or_else(|| item.get("rootNode")) else {
+		return Vec::new();
+	};
+	if let Some(roots) = roots.as_array() {
+		roots.iter().filter_map(|root| dynamics_node_ref_path(Some(root))).collect()
+	} else {
+		dynamics_node_ref_path(Some(roots)).into_iter().collect()
+	}
+}
+
 fn dynamics_source_collider_shape_known(collider: &serde_json::Value) -> bool {
 	let shape = collider
 		.get("shapeType")
@@ -2782,7 +7750,61 @@ fn dynamics_source_collider_shape_known(collider: &serde_json::Value) -> bool {
 		return true;
 	}
 	let shape = shape.and_then(|shape| shape.as_str()).unwrap_or_default();
-	shape == "0" || shape == "1" || shape.eq_ignore_ascii_case("sphere") || shape.eq_ignore_ascii_case("capsule")
+	shape == "0"
+		|| shape == "1"
+		|| shape.eq_ignore_ascii_case("sphere")
+		|| shape.eq_ignore_ascii_case("local_sphere")
+		|| shape.eq_ignore_ascii_case("capsule")
+		|| shape.eq_ignore_ascii_case("local_capsule")
+		|| shape.eq_ignore_ascii_case("plane")
+		|| shape.eq_ignore_ascii_case("local_plane")
+}
+
+fn dynamics_source_collider_audit(doc: &UnaDocument, active_source_ids: Option<&BTreeSet<String>>) -> DynamicsSourceColliderAudit {
+	let Some(unavatar) = doc.unavatar.as_ref() else {
+		return DynamicsSourceColliderAudit::default();
+	};
+	let Some(dynamics) = unavatar.source.get("dynamics").and_then(|value| value.as_array()) else {
+		return DynamicsSourceColliderAudit::default();
+	};
+	let mut audit = DynamicsSourceColliderAudit::default();
+	for item in dynamics {
+		let source_params = dynamics_source_params(item);
+		let source_id = item.get("id").and_then(|value| value.as_str()).unwrap_or_default();
+		if let Some(active_source_ids) = active_source_ids {
+			if !active_source_ids.contains(source_id) {
+				continue;
+			}
+		}
+		let label = dynamics_source_label(item);
+		let allow_collision =
+			dynamics_source_value(item, source_params, "allowCollision", "allow_collision").and_then(|value| value.as_bool());
+		let colliders = dynamics_source_value(item, source_params, "colliders", "colliders").and_then(|value| value.as_array());
+		let collider_count = colliders.map_or(0, Vec::len);
+		if dynamics_source_has_collision_enabled_empty_colliders(allow_collision, collider_count) {
+			audit.collision_enabled_empty_collider_count += 1;
+			if !source_id.is_empty() {
+				audit.collision_enabled_empty_collider_source_ids.push(source_id.to_string());
+			}
+			if audit.collision_enabled_empty_collider_samples.len() < 8 {
+				audit.collision_enabled_empty_collider_samples.push(label.clone());
+			}
+		}
+	}
+	audit
+}
+
+fn dynamics_source_has_collision_enabled_empty_colliders(allow_collision: Option<bool>, collider_count: usize) -> bool {
+	allow_collision == Some(true) && collider_count == 0
+}
+
+fn dynamics_source_label(item: &serde_json::Value) -> String {
+	item.get("id")
+		.and_then(|value| value.as_str())
+		.filter(|id| !id.is_empty())
+		.or_else(|| item.get("name").and_then(|value| value.as_str()).filter(|name| !name.is_empty()))
+		.unwrap_or("<unnamed>")
+		.to_string()
 }
 
 fn wardrobe_dynamics_enable_targets(doc: &UnaDocument) -> Vec<String> {
@@ -4236,9 +9258,9 @@ fn build_diagnose_report(
 			&& !sc
 				.materials
 				.iter()
-				.any(|m| m.runtime_toon_model() == Some(UnaRuntimeToonModel::MToonLike))
+				.any(|m| m.runtime_toon_model() == Some(UnaRuntimeToonModel::UNToon))
 		{
-			warnings.push("VRM document has no MToonLike materials after import".to_string());
+			warnings.push("VRM document has no UNToon runtime materials after import".to_string());
 		}
 		let mut image_source_mime_counts = BTreeMap::new();
 		let mut image_source_color_space_counts = BTreeMap::new();
@@ -4371,6 +9393,24 @@ fn build_diagnose_report(
 				skin_out_of_range
 			));
 		}
+		let mut node_constraint_kind_counts = BTreeMap::new();
+		let mut parent_node_constraint_source_count = 0usize;
+		let mut parent_node_constraint_multi_source_count = 0usize;
+		for constraint in &sc.node_constraints {
+			let kind = diagnose_node_constraint_kind(&constraint.kind);
+			bump_count(&mut node_constraint_kind_counts, kind.to_string());
+			if matches!(constraint.kind, UnaNodeConstraintKind::Parent { .. }) {
+				let source_count = if constraint.sources.is_empty() {
+					1
+				} else {
+					constraint.sources.len()
+				};
+				parent_node_constraint_source_count += source_count;
+				if source_count > 1 {
+					parent_node_constraint_multi_source_count += 1;
+				}
+			}
+		}
 		let asset_ownership_counts = sc.asset_group_ownership_counts();
 		let scoped_asset_selection = doc.scoped_asset_selection();
 		let asset_group_ownership = sc
@@ -4410,6 +9450,9 @@ fn build_diagnose_report(
 			material_count: sc.materials.len(),
 			liltoon_feature_counts,
 			node_constraint_count: sc.node_constraints.len(),
+			node_constraint_kind_counts,
+			parent_node_constraint_source_count,
+			parent_node_constraint_multi_source_count,
 			asset_group_ownership_count: asset_ownership_counts.groups,
 			asset_group_owned_mesh_primitive_count: asset_ownership_counts.mesh_primitives,
 			asset_group_owned_material_count: asset_ownership_counts.materials,
@@ -4457,6 +9500,9 @@ fn build_diagnose_report(
 			material_count: 0,
 			liltoon_feature_counts: BTreeMap::new(),
 			node_constraint_count: 0,
+			node_constraint_kind_counts: BTreeMap::new(),
+			parent_node_constraint_source_count: 0,
+			parent_node_constraint_multi_source_count: 0,
 			asset_group_ownership_count: 0,
 			asset_group_owned_mesh_primitive_count: 0,
 			asset_group_owned_material_count: 0,
@@ -4559,6 +9605,8 @@ fn build_diagnose_report(
 	};
 	let runtime_dynamics = runtime_model.dynamics();
 	let dynamics_groups = dynamics_group_summaries(&doc);
+	let dynamics_response_categories = dynamics_response_category_summaries(&doc);
+	let dynamics_response_groups = dynamics_response_group_summaries(&doc);
 	let dynamics_colliders = dynamics_collider_summaries(&doc);
 	let dynamics_contacts = dynamics_contact_summaries(&doc);
 	let dynamics_contact_parameter_declarations = dynamics_contact_parameter_declaration_summaries(&doc);
@@ -4585,6 +9633,11 @@ fn build_diagnose_report(
 		.iter()
 		.filter_map(|group| (!group.source_id.is_empty()).then(|| group.source_id.clone()))
 		.collect::<BTreeSet<_>>();
+	let active_dynamics_source_ids = dynamics_groups
+		.iter()
+		.filter(|group| group.enabled)
+		.filter_map(|group| (!group.source_id.is_empty()).then(|| group.source_id.clone()))
+		.collect::<BTreeSet<_>>();
 	for target_id in wardrobe_dynamics_enable_targets(&doc) {
 		if !dynamics_source_ids.contains(&target_id) {
 			warnings.push(format!(
@@ -4600,10 +9653,38 @@ fn build_diagnose_report(
 		}
 	}
 	let dynamics_source_features = dynamics_source_feature_counts(&doc);
+	let dynamics_source_collider_audit = dynamics_source_collider_audit(&doc, Some(&active_dynamics_source_ids));
 	if dynamics_source_features.unknown_shape_collider_count > 0 {
 		warnings.push(format!(
 			"raw dynamics source colliders include {} unknown shape collider(s); unsupported PhysBone collider shapes will not affect the solver",
 			dynamics_source_features.unknown_shape_collider_count
+		));
+	}
+	if dynamics_source_collider_audit.collision_enabled_empty_collider_count > 0 {
+		let source_local_empty_ids = dynamics_source_collider_audit
+			.collision_enabled_empty_collider_source_ids
+			.iter()
+			.cloned()
+			.collect::<BTreeSet<_>>();
+		let runtime_no_contact_groups = dynamics_groups
+			.iter()
+			.filter(|group| source_local_empty_ids.contains(&group.source_id))
+			.filter(|group| group.selected_runtime_collider_count == 0 && group.hit_radius <= 0.0)
+			.collect::<Vec<_>>();
+		let runtime_no_contact_source_ids = runtime_no_contact_groups
+			.iter()
+			.map(|group| group.source_id.clone())
+			.collect::<BTreeSet<_>>();
+		let runtime_no_contact_samples = runtime_no_contact_source_ids.iter().take(8).cloned().collect::<Vec<_>>();
+		let runtime_no_contact_samples = format_warning_samples(&runtime_no_contact_samples);
+		let source_local_empty_samples = format_warning_samples(&dynamics_source_collider_audit.collision_enabled_empty_collider_samples);
+		warnings.push(format!(
+			"active VRC PhysBone sources set allowCollision=true but define no source-local colliders; with hitRadius=0 these lower to no runtime contact candidates. sources={} runtime_no_contact_sources={} runtime_no_contact_groups={} no_contact{} source_local_empty{}",
+			dynamics_source_collider_audit.collision_enabled_empty_collider_count,
+			runtime_no_contact_source_ids.len(),
+			runtime_no_contact_groups.len(),
+			runtime_no_contact_samples,
+			source_local_empty_samples
 		));
 	}
 	let dynamics_counts = runtime_dynamics.counts();
@@ -4615,6 +9696,10 @@ fn build_diagnose_report(
 	let rotation_translation_writeback_group_count = rotation_translation_writeback_groups.len();
 	let translation_writeback_candidate_count = dynamics_translation_writeback_candidate_total(&rotation_translation_writeback_groups);
 	let translation_writeback_target_count = dynamics_translation_writeback_target_total(&rotation_translation_writeback_groups);
+	let effective_stretch_limit_group_count = dynamics_groups
+		.iter()
+		.filter(|group| dynamics_group_has_length_limit(group))
+		.count();
 	let stretch_translation_writeback_group_count = dynamics_stretch_translation_writeback_group_count(&dynamics_groups);
 	let stretch_translation_writeback_target_group_count = dynamics_stretch_translation_writeback_target_group_count(&dynamics_groups);
 	if dynamics_counts.groups > 0 && dynamics_counts.enabled_groups == 0 {
@@ -4627,13 +9712,29 @@ fn build_diagnose_report(
 			format_warning_samples(&samples)
 		));
 	}
-	if dynamics_source_features.stretch_limit_count > 0 || dynamics_counts.stretch_limit_groups > 0 {
+	if dynamics_source_features.stretch_limit_count > 0 || effective_stretch_limit_group_count > 0 {
 		let samples = dynamics_stretch_limit_samples(&dynamics_groups);
+		if effective_stretch_limit_group_count > 0 {
+			warnings.push(format!(
+				"dynamics stretch limits are supported as simulation stretch; safe targets also use translation writeback while targetless groups keep node translations unchanged; source_stretch_limits={} runtime_stretch_limit_groups={} writeback_target_groups={}{}",
+				dynamics_source_features.stretch_limit_count,
+				effective_stretch_limit_group_count,
+				stretch_translation_writeback_target_group_count,
+				format_warning_samples(&samples)
+			));
+		} else {
+			warnings.push(format!(
+				"dynamics stretch/squish limits are authored in source data but currently have no effective runtime length range, usually because scalar/curve stretchMotion is zero or no positive stretch/squish range was lowered; source_stretch_limits={} runtime_stretch_limit_groups=0",
+				dynamics_source_features.stretch_limit_count
+			));
+		}
+	}
+	let large_stretch_range_groups = dynamics_large_stretch_range_groups(&dynamics_groups);
+	if !large_stretch_range_groups.is_empty() {
+		let samples = dynamics_large_stretch_range_samples(&large_stretch_range_groups);
 		warnings.push(format!(
-			"dynamics stretch limits are partially supported by rotation_translation target writeback; targetless stretch groups remain metadata-only; source_stretch_limits={} runtime_stretch_limit_groups={} writeback_target_groups={}{}",
-			dynamics_source_features.stretch_limit_count,
-			dynamics_counts.stretch_limit_groups,
-			stretch_translation_writeback_target_group_count,
+			"dynamics stretch range has very large authored/effective multiplier; this is allowed source intent but can produce large chain-relative lag and should be verified numerically. groups={}{}",
+			large_stretch_range_groups.len(),
 			format_warning_samples(&samples)
 		));
 	}
@@ -4662,18 +9763,18 @@ fn build_diagnose_report(
 			));
 		}
 	}
-	if dynamics_source_features.grabbing_enabled_count > 0
-		|| dynamics_source_features.posing_enabled_count > 0
-		|| dynamics_counts.grabbing_enabled_groups > 0
-		|| dynamics_counts.posing_enabled_groups > 0
-	{
+	let metadata_only_interaction_hook_count = dynamics_interaction_hooks.iter().filter(|hook| hook.metadata_only).count();
+	let source_only_interaction_hook_count = if metadata_only_interaction_hook_count == 0 && dynamics_interaction_hooks.is_empty() {
+		dynamics_source_features.grabbing_enabled_count + dynamics_source_features.posing_enabled_count
+	} else {
+		0
+	};
+	let metadata_only_or_source_only_interaction_hook_count = metadata_only_interaction_hook_count + source_only_interaction_hook_count;
+	if metadata_only_or_source_only_interaction_hook_count > 0 {
 		let samples = dynamics_interaction_hook_samples(&dynamics_interaction_hooks);
 		warnings.push(format!(
-			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; source_grabbing={} source_posing={} runtime_grabbing_groups={} runtime_posing_groups={}{}",
-			dynamics_source_features.grabbing_enabled_count,
-			dynamics_source_features.posing_enabled_count,
-			dynamics_counts.grabbing_enabled_groups,
-			dynamics_counts.posing_enabled_groups,
+			"dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver; hooks={}{}",
+			metadata_only_or_source_only_interaction_hook_count,
 			format_warning_samples(&samples)
 		));
 	}
@@ -4701,7 +9802,7 @@ fn build_diagnose_report(
 		unknown_group_count: dynamics_counts.unknown_groups,
 		limit_group_count: dynamics_counts.limit_groups,
 		angle_limit_group_count: dynamics_counts.angle_limit_groups,
-		stretch_limit_group_count: dynamics_counts.stretch_limit_groups,
+		stretch_limit_group_count: effective_stretch_limit_group_count,
 		rotation_translation_writeback_group_count,
 		translation_writeback_candidate_count,
 		translation_writeback_target_count,
@@ -4753,6 +9854,8 @@ fn build_diagnose_report(
 		constraint_refs: dynamics_constraint_refs,
 		interaction_hooks: dynamics_interaction_hooks,
 		groups: dynamics_groups,
+		response_categories: dynamics_response_categories,
+		response_groups: dynamics_response_groups,
 	};
 	let vrm = doc.vrm.as_ref().map(|vrm| DiagnoseVrmSummary {
 		spec_version: vrm.spec_version.clone(),
@@ -4888,6 +9991,7 @@ fn expression_probe_document(doc: &UnaDocument) -> UnaDocument {
 		meshes: scene.meshes.clone(),
 		materials: scene.materials.clone(),
 		images: Vec::new(),
+		lighting: scene.lighting.clone(),
 		image_sources: Vec::new(),
 		skins: scene.skins.clone(),
 		nodes: scene.nodes.clone(),
@@ -5742,6 +10846,111 @@ fn run_diagnose(
 		report.dynamics.source_posing_enabled_count,
 		report.dynamics.source_interaction_parameter_count
 	);
+	let response_range = |average: f32, min: f32, max: f32| format!("{average}[{min}..{max}]");
+	let damping_label = |value: Option<f32>| value.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string());
+	for category in &report.dynamics.response_categories {
+		println!(
+			"  dynamics_response_category[{}]: groups={} joints={} matched={} exact={} xpbd={} compliance={} rest={} shape={} bounce={} stretch={} squish={} stretchMotion={} drag={} damp={} follow={} orient={}",
+			category.category,
+			category.group_count,
+			category.joint_count,
+			category.matched_override_group_count,
+			category.group_override_group_count,
+			category.xpbd_group_count,
+			category.average_xpbd_compliance,
+			response_range(category.average_rest_response, category.min_rest_response, category.max_rest_response),
+			response_range(
+				category.average_shape_preservation,
+				category.min_shape_preservation,
+				category.max_shape_preservation
+			),
+			response_range(
+				category.average_bounce_response,
+				category.min_bounce_response,
+				category.max_bounce_response
+			),
+			response_range(
+				category.average_max_stretch_response,
+				category.min_max_stretch_response,
+				category.max_max_stretch_response
+			),
+			response_range(
+				category.average_max_squish_response,
+				category.min_max_squish_response,
+				category.max_max_squish_response
+			),
+			response_range(
+				category.average_stretch_motion_response,
+				category.min_stretch_motion_response,
+				category.max_stretch_motion_response
+			),
+			category.average_drag_force,
+			damping_label(category.average_damping_half_life_ms),
+			response_range(
+				category.average_parent_motion_follow,
+				category.min_parent_motion_follow,
+				category.max_parent_motion_follow
+			),
+			category.average_orientation_follow
+		);
+	}
+	for group in report.dynamics.response_groups.iter().take(DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT) {
+		let matched_overrides = if group.matched_overrides.is_empty() {
+			String::new()
+		} else {
+			format!(" overrides={}", group.matched_overrides.join(","))
+		};
+		let invalid_match_regexes = if group.invalid_match_regexes.is_empty() {
+			String::new()
+		} else {
+			format!(" invalid_regex={}", group.invalid_match_regexes.join(" | "))
+		};
+		let group_override = if group.group_override_applied { " exact_override=true" } else { "" };
+		println!(
+			"  dynamics_response_group[{}]: category={} visual={} visibleJoints={} visibleMeshSubtrees={} joints={} solver={:?} compliance={} rest={} shape={} bounce={} stretch={} squish={} stretchMotion={} drag={} damp={} follow={} orient={}{}{}{}",
+			group.source_id,
+			group.category,
+			group.visual_target,
+			group.skinned_joint_count,
+			group.mesh_subtree_node_count,
+			group.joint_count,
+			group.solver,
+			group.xpbd_compliance,
+			response_range(group.average_rest_response, group.min_rest_response, group.max_rest_response),
+			response_range(
+				group.average_shape_preservation,
+				group.min_shape_preservation,
+				group.max_shape_preservation
+			),
+			response_range(group.average_bounce_response, group.min_bounce_response, group.max_bounce_response),
+			response_range(
+				group.average_max_stretch_response,
+				group.min_max_stretch_response,
+				group.max_max_stretch_response
+			),
+			response_range(
+				group.average_max_squish_response,
+				group.min_max_squish_response,
+				group.max_max_squish_response
+			),
+			response_range(
+				group.average_stretch_motion_response,
+				group.min_stretch_motion_response,
+				group.max_stretch_motion_response
+			),
+			group.average_drag_force,
+			damping_label(group.average_damping_half_life_ms),
+			response_range(
+				group.average_parent_motion_follow,
+				group.min_parent_motion_follow,
+				group.max_parent_motion_follow
+			),
+			group.average_orientation_follow,
+			matched_overrides,
+			group_override,
+			invalid_match_regexes
+		);
+	}
 	for collider in report.dynamics.colliders.iter().take(DIAGNOSE_TEXT_LIST_LIMIT) {
 		println!(
 			"  dynamics_collider[{}]: source={:?} id={:?} node={:?} shape={:?} radius={} height={} position={:?} rotation={:?} inside_bounds={}",
@@ -5759,14 +10968,23 @@ fn run_diagnose(
 	}
 	print_omitted_text_items("dynamics_collider", report.dynamics.colliders.len(), DIAGNOSE_TEXT_LIST_LIMIT);
 	for group in report.dynamics.groups.iter().take(DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT) {
-		let limit = match (&group.limit_type, group.max_angle_x, group.max_angle_z, group.max_stretch) {
-			(None, None, None, None) => String::new(),
-			(limit_type, max_angle_x, max_angle_z, max_stretch) => format!(
-				" limit={:?}/x={:?}/z={:?}/stretch={:?}",
+		let limit = match (
+			&group.limit_type,
+			group.max_angle_x,
+			group.max_angle_z,
+			group.max_stretch,
+			group.max_squish,
+			group.stretch_motion,
+		) {
+			(None, None, None, None, None, None) => String::new(),
+			(limit_type, max_angle_x, max_angle_z, max_stretch, max_squish, stretch_motion) => format!(
+				" limit={:?}/x={:?}/z={:?}/stretch={:?}/squish={:?}/stretchMotion={:?}",
 				limit_type.as_deref(),
 				max_angle_x,
 				max_angle_z,
-				max_stretch
+				max_stretch,
+				max_squish,
+				stretch_motion
 			),
 		};
 		let interaction = match (group.allow_grabbing, group.allow_posing) {
@@ -5774,7 +10992,7 @@ fn run_diagnose(
 			(allow_grabbing, allow_posing) => format!(" interaction=grab:{allow_grabbing:?}/pose:{allow_posing:?}"),
 		};
 		println!(
-			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} runtime_override={:?} id={:?} bones={} root={:?} tip={:?} writeback={:?} translation_candidates={} translation_targets={} stiffness={} drag={} gravity={} radius={}{}{} comment={:?}",
+			"  dynamics_group[{}]: source={:?} enabled={} source_enabled={} runtime_override={:?} id={:?} bones={} root={:?} tip={:?} center={:?} writeback={:?} translation_candidates={} translation_targets={} integration={:?} source_pull={} source_bounce={} source_shape={} drag={} gravity={} radius={}{}{} comment={:?}",
 			group.index,
 			group.source_kind,
 			group.enabled,
@@ -5784,9 +11002,13 @@ fn run_diagnose(
 			group.bone_count,
 			group.root_path.as_deref().or(group.root_node.map(|_| "#")),
 			group.tip_path.as_deref().or(group.tip_node.map(|_| "#")),
+			group.center_path.as_deref().or(group.center_node.map(|_| "#")),
 			group.writeback_mode,
 			group.translation_writeback_candidate_count,
 			group.translation_writeback_target_count,
+			group.integration_type,
+			group.pull,
+			group.spring,
 			group.stiffness,
 			group.drag_force,
 			group.gravity_power,
@@ -6137,7 +11359,13 @@ fn run_diagnose(
 			skin.out_of_range_joint_attribute_count
 		);
 	}
-	println!("node_constraints: {}", report.scene.node_constraint_count);
+	println!(
+		"node_constraints: {} kinds={:?} parent_sources={} parent_multi_source={}",
+		report.scene.node_constraint_count,
+		report.scene.node_constraint_kind_counts,
+		report.scene.parent_node_constraint_source_count,
+		report.scene.parent_node_constraint_multi_source_count
+	);
 	println!(
 		"asset_ownership: groups={} mesh_primitives={} materials={} images={} dynamics={}",
 		report.scene.asset_group_ownership_count,
@@ -6467,6 +11695,377 @@ mod tests {
 	}
 
 	#[test]
+	fn dynamics_vertex_probe_node_samples_are_displacement_based_not_path_whitelisted() {
+		let node_paths = vec![
+			Some("Avatar/GenericAccessory".to_string()),
+			Some("Avatar/StillNode".to_string()),
+			Some("Avatar/OtherDynamic".to_string()),
+		];
+		let rest_world = vec![Mat4::IDENTITY, Mat4::IDENTITY, Mat4::IDENTITY];
+		let settled_world = vec![
+			Mat4::from_translation(Vec3::new(0.01, 0.0, 0.0)),
+			Mat4::IDENTITY,
+			Mat4::from_translation(Vec3::new(0.03, 0.0, 0.0)),
+		];
+
+		let samples = dynamics_vertex_probe_node_samples(&node_paths, &rest_world, &settled_world);
+
+		assert_eq!(samples.len(), 2);
+		assert_eq!(samples[0].path, "Avatar/OtherDynamic");
+		assert_eq!(samples[1].path, "Avatar/GenericAccessory");
+		assert!(samples.iter().all(|sample| sample.path != "Avatar/StillNode"));
+	}
+
+	#[test]
+	fn dynamics_source_collider_audit_flags_collision_enabled_sources_without_colliders() {
+		let doc = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "2.0".to_string(),
+				source: serde_json::json!({
+					"dynamics": [
+						{
+							"id": "physbone:Avatar/PB/LooseAccessory",
+							"sourceParams": {
+								"allowCollision": true,
+								"colliders": []
+							}
+						},
+						{
+							"id": "physbone:Avatar/PB/ClothPanel/ClothPanel_L",
+							"sourceParams": {
+								"allowCollision": true,
+								"colliders": [
+									{"component": {"path": "Avatar/PB/BodyColliders/Chest"}},
+									{"component": {"path": "Avatar/PB/BodyColliders/Spine"}}
+								]
+							}
+						},
+						{
+							"id": "physbone:Avatar/Hair",
+							"sourceParams": {
+								"allowCollision": true,
+								"colliders": []
+							}
+						}
+					]
+				}),
+			}),
+			..UnaDocument::default()
+		};
+		let audit = dynamics_source_collider_audit(&doc, None);
+		assert_eq!(audit.collision_enabled_empty_collider_count, 2);
+		assert_eq!(
+			audit.collision_enabled_empty_collider_source_ids,
+			vec!["physbone:Avatar/PB/LooseAccessory", "physbone:Avatar/Hair"]
+		);
+		assert_eq!(
+			audit.collision_enabled_empty_collider_samples,
+			vec!["physbone:Avatar/PB/LooseAccessory", "physbone:Avatar/Hair"]
+		);
+	}
+
+	#[test]
+	fn dynamics_source_empty_collider_audit_uses_source_payload_not_path_shape() {
+		assert!(dynamics_source_has_collision_enabled_empty_colliders(Some(true), 0));
+		assert!(!dynamics_source_has_collision_enabled_empty_colliders(Some(true), 1));
+		assert!(!dynamics_source_has_collision_enabled_empty_colliders(Some(false), 0));
+		assert!(!dynamics_source_has_collision_enabled_empty_colliders(None, 0));
+	}
+
+	#[test]
+	fn dynamics_source_collider_audit_can_filter_to_active_sources() {
+		let doc = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "2.0".to_string(),
+				source: serde_json::json!({
+					"dynamics": [
+						{
+							"id": "physbone:InactiveOutfit/PB/LooseAccessory",
+							"sourceParams": {
+								"allowCollision": true,
+								"colliders": []
+							}
+						},
+						{
+							"id": "physbone:ActiveOutfit/PB/ClothPanel/ClothPanel_L",
+							"sourceParams": {
+								"allowCollision": true,
+								"colliders": [
+									{"component": {"path": "ActiveOutfit/PB/BodyColliders/Chest"}},
+									{"component": {"path": "ActiveOutfit/PB/BodyColliders/Spine"}}
+								]
+							}
+						}
+					]
+				}),
+			}),
+			..UnaDocument::default()
+		};
+		let active_source_ids = BTreeSet::from(["physbone:ActiveOutfit/PB/ClothPanel/ClothPanel_L".to_string()]);
+		let audit = dynamics_source_collider_audit(&doc, Some(&active_source_ids));
+		assert_eq!(audit.collision_enabled_empty_collider_count, 0);
+		assert!(audit.collision_enabled_empty_collider_source_ids.is_empty());
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_morph_samples_are_effect_based_not_name_whitelisted() {
+		let primitive = un_avatar_core::UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![
+				un_avatar_core::UnaMorphTargetDeltas {
+					position_deltas: vec![[0.001, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+					normal_deltas: None,
+				},
+				un_avatar_core::UnaMorphTargetDeltas {
+					position_deltas: vec![[0.02, 0.0, 0.0], [0.03, 0.0, 0.0], [0.0, 0.0, 0.0]],
+					normal_deltas: None,
+				},
+			],
+			morph_target_names: vec!["Breast_Fix".to_string(), "GenericWide".to_string()],
+			default_morph_weights: vec![0.0, 0.0],
+		};
+
+		let samples = dynamics_vertex_probe_region_morph_targets(&primitive, &primitive.positions, |_| true);
+
+		assert_eq!(samples.len(), 2);
+		assert_eq!(samples[0].name, "GenericWide");
+		assert_eq!(samples[0].affected_vertices, 2);
+		assert_eq!(samples[1].name, "Breast_Fix");
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_collider_path_summaries_are_source_scoped() {
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("root", test_identity_mat4(), vec![1, 2]),
+				test_scene_node("source_a", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("source_b", translation_mat4(1.0, 0.0, 0.0), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let colliders = vec![
+			BoneColliderPrimitive::Sphere { node: 1, radius: 0.1 },
+			BoneColliderPrimitive::Sphere { node: 2, radius: 0.1 },
+		];
+		let collider_source_ids = vec!["physbone:a".to_string(), "physbone:b".to_string()];
+		let collider_paths = vec!["BodyColliders/A".to_string(), "BodyColliders/B".to_string()];
+		let tail_samples = vec![DynamicsTailSample {
+			source_id: "physbone:a".to_string(),
+			curr_tail: [0.05, 0.0, 0.0],
+			hit_radius: 0.02,
+			..Default::default()
+		}];
+
+		let summaries = dynamics_vertex_probe_collider_path_summaries_for_samples(
+			&scene,
+			&colliders,
+			&collider_source_ids,
+			&collider_paths,
+			&tail_samples,
+			&BTreeMap::new(),
+		);
+
+		assert_eq!(summaries.len(), 1);
+		assert_eq!(summaries[0].collider_path, "BodyColliders/A");
+		assert_eq!(summaries[0].candidate_count, 1);
+		assert_eq!(summaries[0].penetrating_count, 1);
+		assert_eq!(summaries[0].source_count, 1);
+		assert_eq!(summaries[0].sample_source_ids, vec!["physbone:a"]);
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_collider_path_summaries_keep_global_colliders_with_scoped_sources() {
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("root", test_identity_mat4(), vec![1, 2, 3]),
+				test_scene_node("global", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("source_a", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("source_b", translation_mat4(1.0, 0.0, 0.0), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let colliders = vec![
+			BoneColliderPrimitive::Sphere { node: 1, radius: 0.1 },
+			BoneColliderPrimitive::Sphere { node: 2, radius: 0.1 },
+			BoneColliderPrimitive::Sphere { node: 3, radius: 0.1 },
+		];
+		let collider_source_ids = vec!["".to_string(), "physbone:a".to_string(), "physbone:b".to_string()];
+		let collider_paths = vec![
+			"BodyColliders/Global".to_string(),
+			"BodyColliders/A".to_string(),
+			"BodyColliders/B".to_string(),
+		];
+		let tail_samples = vec![DynamicsTailSample {
+			source_id: "physbone:a".to_string(),
+			curr_tail: [0.05, 0.0, 0.0],
+			hit_radius: 0.02,
+			..Default::default()
+		}];
+
+		let summaries = dynamics_vertex_probe_collider_path_summaries_for_samples(
+			&scene,
+			&colliders,
+			&collider_source_ids,
+			&collider_paths,
+			&tail_samples,
+			&BTreeMap::new(),
+		);
+
+		let paths = summaries.iter().map(|summary| summary.collider_path.as_str()).collect::<Vec<_>>();
+		assert_eq!(paths, vec!["BodyColliders/A", "BodyColliders/Global"]);
+		assert!(summaries.iter().all(|summary| summary.candidate_count == 1));
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_collider_path_summaries_respect_inside_bounds_spheres() {
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("root", test_identity_mat4(), vec![1]),
+				test_scene_node("bounds", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let colliders = vec![BoneColliderPrimitive::LocalSphere {
+			node: 1,
+			center: [0.0, 0.0, 0.0],
+			radius: 0.1,
+			inside_bounds: true,
+		}];
+		let collider_source_ids = vec!["physbone:a".to_string()];
+		let collider_paths = vec!["BodyColliders/InsideSphere".to_string()];
+		let tail_samples = vec![
+			DynamicsTailSample {
+				source_id: "physbone:a".to_string(),
+				curr_tail: [0.03, 0.0, 0.0],
+				hit_radius: 0.02,
+				..Default::default()
+			},
+			DynamicsTailSample {
+				source_id: "physbone:a".to_string(),
+				curr_tail: [0.20, 0.0, 0.0],
+				hit_radius: 0.02,
+				..Default::default()
+			},
+		];
+
+		let summaries = dynamics_vertex_probe_collider_path_summaries_for_samples(
+			&scene,
+			&colliders,
+			&collider_source_ids,
+			&collider_paths,
+			&tail_samples,
+			&BTreeMap::new(),
+		);
+
+		assert_eq!(summaries.len(), 1);
+		assert!(summaries[0].inside_bounds);
+		assert_eq!(summaries[0].candidate_count, 2);
+		assert_eq!(summaries[0].penetrating_count, 1);
+		assert!(summaries[0].min_margin < 0.0);
+		assert!((summaries[0].min_threshold - 0.08).abs() < 1e-5);
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_collider_path_summaries_respect_inside_bounds_planes() {
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("root", test_identity_mat4(), vec![1]),
+				test_scene_node("plane", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let colliders = vec![BoneColliderPrimitive::LocalPlane {
+			node: 1,
+			center: [0.0, 0.0, 0.0],
+			normal: [0.0, 1.0, 0.0],
+			inside_bounds: true,
+		}];
+		let collider_source_ids = vec!["physbone:a".to_string()];
+		let collider_paths = vec!["BodyColliders/InsidePlane".to_string()];
+		let tail_samples = vec![
+			DynamicsTailSample {
+				source_id: "physbone:a".to_string(),
+				curr_tail: [0.0, -0.05, 0.0],
+				hit_radius: 0.0,
+				..Default::default()
+			},
+			DynamicsTailSample {
+				source_id: "physbone:a".to_string(),
+				curr_tail: [0.0, 0.05, 0.0],
+				hit_radius: 0.0,
+				..Default::default()
+			},
+		];
+
+		let summaries = dynamics_vertex_probe_collider_path_summaries_for_samples(
+			&scene,
+			&colliders,
+			&collider_source_ids,
+			&collider_paths,
+			&tail_samples,
+			&BTreeMap::new(),
+		);
+
+		assert_eq!(summaries.len(), 1);
+		assert!(summaries[0].inside_bounds);
+		assert_eq!(summaries[0].candidate_count, 2);
+		assert_eq!(summaries[0].penetrating_count, 1);
+		assert!(summaries[0].min_margin < 0.0);
+		assert!(summaries[0].min_distance > 0.0);
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_collider_path_summaries_include_projection_counts() {
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("root", test_identity_mat4(), vec![1]),
+				test_scene_node("source_a", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let colliders = vec![BoneColliderPrimitive::Sphere { node: 1, radius: 0.1 }];
+		let collider_source_ids = vec!["physbone:a".to_string()];
+		let collider_paths = vec!["BodyColliders/A".to_string()];
+		let tail_samples = vec![DynamicsTailSample {
+			source_id: "physbone:a".to_string(),
+			curr_tail: [0.05, 0.0, 0.0],
+			hit_radius: 0.02,
+			..Default::default()
+		}];
+		let projection_counts = BTreeMap::from([("BodyColliders/A".to_string(), 7)]);
+
+		let summaries = dynamics_vertex_probe_collider_path_summaries_for_samples(
+			&scene,
+			&colliders,
+			&collider_source_ids,
+			&collider_paths,
+			&tail_samples,
+			&projection_counts,
+		);
+
+		assert_eq!(summaries.len(), 1);
+		assert_eq!(summaries[0].projection_count, 7);
+	}
+
+	#[test]
 	fn menu_graph_node_path_reports_truncated_cycles() {
 		let nodes = vec![
 			DiagnoseModularAvatarMenuGraphNode {
@@ -6550,6 +12149,1515 @@ mod tests {
 	}
 
 	#[test]
+	fn normalize_cli_args_preserves_vertex_probe_command() {
+		let args = ["un-avatar", "dynamics-vertex-probe", "target/tmp/model.unavatar", "--json"].map(OsString::from);
+		let normalized = normalize_cli_args(args.clone());
+		assert_eq!(normalized, args);
+		assert!(is_known_command(OsStr::new("dynamics-vertex-probe")));
+	}
+
+	#[test]
+	fn dynamics_scan_counts_unavatar_source_params_without_importing_assets() {
+		let path = std::env::temp_dir().join(format!("un-avatar-dynamics-scan-{}.gltf", std::process::id()));
+		let json = r#"{
+			"asset": {"version": "2.0"},
+			"extensions": {
+				"UN_avatar": {
+					"dynamics": {
+						"groups": [
+							{"sourceParams": {
+								"pull": 0.25,
+								"pullCurve": [],
+								"spring": 0.35,
+								"springCurve": [],
+								"momentum": 0.45,
+								"momentumCurve": [],
+								"stiffness": 0.55,
+								"stiffnessCurve": [],
+								"gravityFalloff": 0.65,
+								"gravityFalloffCurve": [],
+								"immobile": 0.75,
+								"immobileCurve": [],
+								"immobileType": "world",
+								"integrationType": "vrcAdvanced",
+								"limitRotation": [10, 20, 30]
+							}},
+							{"sourceParams": {
+								"pull": 0.1,
+								"pullCurve": [],
+								"spring": 0.2,
+								"springCurve": [],
+								"momentum": 0.3,
+								"momentumCurve": [],
+								"stiffness": 0.4,
+								"stiffnessCurve": [],
+								"gravityFalloff": 0.5,
+								"gravityFalloffCurve": [],
+								"immobile": 0.6,
+								"immobileCurve": [],
+								"immobileType": "allMotion",
+								"integrationType": "standard",
+								"limitRotation": [0, 0, 0]
+							}}
+						]
+					}
+				}
+			}
+		}"#;
+		fs::write(&path, json).unwrap();
+		let report = dynamics_scan_report(&path).unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(report.extension_keys, vec!["UN_avatar".to_string()]);
+		assert_eq!(report.source_params_count, 2);
+		assert!(report.missing_required_source_params.is_empty());
+		assert_eq!(report.required_source_param_counts["pull"], 2);
+		assert_eq!(report.required_source_param_counts["limitRotation"], 2);
+		assert_eq!(report.curve_counts["pullCurve"], 2);
+		let pull_range = report.numeric_ranges["pull"];
+		assert_eq!(pull_range.count, 2);
+		assert_eq!(pull_range.min, 0.1);
+		assert_eq!(pull_range.max, 0.25);
+	}
+
+	#[test]
+	fn dynamics_scan_reports_missing_current_exporter_terms() {
+		let path = std::env::temp_dir().join(format!("un-avatar-dynamics-scan-missing-{}.gltf", std::process::id()));
+		let json = r#"{
+			"asset": {"version": "2.0"},
+			"extensions": {
+				"UN_avatar": {
+					"dynamics": {
+						"groups": [
+							{"sourceParams": {
+								"pull": 0.25,
+								"spring": 0.35
+							}}
+						]
+					}
+				}
+			}
+		}"#;
+		fs::write(&path, json).unwrap();
+		let report = dynamics_scan_report(&path).unwrap();
+		let _ = fs::remove_file(&path);
+		let err = require_current_exporter_dynamics_scan(&report).unwrap_err();
+
+		assert_eq!(report.source_params_count, 1);
+		assert!(report
+			.missing_required_source_params
+			.iter()
+			.any(|missing| missing == "pullCurve=0/1"));
+		assert!(report
+			.missing_required_source_params
+			.iter()
+			.any(|missing| missing == "limitRotation=0/1"));
+		assert!(err.contains("pullCurve=0/1"));
+	}
+
+	#[test]
+	fn dynamics_import_audit_reports_imported_runtime_evidence() {
+		let path = std::env::temp_dir().join(format!("un-avatar-dynamics-import-audit-{}.gltf", std::process::id()));
+		let json = r#"{
+			"asset": {"version": "2.0"},
+			"scene": 0,
+			"scenes": [{"nodes": [0]}],
+			"nodes": [
+				{"name": "Avatar", "children": [1, 3], "translation": [0.0, 0.0, 0.0]},
+				{"name": "Root", "children": [2], "translation": [0.0, 0.0, 0.0]},
+				{"name": "Tip", "translation": [0.0, 0.2, 0.0]},
+				{"name": "ClothRoot", "children": [4], "translation": [0.2, 0.0, 0.0]},
+				{"name": "ClothTip", "translation": [0.0, 0.2, 0.0]}
+			],
+			"extensions": {
+				"UN_avatar": {
+					"specVersion": "0.1-preview",
+					"nodes": [
+						{"nodeId": "node_root", "path": "Root"},
+						{"nodeId": "node_tip", "path": "Root/Tip"},
+						{"nodeId": "node_cloth_root", "path": "ClothRoot"},
+						{"nodeId": "node_cloth_tip", "path": "ClothRoot/ClothTip"}
+					],
+					"dynamics": [
+						{
+							"id": "audit_hair",
+							"source": "vrc_physbone",
+							"roots": [{"nodeId": "node_root", "path": "Root"}],
+							"drag": 0.2,
+							"gravity": [0.0, -0.2, 0.0],
+							"radius": 0.03,
+							"sourceParams": {
+								"integrationType": "Advanced",
+								"pull": 0.25,
+								"pullCurve": {"keys": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.5}]},
+								"spring": 0.15,
+								"springCurve": {"keys": []},
+								"momentum": 0.35,
+								"momentumCurve": {"keys": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.5}]},
+								"stiffness": 0.45,
+								"stiffnessCurve": {"keys": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.25}]},
+								"gravityFalloff": 0.6,
+								"gravityFalloffCurve": {"keys": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.5}]},
+								"immobile": 0.35,
+								"immobileCurve": {"keys": [{"time": 0.0, "value": 1.0}, {"time": 1.0, "value": 0.5}]},
+								"immobileType": 1,
+								"limitRotation": [10.0, 20.0, 30.0]
+							}
+						},
+						{
+							"id": "audit_cloth",
+							"source": "vrc_physbone",
+							"roots": [{"nodeId": "node_cloth_root", "path": "ClothRoot"}],
+							"drag": 0.2,
+							"gravity": [0.0, -0.2, 0.0],
+							"radius": 0.03,
+							"sourceParams": {
+								"integrationType": "Advanced",
+								"pull": 0.25,
+								"pullCurve": {"keys": []},
+								"spring": 0.15,
+								"springCurve": {"keys": []},
+								"momentum": 0.35,
+								"momentumCurve": {"keys": []},
+								"stiffness": 0.45,
+								"stiffnessCurve": {"keys": []},
+								"gravityFalloff": 0.6,
+								"gravityFalloffCurve": {"keys": []},
+								"immobile": 0.35,
+								"immobileCurve": {"keys": []},
+								"immobileType": 1,
+								"limitType": "Polar",
+								"limitRotation": [10.0, 20.0, 30.0],
+								"maxAngleX": 45.0,
+								"maxAngleZ": 90.0
+							}
+						}
+					]
+				}
+			}
+		}"#;
+		fs::write(&path, json).unwrap();
+		let report = dynamics_import_audit_report(&[], &path, None, None).unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(report.source_params_count, 2);
+		assert_eq!(report.group_count, 2);
+		assert_eq!(report.enabled_group_count, 2);
+		assert_eq!(report.chain_joint_count, 4);
+		assert_eq!(report.response_group_count, 2);
+		assert_eq!(report.source_angle_limit_group_count, 2);
+		assert_eq!(report.active_angle_limit_group_count, 2);
+		assert_eq!(report.hard_angle_constraint_group_count, 1);
+		assert_eq!(report.cloth_angle_limit_metadata_only_count, 1);
+		assert_eq!(report.node_constraint_count, 0);
+		assert_eq!(report.parent_node_constraint_count, 0);
+		assert_eq!(report.parent_node_constraint_source_count, 0);
+		assert_eq!(report.parent_node_constraint_multi_source_count, 0);
+		assert!(report.missing_runtime_evidence.is_empty());
+		assert_eq!(report.runtime_ranges["pull"].min, 0.25);
+		assert!((report.runtime_ranges["spring"].max - 0.35).abs() < 1e-6);
+		assert_eq!(report.sample_counts["pullSamples"], 2);
+		assert_eq!(report.sample_counts["stiffnessSamples"], 2);
+	}
+
+	#[test]
+	fn dynamics_import_node_constraint_counts_match_diagnose_parent_policy() {
+		let scene = UnaSceneSnapshot {
+			node_constraints: vec![
+				un_avatar_core::UnaNodeConstraint {
+					target_node: 1,
+					source_node: 0,
+					weight: 1.0,
+					kind: UnaNodeConstraintKind::Parent {
+						translate_x: true,
+						translate_y: true,
+						translate_z: true,
+						rotate_x: true,
+						rotate_y: true,
+						rotate_z: true,
+						translation_at_rest: [0.0; 3],
+						rotation_at_rest: [0.0; 3],
+					},
+					sources: Vec::new(),
+				},
+				un_avatar_core::UnaNodeConstraint {
+					target_node: 2,
+					source_node: 0,
+					weight: 1.0,
+					kind: UnaNodeConstraintKind::Parent {
+						translate_x: true,
+						translate_y: true,
+						translate_z: true,
+						rotate_x: true,
+						rotate_y: true,
+						rotate_z: true,
+						translation_at_rest: [0.0; 3],
+						rotation_at_rest: [0.0; 3],
+					},
+					sources: vec![
+						un_avatar_core::UnaNodeConstraintSource {
+							source_node: 0,
+							weight: 0.5,
+							translation_offset: [0.0; 3],
+							rotation_offset: [0.0; 3],
+						},
+						un_avatar_core::UnaNodeConstraintSource {
+							source_node: 3,
+							weight: 0.5,
+							translation_offset: [0.0; 3],
+							rotation_offset: [0.0; 3],
+						},
+					],
+				},
+				un_avatar_core::UnaNodeConstraint {
+					target_node: 4,
+					source_node: 0,
+					weight: 1.0,
+					kind: UnaNodeConstraintKind::Rotation,
+					sources: Vec::new(),
+				},
+			],
+			..Default::default()
+		};
+
+		assert_eq!(dynamics_import_node_constraint_counts(Some(&scene)), (3, 2, 3, 1));
+		assert_eq!(dynamics_import_node_constraint_counts(None), (0, 0, 0, 0));
+	}
+
+	#[test]
+	fn dynamics_import_missing_runtime_evidence_distinguishes_raw_and_scoped_groups() {
+		assert_eq!(
+			dynamics_import_missing_runtime_evidence(3, 2, 0, 0, 0),
+			Vec::<String>::new(),
+			"active wardrobe with no resident dynamics should not fail raw sourceParams evidence"
+		);
+		let missing_raw = dynamics_import_missing_runtime_evidence(3, 0, 0, 0, 0);
+		assert_eq!(
+			missing_raw,
+			vec!["sourceParams=3 but imported runtime dynamics groups=0".to_string()]
+		);
+		let missing_chain = dynamics_import_missing_runtime_evidence(3, 2, 2, 0, 2);
+		assert_eq!(
+			missing_chain,
+			vec!["imported dynamics groups=2 but chain_joint_count=0".to_string()]
+		);
+		let missing_response = dynamics_import_missing_runtime_evidence(3, 2, 2, 2, 0);
+		assert_eq!(
+			missing_response,
+			vec!["imported dynamics groups=2 but simulator response_group_count=0".to_string()]
+		);
+	}
+
+	#[test]
+	fn dynamics_import_group_sample_score_uses_structure_not_model_names() {
+		let plain = un_avatar_core::UnaSpringBoneGroup {
+			enabled: true,
+			source_id: "physbone:Fixture/PB/PlainPanel".to_string(),
+			bone_node_indices: vec![0, 1],
+			..Default::default()
+		};
+		let structured = un_avatar_core::UnaSpringBoneGroup {
+			enabled: true,
+			source_id: "custom:generic_drape".to_string(),
+			pull_samples: vec![0.2, 0.1],
+			limit: Some(un_avatar_core::UnaDynamicsLimit {
+				max_stretch: 0.25,
+				..Default::default()
+			}),
+			bone_node_indices: vec![0, 1, 2, 3],
+			..Default::default()
+		};
+
+		assert!(dynamics_import_group_sample_score(&structured, false) > dynamics_import_group_sample_score(&plain, false));
+		assert!(dynamics_import_group_sample_score(&plain, true) > dynamics_import_group_sample_score(&plain, false));
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_mesh_cloth_assist_uses_shared_general_cloth_filter() {
+		let physics_config = DynamicsPhysicsConfig::default().normalized();
+		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
+		let categories = physics_config.categories;
+
+		assert!(config.mesh_path_contains.is_empty());
+		assert!(dynamics_mesh_cloth_assist_mesh_matches(
+			Some("Avatar/LongCoatPanel"),
+			&config.mesh_path_contains,
+			&categories
+		));
+		assert!(dynamics_mesh_cloth_assist_mesh_matches(
+			Some("Avatar/SleeveFrill"),
+			&config.mesh_path_contains,
+			&categories
+		));
+		assert!(dynamics_mesh_cloth_assist_mesh_matches(
+			Some("Avatar/ブラウス_裾_L"),
+			&config.mesh_path_contains,
+			&categories
+		));
+		assert!(!dynamics_mesh_cloth_assist_mesh_matches(
+			Some("Avatar/BodyMesh"),
+			&config.mesh_path_contains,
+			&categories
+		));
+		assert!(!dynamics_mesh_cloth_assist_mesh_matches(
+			None,
+			&config.mesh_path_contains,
+			&categories
+		));
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_mesh_cloth_assist_uses_profile_thresholds() {
+		let physics_config = DynamicsPhysicsConfig {
+			mesh_cloth_assist: DynamicsMeshClothAssistConfig {
+				enabled: false,
+				body_dominance_threshold: 0.72,
+				min_existing_dynamic_weight: 0.03,
+				seed_missing_dynamic_influence: false,
+				max_assist_weight: 0.5,
+				mesh_path_contains: vec!["sleeve panel".to_string()],
+			},
+			..Default::default()
+		};
+
+		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
+
+		assert!(config.enabled);
+		assert_eq!(config.body_dominance_threshold, 0.72);
+		assert_eq!(config.min_existing_dynamic_weight, 0.03);
+		assert!(!config.seed_missing_dynamic_influence);
+		assert_eq!(config.max_assist_weight, 0.5);
+		assert_eq!(config.mesh_path_contains, vec!["sleeve_panel"]);
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_joint_roles_prefer_runtime_dynamic_membership() {
+		let identity = test_identity_mat4();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![identity, identity, identity],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			Some("Avatar/Chest".to_string()),
+			Some("Avatar/AccessoryRoot".to_string()),
+			Some("Avatar/Cloth_Static".to_string()),
+		];
+		let runtime_dynamic_nodes = vec![1usize];
+
+		let roles = dynamics_mesh_cloth_assist_joint_roles(&skin, 3, Some(&runtime_dynamic_nodes), |joint_index| {
+			dynamics_mesh_cloth_assist_joint_leaf(&skin, &node_paths, joint_index)
+		});
+
+		assert_eq!(roles[0], DynamicsMeshClothAssistJointRole::Body);
+		assert_eq!(roles[1], DynamicsMeshClothAssistJointRole::Dynamic);
+		assert_eq!(roles[2], DynamicsMeshClothAssistJointRole::StaticCloth);
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_joint_roles_keep_cloth_alias_fallback_without_runtime_membership() {
+		let identity = test_identity_mat4();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![identity, identity],
+			skeleton_node: None,
+		};
+		let node_paths = vec![Some("Avatar/Chest".to_string()), Some("Avatar/ブラウス_裾_L".to_string())];
+
+		let roles = dynamics_mesh_cloth_assist_joint_roles(&skin, 2, None, |joint_index| {
+			dynamics_mesh_cloth_assist_joint_leaf(&skin, &node_paths, joint_index)
+		});
+
+		assert_eq!(roles[0], DynamicsMeshClothAssistJointRole::Body);
+		assert_eq!(roles[1], DynamicsMeshClothAssistJointRole::Dynamic);
+	}
+
+	#[test]
+	fn dynamics_import_mesh_cloth_assist_classifies_seed_candidates_from_connected_dynamic_evidence() {
+		let identity = test_identity_mat4();
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Avatar", identity, vec![1, 2, 3, 4]),
+				un_avatar_core::UnaSceneNode {
+					name: Some("Cloth_Panel_Mesh".to_string()),
+					transform: identity,
+					mesh: Some(0),
+					skin: Some(0),
+					..test_scene_node("Cloth_Panel_Mesh", identity, Vec::new())
+				},
+				test_scene_node("Chest", identity, Vec::new()),
+				test_scene_node("Cloth_Static_L", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("Cloth_Dyn_L", translation_mat4(0.1, 0.0, 0.0), Vec::new()),
+			],
+			meshes: vec![vec![un_avatar_core::UnaMeshBuffers {
+				name: Some("cloth".to_string()),
+				vertex_payload_id: None,
+				positions: vec![[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: Some(vec![[0, 1, 0, 0], [0, 1, 2, 0], [0, 1, 2, 0]]),
+				weights: Some(vec![[0.94, 0.06, 0.0, 0.0], [0.56, 0.39, 0.05, 0.0], [0.30, 0.60, 0.10, 0.0]]),
+				indices: Some(vec![0, 1, 2]),
+				material_index: None,
+				morph_targets: Vec::new(),
+				morph_target_names: Vec::new(),
+				default_morph_weights: Vec::new(),
+			}]],
+			skins: vec![un_avatar_core::UnaSkin {
+				joint_nodes: vec![2, 3, 4],
+				inverse_bind_matrices: vec![identity, identity, translation_mat4(0.1, 0.0, 0.0)],
+				skeleton_node: None,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let groups = vec![un_avatar_core::UnaDynamicsSourceGroup {
+			enabled: true,
+			source_id: "physbone:test/Cloth_Dyn_L".to_string(),
+			category: "cloth".to_string(),
+			bone_node_indices: vec![2, 3, 4],
+			..Default::default()
+		}];
+		let node_paths = vec![
+			Some("Avatar".to_string()),
+			Some("Avatar/Cloth_Panel_Mesh".to_string()),
+			Some("Avatar/Chest".to_string()),
+			Some("Avatar/Cloth_Static_L".to_string()),
+			Some("Avatar/Cloth_Dyn_L".to_string()),
+		];
+
+		let samples = dynamics_import_mesh_cloth_assist_samples(&scene, &groups, &node_paths);
+
+		let sample = samples.iter().find(|sample| sample.region == "all").unwrap();
+		assert_eq!(sample.candidate_count, 2);
+		assert_eq!(sample.existing_dynamic_candidate_count, 1);
+		assert_eq!(sample.static_cloth_bridge_candidate_count, 2);
+		assert_eq!(sample.seed_candidate_count, 1);
+		assert!(sample.static_cloth_weight_sum > 0.0);
+		assert!(sample.seeded_assist_weight_sum > 0.0);
+		assert_eq!(sample.dynamic_targets[0].path.as_deref(), Some("Avatar/Cloth_Dyn_L"));
+	}
+
+	#[test]
+	fn dynamics_import_mesh_cloth_assist_neighbor_uses_strongest_dynamic_joint_weight() {
+		let profiles = vec![
+			DynamicsImportMeshClothAssistVertexProfile::default(),
+			DynamicsImportMeshClothAssistVertexProfile {
+				dynamic_weight: 0.09,
+				strongest_dynamic_joint: Some(2),
+				strongest_dynamic_weight: 0.05,
+				..Default::default()
+			},
+		];
+
+		let (neighbor_dynamic_max, neighbor_dynamic_joint) =
+			dynamics_import_mesh_cloth_assist_neighbor_dynamic(2, Some(&[0, 1, 1]), &profiles);
+
+		assert!((neighbor_dynamic_max[0] - 0.05).abs() < 0.0001);
+		assert_eq!(neighbor_dynamic_joint[0], Some(2));
+	}
+
+	#[test]
+	fn dynamics_import_mesh_cloth_assist_requires_stronger_neighbor_dynamic_evidence() {
+		let identity = test_identity_mat4();
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Avatar", identity, vec![1, 2, 3, 4]),
+				un_avatar_core::UnaSceneNode {
+					name: Some("Cloth_Panel_Mesh".to_string()),
+					transform: identity,
+					mesh: Some(0),
+					skin: Some(0),
+					..test_scene_node("Cloth_Panel_Mesh", identity, Vec::new())
+				},
+				test_scene_node("Chest", identity, Vec::new()),
+				test_scene_node("Cloth_Static_L", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("Cloth_Dyn_L", translation_mat4(0.1, 0.0, 0.0), Vec::new()),
+			],
+			meshes: vec![vec![un_avatar_core::UnaMeshBuffers {
+				name: Some("cloth".to_string()),
+				vertex_payload_id: None,
+				positions: vec![[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: Some(vec![[0, 1, 2, 0], [0, 1, 2, 0], [0, 1, 2, 0]]),
+				weights: Some(vec![[0.56, 0.39, 0.05, 0.0]; 3]),
+				indices: Some(vec![0, 1, 2]),
+				material_index: None,
+				morph_targets: Vec::new(),
+				morph_target_names: Vec::new(),
+				default_morph_weights: Vec::new(),
+			}]],
+			skins: vec![un_avatar_core::UnaSkin {
+				joint_nodes: vec![2, 3, 4],
+				inverse_bind_matrices: vec![identity; 3],
+				skeleton_node: None,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let groups = vec![un_avatar_core::UnaDynamicsSourceGroup {
+			enabled: true,
+			source_id: "physbone:test/Cloth_Dyn_L".to_string(),
+			category: "cloth".to_string(),
+			bone_node_indices: vec![2, 3, 4],
+			..Default::default()
+		}];
+		let node_paths = vec![
+			Some("Avatar".to_string()),
+			Some("Avatar/Cloth_Panel_Mesh".to_string()),
+			Some("Avatar/Chest".to_string()),
+			Some("Avatar/Cloth_Static_L".to_string()),
+			Some("Avatar/Cloth_Dyn_L".to_string()),
+		];
+
+		let samples = dynamics_import_mesh_cloth_assist_samples(&scene, &groups, &node_paths);
+
+		assert!(samples.is_empty());
+	}
+
+	#[test]
+	fn dynamics_import_mesh_cloth_assist_does_not_seed_without_connected_dynamic_evidence() {
+		let identity = test_identity_mat4();
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Avatar", identity, vec![1, 2, 3, 4]),
+				un_avatar_core::UnaSceneNode {
+					name: Some("Cloth_Panel_Mesh".to_string()),
+					transform: identity,
+					mesh: Some(0),
+					skin: Some(0),
+					..test_scene_node("Cloth_Panel_Mesh", identity, Vec::new())
+				},
+				test_scene_node("Chest", identity, Vec::new()),
+				test_scene_node("Cloth_Static_L", translation_mat4(0.0, 0.0, 0.0), Vec::new()),
+				test_scene_node("Cloth_Dyn_L", translation_mat4(0.1, 0.0, 0.0), Vec::new()),
+			],
+			meshes: vec![vec![un_avatar_core::UnaMeshBuffers {
+				name: Some("cloth".to_string()),
+				vertex_payload_id: None,
+				positions: vec![[0.0, 0.0, 0.0]],
+				normals: None,
+				tangents: None,
+				tex_coords_0: None,
+				tex_coords_1: None,
+				tex_coords_2: None,
+				tex_coords_3: None,
+				colors_0: None,
+				joints: Some(vec![[0, 1, 0, 0]]),
+				weights: Some(vec![[0.94, 0.06, 0.0, 0.0]]),
+				indices: Some(vec![0, 0, 0]),
+				material_index: None,
+				morph_targets: Vec::new(),
+				morph_target_names: Vec::new(),
+				default_morph_weights: Vec::new(),
+			}]],
+			skins: vec![un_avatar_core::UnaSkin {
+				joint_nodes: vec![2, 3, 4],
+				inverse_bind_matrices: vec![identity, identity, translation_mat4(0.1, 0.0, 0.0)],
+				skeleton_node: None,
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		let groups = vec![un_avatar_core::UnaDynamicsSourceGroup {
+			enabled: true,
+			source_id: "physbone:test/Cloth_Dyn_L".to_string(),
+			category: "cloth".to_string(),
+			bone_node_indices: vec![2, 3, 4],
+			..Default::default()
+		}];
+		let node_paths = vec![
+			Some("Avatar".to_string()),
+			Some("Avatar/Cloth_Panel_Mesh".to_string()),
+			Some("Avatar/Chest".to_string()),
+			Some("Avatar/Cloth_Static_L".to_string()),
+			Some("Avatar/Cloth_Dyn_L".to_string()),
+		];
+
+		let samples = dynamics_import_mesh_cloth_assist_samples(&scene, &groups, &node_paths);
+
+		assert!(samples.iter().all(|sample| sample.seed_candidate_count == 0));
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_mesh_cloth_assist_does_not_seed_body_only_vertex() {
+		let identity = test_identity_mat4();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![identity, identity],
+			skeleton_node: None,
+		};
+		let node_paths = vec![Some("Avatar/Chest".to_string()), Some("Avatar/Cloth_Dyn".to_string())];
+		let dynamic_nodes = vec![1usize];
+		let physics_config = DynamicsPhysicsConfig::default().normalized();
+		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
+		let mut primitive = un_avatar_core::UnaMeshBuffers {
+			name: Some("cloth".to_string()),
+			vertex_payload_id: None,
+			positions: vec![[0.0, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(vec![[0, 0, 0, 0]]),
+			weights: Some(vec![[1.0, 0.0, 0.0, 0.0]]),
+			indices: Some(vec![0, 0, 0]),
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let categories = DynamicsPhysicsConfig::default().normalized().categories;
+
+		let changed = dynamics_vertex_probe_apply_mesh_cloth_assist(
+			&mut primitive,
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Mesh",
+			&config,
+			&dynamic_nodes,
+			&categories,
+		);
+
+		assert_eq!(changed, 0);
+		assert_eq!(primitive.joints.as_ref().unwrap()[0], [0, 0, 0, 0]);
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_mesh_cloth_assist_uses_connected_dynamic_evidence() {
+		let identity = test_identity_mat4();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![identity, identity, identity],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			Some("Avatar/Chest".to_string()),
+			Some("Avatar/Cloth_Static_L".to_string()),
+			Some("Avatar/Cloth_Dyn_L".to_string()),
+		];
+		let dynamic_nodes = vec![2usize];
+		let physics_config = DynamicsPhysicsConfig::default().normalized();
+		let config = dynamics_vertex_probe_mesh_cloth_assist_config(&physics_config);
+		let mut primitive = un_avatar_core::UnaMeshBuffers {
+			name: Some("cloth".to_string()),
+			vertex_payload_id: None,
+			positions: vec![[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.2, 0.0, 0.0], [0.3, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(vec![[0, 1, 0, 0], [0, 1, 2, 0], [0, 1, 2, 0], [0, 1, 2, 0]]),
+			weights: Some(vec![
+				[0.78, 0.22, 0.0, 0.0],
+				[0.58, 0.418, 0.002, 0.0],
+				[0.30, 0.684, 0.016, 0.0],
+				[0.16, 0.768, 0.072, 0.0],
+			]),
+			indices: Some(vec![0, 1, 2, 1, 2, 3]),
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let categories = DynamicsPhysicsConfig::default().normalized().categories;
+
+		let changed = dynamics_vertex_probe_apply_mesh_cloth_assist(
+			&mut primitive,
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Mesh",
+			&config,
+			&dynamic_nodes,
+			&categories,
+		);
+
+		assert!(changed >= 2);
+		let first_dynamic = primitive.joints.as_ref().unwrap()[0]
+			.iter()
+			.zip(primitive.weights.as_ref().unwrap()[0].iter())
+			.filter_map(|(&joint, &weight)| (joint == 2).then_some(weight))
+			.sum::<f32>();
+		assert!(
+			first_dynamic >= config.min_existing_dynamic_weight,
+			"probe cloth assist should propagate dynamic evidence over connected topology, got {first_dynamic}"
+		);
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_source_dynamic_nodes_exclude_non_cloth_accessories() {
+		let identity = test_identity_mat4();
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Avatar", identity, vec![1, 2, 3]),
+				test_scene_node("Chest", identity, Vec::new()),
+				test_scene_node("Cloth_Dyn", identity, Vec::new()),
+				test_scene_node("Pendant_Body", identity, Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let groups = vec![
+			un_avatar_core::UnaDynamicsSourceGroup {
+				enabled: true,
+				source_id: "physbone:test/Cloth_Dyn".to_string(),
+				category: "cloth".to_string(),
+				bone_node_indices: vec![1, 1, 2],
+				..Default::default()
+			},
+			un_avatar_core::UnaDynamicsSourceGroup {
+				enabled: true,
+				source_id: "physbone:test/Pendant_Body".to_string(),
+				category: "accessory".to_string(),
+				bone_node_indices: vec![1, 1, 3],
+				..Default::default()
+			},
+		];
+
+		let dynamic_nodes = dynamics_mesh_cloth_assist_source_dynamic_nodes(&scene, &groups);
+
+		assert!(dynamic_nodes.contains(&2));
+		assert!(!dynamic_nodes.contains(&3));
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_runtime_dynamic_nodes_use_profile_categories() {
+		let identity = test_identity_mat4();
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Avatar", identity, vec![1, 2, 3]),
+				test_scene_node("Anchor", identity, Vec::new()),
+				test_scene_node("PanelDyn", identity, Vec::new()),
+				test_scene_node("AccessoryDyn", identity, Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = un_avatar_core::UnaDynamicsSettings {
+			groups: vec![
+				un_avatar_core::UnaDynamicsSourceGroup {
+					enabled: true,
+					source_id: "physbone:Fixture/PanelRig".to_string(),
+					bone_node_indices: vec![1, 1, 2],
+					..Default::default()
+				},
+				un_avatar_core::UnaDynamicsSourceGroup {
+					enabled: true,
+					source_id: "physbone:Fixture/AccessoryRig".to_string(),
+					category: "accessory".to_string(),
+					bone_node_indices: vec![1, 1, 3],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+		let categories = vec![un_avatar_skeleton::DynamicsCategoryDefinition {
+			id: "cloth".to_string(),
+			matches: vec!["panel_rig".to_string()],
+			..Default::default()
+		}];
+
+		let dynamic_nodes = dynamics_mesh_cloth_assist_runtime_dynamic_nodes(&scene, settings.runtime_dynamics(), &categories);
+
+		assert!(dynamic_nodes.contains(&2));
+		assert!(!dynamic_nodes.contains(&3));
+	}
+
+	#[test]
+	fn dynamics_source_collider_shape_known_is_exact() {
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "sphere"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "local_sphere"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "capsule"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "local_capsule"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "plane"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape": "local_plane"})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shapeType": 0})));
+		assert!(dynamics_source_collider_shape_known(&serde_json::json!({"shape_type": "1"})));
+		assert!(!dynamics_source_collider_shape_known(&serde_json::json!({"shape": "not_a_sphere"})));
+		assert!(!dynamics_source_collider_shape_known(&serde_json::json!({"shape": "capsule_hint"})));
+	}
+
+	#[test]
+	fn vertex_probe_node_filter_prefers_visible_matching_node() {
+		let node_paths = vec![
+			Some("Avatar/Inactive/Cloth_Mesh".to_string()),
+			Some("Avatar/Active/Cloth_Mesh".to_string()),
+		];
+		let effective_visibility = vec![false, true];
+
+		let selected = select_node_path_containing(&node_paths, &effective_visibility, "cloth mesh").unwrap();
+
+		assert_eq!(selected.0, 1);
+		assert_eq!(selected.1, "Avatar/Active/Cloth_Mesh");
+	}
+
+	#[test]
+	fn vertex_probe_node_filter_uses_token_matching() {
+		let node_paths = vec![
+			Some("Avatar/Accessories/Earring_L".to_string()),
+			Some("Avatar/Hair/Ear_01_L".to_string()),
+			Some("Avatar/Outer/LongCoatPanel".to_string()),
+		];
+		let effective_visibility = vec![true, true, true];
+
+		let selected = select_node_path_containing(&node_paths, &effective_visibility, "ear").unwrap();
+		let compact_selected = select_node_path_containing(&node_paths, &effective_visibility, "long coat").unwrap();
+
+		assert_eq!(selected.0, 1);
+		assert_eq!(selected.1, "Avatar/Hair/Ear_01_L");
+		assert_eq!(compact_selected.0, 2);
+		assert_eq!(compact_selected.1, "Avatar/Outer/LongCoatPanel");
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_dynamic_weight_score_uses_authored_vertex_weights() {
+		let mesh = vec![un_avatar_core::UnaMeshBuffers {
+			name: Some("ClothPanel".to_string()),
+			vertex_payload_id: None,
+			positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(vec![[0, 1, 0, 0], [0, 1, 0, 0], [0, 0, 0, 0]]),
+			weights: Some(vec![[0.9, 0.1, 0.0, 0.0], [1.0, 0.0005, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]),
+			indices: Some(vec![0, 1, 2]),
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		}];
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![10, 20],
+			inverse_bind_matrices: vec![test_identity_mat4(), test_identity_mat4()],
+			skeleton_node: None,
+		};
+		let dynamic_nodes = vec![20usize];
+
+		let (vertex_count, weight_sum) = dynamics_vertex_probe_dynamic_weight_score(&mesh, &skin, &dynamic_nodes);
+
+		assert_eq!(vertex_count, 1);
+		assert!((weight_sum - 0.1).abs() < 0.0001);
+	}
+
+	#[test]
+	fn dynamics_vertex_probe_probe_projection_sources_follow_weighted_dynamic_sources() {
+		let primitive = un_avatar_core::UnaMeshBuffers {
+			name: Some("ClothPanel".to_string()),
+			vertex_payload_id: None,
+			positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(vec![[0, 1, 0, 0], [0, 2, 0, 0]]),
+			weights: Some(vec![[0.8, 0.2, 0.0, 0.0], [0.9, 0.1, 0.0, 0.0]]),
+			indices: Some(vec![0, 1]),
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		};
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![10, 20, 30],
+			inverse_bind_matrices: vec![test_identity_mat4(), test_identity_mat4(), test_identity_mat4()],
+			skeleton_node: None,
+		};
+		let settings = un_avatar_core::UnaDynamicsSettings {
+			groups: vec![
+				un_avatar_core::UnaDynamicsSourceGroup {
+					enabled: true,
+					source_id: "physbone:Fixture/WeightedCloth".to_string(),
+					bone_node_indices: vec![10, 10, 20],
+					..Default::default()
+				},
+				un_avatar_core::UnaDynamicsSourceGroup {
+					enabled: true,
+					source_id: "physbone:Fixture/OtherCloth".to_string(),
+					bone_node_indices: vec![10, 10, 30],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+		let dynamic_nodes = vec![20usize];
+		let source_weights =
+			dynamics_vertex_probe_dynamic_source_weight_sums(settings.runtime_dynamics(), Some(&skin), &primitive, &dynamic_nodes);
+		let all_projection_counts = BTreeMap::from([
+			("physbone:Fixture/WeightedCloth".to_string(), 7),
+			("physbone:Fixture/OtherCloth".to_string(), 11),
+		]);
+		let all_source_path_counts = BTreeMap::from([
+			(
+				"physbone:Fixture/WeightedCloth".to_string(),
+				BTreeMap::from([("Body/Torso".to_string(), 7)]),
+			),
+			(
+				"physbone:Fixture/OtherCloth".to_string(),
+				BTreeMap::from([("Body/Other".to_string(), 11)]),
+			),
+		]);
+
+		let probe_projection_counts = probe_collision_projection_source_counts(&all_projection_counts, &source_weights);
+		let probe_path_counts = probe_collision_projection_collider_path_counts(&all_source_path_counts, &source_weights);
+
+		assert_eq!(source_weights.len(), 1);
+		assert!((source_weights["physbone:Fixture/WeightedCloth"] - 0.2).abs() < 0.0001);
+		assert_eq!(probe_projection_counts.len(), 1);
+		assert_eq!(probe_projection_counts["physbone:Fixture/WeightedCloth"], 7);
+		assert!(!probe_projection_counts.contains_key("physbone:Fixture/OtherCloth"));
+		assert_eq!(probe_path_counts.len(), 1);
+		assert_eq!(probe_path_counts["Body/Torso"], 7);
+		assert!(!probe_path_counts.contains_key("Body/Other"));
+	}
+
+	#[test]
+	fn dynamics_motion_trace_audit_reports_recovery_and_residual_motion() {
+		let path = std::env::temp_dir().join(format!("un-avatar-dynamics-motion-trace-{}.gltf", std::process::id()));
+		let json = r#"{
+			"asset": {"version": "2.0"},
+			"scene": 0,
+			"scenes": [{"nodes": [0]}],
+			"nodes": [
+				{"name": "Avatar", "children": [1], "translation": [0.0, 0.0, 0.0]},
+				{"name": "HairRoot", "children": [2], "translation": [0.0, 0.0, 0.0]},
+				{"name": "HairMid", "children": [3], "translation": [0.0, 0.5, 0.0]},
+				{"name": "HairTip", "translation": [0.0, 0.5, 0.0]}
+			],
+			"extensions": {
+				"UN_avatar": {
+					"specVersion": "0.1-preview",
+					"nodes": [
+						{"nodeId": "node_root", "path": "HairRoot"},
+						{"nodeId": "node_mid", "path": "HairRoot/HairMid"},
+						{"nodeId": "node_tip", "path": "HairRoot/HairMid/HairTip"}
+					],
+					"dynamics": [{
+						"id": "audit_hair",
+						"source": "vrc_physbone",
+						"roots": [{"nodeId": "node_root", "path": "HairRoot"}],
+						"drag": 0.2,
+						"gravity": [0.0, 0.0, 0.0],
+						"radius": 0.01,
+						"sourceParams": {
+							"integrationType": "Advanced",
+							"pull": 0.18,
+							"pullCurve": {"keys": []},
+							"spring": 0.6,
+							"springCurve": {"keys": []},
+							"momentum": 0.6,
+							"momentumCurve": {"keys": []},
+							"stiffness": 0.1,
+							"stiffnessCurve": {"keys": []},
+							"gravityFalloff": 0.0,
+							"gravityFalloffCurve": {"keys": []},
+							"immobile": 0.0,
+							"immobileCurve": {"keys": []},
+							"immobileType": 0,
+							"limitRotation": [0.0, 0.0, 0.0]
+						}
+					}, {
+						"id": "audit_disabled",
+						"source": "vrc_physbone",
+						"roots": [{"nodeId": "node_root", "path": "HairRoot"}],
+						"enabled": false,
+						"drag": 0.2,
+						"gravity": [0.0, 0.0, 0.0],
+						"radius": 0.01,
+						"sourceParams": {
+							"integrationType": "Advanced",
+							"pull": 0.18,
+							"pullCurve": {"keys": []},
+							"spring": 0.6,
+							"springCurve": {"keys": []},
+							"momentum": 0.6,
+							"momentumCurve": {"keys": []},
+							"stiffness": 0.1,
+							"stiffnessCurve": {"keys": []},
+							"gravityFalloff": 0.0,
+							"gravityFalloffCurve": {"keys": []},
+							"immobile": 0.0,
+							"immobileCurve": {"keys": []},
+							"immobileType": 0,
+							"limitRotation": [0.0, 0.0, 0.0]
+						}
+					}]
+				}
+			}
+		}"#;
+		fs::write(&path, json).unwrap();
+		let report = dynamics_motion_trace_report(&[], &path, None, None, 12, Some(18), "authored").unwrap();
+		let rest_high_report = dynamics_motion_trace_report(&[], &path, None, None, 12, Some(18), "rest-high").unwrap();
+		let _ = fs::remove_file(&path);
+
+		assert_eq!(report.frame_count, 12);
+		assert_eq!(report.recovery_frame_count, 18);
+		assert_eq!(report.tuning, "authored");
+		assert_eq!(report.group_count, 1);
+		assert_eq!(report.joint_count, 3);
+		assert!(report.missing_motion_evidence.is_empty());
+		let category = report.categories.iter().find(|category| category.category == "hair").unwrap();
+		assert_eq!(category.visual_target_group_count, 0);
+		assert_eq!(category.nonvisual_group_count, 1);
+		assert_eq!(category.visible_skinned_joint_count, 0);
+		assert_eq!(category.visible_mesh_subtree_node_count, 0);
+		assert!(category.max_lag > 0.0);
+		assert!(category.recovery_final_lag.is_finite());
+		assert!(category.recovery_ratio.is_finite());
+		assert!(category.settled_recovery_lag.is_finite());
+		assert!(category.stable_offset.is_finite());
+		assert!(category.stable_offset_ratio.is_finite());
+		assert!(!category.recovery_state.is_empty());
+		assert!(category.settled_recovery_ratio.is_finite());
+		assert!(category.residual_motion.is_finite());
+		assert!(category.residual_motion_chain_ratio.is_finite());
+		assert!(category.recovery_half_life_frames.map_or(true, f32::is_finite));
+		assert!(category.average_rest_response > 0.0);
+		assert!(category.average_parent_motion_follow >= 0.0);
+		assert_eq!(report.groups.len(), 1);
+		assert_eq!(report.groups[0].source_id, "audit_hair");
+		assert_eq!(report.groups[0].category, "hair");
+		assert!(!report.groups[0].visual_target);
+		assert_eq!(report.groups[0].skinned_joint_count, 0);
+		assert_eq!(report.groups[0].mesh_subtree_node_count, 0);
+		assert!(report.groups[0].max_lag > 0.0);
+		assert!(report.groups[0].settled_recovery_lag.is_finite());
+		assert!(report.groups[0].stable_offset.is_finite());
+		assert!(report.groups[0].stable_offset_ratio.is_finite());
+		assert!(report.groups[0].residual_motion_chain_ratio.is_finite());
+		assert!(!report.groups[0].recovery_state.is_empty());
+		assert!(report.groups[0].recovery_half_life_frames.map_or(true, f32::is_finite));
+		assert!(report.groups[0].average_rest_response > 0.0);
+		assert!(report.groups[0].average_parent_motion_follow >= 0.0);
+		assert_eq!(rest_high_report.tuning, "rest-high");
+		assert!(rest_high_report.groups[0].average_rest_response > report.groups[0].average_rest_response);
+	}
+
+	#[test]
+	fn dynamics_motion_trace_evidence_flags_nonfinite_values() {
+		let category = DynamicsMotionTraceCategorySummary {
+			category: "cloth".to_string(),
+			group_count: 1,
+			joint_count: 1,
+			visual_target_group_count: 1,
+			nonvisual_group_count: 0,
+			visible_skinned_joint_count: 1,
+			visible_mesh_subtree_node_count: 0,
+			average_chain_rest_length: 1.0,
+			max_lag: f32::NAN,
+			max_lag_chain_ratio: 0.0,
+			average_lag: 0.0,
+			final_lag: 0.0,
+			final_lag_chain_ratio: 0.0,
+			recovery_final_lag: 0.0,
+			recovery_ratio: 0.0,
+			initial_stable_offset: 0.0,
+			settled_recovery_lag: 0.0,
+			stable_offset: 0.0,
+			stable_offset_chain_ratio: 0.0,
+			stable_offset_ratio: 0.0,
+			recovery_state: "settled".to_string(),
+			settled_recovery_ratio: 0.0,
+			residual_motion: 0.0,
+			residual_motion_chain_ratio: 0.0,
+			recovery_half_life_frames: Some(f32::INFINITY),
+			average_rest_response: 0.1,
+			average_shape_preservation: 0.1,
+			average_bounce_response: 0.1,
+			average_parent_motion_follow: 0.1,
+			average_orientation_follow: 0.1,
+			average_max_stretch_response: 0.0,
+			average_stretch_motion_response: 0.0,
+		};
+		let group = DynamicsMotionTraceGroupSummary {
+			source_id: "physbone:test".to_string(),
+			category: "cloth".to_string(),
+			joint_count: 1,
+			visual_target: true,
+			skinned_joint_count: 1,
+			mesh_subtree_node_count: 0,
+			interaction_metadata_only: false,
+			chain_rest_length: 1.0,
+			max_lag: 0.0,
+			max_lag_chain_ratio: 0.0,
+			average_lag: 0.0,
+			final_lag: 0.0,
+			final_lag_chain_ratio: 0.0,
+			recovery_final_lag: 0.0,
+			recovery_ratio: 0.0,
+			initial_stable_offset: 0.0,
+			settled_recovery_lag: 0.0,
+			stable_offset: 0.0,
+			stable_offset_chain_ratio: 0.0,
+			stable_offset_ratio: 0.0,
+			recovery_state: "settled".to_string(),
+			settled_recovery_ratio: 0.0,
+			residual_motion: f32::INFINITY,
+			residual_motion_chain_ratio: 0.0,
+			recovery_half_life_frames: None,
+			average_rest_response: 0.1,
+			average_shape_preservation: 0.1,
+			average_bounce_response: 0.1,
+			average_parent_motion_follow: 0.1,
+			average_orientation_follow: 0.1,
+			average_max_stretch_response: 0.0,
+			average_stretch_motion_response: 0.0,
+		};
+		let mut evidence = Vec::new();
+
+		collect_motion_trace_numeric_evidence(&[category], &[group], &mut evidence);
+
+		assert!(evidence.iter().any(|item| item.contains("motion category cloth max_lag")));
+		assert!(evidence
+			.iter()
+			.any(|item| item.contains("motion category cloth recovery_half_life_frames")));
+		assert!(evidence
+			.iter()
+			.any(|item| item.contains("motion group physbone:test residual_motion")));
+	}
+
+	#[test]
+	fn motion_trace_sort_prefers_finite_values_before_nonfinite_values() {
+		let mut values = [f32::NAN, 0.4, f32::INFINITY, 0.9, 0.1];
+
+		values.sort_by(|left, right| motion_trace_desc_finite_cmp(*left, *right));
+
+		assert_eq!(values[0], 0.9);
+		assert_eq!(values[1], 0.4);
+		assert_eq!(values[2], 0.1);
+		assert!(!values[3].is_finite());
+		assert!(!values[4].is_finite());
+	}
+
+	#[test]
+	fn dynamics_motion_trace_findings_flag_large_stretch_and_unsettled_recovery() {
+		let group = DynamicsMotionTraceGroupSummary {
+			source_id: "physbone:hand".to_string(),
+			category: "other".to_string(),
+			joint_count: 1,
+			visual_target: true,
+			skinned_joint_count: 1,
+			mesh_subtree_node_count: 0,
+			interaction_metadata_only: false,
+			chain_rest_length: 0.05,
+			max_lag: 0.65,
+			max_lag_chain_ratio: 13.0,
+			average_lag: 0.3,
+			final_lag: 0.65,
+			final_lag_chain_ratio: 13.0,
+			recovery_final_lag: 0.2,
+			recovery_ratio: 0.6,
+			initial_stable_offset: 0.65,
+			settled_recovery_lag: 0.18,
+			stable_offset: 0.18,
+			stable_offset_chain_ratio: 3.6,
+			stable_offset_ratio: 0.27,
+			recovery_state: "moving".to_string(),
+			settled_recovery_ratio: 0.7,
+			residual_motion: 0.01,
+			residual_motion_chain_ratio: 0.2,
+			recovery_half_life_frames: Some(14.0),
+			average_rest_response: 0.01,
+			average_shape_preservation: 0.0,
+			average_bounce_response: 0.2,
+			average_parent_motion_follow: 0.4,
+			average_orientation_follow: 0.0,
+			average_max_stretch_response: 100.0,
+			average_stretch_motion_response: 0.5,
+		};
+
+		let findings = collect_motion_trace_finding_details(&[], &[group]);
+		let counts = motion_trace_finding_kind_counts(&findings);
+
+		assert!(findings.iter().any(|item| item.kind == "large_stretch"));
+		assert!(findings.iter().any(|item| item.kind == "high_chain_lag"));
+		assert!(findings.iter().any(|item| item.kind == "moving_after_recovery"));
+		assert_eq!(counts.get("large_stretch"), Some(&1));
+		assert_eq!(counts.get("high_chain_lag"), Some(&1));
+		assert_eq!(counts.get("moving_after_recovery"), Some(&1));
+		let stretch = findings.iter().find(|item| item.kind == "large_stretch").unwrap();
+		let hint = stretch.response_override_hint.as_ref().unwrap();
+		assert_eq!(hint.source_id, "physbone:hand");
+		assert_eq!(hint.stretch_range_scale, Some(0.25));
+		assert_eq!(hint.stretch_motion, Some(0.1));
+	}
+
+	#[test]
+	fn dynamics_motion_trace_findings_classify_nonvisual_control_motion_without_override_hint() {
+		let group = DynamicsMotionTraceGroupSummary {
+			source_id: "physbone:control".to_string(),
+			category: "other".to_string(),
+			joint_count: 1,
+			visual_target: false,
+			skinned_joint_count: 0,
+			mesh_subtree_node_count: 0,
+			interaction_metadata_only: true,
+			chain_rest_length: 0.05,
+			max_lag: 0.65,
+			max_lag_chain_ratio: 13.0,
+			average_lag: 0.3,
+			final_lag: 0.65,
+			final_lag_chain_ratio: 13.0,
+			recovery_final_lag: 0.0,
+			recovery_ratio: 1.0,
+			initial_stable_offset: 0.65,
+			settled_recovery_lag: 0.0,
+			stable_offset: 0.0,
+			stable_offset_chain_ratio: 0.0,
+			stable_offset_ratio: 0.0,
+			recovery_state: "settled".to_string(),
+			settled_recovery_ratio: 1.0,
+			residual_motion: 0.0,
+			residual_motion_chain_ratio: 0.0,
+			recovery_half_life_frames: Some(2.0),
+			average_rest_response: 0.01,
+			average_shape_preservation: 0.0,
+			average_bounce_response: 0.2,
+			average_parent_motion_follow: 0.4,
+			average_orientation_follow: 0.0,
+			average_max_stretch_response: 100.0,
+			average_stretch_motion_response: 0.5,
+		};
+
+		let findings = collect_motion_trace_finding_details(&[], &[group]);
+
+		assert_eq!(findings.len(), 1);
+		assert_eq!(findings[0].kind, "nonvisual_control_motion");
+		assert!(findings[0].response_override_hint.is_none());
+	}
+
+	#[test]
+	fn dynamics_motion_trace_category_findings_keep_visibility_classification() {
+		let category = DynamicsMotionTraceCategorySummary {
+			category: "cloth".to_string(),
+			group_count: 2,
+			joint_count: 4,
+			visual_target_group_count: 1,
+			nonvisual_group_count: 1,
+			visible_skinned_joint_count: 3,
+			visible_mesh_subtree_node_count: 1,
+			average_chain_rest_length: 0.5,
+			max_lag: 0.2,
+			max_lag_chain_ratio: 0.4,
+			average_lag: 0.1,
+			final_lag: 0.1,
+			final_lag_chain_ratio: 0.2,
+			recovery_final_lag: 0.1,
+			recovery_ratio: 0.5,
+			initial_stable_offset: 0.2,
+			settled_recovery_lag: 0.15,
+			stable_offset: 0.15,
+			stable_offset_chain_ratio: 0.3,
+			stable_offset_ratio: 0.75,
+			recovery_state: "settled_offset".to_string(),
+			settled_recovery_ratio: 0.5,
+			residual_motion: 0.0,
+			residual_motion_chain_ratio: 0.0,
+			recovery_half_life_frames: Some(12.0),
+			average_rest_response: 0.2,
+			average_shape_preservation: 0.5,
+			average_bounce_response: 0.1,
+			average_parent_motion_follow: 0.4,
+			average_orientation_follow: 0.2,
+			average_max_stretch_response: 0.0,
+			average_stretch_motion_response: 0.0,
+		};
+
+		let findings = collect_motion_trace_finding_details(&[category], &[]);
+
+		assert_eq!(findings.len(), 1);
+		assert_eq!(findings[0].kind, "category_recovery_state");
+		assert_eq!(findings[0].visual_target, Some(true));
+		assert_eq!(findings[0].skinned_joint_count, Some(3));
+		assert_eq!(findings[0].mesh_subtree_node_count, Some(1));
+	}
+
+	#[test]
+	fn bounded_unique_string_samples_keep_first_unique_values() {
+		let mut samples = Vec::new();
+
+		push_bounded_unique_string(&mut samples, "a".to_string(), 2);
+		push_bounded_unique_string(&mut samples, "a".to_string(), 2);
+		push_bounded_unique_string(&mut samples, "b".to_string(), 2);
+		push_bounded_unique_string(&mut samples, "c".to_string(), 2);
+
+		assert_eq!(samples, vec!["a".to_string(), "b".to_string()]);
+	}
+
+	#[test]
+	fn motion_trace_visual_target_counts_use_only_visible_mesh_skins() {
+		let identity = test_identity_mat4();
+		let mut hidden_parent = test_scene_node("Hidden", identity, vec![4]);
+		hidden_parent.visible = false;
+		let mut visible_mesh = test_scene_node("VisibleMesh", identity, Vec::new());
+		visible_mesh.mesh = Some(0);
+		visible_mesh.skin = Some(0);
+		let mut hidden_mesh = test_scene_node("HiddenMesh", identity, Vec::new());
+		hidden_mesh.mesh = Some(1);
+		hidden_mesh.skin = Some(1);
+		let scene = un_avatar_core::UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("Root", identity, vec![1, 3, 5]),
+				test_scene_node("VisibleJoint", identity, vec![2]),
+				visible_mesh,
+				hidden_parent,
+				hidden_mesh,
+				test_scene_node("UnusedSkinJoint", identity, Vec::new()),
+			],
+			roots: vec![0],
+			meshes: vec![
+				vec![un_avatar_core::UnaMeshBuffers {
+					name: None,
+					vertex_payload_id: None,
+					positions: vec![[0.0, 0.0, 0.0]],
+					normals: None,
+					tangents: None,
+					tex_coords_0: None,
+					tex_coords_1: None,
+					tex_coords_2: None,
+					tex_coords_3: None,
+					colors_0: None,
+					joints: Some(vec![[0, 1, 0, 0]]),
+					weights: Some(vec![[1.0, 0.0, 0.0, 0.0]]),
+					indices: None,
+					material_index: None,
+					morph_targets: Vec::new(),
+					morph_target_names: Vec::new(),
+					default_morph_weights: Vec::new(),
+				}],
+				vec![un_avatar_core::UnaMeshBuffers {
+					name: None,
+					vertex_payload_id: None,
+					positions: vec![[0.0, 0.0, 0.0]],
+					normals: None,
+					tangents: None,
+					tex_coords_0: None,
+					tex_coords_1: None,
+					tex_coords_2: None,
+					tex_coords_3: None,
+					colors_0: None,
+					joints: Some(vec![[0, 0, 0, 0]]),
+					weights: Some(vec![[1.0, 0.0, 0.0, 0.0]]),
+					indices: None,
+					material_index: None,
+					morph_targets: Vec::new(),
+					morph_target_names: Vec::new(),
+					default_morph_weights: Vec::new(),
+				}],
+			],
+			skins: vec![
+				un_avatar_core::UnaSkin {
+					joint_nodes: vec![1, 5],
+					..Default::default()
+				},
+				un_avatar_core::UnaSkin {
+					joint_nodes: vec![3],
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+
+		let context = DynamicsVisualTargetContext::for_scene(&scene);
+
+		assert_eq!(context.group_counts(&[1]), (1, 1));
+		assert_eq!(context.group_counts(&[1, 1]), (1, 1));
+		assert_eq!(context.group_counts(&[2]), (0, 1));
+		assert_eq!(context.group_counts(&[5]), (0, 0));
+		assert_eq!(context.group_counts(&[3]), (0, 0));
+	}
+
+	#[test]
+	fn dynamics_motion_trace_tuning_includes_stretch_terms() {
+		let (_, stretch_off) = dynamics_motion_trace_tuning_config("stretch-off").unwrap();
+		let (_, stretch_low) = dynamics_motion_trace_tuning_config("stretch-low").unwrap();
+		let (_, stretch_high) = dynamics_motion_trace_tuning_config("stretch-high").unwrap();
+
+		assert_eq!(stretch_off.overrides[0].params.stretch_range_scale, Some(0.0));
+		assert_eq!(stretch_off.overrides[0].params.stretch_motion, Some(0.0));
+		assert_eq!(stretch_low.overrides[0].params.stretch_range_scale, Some(0.25));
+		assert_eq!(stretch_low.overrides[0].params.stretch_motion, Some(0.1));
+		assert_eq!(stretch_high.overrides[0].params.stretch_range_scale, Some(1.5));
+		assert_eq!(stretch_high.overrides[0].params.stretch_motion, Some(0.85));
+	}
+
+	#[test]
+	fn dynamics_response_audit_detects_soft_and_firm_override_effects() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node("Root", test_identity_mat4(), vec![1]),
+					test_scene_node("Tip", translation_mat4(0.0, 1.0, 0.0), Vec::new()),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: true,
+					source_id: "physbone:test-ear".to_string(),
+					comment: "test ear".to_string(),
+					category: "ears".to_string(),
+					stiffness: 0.2,
+					pull: 0.2,
+					spring: 0.5,
+					drag_force: 0.4,
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_stretch: 0.4,
+						max_squish: 0.1,
+						stretch_motion: Some(0.5),
+						..Default::default()
+					}),
+					bone_node_indices: vec![0, 1],
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+		let soft = dynamics_response_audit_mode("soft", &doc, dynamics_response_audit_config(dynamics_soft_audit_params()))
+			.expect("soft response");
+		let firm = dynamics_response_audit_mode("firm", &doc, dynamics_response_audit_config(dynamics_firm_audit_params()))
+			.expect("firm response");
+
+		assert_eq!(soft.group_count, 1);
+		assert_eq!(firm.group_count, 1);
+		assert_eq!(soft.categories.len(), 1);
+		assert_eq!(soft.categories[0].category, "ears");
+		assert!(soft.average_rest_response < firm.average_rest_response);
+		assert!(soft.average_shape_preservation < firm.average_shape_preservation);
+		assert!(soft.average_bounce_response > firm.average_bounce_response);
+		assert!(soft.average_max_stretch_response < firm.average_max_stretch_response);
+		assert!(soft.average_stretch_motion_response < firm.average_stretch_motion_response);
+		assert!(soft.average_parent_motion_follow < firm.average_parent_motion_follow);
+		assert!(soft.average_damping_half_life_ms > firm.average_damping_half_life_ms);
+	}
+
+	#[test]
 	fn io_registry_for_cli_empty_is_vrm_and_gltf() {
 		let reg = io_registry_for_cli(&[]).unwrap();
 		assert_eq!(reg.importer_descriptors().len(), 2);
@@ -6563,13 +13671,13 @@ mod tests {
 				materials: vec![
 					un_avatar_core::UnaMaterialPbr {
 						name: Some("Eye_Iris".into()),
-						shading: UnaShadingModel::MToonLike,
+						shading: UnaShadingModel::LilToonLike,
 						alpha_mode: UnaAlphaMode::Mask,
 						..Default::default()
 					},
 					un_avatar_core::UnaMaterialPbr {
 						name: Some("Body".into()),
-						shading: UnaShadingModel::MToonLike,
+						shading: UnaShadingModel::LilToonLike,
 						alpha_mode: UnaAlphaMode::Opaque,
 						..Default::default()
 					},
@@ -6604,7 +13712,7 @@ mod tests {
 
 		assert_eq!(report.scene.material_count, 2);
 		assert_eq!(report.scene.node_constraint_count, 0);
-		assert_eq!(report.scene.shading_counts.get("MToonLike"), Some(&2));
+		assert_eq!(report.scene.shading_counts.get("LilToonLike"), Some(&2));
 		assert!(report.scene.visible_shading_counts.is_empty());
 		assert!(report.scene.visible_alpha_counts.is_empty());
 		assert!(report.scene.visible_material_indices.is_empty());
@@ -7591,6 +14699,7 @@ mod tests {
 								"colliders": [
 									{"shapeType": 0, "insideBounds": true},
 									{"shapeType": "1"},
+									{"shapeType": "Plane"},
 									{"shapeType": "box"}
 								]
 							}
@@ -7625,7 +14734,7 @@ mod tests {
 		assert_eq!(report.dynamics.source_radius_curve_count, 1);
 		assert_eq!(report.dynamics.source_angle_limit_curve_count, 1);
 		assert_eq!(report.dynamics.source_stretch_limit_curve_count, 1);
-		assert_eq!(report.dynamics.source_collider_count, 3);
+		assert_eq!(report.dynamics.source_collider_count, 4);
 		assert_eq!(report.dynamics.source_unknown_shape_collider_count, 1);
 		assert_eq!(report.dynamics.source_collision_disabled_count, 1);
 		assert_eq!(report.dynamics.source_inside_bounds_collider_count, 1);
@@ -7643,7 +14752,8 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics stretch limits are partially supported") && !w.contains("samples=[")));
+			.any(|w| w.contains("dynamics stretch/squish limits are authored in source data")
+				&& w.contains("runtime_stretch_limit_groups=0")));
 		assert!(report
 			.warnings
 			.iter()
@@ -7651,7 +14761,7 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")));
+			.any(|w| w.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")));
 	}
 
 	#[test]
@@ -7673,6 +14783,8 @@ mod tests {
 					bone_node_indices: vec![0, 1],
 					hit_radius: 0.03,
 					hit_radius_samples: vec![0.015],
+					stiffness: 0.2,
+					stiffness_samples: Vec::new(),
 					..Default::default()
 				}],
 				..Default::default()
@@ -7714,6 +14826,15 @@ mod tests {
 		);
 
 		assert_eq!(report.dynamics.source_radius_curve_count, 1);
+		assert_eq!(report.dynamics.groups[0].category, "hair");
+		assert_eq!(report.dynamics.response_categories.len(), 1);
+		assert_eq!(report.dynamics.response_categories[0].category, "hair");
+		assert!(report.dynamics.response_categories[0].average_shape_preservation > 0.0);
+		assert!(report.dynamics.response_categories[0].average_orientation_follow >= 0.0);
+		assert_eq!(report.dynamics.response_groups.len(), 1);
+		assert_eq!(report.dynamics.response_groups[0].source_id, "physbone:hair");
+		assert_eq!(report.dynamics.response_groups[0].category, "hair");
+		assert!(report.dynamics.response_groups[0].average_shape_preservation > 0.0);
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_count, 1);
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_min, Some(0.015));
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_max, Some(0.015));
@@ -7749,9 +14870,15 @@ mod tests {
 						writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 						limit: Some(un_avatar_core::UnaDynamicsLimit {
 							limit_type: "angle".into(),
+							limit_rotation: [0.0, 0.0, 0.0],
 							max_angle_x: 45.0,
 							max_angle_z: 20.0,
 							max_stretch: 0.1,
+							max_squish: 0.0,
+							stretch_motion: None,
+							max_stretch_samples: Vec::new(),
+							max_squish_samples: Vec::new(),
+							stretch_motion_samples: Vec::new(),
 						}),
 						interaction: Some(un_avatar_core::UnaDynamicsInteraction {
 							allow_grabbing: Some(true),
@@ -7858,24 +14985,19 @@ mod tests {
 		assert!(report
 			.warnings
 			.iter()
-			.any(|w| w.contains("dynamics stretch limits are partially supported")
-				&& w.contains("writeback_target_groups=0")
+			.any(|w| w.contains("dynamics stretch limits are supported as simulation stretch")
+				&& w.contains("writeback_target_groups=1")
 				&& w.contains("physbone:hair@root")));
-		assert!(report.warnings.iter().any(|w| w
-			.contains("dynamics rotation_translation writeback has no safe translation target in the current solver")
-			&& w.contains("candidate_joints=1")
-			&& w.contains("target_joints=0")
-			&& w.contains("physbone:hair@root")));
 		assert_eq!(report.dynamics.rotation_translation_writeback_group_count, 1);
 		assert_eq!(report.dynamics.translation_writeback_candidate_count, 1);
-		assert_eq!(report.dynamics.translation_writeback_target_count, 0);
+		assert_eq!(report.dynamics.translation_writeback_target_count, 1);
 		assert_eq!(report.dynamics.stretch_translation_writeback_group_count, 1);
-		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 0);
+		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 1);
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
 			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));
 		assert!(report.warnings.iter().any(|w| w
-			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
 			&& w.contains("samples=[physbone:hair@root")));
 		assert!(report.warnings.iter().any(|w| w
 			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
@@ -7894,7 +15016,7 @@ mod tests {
 		assert_eq!(report.dynamics.interaction_hooks[0].parameter, "HairPB");
 		assert!(report.dynamics.interaction_hooks[0].allow_grabbing);
 		assert!(!report.dynamics.interaction_hooks[0].allow_posing);
-		assert!(report.dynamics.interaction_hooks[0].metadata_only);
+		assert!(!report.dynamics.interaction_hooks[0].metadata_only);
 		assert!(report.dynamics.interaction_hooks[0]
 			.suffix_parameters
 			.iter()
@@ -7902,6 +15024,7 @@ mod tests {
 		assert_eq!(report.dynamics.interaction_hooks[1].group_index, 1);
 		assert!(report.dynamics.interaction_hooks[1].allow_posing);
 		assert!(report.dynamics.interaction_hooks[1].suffix_parameters.is_empty());
+		assert!(report.dynamics.interaction_hooks[1].metadata_only);
 		assert_eq!(report.dynamics.limit_group_count, 1);
 		assert_eq!(report.dynamics.angle_limit_group_count, 1);
 		assert_eq!(report.dynamics.stretch_limit_group_count, 1);
@@ -7940,6 +15063,66 @@ mod tests {
 		assert_eq!(report.dynamics.constraint_refs[0].source_nodes, vec![0]);
 		assert_eq!(report.dynamics.constraint_refs[0].constraint_type, "parent");
 		assert_eq!(report.dynamics.constraint_refs[0].weight, 0.75);
+	}
+
+	#[test]
+	fn diagnose_report_warns_on_large_stretch_range() {
+		let doc = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node("root", test_identity_mat4(), vec![1]),
+					test_scene_node("tip", translation_mat4(0.0, 0.05, 0.0), Vec::new()),
+				],
+				roots: vec![0],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaSpringBoneSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+					enabled: true,
+					source_id: "physbone:large-stretch".into(),
+					bone_node_indices: vec![0, 1],
+					writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						limit_type: "angle".into(),
+						limit_rotation: [0.0, 0.0, 0.0],
+						max_angle_x: 0.0,
+						max_angle_z: 0.0,
+						max_stretch: 20.0,
+						max_squish: 0.0,
+						stretch_motion: Some(0.5),
+						max_stretch_samples: Vec::new(),
+						max_squish_samples: Vec::new(),
+						stretch_motion_samples: Vec::new(),
+					}),
+					..Default::default()
+				}],
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		let report = build_diagnose_report(
+			Path::new("avatar.unavatar"),
+			"io.un-avatar.gltf".into(),
+			None,
+			DiagnoseTimingSummary {
+				import_ms: 0,
+				wardrobe_apply_ms: 0,
+				wardrobe_probe_ms: 0,
+				report_build_ms: 0,
+			},
+			ImportReport::default(),
+			doc,
+			Vec::new(),
+		);
+
+		assert!(report.warnings.iter().any(|w| {
+			w.contains("dynamics stretch range has very large authored/effective multiplier")
+				&& w.contains("physbone:large-stretch@root")
+				&& w.contains("max_stretch=20.000")
+				&& w.contains("stretch_motion=0.500")
+		}));
 	}
 
 	#[test]

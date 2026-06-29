@@ -33,6 +33,7 @@ namespace UNAvatar.UnityExporter
 
                 var components = root.GetComponentsInChildren<Component>(true);
                 AddVrcDescriptorAnimatorControllers(root.transform, components, controllers, seen);
+                AddModularAvatarMergeAnimatorControllers(root.transform, components, controllers, seen);
             }
 
             return new Dictionary<string, object>
@@ -42,6 +43,127 @@ namespace UNAvatar.UnityExporter
                 ["controllers"] = controllers,
                 ["enabledActionIds"] = new List<object>()
             };
+        }
+
+        private void AddModularAvatarMergeAnimatorControllers(
+            Transform root,
+            Component[] components,
+            List<object> controllers,
+            HashSet<int> seen)
+        {
+            if (components == null)
+            {
+                return;
+            }
+            foreach (var component in components)
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+                var type = component.GetType();
+                if (type.Name != "ModularAvatarMergeAnimator")
+                {
+                    continue;
+                }
+                if (component is Behaviour behaviour && !behaviour.enabled)
+                {
+                    continue;
+                }
+                var controller = ReadMember(type, component, "animator") as AnimatorController;
+                if (controller == null)
+                {
+                    continue;
+                }
+                var layerType = ReadMember(type, component, "layerType")?.ToString() ?? "";
+                var pathMode = ReadMember(type, component, "pathMode")?.ToString() ?? "";
+                var targetPath = VariantExtractor.TransformPath(root, component.transform);
+                var motionBasePath = string.Equals(pathMode, "Absolute", StringComparison.Ordinal)
+                    ? ""
+                    : ModularAvatarMergeAnimatorMotionBasePath(root, component);
+                AddAnimatorControllerPayload(
+                    root,
+                    controller,
+                    "modularAvatarMergeAnimator",
+                    layerType,
+                    controllers,
+                    seen,
+                    targetPath,
+                    motionBasePath,
+                    forceFirstLayerWeightOne: true,
+                    allowDuplicateController: true);
+            }
+        }
+
+        private static string ModularAvatarMergeAnimatorMotionBasePath(Transform root, Component component)
+        {
+            var relativePathRoot = ReadMember(component.GetType(), component, "relativePathRoot");
+            if (relativePathRoot != null)
+            {
+                var directTarget = ReadMember(relativePathRoot.GetType(), relativePathRoot, "targetObject") as UnityEngine.Object;
+                if (directTarget is Component targetComponent)
+                {
+                    var targetTransform = SafeComponentTransform(targetComponent);
+                    if (targetTransform != null)
+                    {
+                        return VariantExtractor.TransformPath(root, targetTransform);
+                    }
+                }
+                if (directTarget is GameObject targetGameObject)
+                {
+                    var targetTransform = SafeGameObjectTransform(targetGameObject);
+                    if (targetTransform != null)
+                    {
+                        return VariantExtractor.TransformPath(root, targetTransform);
+                    }
+                }
+                var referencePath = ReadMember(relativePathRoot.GetType(), relativePathRoot, "referencePath") as string;
+                if (!string.IsNullOrEmpty(referencePath))
+                {
+                    return referencePath;
+                }
+            }
+            return VariantExtractor.TransformPath(root, component.transform);
+        }
+
+        private static Transform SafeComponentTransform(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+            try
+            {
+                return component.transform;
+            }
+            catch (MissingReferenceException)
+            {
+                return null;
+            }
+            catch (NullReferenceException)
+            {
+                return null;
+            }
+        }
+
+        private static Transform SafeGameObjectTransform(GameObject gameObject)
+        {
+            if (gameObject == null)
+            {
+                return null;
+            }
+            try
+            {
+                return gameObject.transform;
+            }
+            catch (MissingReferenceException)
+            {
+                return null;
+            }
+            catch (NullReferenceException)
+            {
+                return null;
+            }
         }
 
         private void AddVrcDescriptorAnimatorControllers(
@@ -74,13 +196,21 @@ namespace UNAvatar.UnityExporter
             string source,
             string layerType,
             List<object> controllers,
-            HashSet<int> seen)
+            HashSet<int> seen,
+            string sourceTargetPath = null,
+            string motionBasePath = null,
+            bool forceFirstLayerWeightOne = false,
+            bool allowDuplicateController = false)
         {
             if (controllers.Count >= MaxAnimatorExportControllers)
             {
                 return;
             }
-            if (controller == null || !seen.Add(controller.GetInstanceID()))
+            if (controller == null)
+            {
+                return;
+            }
+            if (!allowDuplicateController && !seen.Add(controller.GetInstanceID()))
             {
                 return;
             }
@@ -105,12 +235,15 @@ namespace UNAvatar.UnityExporter
                 {
                     break;
                 }
-                layers.Add(AnimatorLayerToJson(root, layer));
+                var layerDefaultWeight = forceFirstLayerWeightOne && layers.Count == 0 ? 1.0f : layer.defaultWeight;
+                layers.Add(AnimatorLayerToJson(root, layer, layerDefaultWeight));
             }
 
             var json = UnityObjectReferenceHeaderToJson(controller);
             json["source"] = source ?? "";
             json["vrcLayerType"] = layerType ?? "";
+            json["sourceTargetPath"] = sourceTargetPath ?? "";
+            json["motionBasePath"] = motionBasePath ?? "";
             json["parameterCount"] = parameters.Count;
             json["parameters"] = parameters;
             json["layerCount"] = layers.Count;
@@ -118,7 +251,7 @@ namespace UNAvatar.UnityExporter
             controllers.Add(json);
         }
 
-        private Dictionary<string, object> AnimatorLayerToJson(Transform root, AnimatorControllerLayer layer)
+        private Dictionary<string, object> AnimatorLayerToJson(Transform root, AnimatorControllerLayer layer, float defaultWeight)
         {
             var states = new List<object>();
             var anyStateTransitions = new List<object>();
@@ -157,6 +290,7 @@ namespace UNAvatar.UnityExporter
             return new Dictionary<string, object>
             {
                 ["name"] = layer.name ?? "",
+                ["defaultWeight"] = defaultWeight,
                 ["stateCount"] = states.Count,
                 ["states"] = states,
                 ["anyStateTransitionCount"] = anyStateTransitions.Count,
@@ -235,7 +369,19 @@ namespace UNAvatar.UnityExporter
                 var children = new List<object>();
                 foreach (var child in blendTree.children)
                 {
-                    children.Add(AnimatorMotionToJson(root, child.motion, depth + 1));
+                    var childJson = AnimatorMotionToJson(root, child.motion, depth + 1);
+                    if (childJson is Dictionary<string, object> childObject)
+                    {
+                        childObject["threshold"] = child.threshold;
+                        childObject["position"] = new Dictionary<string, object>
+                        {
+                            ["x"] = child.position.x,
+                            ["y"] = child.position.y
+                        };
+                        childObject["timeScale"] = child.timeScale;
+                        childObject["directBlendParameter"] = child.directBlendParameter ?? "";
+                    }
+                    children.Add(childJson);
                 }
                 var json = UnityObjectReferenceHeaderToJson(blendTree);
                 json["motionType"] = "BlendTree";

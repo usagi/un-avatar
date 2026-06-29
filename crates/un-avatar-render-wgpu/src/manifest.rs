@@ -12,7 +12,7 @@ use crate::{
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
 };
-use un_avatar_skeleton::SpringBonePhysicsConfig;
+use un_avatar_skeleton::DynamicsPhysicsConfig;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
@@ -37,6 +37,7 @@ pub(crate) struct RendererManifest {
 	pub physics: Option<PhysicsManifest>,
 	pub aa: Option<AaMode>,
 	pub render_quality: Option<RenderQualityManifest>,
+	pub runtime: Option<RuntimeManifest>,
 	pub environment: Option<EnvironmentManifest>,
 	/// 旧 manifest 互換。新規 profile は `[output.spout2]` を使う。
 	pub spout: Option<SpoutManifest>,
@@ -52,6 +53,20 @@ pub(crate) struct RendererManifest {
 	pub window: Option<WindowManifest>,
 	pub camera: Option<CameraManifest>,
 	pub profile: Option<ProfileManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct RuntimeManifest {
+	pub target_fps: Option<f32>,
+}
+
+impl RuntimeManifest {
+	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(target_fps) = self.target_fps {
+			opts.target_fps = target_fps;
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -194,6 +209,7 @@ pub(crate) struct AnimatorBindingManifest {
 pub(crate) struct ProfileManifest {
 	pub id: Option<String>,
 	pub display_name: Option<String>,
+	pub gpu_adapter: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -407,14 +423,34 @@ pub(crate) struct PhysicsManifest {
 	pub dynamics: Option<DynamicsPhysicsManifest>,
 	/// v1/v2 development-era compatibility. v2 canonical profile schema uses
 	/// `[physics.dynamics.solver]`.
-	pub spring_bone: Option<SpringBonePhysicsConfig>,
+	pub spring_bone: Option<RendererDynamicsPhysicsConfigManifest>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, rename_all = "snake_case")]
 pub(crate) struct DynamicsPhysicsManifest {
 	pub enabled: Option<bool>,
-	pub solver: Option<SpringBonePhysicsConfig>,
+	pub solver: Option<RendererDynamicsPhysicsConfigManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct RendererDynamicsPhysicsConfigManifest {
+	#[serde(flatten)]
+	pub config: DynamicsPhysicsConfig,
+	pub surface_constraints: Option<SurfaceConstraintsPhysicsManifest>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub(crate) struct SurfaceConstraintsPhysicsManifest {
+	pub enabled: Option<bool>,
+	pub topology_max_edge_distance_m: Option<f32>,
+	pub topology_max_mean_edge_distance_m: Option<f32>,
+	pub spatial_max_distance_m: Option<f32>,
+	pub topology_stiffness: Option<f32>,
+	pub spatial_stiffness: Option<f32>,
+	pub min_edge_count: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -514,10 +550,12 @@ pub(crate) struct DebugManifest {
 	pub show_bone_colliders: Option<bool>,
 	/// UNToon geometry outline 描画を完全に無効化する診断 toggle（既定 false）。
 	/// 一部の VRM モデルで目周辺に肌色寄りの outline が太く出る現象の切り分け用。
+	pub disable_geometry_outlines: Option<bool>,
+	/// Legacy alias for `disable_geometry_outlines`.
 	pub disable_mtoon_outlines: Option<bool>,
 	/// UNToon rim lighting 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_rim_lighting: Option<bool>,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle（既定 false）。
+	/// v1 MToon 診断キーの互換 no-op。v2-UNToon shader では shading shift をこの経路で制御しない。
 	pub force_shading_shift_zero: Option<bool>,
 	/// matcap (sphere add) 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_matcap: Option<bool>,
@@ -614,9 +652,7 @@ impl RendererManifest {
 		if let Some(audio_link) = self.audio_link {
 			audio_link.apply_to(opts);
 		}
-		if let Some(spring_bones) = self.spring_bones {
-			opts.dynamics_enabled = spring_bones;
-		}
+		let _legacy_spring_bones = self.spring_bones;
 		if let Some(physics) = self.physics {
 			physics.apply_to(opts);
 		}
@@ -628,6 +664,9 @@ impl RendererManifest {
 		}
 		if let Some(render_quality) = self.render_quality {
 			render_quality.apply_to(opts);
+		}
+		if let Some(runtime) = self.runtime {
+			runtime.apply_to(opts);
 		}
 		if let Some(spout) = self.spout {
 			spout.apply_to(&mut opts.spout);
@@ -650,7 +689,7 @@ impl RendererManifest {
 				&mut opts.debug_material_dump,
 				&mut opts.show_axes,
 				&mut opts.show_bone_colliders,
-				&mut opts.disable_mtoon_outlines,
+				&mut opts.disable_geometry_outlines,
 				&mut opts.debug_disable_rim_lighting,
 				&mut opts.debug_force_shading_shift_zero,
 				&mut opts.debug_disable_matcap,
@@ -788,6 +827,14 @@ fn animator_binding_from_manifest(binding: AnimatorBindingManifest) -> Option<An
 
 impl ProfileManifest {
 	fn apply_to(self, opts: &mut AvatarWindowOptions) {
+		if let Some(gpu_adapter) = self.gpu_adapter.as_deref() {
+			let gpu_adapter = gpu_adapter.trim();
+			if gpu_adapter.is_empty() || gpu_adapter.eq_ignore_ascii_case("auto") {
+				opts.gpu_adapter = None;
+			} else {
+				opts.gpu_adapter = Some(gpu_adapter.to_string());
+			}
+		}
 		let profile_key = self.id.or(self.display_name);
 		if let Some(profile_key) = profile_key {
 			if let Some(app_id) = renderer_profile_app_user_model_id(&profile_key) {
@@ -1080,7 +1127,7 @@ fn parse_outline_policy(value: &str) -> Option<AvatarOutlinePolicy> {
 
 fn parse_outline_kind(value: &str) -> Option<AvatarOutlineKind> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Geometry),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -1232,7 +1279,7 @@ impl PhysicsManifest {
 			contacts.apply_to(opts);
 		}
 		if let Some(spring_bone) = self.spring_bone {
-			opts.spring_bone_physics = spring_bone.normalized();
+			opts.dynamics_physics = spring_bone.into_config();
 		}
 		if let Some(dynamics) = self.dynamics {
 			dynamics.apply_to(opts);
@@ -1246,7 +1293,43 @@ impl DynamicsPhysicsManifest {
 			opts.dynamics_enabled = enabled;
 		}
 		if let Some(solver) = self.solver {
-			opts.spring_bone_physics = solver.normalized();
+			opts.dynamics_physics = solver.into_config();
+		}
+	}
+}
+
+impl RendererDynamicsPhysicsConfigManifest {
+	fn into_config(self) -> DynamicsPhysicsConfig {
+		let mut config = self.config;
+		if let Some(surface) = self.surface_constraints {
+			surface.apply_to(&mut config);
+		}
+		config.normalized()
+	}
+}
+
+impl SurfaceConstraintsPhysicsManifest {
+	fn apply_to(self, config: &mut DynamicsPhysicsConfig) {
+		if let Some(enabled) = self.enabled {
+			config.surface_constraints_enabled = enabled;
+		}
+		if let Some(value) = self.topology_max_edge_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_max_edge_distance_m = value;
+		}
+		if let Some(value) = self.topology_max_mean_edge_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_max_mean_edge_distance_m = value;
+		}
+		if let Some(value) = self.spatial_max_distance_m.filter(|value| value.is_finite()) {
+			config.surface_constraint_spatial_max_distance_m = value;
+		}
+		if let Some(value) = self.topology_stiffness.filter(|value| value.is_finite()) {
+			config.surface_constraint_topology_stiffness = value;
+		}
+		if let Some(value) = self.spatial_stiffness.filter(|value| value.is_finite()) {
+			config.surface_constraint_spatial_stiffness = value;
+		}
+		if let Some(value) = self.min_edge_count {
+			config.surface_constraint_min_edge_count = value;
 		}
 	}
 }
@@ -1354,7 +1437,7 @@ impl DebugManifest {
 		debug_material_dump: &mut bool,
 		show_axes: &mut bool,
 		show_bone_colliders: &mut bool,
-		disable_mtoon_outlines: &mut bool,
+		disable_geometry_outlines: &mut bool,
 		debug_disable_rim_lighting: &mut bool,
 		debug_force_shading_shift_zero: &mut bool,
 		debug_disable_matcap: &mut bool,
@@ -1396,8 +1479,8 @@ impl DebugManifest {
 		if let Some(value) = self.show_bone_colliders {
 			*show_bone_colliders = value;
 		}
-		if let Some(value) = self.disable_mtoon_outlines {
-			*disable_mtoon_outlines = value;
+		if let Some(value) = self.disable_geometry_outlines.or(self.disable_mtoon_outlines) {
+			*disable_geometry_outlines = value;
 		}
 		if let Some(value) = self.disable_rim_lighting {
 			*debug_disable_rim_lighting = value;
@@ -1481,6 +1564,7 @@ billboard_y_offset_mm = 35.0
 
 [profile]
 id = "mizuki-copy"
+gpu_adapter = "gpu:8086:a780:Intel UHD Graphics"
 
 [render_quality]
 aa = "fxaa"
@@ -1489,6 +1573,9 @@ texture_compression = "balanced"
 mipmap_filter = "lanczos3"
 processed_texture_cache = false
 skin_tone_matching = true
+
+[runtime]
+target_fps = 144
 
 [render_quality.texture_compression_advanced]
 face = "source"
@@ -1557,6 +1644,7 @@ minimized = true
 vmc = true
 scene = true
 disable_expression_morphs = true
+disable_geometry_outlines = true
 
 [diagnostics]
 zero_morphs = true
@@ -1628,6 +1716,28 @@ parameter_emission = true
 simulation_hz = 240
 substeps = 2
 
+[physics.dynamics.solver.surface_constraints]
+enabled = false
+topology_max_edge_distance_m = 0.04
+topology_max_mean_edge_distance_m = 0.02
+spatial_max_distance_m = 0.01
+topology_stiffness = 0.25
+spatial_stiffness = 0.8
+min_edge_count = 4
+
+[physics.dynamics.solver.mesh_cloth_assist]
+enabled = true
+body_dominance_threshold = 0.6
+min_existing_dynamic_weight = 0.04
+seed_missing_dynamic_influence = true
+max_assist_weight = 0.3
+mesh_path_contains = []
+
+[[physics.dynamics.solver.categories]]
+id = "cloth"
+name = "Cloth"
+matches = ["cloth", "skirt"]
+
 [[physics.dynamics.solver.categories]]
 id = "ears"
 name = "Ears"
@@ -1637,8 +1747,43 @@ matches = ["ears", "耳", "ミミ"]
 category = "ears"
 solver = "xpbd"
 damping_half_life_ms = 90
+rest_response = 0.12
+shape_preservation = 0.08
+bounce_scale = 0.45
+stretch_range_scale = 1.5
+stretch_motion = 0.8
+motion_coupling = 0.35
 xpbd_compliance = 0.02
 constraint_iterations = 6
+
+[[physics.dynamics.solver.match_overrides]]
+name = "soft cloth panels"
+source_id_contains = ["cloth", "skirt"]
+source_id_regex = ["(?i)(ribbon|tie)"]
+solver = "verlet"
+rest_response = 0.06
+shape_preservation = 0.025
+bounce_scale = 0.7
+stretch_range_scale = 0.6
+stretch_motion = 0.4
+motion_coupling = 0.28
+drag_scale = 0.6
+
+[[physics.dynamics.solver.collider_augment_overrides]]
+name = "cloth chest colliders"
+source_id_contains = ["cloth panel"]
+collider_path_contains = ["chest collider"]
+
+[[physics.dynamics.solver.group_overrides]]
+source_id = "physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+solver = "verlet"
+rest_response = 0.04
+shape_preservation = 0.03
+bounce_scale = 0.8
+stretch_range_scale = 1.2
+stretch_motion = 1.0
+motion_coupling = 0.25
+drag_scale = 1.4
 "#,
 		)
 		.unwrap();
@@ -1670,7 +1815,9 @@ constraint_iterations = 6
 			opts.app_user_model_id.as_deref(),
 			Some("UsagiNetwork.UNAvatar.Renderer.Profile.mizuki-copy")
 		);
+		assert_eq!(opts.gpu_adapter.as_deref(), Some("gpu:8086:a780:Intel UHD Graphics"));
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
+		assert!(opts.disable_geometry_outlines);
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
 		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));
 		assert_eq!(opts.audio_link.input_device_name_hint.as_deref(), Some("Main Mix"));
@@ -1691,6 +1838,7 @@ constraint_iterations = 6
 		);
 		assert!(!opts.processed_texture_cache);
 		assert!(opts.skin_tone_matching);
+		assert_eq!(opts.target_fps, 144.0);
 		assert_eq!(
 			opts.animator_action_ids,
 			vec!["animator:0:0:hat_off:0".to_string(), "animator:0:0:beam:0".to_string()]
@@ -1737,7 +1885,7 @@ constraint_iterations = 6
 		assert!(opts.mesh_diagnostics.debug_zero_morphs);
 		assert!(opts.mesh_diagnostics.relax_iris_alpha);
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.policy, AvatarOutlinePolicy::Override);
-		assert_eq!(opts.mesh_diagnostics.avatar_outline.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(opts.mesh_diagnostics.avatar_outline.kind, AvatarOutlineKind::Geometry);
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.width, Some(0.004));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.color, Some([0.02, 0.01, 0.03]));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.lighting_mix, Some(0.25));
@@ -1763,18 +1911,77 @@ constraint_iterations = 6
 		assert_eq!(opts.bone_colliders.radius_mm.torso, 140.0);
 		assert!(opts.contact_parameter_emission);
 		assert!(opts.dynamics_enabled);
-		assert_eq!(opts.spring_bone_physics.simulation_hz, 240.0);
-		assert_eq!(opts.spring_bone_physics.substeps, 2);
-		assert_eq!(opts.spring_bone_physics.categories[0].id, "ears");
-		assert_eq!(opts.spring_bone_physics.categories[0].matches, vec!["ears", "耳", "ミミ"]);
-		assert_eq!(opts.spring_bone_physics.overrides[0].category, "ears");
+		assert_eq!(opts.dynamics_physics.simulation_hz, 240.0);
+		assert_eq!(opts.dynamics_physics.substeps, 2);
+		assert!(!opts.dynamics_physics.surface_constraints_enabled);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_max_edge_distance_m, 0.04);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_max_mean_edge_distance_m, 0.02);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_max_distance_m, 0.01);
+		assert_eq!(opts.dynamics_physics.surface_constraint_topology_stiffness, 0.25);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_stiffness, 0.8);
+		assert_eq!(opts.dynamics_physics.surface_constraint_min_edge_count, 4);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.enabled);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.body_dominance_threshold, 0.6);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.min_existing_dynamic_weight, 0.04);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.seed_missing_dynamic_influence);
+		assert_eq!(opts.dynamics_physics.mesh_cloth_assist.max_assist_weight, 0.3);
+		assert!(opts.dynamics_physics.mesh_cloth_assist.mesh_path_contains.is_empty());
+		assert_eq!(opts.dynamics_physics.categories[0].id, "cloth");
+		assert_eq!(opts.dynamics_physics.categories[0].matches, vec!["cloth", "skirt"]);
+		assert_eq!(opts.dynamics_physics.categories[1].id, "ears");
+		assert_eq!(opts.dynamics_physics.categories[1].matches, vec!["ears", "耳", "ミミ"]);
+		assert_eq!(opts.dynamics_physics.overrides[0].category, "ears");
 		assert_eq!(
-			opts.spring_bone_physics.overrides[0].params.solver,
-			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+			opts.dynamics_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Xpbd)
 		);
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.xpbd_compliance, Some(0.02));
-		assert_eq!(opts.spring_bone_physics.overrides[0].params.constraint_iterations, Some(6));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.damping_half_life_ms, Some(90.0));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.rest_response, Some(0.12));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.shape_preservation, Some(0.08));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.bounce_scale, Some(0.45));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.stretch_range_scale, Some(1.5));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.stretch_motion, Some(0.8));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.motion_coupling, Some(0.35));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.xpbd_compliance, Some(0.02));
+		assert_eq!(opts.dynamics_physics.overrides[0].params.constraint_iterations, Some(6));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].name, "soft cloth panels");
+		assert_eq!(opts.dynamics_physics.match_overrides[0].source_id_contains, vec!["cloth", "skirt"]);
+		assert_eq!(opts.dynamics_physics.match_overrides[0].source_id_regex, vec!["(?i)(ribbon|tie)"]);
+		assert_eq!(
+			opts.dynamics_physics.match_overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Verlet)
+		);
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.rest_response, Some(0.06));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.shape_preservation, Some(0.025));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.bounce_scale, Some(0.7));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.stretch_range_scale, Some(0.6));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.stretch_motion, Some(0.4));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.motion_coupling, Some(0.28));
+		assert_eq!(opts.dynamics_physics.match_overrides[0].params.drag_scale, Some(0.6));
+		assert_eq!(opts.dynamics_physics.collider_augment_overrides[0].name, "cloth chest colliders");
+		assert_eq!(
+			opts.dynamics_physics.collider_augment_overrides[0].source_id_contains,
+			vec!["cloth_panel"]
+		);
+		assert_eq!(
+			opts.dynamics_physics.collider_augment_overrides[0].collider_path_contains,
+			vec!["chest_collider"]
+		);
+		assert_eq!(
+			opts.dynamics_physics.group_overrides[0].source_id,
+			"physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+		);
+		assert_eq!(
+			opts.dynamics_physics.group_overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Verlet)
+		);
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.rest_response, Some(0.04));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.shape_preservation, Some(0.03));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.bounce_scale, Some(0.8));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.stretch_range_scale, Some(1.2));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.stretch_motion, Some(1.0));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.motion_coupling, Some(0.25));
+		assert_eq!(opts.dynamics_physics.group_overrides[0].params.drag_scale, Some(1.4));
 	}
 
 	#[test]
@@ -1794,13 +2001,30 @@ xpbd_compliance = 0.03
 		.unwrap();
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert_eq!(opts.spring_bone_physics.simulation_hz, 120.0);
-		assert_eq!(opts.spring_bone_physics.substeps, 3);
-		assert_eq!(opts.spring_bone_physics.overrides[0].category, "hair");
+		assert_eq!(opts.dynamics_physics.simulation_hz, 120.0);
+		assert_eq!(opts.dynamics_physics.substeps, 3);
+		assert_eq!(opts.dynamics_physics.overrides[0].category, "hair");
 		assert_eq!(
-			opts.spring_bone_physics.overrides[0].params.solver,
-			Some(un_avatar_skeleton::SpringBoneSolver::Xpbd)
+			opts.dynamics_physics.overrides[0].params.solver,
+			Some(un_avatar_skeleton::DynamicsSolver::Xpbd)
 		);
+	}
+
+	#[test]
+	fn toml_manifest_keeps_flat_surface_constraint_compatibility() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[physics.dynamics.solver]
+surface_constraints_enabled = false
+surface_constraint_spatial_max_distance_m = 0.02
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert!(!opts.dynamics_physics.surface_constraints_enabled);
+		assert_eq!(opts.dynamics_physics.surface_constraint_spatial_max_distance_m, 0.02);
 	}
 
 	#[test]
@@ -1821,7 +2045,7 @@ enabled = true
 	}
 
 	#[test]
-	fn toml_manifest_reads_legacy_spring_bones_for_unphysics_enabled() {
+	fn toml_manifest_ignores_legacy_spring_bones_without_v2_unphysics_enabled() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
 spring_bones = false
@@ -1831,7 +2055,7 @@ spring_bones = false
 
 		let mut opts = AvatarWindowOptions::default();
 		manifest.apply_to(&mut opts);
-		assert!(!opts.dynamics_enabled);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]
@@ -1871,7 +2095,7 @@ height = 720
 		assert_eq!(opts.spout.name, "Legacy Spout");
 		assert_eq!(opts.spout.width, Some(1280));
 		assert_eq!(opts.spout.height, Some(720));
-		assert!(!opts.dynamics_enabled);
+		assert!(opts.dynamics_enabled);
 	}
 
 	#[test]

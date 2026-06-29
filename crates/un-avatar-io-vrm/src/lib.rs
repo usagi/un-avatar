@@ -15,10 +15,10 @@ use std::{
 use glam::Mat4;
 use serde_json::Value;
 use un_avatar_core::{
-	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsSourceKind, UnaExpressionCatalog, UnaExpressionPreset,
-	UnaExpressionWeights, UnaImageRgba, UnaMorphTargetBind, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
-	UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind, UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup,
-	UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
+	ReportStatus, UnaAlphaMode, UnaCullMode, UnaDocument, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsSourceKind,
+	UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImageRgba, UnaLilToonLikeMaterial, UnaMorphTargetBind,
+	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind,
+	UnaSceneSnapshot, UnaShadingModel, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaVrm0MtoonMaterialEntry, UnaVrmExtension,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -282,6 +282,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Roll { axis },
+				sources: Vec::new(),
 			});
 		} else if let Some(v) = c.get("aim") {
 			let Some(source_node) = v.get("source").and_then(|x| x.as_u64()).map(|x| x as usize) else {
@@ -295,6 +296,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Aim { axis },
+				sources: Vec::new(),
 			});
 		} else if let Some(v) = c.get("rotation") {
 			let Some(source_node) = v.get("source").and_then(|x| x.as_u64()).map(|x| x as usize) else {
@@ -305,6 +307,7 @@ fn node_constraints_from_root(root: &Value) -> Vec<UnaNodeConstraint> {
 				source_node,
 				weight: constraint_weight(v),
 				kind: UnaNodeConstraintKind::Rotation,
+				sources: Vec::new(),
 			});
 		}
 	}
@@ -619,13 +622,24 @@ fn parse_mtoon_v1(material: &Value, root: &Value) -> Option<UnaMtoonMaterial> {
 fn assign_mtoon_materials(scene: &mut UnaSceneSnapshot, root: &Value, vrm: &UnaVrmExtension) {
 	for e in &vrm.mtoon_materials_v0 {
 		if let Some(m) = scene.materials.get_mut(e.material_index) {
-			m.mtoon = Some(parse_mtoon_v0(&e.raw, root));
+			let parsed = parse_mtoon_v0(&e.raw, root);
+			m.liltoon_like = Some(UnaLilToonLikeMaterial::from_mtoon_compat(
+				&parsed,
+				m.emissive_factor,
+				m.emissive_texture_index,
+			));
+			m.mtoon = Some(parsed);
 		}
 	}
 	if let Some(mats) = root.get("materials").and_then(|x| x.as_array()) {
 		for (i, material_json) in mats.iter().enumerate() {
 			if let Some(parsed) = parse_mtoon_v1(material_json, root) {
 				if let Some(m) = scene.materials.get_mut(i) {
+					m.liltoon_like = Some(UnaLilToonLikeMaterial::from_mtoon_compat(
+						&parsed,
+						m.emissive_factor,
+						m.emissive_texture_index,
+					));
 					m.mtoon = Some(parsed);
 				}
 			}
@@ -678,7 +692,7 @@ fn vrm0_mtoon_cull_mode(raw: &Value) -> Option<UnaCullMode> {
 fn tag_mtoon_materials(scene: &mut UnaSceneSnapshot, vrm: &UnaVrmExtension) {
 	for e in &vrm.mtoon_materials_v0 {
 		if let Some(m) = scene.materials.get_mut(e.material_index) {
-			m.shading = UnaShadingModel::MToonLike;
+			m.shading = UnaShadingModel::LilToonLike;
 			if let Some(double_sided) = vrm0_mtoon_double_sided(&e.raw) {
 				m.double_sided = double_sided;
 			}
@@ -707,7 +721,7 @@ fn tag_mtoon_materials(scene: &mut UnaSceneSnapshot, vrm: &UnaVrmExtension) {
 	}
 	for &i in &vrm.mtoon_material_indices_v1 {
 		if let Some(m) = scene.materials.get_mut(i) {
-			m.shading = UnaShadingModel::MToonLike;
+			m.shading = UnaShadingModel::LilToonLike;
 		}
 	}
 	relax_mtoon_mask_for_likely_eye_materials(scene);
@@ -758,12 +772,13 @@ fn eye_area_material_name(name: Option<&str>) -> bool {
 }
 
 /// glTF 側は **PBR lit → Lambert**、**`KHR_materials_unlit` は Unlit** になる。VRM の MToon は拡張 JSON にしか載らないため、多くの書き出しでは **全マテリアルが Unlit のまま**残る。
-/// アバター表示ではトゥーンライティングが既定期待なので、**すでに MToonLike のもの以外**は `MToonLike` に寄せる（意図的な区別は `tag_mtoon_materials` 側の α モード等が優先される）。
-fn default_vrm_shading_to_mtoon_like(scene: &mut UnaSceneSnapshot) {
+/// VRM 由来の toon material はロード時に v2-UNToon 互換プロファイルへ正規化し、実行時の MToon fallback を発生させない。
+fn default_vrm_shading_to_untoon_like(scene: &mut UnaSceneSnapshot) {
 	for m in &mut scene.materials {
-		if m.shading != UnaShadingModel::MToonLike {
-			m.shading = UnaShadingModel::MToonLike;
+		if m.liltoon_like.is_none() {
+			m.liltoon_like = Some(UnaLilToonLikeMaterial::default());
 		}
+		m.shading = UnaShadingModel::LilToonLike;
 	}
 }
 
@@ -771,7 +786,7 @@ fn default_vrm_shading_to_mtoon_like(scene: &mut UnaSceneSnapshot) {
 /// 透明PNGの瞳/ハイライトはMaskのままalphaで抜かないと、透明部分の黒RGBまで表示される。
 fn relax_mtoon_mask_for_likely_eye_materials(scene: &mut UnaSceneSnapshot) {
 	for m in &mut scene.materials {
-		if m.shading != UnaShadingModel::MToonLike || m.alpha_mode != UnaAlphaMode::Mask {
+		if !m.shading.is_toon_like() || m.alpha_mode != UnaAlphaMode::Mask {
 			continue;
 		}
 		if m.base_color_factor[3] > 0.001 {
@@ -1064,16 +1079,31 @@ fn spring_bones_from_vrm0(root: &Value, vrm: &Value) -> Option<UnaSpringBoneSett
 				source_id: String::new(),
 				comment: comment.clone(),
 				category: String::new(),
-				stiffness,
+				stiffness: 0.0,
+				pull: stiffness,
+				spring: 0.0,
+				integration_type: UnaDynamicsIntegrationType::Standard,
 				gravity_power,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: UnaDynamicsImmobileType::AllMotion,
 				gravity_dir: gd,
 				drag_force: drag,
 				center_node,
 				hit_radius,
 				hit_radius_samples: Vec::new(),
+				stiffness_samples: Vec::new(),
+				pull_samples: Vec::new(),
+				spring_samples: Vec::new(),
+				gravity_power_samples: Vec::new(),
+				gravity_falloff_samples: Vec::new(),
+				immobile_samples: Vec::new(),
+				max_angle_x_samples: Vec::new(),
+				max_angle_z_samples: Vec::new(),
 				writeback_mode: Default::default(),
 				limit: None,
 				interaction: None,
+				interaction_chain_start_index: 0,
 				bone_node_indices: chain,
 			});
 		}
@@ -1128,16 +1158,31 @@ fn spring_bones_from_vrm1_root(root: &Value) -> Option<UnaSpringBoneSettings> {
 			source_id: String::new(),
 			comment,
 			category: String::new(),
-			stiffness,
+			stiffness: 0.0,
+			pull: stiffness,
+			spring: 0.0,
+			integration_type: UnaDynamicsIntegrationType::Standard,
 			gravity_power,
+			gravity_falloff: 0.0,
+			immobile: 0.0,
+			immobile_type: UnaDynamicsImmobileType::AllMotion,
 			gravity_dir: gd,
 			drag_force: drag,
 			center_node: None,
 			hit_radius,
 			hit_radius_samples: Vec::new(),
+			stiffness_samples: Vec::new(),
+			pull_samples: Vec::new(),
+			spring_samples: Vec::new(),
+			gravity_power_samples: Vec::new(),
+			gravity_falloff_samples: Vec::new(),
+			immobile_samples: Vec::new(),
+			max_angle_x_samples: Vec::new(),
+			max_angle_z_samples: Vec::new(),
 			writeback_mode: Default::default(),
 			limit: None,
 			interaction: None,
+			interaction_chain_start_index: 0,
 			bone_node_indices: bones,
 		});
 	}
@@ -1218,7 +1263,7 @@ fn import_vrm_from_parts(path_hint: Option<&Path>, bytes: &[u8], root: Option<Va
 	scene.node_constraints = node_constraints_from_root(&root);
 	tag_mtoon_materials(&mut scene, &vrm_ext);
 	assign_mtoon_materials(&mut scene, &root, &vrm_ext);
-	default_vrm_shading_to_mtoon_like(&mut scene);
+	default_vrm_shading_to_untoon_like(&mut scene);
 	// Unlit のままだと relax 対象外だった MASK 瞳を、MToon 化後にもう一度緩和する。
 	relax_mtoon_mask_for_likely_eye_materials(&mut scene);
 	drop_flat_neutral_normal_textures(&mut scene);
@@ -1404,7 +1449,7 @@ mod tests {
 	}
 
 	#[test]
-	fn default_vrm_shading_maps_lit_unlit_and_keeps_mtoon() {
+	fn default_vrm_shading_maps_lit_unlit_and_normalizes_to_untoon() {
 		use un_avatar_core::UnaMaterialPbr;
 		let mut scene = UnaSceneSnapshot {
 			materials: vec![
@@ -1420,13 +1465,81 @@ mod tests {
 					shading: UnaShadingModel::MToonLike,
 					..Default::default()
 				},
+				UnaMaterialPbr {
+					shading: UnaShadingModel::MToonLike,
+					liltoon_like: Some(UnaLilToonLikeMaterial::default()),
+					..Default::default()
+				},
 			],
 			..Default::default()
 		};
-		super::default_vrm_shading_to_mtoon_like(&mut scene);
-		assert_eq!(scene.materials[0].shading, UnaShadingModel::MToonLike);
-		assert_eq!(scene.materials[1].shading, UnaShadingModel::MToonLike);
-		assert_eq!(scene.materials[2].shading, UnaShadingModel::MToonLike);
+		super::default_vrm_shading_to_untoon_like(&mut scene);
+		for material in &scene.materials {
+			assert_eq!(material.shading, UnaShadingModel::LilToonLike);
+			assert!(material.liltoon_like.is_some());
+		}
+	}
+
+	#[test]
+	fn assign_mtoon_materials_builds_untoon_compat_profiles_for_vrm0_and_vrm1() {
+		use std::collections::BTreeMap;
+
+		use un_avatar_core::UnaMaterialPbr;
+		let root = serde_json::json!({
+			"materials": [
+				{ "name": "vrm0" },
+				{
+					"name": "vrm1",
+					"extensions": {
+						"VRMC_materials_mtoon": {
+							"shadeColorFactor": [0.25, 0.5, 0.75],
+							"matcapTexture": { "index": 0 }
+						}
+					}
+				}
+			],
+			"textures": [
+				{ "source": 7 }
+			]
+		});
+		let mut scene = UnaSceneSnapshot {
+			materials: vec![UnaMaterialPbr::default(), UnaMaterialPbr::default()],
+			..Default::default()
+		};
+		let vrm = UnaVrmExtension {
+			spec_version: "1.0".into(),
+			meta: Value::Null,
+			humanoid_bones: BTreeMap::new(),
+			mtoon_materials_v0: vec![UnaVrm0MtoonMaterialEntry {
+				material_index: 0,
+				shader_name: "VRM/MToon".into(),
+				raw: serde_json::json!({
+					"vectorProperties": {
+						"_ShadeColor": [0.1, 0.2, 0.3, 1.0]
+					},
+					"floatProperties": {
+						"_ShadeShift": 0.1,
+						"_ShadeToony": 0.8
+					}
+				}),
+			}],
+			mtoon_material_indices_v1: vec![1],
+			source: Value::Null,
+		};
+
+		assign_mtoon_materials(&mut scene, &root, &vrm);
+		tag_mtoon_materials(&mut scene, &vrm);
+
+		for material in &scene.materials {
+			assert_eq!(material.shading, UnaShadingModel::LilToonLike);
+			assert!(material.mtoon.is_some());
+			assert!(material.liltoon_like.is_some());
+		}
+		assert_eq!(
+			scene.materials[0].liltoon_like.as_ref().unwrap().shadow.color_factor,
+			[0.1, 0.2, 0.3]
+		);
+		assert_eq!(scene.materials[1].liltoon_like.as_ref().unwrap().matcap.texture_index, Some(7));
 	}
 
 	#[test]
@@ -1501,7 +1614,7 @@ mod tests {
 		tag_mtoon_materials(&mut scene, &vrm);
 		assert_eq!(scene.materials[0].alpha_mode, UnaAlphaMode::Mask);
 		assert!((scene.materials[0].alpha_cutoff - 0.42).abs() < 1e-5);
-		assert_eq!(scene.materials[0].shading, UnaShadingModel::MToonLike);
+		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
 	}
 
 	#[test]
@@ -1544,7 +1657,7 @@ mod tests {
 			"alpha_cutoff should keep the authored _Cutoff = 0.5 (got {})",
 			scene.materials[0].alpha_cutoff
 		);
-		assert_eq!(scene.materials[0].shading, UnaShadingModel::MToonLike);
+		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
 	}
 
 	#[test]
@@ -1770,7 +1883,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			materials: vec![UnaMaterialPbr {
 				name: Some("Eye_Iris".into()),
-				shading: UnaShadingModel::MToonLike,
+				shading: UnaShadingModel::LilToonLike,
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.5,
 				base_color_factor: [1.0, 1.0, 1.0, 0.0],
@@ -1789,7 +1902,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			materials: vec![UnaMaterialPbr {
 				name: Some("眼睛高光".into()),
-				shading: UnaShadingModel::MToonLike,
+				shading: UnaShadingModel::LilToonLike,
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.5,
 				base_color_factor: [1.0, 1.0, 1.0, 0.0],
@@ -1808,7 +1921,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			materials: vec![UnaMaterialPbr {
 				name: Some("眼睛高光".into()),
-				shading: UnaShadingModel::MToonLike,
+				shading: UnaShadingModel::LilToonLike,
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.5,
 				base_color_factor: [1.0, 1.0, 1.0, 1.0],
@@ -1826,7 +1939,7 @@ mod tests {
 		let mut scene = UnaSceneSnapshot {
 			materials: vec![UnaMaterialPbr {
 				name: Some("眼睑".into()),
-				shading: UnaShadingModel::MToonLike,
+				shading: UnaShadingModel::LilToonLike,
 				alpha_mode: UnaAlphaMode::Mask,
 				..Default::default()
 			}],
@@ -2116,7 +2229,7 @@ mod tests {
 	}
 
 	#[test]
-	fn tag_mtoon_vrm1_material_index_sets_mtoon_like() {
+	fn tag_mtoon_vrm1_material_index_sets_untoon_like() {
 		use std::collections::BTreeMap;
 
 		use un_avatar_core::UnaMaterialPbr;
@@ -2136,7 +2249,7 @@ mod tests {
 		tag_mtoon_materials(&mut scene, &vrm);
 
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::LitLambert);
-		assert_eq!(scene.materials[1].shading, UnaShadingModel::MToonLike);
+		assert_eq!(scene.materials[1].shading, UnaShadingModel::LilToonLike);
 	}
 
 	#[test]
@@ -2196,8 +2309,10 @@ mod tests {
 		assert_eq!(sb.groups.len(), 2, "each root expands to its own chain");
 		assert_eq!(sb.groups[0].bone_node_indices, vec![10, 11, 12]);
 		assert_eq!(sb.groups[1].bone_node_indices, vec![20, 21, 22]);
-		assert!((sb.groups[0].stiffness - 1.2).abs() < 1e-5);
-		assert!((sb.groups[1].stiffness - 1.2).abs() < 1e-5);
+		assert_eq!(sb.groups[0].stiffness, 0.0);
+		assert_eq!(sb.groups[1].stiffness, 0.0);
+		assert!((sb.groups[0].pull - 1.2).abs() < 1e-5);
+		assert!((sb.groups[1].pull - 1.2).abs() < 1e-5);
 	}
 
 	#[test]
@@ -2253,6 +2368,7 @@ mod tests {
 			roots: vec![],
 			node_constraints: vec![],
 			asset_group_ownership: vec![],
+			lighting: None,
 		};
 		drop_flat_neutral_normal_textures(&mut scene);
 		assert_eq!(scene.materials[0].normal_texture_index, None);
@@ -2297,6 +2413,7 @@ mod tests {
 			roots: vec![],
 			node_constraints: vec![],
 			asset_group_ownership: vec![],
+			lighting: None,
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {
@@ -2359,6 +2476,7 @@ mod tests {
 			roots: vec![],
 			node_constraints: vec![],
 			asset_group_ownership: vec![],
+			lighting: None,
 		};
 		let mut cat = UnaExpressionCatalog {
 			presets: vec![UnaExpressionPreset {

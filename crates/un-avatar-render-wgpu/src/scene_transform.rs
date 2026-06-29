@@ -11,8 +11,11 @@ pub(crate) fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<Mat4> {
 
 pub(crate) fn write_world_from_nodes(scene: &UnaSceneSnapshot, world: &mut Vec<Mat4>) {
 	let n = scene.nodes.len().max(1);
-	world.clear();
-	world.resize(n, Mat4::IDENTITY);
+	if world.len() == n {
+		world.fill(Mat4::IDENTITY);
+	} else {
+		world.resize(n, Mat4::IDENTITY);
+	}
 	fn visit(nodes: &[UnaSceneNode], idx: usize, parent: Mat4, world: &mut [Mat4]) {
 		if idx >= nodes.len() {
 			return;

@@ -48,7 +48,7 @@
 			{$_("profiles.editor.dynamics_category_reset")}
 		</button>
 	{/if}
-	{#if override.mode === "override_xpbd" && recommendedPresets.length > 0}
+	{#if override.mode !== "authored" && recommendedPresets.length > 0}
 		<ProfileDynamicsPresetActions {override} presets={recommendedPresets} {disabled} {onUpdateSettingValue} />
 	{/if}
 </div>

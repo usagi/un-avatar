@@ -29,17 +29,17 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
 	cell::Cell,
-	collections::{BTreeMap, BTreeSet, VecDeque},
+	collections::{BTreeMap, VecDeque},
 	io::{BufRead, BufReader, Write},
 	net::SocketAddr,
 	path::{Path, PathBuf},
 	sync::{
 		atomic::{AtomicBool, AtomicU64, Ordering},
-		mpsc::{self, Receiver},
+		mpsc::{self, Receiver, TryRecvError},
 		Arc, Mutex,
 	},
 	thread,
-	time::{Duration, Instant},
+	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 pub use debug_log::WindowDebugOptions;
@@ -98,8 +98,16 @@ const WINDOW_TITLE_STATUS_MAX_CHARS: usize = 120;
 const SURFACE_RESIZE_SETTLE_DELAY: Duration = Duration::from_millis(80);
 #[cfg(windows)]
 const RENDERER_TRAY_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
-const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 240;
+const RUNTIME_STATUS_METADATA_REFRESH_FRAMES: u32 = 3600;
 const RUNTIME_STATUS_MEMORY_REFRESH_FRAMES: u32 = 240;
+const WINDOW_TITLE_REFRESH_FRAMES: u32 = 60;
+const DEFAULT_TARGET_FPS: f32 = 60.0;
+const MIN_TARGET_FPS: f32 = 30.0;
+const MAX_TARGET_FPS: f32 = 300.0;
+const TARGET_FPS_ENV: &str = "UN_AVATAR_TARGET_FPS";
+const DEFAULT_FRAME_POLL_MARGIN: Duration = Duration::from_micros(500);
+const FRAME_POLL_MARGIN_ENV: &str = "UN_AVATAR_FRAME_POLL_MARGIN_US";
+const FRAME_PACING_RESYNC_AFTER_LATE: Duration = Duration::from_millis(1);
 const WARDROBE_TRANSITION_EXIT_MS: u32 = 700;
 const WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS: u32 = 700;
 const WARDROBE_TRANSITION_ENTER_MS: u32 = 700;
@@ -139,7 +147,10 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_bloom",
 	"set_ssao",
 	"set_contact_shadow",
+	"set_target_fps",
 	"scene_state",
+	"dump_scene_nodes",
+	"dump_runtime_state",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -183,6 +194,65 @@ fn default_camera_transition_duration_ms() -> u32 {
 	320
 }
 
+fn frame_poll_margin_from_env() -> Duration {
+	let Some(raw) = std::env::var_os(FRAME_POLL_MARGIN_ENV) else {
+		return DEFAULT_FRAME_POLL_MARGIN;
+	};
+	let raw = raw.to_string_lossy();
+	let trimmed = raw.trim();
+	if trimmed.is_empty() || trimmed == "0" || trimmed.eq_ignore_ascii_case("off") || trimmed.eq_ignore_ascii_case("false") {
+		return Duration::ZERO;
+	}
+	let Ok(micros) = trimmed.parse::<u64>() else {
+		return DEFAULT_FRAME_POLL_MARGIN;
+	};
+	Duration::from_micros(micros.min(5_000))
+}
+
+fn clamp_target_fps(value: f32) -> f32 {
+	if value.is_finite() {
+		value.clamp(MIN_TARGET_FPS, MAX_TARGET_FPS)
+	} else {
+		DEFAULT_TARGET_FPS
+	}
+}
+
+fn target_fps_from_env() -> Option<f32> {
+	let raw = std::env::var_os(TARGET_FPS_ENV)?;
+	let raw = raw.to_string_lossy();
+	raw.trim().parse::<f32>().ok().map(clamp_target_fps)
+}
+
+fn target_frame_interval(target_fps: f32) -> Duration {
+	Duration::from_secs_f64(1.0 / f64::from(clamp_target_fps(target_fps)))
+}
+
+fn frame_interval_from_hz(hz: f32) -> Option<Duration> {
+	if hz.is_finite() && hz > 0.0 {
+		Some(Duration::from_secs_f64(1.0 / f64::from(hz)))
+	} else {
+		None
+	}
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FrameRateLimit {
+	target_fps: f32,
+	frame_interval: Duration,
+	poll_margin: Duration,
+}
+
+impl FrameRateLimit {
+	fn new(target_fps: f32, poll_margin: Duration) -> Self {
+		let target_fps = clamp_target_fps(target_fps);
+		Self {
+			target_fps,
+			frame_interval: target_frame_interval(target_fps),
+			poll_margin,
+		}
+	}
+}
+
 fn renderer_startup_frame_role(
 	renderer_startup_overlay: Option<gpu::StartupProgressOverlayFrame>,
 	startup_pending_document: bool,
@@ -209,6 +279,14 @@ fn wardrobe_billboard_min_visible_elapsed(started_at: Option<Instant>, now: Inst
 	started_at.is_none_or(|started_at| {
 		now.saturating_duration_since(started_at) >= Duration::from_millis(u64::from(WARDROBE_TRANSITION_MIN_BILLBOARD_VISIBLE_MS))
 	})
+}
+
+fn rendered_frame_role_label(frame_role: &gpu::RenderedFrameRole) -> &'static str {
+	match frame_role {
+		gpu::RenderedFrameRole::RuntimeAvatar => "runtime_avatar",
+		gpu::RenderedFrameRole::WardrobeTransition(_) => "wardrobe_transition",
+		gpu::RenderedFrameRole::RendererStartup(_) => "renderer_startup",
+	}
 }
 
 fn should_evaluate_runtime_actions_for_frame(frame_role: &gpu::RenderedFrameRole) -> bool {
@@ -396,6 +474,10 @@ enum RendererControlEvent {
 		value: f32,
 		result: CommandResultSlot,
 	},
+	SetTargetFps {
+		target_fps: f32,
+		result: CommandResultSlot,
+	},
 	SetDynamicsEnabled {
 		source_id: String,
 		enabled: bool,
@@ -422,6 +504,15 @@ enum RendererControlEvent {
 	},
 	SceneState {
 		result: SceneStateResultSlot,
+	},
+	DumpSceneNodes {
+		path: std::path::PathBuf,
+		filter: Option<String>,
+		result: CommandResultSlot,
+	},
+	DumpRuntimeState {
+		path: std::path::PathBuf,
+		result: CommandResultSlot,
 	},
 	SetExpressionOverride {
 		name: String,
@@ -613,6 +704,10 @@ enum RendererControlCommand {
 		#[serde(alias = "parameterValue")]
 		value: f32,
 	},
+	SetTargetFps {
+		#[serde(alias = "targetFps")]
+		target_fps: f32,
+	},
 	SetDynamicsEnabled {
 		#[serde(alias = "sourceId")]
 		source_id: String,
@@ -798,6 +893,14 @@ enum RendererControlCommand {
 		#[serde(default)]
 		height: Option<f32>,
 	},
+	DumpSceneNodes {
+		path: String,
+		#[serde(default)]
+		filter: Option<String>,
+	},
+	DumpRuntimeState {
+		path: String,
+	},
 }
 
 impl RendererControlCommand {
@@ -852,10 +955,13 @@ impl RendererControlCommand {
 			Self::SetWardrobe { .. } => unreachable!("SetWardrobe は runtime_control_response で個別に処理する"),
 			Self::ActivateAction { .. } => unreachable!("ActivateAction は runtime_control_response で個別に処理する"),
 			Self::SetParameter { .. } => unreachable!("SetParameter は runtime_control_response で個別に処理する"),
+			Self::SetTargetFps { .. } => unreachable!("SetTargetFps は runtime_control_response で個別に処理する"),
 			Self::SetDynamicsEnabled { .. } => unreachable!("SetDynamicsEnabled は runtime_control_response で個別に処理する"),
 			Self::SetAnimatorProfile { .. } => unreachable!("SetAnimatorProfile は runtime_control_response で個別に処理する"),
 			Self::SetInputBindings { .. } => unreachable!("SetInputBindings は runtime_control_response で個別に処理する"),
 			Self::SetWardrobeTransition { .. } => unreachable!("SetWardrobeTransition は runtime_control_response で個別に処理する"),
+			Self::DumpSceneNodes { .. } => unreachable!("DumpSceneNodes は runtime_control_response で個別に処理する"),
+			Self::DumpRuntimeState { .. } => unreachable!("DumpRuntimeState は runtime_control_response で個別に処理する"),
 			Self::SetExpressionOverride { name, weight } => RendererControlEvent::SetExpressionOverride { name, weight },
 			Self::ClearExpressionOverrides => RendererControlEvent::ClearExpressionOverrides,
 			Self::SetLookAt { enabled, clamp_deg } => RendererControlEvent::SetLookAt { enabled, clamp_deg },
@@ -1260,7 +1366,7 @@ fn parse_avatar_outline_policy(value: Option<&str>) -> Option<AvatarOutlinePolic
 
 fn parse_avatar_outline_kind(value: Option<&str>) -> Option<AvatarOutlineKind> {
 	match value?.trim().to_ascii_lowercase().as_str() {
-		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Geometry),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -1544,10 +1650,15 @@ struct AvatarApp {
 	startup_failed: Option<String>,
 	runtime_status: Option<Arc<Mutex<RendererRuntimeSnapshot>>>,
 	last_wall: Instant,
+	next_frame_at: Instant,
+	frame_rate_limit: FrameRateLimit,
 	started_at: Instant,
 	fps_smooth: f32,
 	runtime_status_frame_seq: Cell<u32>,
+	frame_pacing: FramePacingState,
+	frame_trace: Option<FrameTraceState>,
 	resolver_cache_key_generation: Arc<AtomicU64>,
+	memory_stats_refresh_pending: Arc<AtomicBool>,
 	window_focused: bool,
 	window_activation_seq: u64,
 	title_refresh: u32,
@@ -1576,7 +1687,7 @@ struct AvatarApp {
 	#[cfg(windows)]
 	wardrobe_hotkeys: Option<WardrobeHotkeyRuntime>,
 	wardrobe_midi: Option<WardrobeMidiRuntime>,
-	active_profile_animator_actions: BTreeSet<String>,
+	active_profile_animator_actions: Vec<String>,
 	active_animator_transitions: Vec<ActiveAnimatorTransition>,
 }
 
@@ -1625,6 +1736,214 @@ struct FrameBenchState {
 struct FrameBenchMetric {
 	sum: f32,
 	max: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct FramePacingSnapshot {
+	wall_ms: f32,
+	frame_target_late_ms: f32,
+	wall_max_recent_ms: f32,
+	wall_spike_count_recent: u32,
+}
+
+#[derive(Debug, Default)]
+struct FramePacingState {
+	wall_ms: VecDeque<f32>,
+}
+
+const FRAME_PACING_WINDOW_FRAMES: usize = 120;
+const FRAME_PACING_SPIKE_TOLERANCE_MS: f32 = 1.0;
+const FRAME_TRACE_ENV: &str = "UN_AVATAR_FRAME_TRACE_JSON";
+const FRAME_TRACE_WINDOW_FRAMES: usize = 600;
+
+impl FramePacingState {
+	fn push(&mut self, wall_ms: f32, frame_target_late_ms: f32, spike_threshold_ms: f32) -> FramePacingSnapshot {
+		self.wall_ms.push_back(wall_ms);
+		while self.wall_ms.len() > FRAME_PACING_WINDOW_FRAMES {
+			self.wall_ms.pop_front();
+		}
+		let mut wall_max_recent_ms = 0.0f32;
+		let mut wall_spike_count_recent = 0u32;
+		for value in &self.wall_ms {
+			wall_max_recent_ms = wall_max_recent_ms.max(*value);
+			if *value > spike_threshold_ms + FRAME_PACING_SPIKE_TOLERANCE_MS {
+				wall_spike_count_recent = wall_spike_count_recent.saturating_add(1);
+			}
+		}
+		FramePacingSnapshot {
+			wall_ms,
+			frame_target_late_ms,
+			wall_max_recent_ms,
+			wall_spike_count_recent,
+		}
+	}
+}
+
+#[derive(Debug)]
+struct FrameTraceState {
+	path: PathBuf,
+	started_at: Instant,
+	next_seq: u64,
+	last_unmotion_received_frames: u64,
+	last_motion_applied_frames: u64,
+	frames: VecDeque<FrameTraceEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct FrameTraceEntry {
+	seq: u64,
+	t_secs: f32,
+	role: &'static str,
+	wall_ms: f32,
+	frame_target_late_ms: f32,
+	wall_max_recent_ms: f32,
+	wall_spike_count_recent: u32,
+	cpu_busy_ms: f32,
+	cpu_total_ms: f32,
+	motion_apply_ms: f32,
+	dynamics_step_ms: f32,
+	dynamics_fixed_steps: u32,
+	dynamics_world_ms: f32,
+	dynamics_collider_ms: f32,
+	dynamics_solve_ms: f32,
+	dynamics_solve_collision_ms: f32,
+	dynamics_solve_propagate_ms: f32,
+	frame_globals_ms: f32,
+	surface_acquire_ms: f32,
+	target_prepare_ms: f32,
+	draw_state_refresh_ms: f32,
+	draw_doc_lock_ms: f32,
+	draw_expression_select_ms: f32,
+	draw_update_total_ms: f32,
+	scene_world_ms: f32,
+	draw_skin_palette_ms: f32,
+	draw_skin_palette_write_ms: f32,
+	draw_fur_source_vertices_ms: f32,
+	draw_expression_values_ms: f32,
+	draw_morph_weights_ms: f32,
+	draw_transform_loop_ms: f32,
+	bone_collider_debug_ms: f32,
+	command_encode_ms: f32,
+	submit_present_ms: f32,
+	spout_cpu_ms: f32,
+	contact_eval_ms: f32,
+	runtime_action_eval_ms: f32,
+	gpu_ms: f32,
+	unmotion_received_frames_total: u64,
+	unmotion_received_frames_delta: u64,
+	motion_applied_frames_total: u64,
+	motion_applied_frames_delta: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct FrameTraceFile<'a> {
+	version: u32,
+	window_frames: usize,
+	spike_threshold_ms: f32,
+	frame_count: usize,
+	frames: &'a VecDeque<FrameTraceEntry>,
+}
+
+impl FrameTraceState {
+	fn from_env() -> Option<Self> {
+		let raw = std::env::var_os(FRAME_TRACE_ENV)?;
+		let raw = raw.to_string_lossy().trim().to_string();
+		if raw.is_empty() || raw.eq_ignore_ascii_case("0") || raw.eq_ignore_ascii_case("false") || raw.eq_ignore_ascii_case("off") {
+			return None;
+		}
+		let path = if raw.eq_ignore_ascii_case("1") || raw.eq_ignore_ascii_case("true") || raw.eq_ignore_ascii_case("on") {
+			let stamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+			std::env::temp_dir().join(format!("un-avatar-frame-trace-{stamp}.json"))
+		} else {
+			PathBuf::from(raw)
+		};
+		eprintln!("un-avatar-renderer: frame trace enabled path={}", path.display());
+		Some(Self {
+			path,
+			started_at: Instant::now(),
+			next_seq: 0,
+			last_unmotion_received_frames: 0,
+			last_motion_applied_frames: 0,
+			frames: VecDeque::with_capacity(FRAME_TRACE_WINDOW_FRAMES),
+		})
+	}
+
+	fn push(
+		&mut self,
+		role: &'static str,
+		timings: &FrameTimings,
+		pacing: FramePacingSnapshot,
+		unmotion_received_frames: u64,
+		motion_applied_frames: u64,
+	) {
+		let unmotion_received_frames_delta = unmotion_received_frames.saturating_sub(self.last_unmotion_received_frames);
+		let motion_applied_frames_delta = motion_applied_frames.saturating_sub(self.last_motion_applied_frames);
+		self.last_unmotion_received_frames = unmotion_received_frames;
+		self.last_motion_applied_frames = motion_applied_frames;
+		self.frames.push_back(FrameTraceEntry {
+			seq: self.next_seq,
+			t_secs: self.started_at.elapsed().as_secs_f32(),
+			role,
+			wall_ms: pacing.wall_ms,
+			frame_target_late_ms: pacing.frame_target_late_ms,
+			wall_max_recent_ms: pacing.wall_max_recent_ms,
+			wall_spike_count_recent: pacing.wall_spike_count_recent,
+			cpu_busy_ms: frame_cpu_busy_ms(timings),
+			cpu_total_ms: timings.cpu_total_ms,
+			motion_apply_ms: timings.motion_apply_ms,
+			dynamics_step_ms: timings.dynamics_step_ms,
+			dynamics_fixed_steps: timings.dynamics_profile.fixed_steps,
+			dynamics_world_ms: timings.dynamics_profile.world_ms,
+			dynamics_collider_ms: timings.dynamics_profile.collider_ms,
+			dynamics_solve_ms: timings.dynamics_profile.solve_ms,
+			dynamics_solve_collision_ms: timings.dynamics_profile.solve_collision_ms,
+			dynamics_solve_propagate_ms: timings.dynamics_profile.solve_propagate_ms,
+			frame_globals_ms: timings.frame_globals_ms,
+			surface_acquire_ms: timings.surface_acquire_ms,
+			target_prepare_ms: timings.target_prepare_ms,
+			draw_state_refresh_ms: timings.draw_state_refresh_ms,
+			draw_doc_lock_ms: timings.draw_doc_lock_ms,
+			draw_expression_select_ms: timings.draw_expression_select_ms,
+			draw_update_total_ms: timings.draw_update_total_ms,
+			scene_world_ms: timings.scene_world_ms,
+			draw_skin_palette_ms: timings.draw_skin_palette_ms,
+			draw_skin_palette_write_ms: timings.draw_skin_palette_write_ms,
+			draw_fur_source_vertices_ms: timings.draw_fur_source_vertices_ms,
+			draw_expression_values_ms: timings.draw_expression_values_ms,
+			draw_morph_weights_ms: timings.draw_morph_weights_ms,
+			draw_transform_loop_ms: timings.draw_transform_loop_ms,
+			bone_collider_debug_ms: timings.bone_collider_debug_ms,
+			command_encode_ms: timings.command_encode_ms,
+			submit_present_ms: timings.submit_present_ms,
+			spout_cpu_ms: timings.spout_cpu_ms,
+			contact_eval_ms: timings.contact_eval_ms,
+			runtime_action_eval_ms: timings.runtime_action_eval_ms,
+			gpu_ms: timings.gpu_ms,
+			unmotion_received_frames_total: unmotion_received_frames,
+			unmotion_received_frames_delta,
+			motion_applied_frames_total: motion_applied_frames,
+			motion_applied_frames_delta,
+		});
+		self.next_seq = self.next_seq.saturating_add(1);
+		while self.frames.len() > FRAME_TRACE_WINDOW_FRAMES {
+			self.frames.pop_front();
+		}
+	}
+
+	fn write_json_with_threshold(&self, spike_threshold_ms: f32) -> Result<(), String> {
+		if let Some(parent) = self.path.parent() {
+			std::fs::create_dir_all(parent).map_err(|e| format!("create frame trace dir {}: {e}", parent.display()))?;
+		}
+		let file = FrameTraceFile {
+			version: 1,
+			window_frames: FRAME_TRACE_WINDOW_FRAMES,
+			spike_threshold_ms,
+			frame_count: self.frames.len(),
+			frames: &self.frames,
+		};
+		let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize frame trace: {e}"))?;
+		std::fs::write(&self.path, json).map_err(|e| format!("write frame trace {}: {e}", self.path.display()))
+	}
 }
 
 impl FrameBenchMetric {
@@ -1836,6 +2155,7 @@ impl AvatarApp {
 			opts.clear_color.a = 1.0;
 		}
 		let title_base = opts.title.clone();
+		opts.target_fps = clamp_target_fps(opts.target_fps);
 		let runtime_status = if let Some(base_key) = opts.runtime_bus_key.clone() {
 			Some(start_runtime_bus(base_key, &opts, event_proxy.clone()))
 		} else {
@@ -1853,6 +2173,7 @@ impl AvatarApp {
 		let camera_locked = opts.camera_locked;
 		let frame_bench = opts.bench_frames.map(FrameBenchState::new);
 		let preview_window_enabled = !(opts.spout.enabled && opts.start_minimized);
+		let frame_rate_limit = FrameRateLimit::new(opts.target_fps, frame_poll_margin_from_env());
 		Self {
 			opts,
 			title_base,
@@ -1865,10 +2186,15 @@ impl AvatarApp {
 			startup_failed: None,
 			runtime_status,
 			last_wall: Instant::now(),
+			next_frame_at: Instant::now(),
+			frame_rate_limit,
 			started_at: Instant::now(),
 			fps_smooth: 60.0,
 			runtime_status_frame_seq: Cell::new(0),
+			frame_pacing: FramePacingState::default(),
+			frame_trace: FrameTraceState::from_env(),
 			resolver_cache_key_generation: Arc::new(AtomicU64::new(0)),
+			memory_stats_refresh_pending: Arc::new(AtomicBool::new(false)),
 			window_focused: false,
 			window_activation_seq: 0,
 			title_refresh: 0,
@@ -1894,7 +2220,7 @@ impl AvatarApp {
 			#[cfg(windows)]
 			wardrobe_hotkeys: None,
 			wardrobe_midi: None,
-			active_profile_animator_actions: BTreeSet::new(),
+			active_profile_animator_actions: Vec::new(),
 			active_animator_transitions: Vec::new(),
 		}
 	}
@@ -1903,6 +2229,81 @@ impl AvatarApp {
 		if let Some(w) = &self.window {
 			w.request_redraw();
 		}
+	}
+
+	fn schedule_next_window_frame_after_render(&mut self, now: Instant) {
+		let frame_interval = self.effective_preview_frame_interval();
+		let mut next = if now > self.next_frame_at + FRAME_PACING_RESYNC_AFTER_LATE {
+			now + frame_interval
+		} else {
+			self.next_frame_at + frame_interval
+		};
+		if next <= now {
+			next = now + frame_interval;
+		}
+		self.next_frame_at = next;
+	}
+
+	fn monitor_refresh_interval(&self) -> Option<Duration> {
+		let Some(window) = self.window.as_ref() else {
+			return None;
+		};
+		window
+			.current_monitor()
+			.and_then(|monitor| monitor.refresh_rate_millihertz())
+			.map(|millihertz| millihertz as f32 / 1000.0)
+			.and_then(frame_interval_from_hz)
+	}
+
+	fn effective_preview_frame_interval(&self) -> Duration {
+		let Some(refresh_interval) = self.monitor_refresh_interval() else {
+			return self.frame_rate_limit.frame_interval;
+		};
+		self.frame_rate_limit.frame_interval.max(refresh_interval)
+	}
+
+	fn should_defer_early_redraw(&self, now: Instant) -> bool {
+		self.preview_window_enabled
+			&& self.startup_progress.is_none()
+			&& self.startup_failed.is_none()
+			&& self
+				.wardrobe_transition
+				.as_ref()
+				.is_none_or(|transition| !matches!(transition.phase, WardrobeTransitionPhase::Applying))
+			&& now + Duration::from_micros(250) < self.next_frame_at
+	}
+
+	fn wait_until_next_frame(&self, event_loop: &ActiveEventLoop, now: Instant) {
+		let poll_at = self
+			.next_frame_at
+			.checked_sub(self.frame_rate_limit.poll_margin)
+			.unwrap_or(self.next_frame_at);
+		if self.frame_rate_limit.poll_margin > Duration::ZERO && now >= poll_at {
+			event_loop.set_control_flow(ControlFlow::Poll);
+		} else {
+			event_loop.set_control_flow(ControlFlow::WaitUntil(poll_at));
+		}
+	}
+
+	fn effective_preview_frame_target_ms(&self) -> f32 {
+		self.effective_preview_frame_interval().as_secs_f32() * 1000.0
+	}
+
+	fn set_target_fps(&mut self, target_fps: f32) {
+		let next_limit = FrameRateLimit::new(target_fps, self.frame_rate_limit.poll_margin);
+		if (next_limit.target_fps - self.frame_rate_limit.target_fps).abs() <= f32::EPSILON {
+			return;
+		}
+		self.frame_rate_limit = next_limit;
+		self.opts.target_fps = self.frame_rate_limit.target_fps;
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.set_target_fps(self.frame_rate_limit.target_fps);
+		}
+		let now = Instant::now();
+		if self.next_frame_at <= now {
+			self.next_frame_at = now + self.effective_preview_frame_interval();
+		}
+		self.request_redraw();
 	}
 
 	fn reconfigure(&mut self, width: u32, height: u32) {
@@ -2028,7 +2429,7 @@ impl AvatarApp {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
-		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+		let Ok(snapshot) = status.try_lock().map(|status| status.clone()) else {
 			return;
 		};
 		match renderer_tray::RendererTray::new(&self.opts, &snapshot, self.event_proxy.clone()) {
@@ -2055,7 +2456,7 @@ impl AvatarApp {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
-		let Ok(snapshot) = status.lock().map(|status| status.clone()) else {
+		let Ok(snapshot) = status.try_lock().map(|status| status.clone()) else {
 			return;
 		};
 		tray.refresh(&self.opts, &snapshot);
@@ -2195,17 +2596,19 @@ impl AvatarApp {
 			.get(action_id)
 			.cloned()
 			.unwrap_or_else(|| "toggle".to_string());
-		let active = self.active_profile_animator_actions.contains(action_id)
-			|| self
-				.runtime_status
-				.as_ref()
-				.and_then(|status| status.lock().ok())
-				.is_some_and(|status| {
-					status
-						.runtime_actions
-						.iter()
-						.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
-				});
+		let active = self
+			.active_profile_animator_actions
+			.binary_search_by(|id| id.as_str().cmp(action_id))
+			.is_ok() || self
+			.runtime_status
+			.as_ref()
+			.and_then(|status| status.lock().ok())
+			.is_some_and(|status| {
+				status
+					.runtime_actions
+					.iter()
+					.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
+			});
 		if mode == "toggle" && active {
 			let parameter = self.runtime_status.as_ref().and_then(|status| {
 				status.lock().ok().and_then(|status| {
@@ -2230,7 +2633,7 @@ impl AvatarApp {
 						Some(gpu) => gpu.set_runtime_parameter(&name, inactive_value)?,
 						None => return Err("renderer is not initialized".to_string()),
 					};
-					self.update_runtime_parameters(BTreeMap::from([(name, inactive_value)]));
+					self.update_runtime_parameter(name, inactive_value);
 					activation
 				}
 			} else {
@@ -2243,7 +2646,12 @@ impl AvatarApp {
 					}
 				}
 			};
-			self.active_profile_animator_actions.remove(action_id);
+			if let Ok(index) = self
+				.active_profile_animator_actions
+				.binary_search_by(|id| id.as_str().cmp(action_id))
+			{
+				self.active_profile_animator_actions.remove(index);
+			}
 			if let Some(activation) = activation.as_ref() {
 				self.apply_runtime_activation_status(activation);
 			}
@@ -2256,7 +2664,12 @@ impl AvatarApp {
 		}?;
 		self.schedule_animator_activation_transitions(action_id, &outcome);
 		if mode == "toggle" {
-			self.active_profile_animator_actions.insert(action_id.to_string());
+			if let Err(index) = self
+				.active_profile_animator_actions
+				.binary_search_by(|id| id.as_str().cmp(action_id))
+			{
+				self.active_profile_animator_actions.insert(index, action_id.to_string());
+			}
 		}
 		self.apply_runtime_activation_status(&outcome);
 		self.request_redraw();
@@ -2439,8 +2852,19 @@ impl AvatarApp {
 		let Some(rx) = self.wardrobe_apply_rx.as_ref() else {
 			return;
 		};
-		let Ok(result) = rx.try_recv() else {
-			return;
+		let result = match rx.try_recv() {
+			Ok(result) => result,
+			Err(TryRecvError::Empty) => return,
+			Err(TryRecvError::Disconnected) => {
+				self.wardrobe_apply_rx = None;
+				self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+					outcome: Err("wardrobe apply worker disconnected before reporting a result".to_string()),
+					active_set_id: None,
+					active_asset_groups: Vec::new(),
+					asset_upload_plan: WardrobeAssetUploadPlan::default(),
+				});
+				return;
+			}
 		};
 		self.wardrobe_apply_rx = None;
 		let outcome = match result.scene {
@@ -2537,8 +2961,10 @@ impl AvatarApp {
 
 		let next_bindings = animator_bindings_from_runtime_controls(bindings);
 
-		let enabled: BTreeSet<_> = action_ids.iter().cloned().collect();
-		self.active_profile_animator_actions.retain(|id| enabled.contains(id));
+		let mut enabled = action_ids.clone();
+		enabled.sort_unstable();
+		enabled.dedup();
+		self.active_profile_animator_actions.retain(|id| enabled.binary_search(id).is_ok());
 		self.opts.animator_action_ids = action_ids;
 		self.opts.animator_action_modes = action_modes;
 		self.opts.animator_action_values = action_values;
@@ -2632,7 +3058,7 @@ impl AvatarApp {
 		if let Some(gpu) = self.gpu.as_mut() {
 			let _ = gpu.set_runtime_parameter(name, start);
 		}
-		self.update_runtime_parameters(BTreeMap::from([(name.to_string(), start)]));
+		self.update_runtime_parameter(name, start);
 		self.replace_animator_transition(ActiveAnimatorTransition {
 			target: AnimatorTransitionTarget::Parameter { name: name.to_string() },
 			start,
@@ -2824,12 +3250,19 @@ impl AvatarApp {
 	}
 
 	fn update_runtime_profile_animator_actions(&self) {
+		self.update_runtime_action_metadata();
+	}
+
+	fn update_runtime_action_metadata(&self) {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
 		if let Ok(mut status) = status.lock() {
-			status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+			status
+				.active_profile_animator_actions
+				.clone_from(&self.active_profile_animator_actions);
 			if let Some(gpu) = self.gpu.as_ref() {
+				status.wardrobe_actions = gpu.wardrobe_actions();
 				status.runtime_actions = gpu.runtime_actions();
 				status.menu_action_candidates = gpu.menu_action_candidates();
 				status.menu_wardrobe_candidates = gpu.menu_wardrobe_candidates();
@@ -2923,17 +3356,23 @@ impl AvatarApp {
 		}
 	}
 
-	fn update_runtime_frame(&self, timings: &FrameTimings) {
+	fn update_runtime_frame(&self, timings: &FrameTimings, pacing: FramePacingSnapshot) {
 		let Some(status) = &self.runtime_status else {
 			return;
 		};
-		if let Ok(mut status) = status.lock() {
+		let status_arc = Arc::clone(status);
+		if let Ok(mut status) = status.try_lock() {
 			let gpu = self.gpu.as_ref();
 			let runtime_status_frame_seq = self.runtime_status_frame_seq.get().wrapping_add(1);
 			self.runtime_status_frame_seq.set(runtime_status_frame_seq);
 			status.uptime_secs = self.started_at.elapsed().as_secs();
 			status.fps = Some(self.fps_smooth);
+			status.target_fps = self.frame_rate_limit.target_fps;
+			status.frame_target_ms = self.effective_preview_frame_target_ms();
 			status.cpu_ms = Some(frame_cpu_busy_ms(timings));
+			status.frame_wall_ms = Some(pacing.wall_ms);
+			status.frame_wall_max_recent_ms = Some(pacing.wall_max_recent_ms);
+			status.frame_wall_spike_count_recent = Some(pacing.wall_spike_count_recent);
 			status.frame_cpu_total_ms = Some(timings.cpu_total_ms);
 			status.frame_motion_apply_ms = Some(timings.motion_apply_ms);
 			status.frame_dynamics_step_ms = Some(timings.dynamics_step_ms);
@@ -2958,38 +3397,58 @@ impl AvatarApp {
 			status.frame_contact_eval_ms = Some(timings.contact_eval_ms);
 			status.frame_runtime_action_eval_ms = Some(timings.runtime_action_eval_ms);
 			status.gpu_ms = Some(timings.gpu_ms);
+			status.dynamics_collision_projection_count = timings.dynamics_profile.collision_projection_count;
+			if timings.dynamics_profile.collision_projection_count == 0 {
+				status.dynamics_collision_projection_source_ids.clear();
+				status.dynamics_collision_projection_collider_paths.clear();
+				status.dynamics_collision_projection_collider_path_counts.clear();
+				status.dynamics_collision_projection_top_collider_path = None;
+				status.dynamics_collision_projection_top_collider_count = None;
+			} else {
+				status.dynamics_collision_projection_source_ids =
+					runtime_sample_strings(&timings.dynamics_profile.collision_projection_source_ids, 16);
+				status.dynamics_collision_projection_collider_paths =
+					runtime_sample_strings(&timings.dynamics_profile.collision_projection_collider_paths, 16);
+				status.dynamics_collision_projection_collider_path_counts =
+					runtime_count_entries(&timings.dynamics_profile.collision_projection_collider_path_counts, 16);
+				let top_collider_path = runtime_top_count_entry(&timings.dynamics_profile.collision_projection_collider_path_counts);
+				status.dynamics_collision_projection_top_collider_path = top_collider_path.as_ref().map(|entry| entry.key.clone());
+				status.dynamics_collision_projection_top_collider_count = top_collider_path.map(|entry| entry.count);
+			}
 			let refresh_runtime_metadata =
 				runtime_status_frame_seq == 1 || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_METADATA_REFRESH_FRAMES);
 			if status.ram_mb.is_none() || runtime_status_frame_seq.is_multiple_of(RUNTIME_STATUS_MEMORY_REFRESH_FRAMES) {
-				status.ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
+				spawn_runtime_memory_refresh(Arc::clone(&status_arc), Arc::clone(&self.memory_stats_refresh_pending));
 			}
-			let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
-			if status.expression_presets.as_slice() != presets {
-				status.expression_presets = presets.to_vec();
-			}
-			let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
-			status.look_at_enabled = clamp.is_some();
-			status.look_at_clamp_deg = clamp;
-			status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
 			status.unmotion_zenoh_enabled = gpu.is_some_and(|g| g.unmotion_zenoh_live());
 			if status.unmotion_zenoh_key != self.opts.unmotion_zenoh.base_key_expr {
 				status.unmotion_zenoh_key.clone_from(&self.opts.unmotion_zenoh.base_key_expr);
 			}
 			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
 			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
-			status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
-			let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
-			status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
-			status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
-			status.runtime_requires_fur = runtime_requirements.fur;
 			if refresh_runtime_metadata {
+				let presets = gpu.map(|g| g.expression_presets()).unwrap_or(&[]);
+				if status.expression_presets.as_slice() != presets {
+					status.expression_presets = presets.to_vec();
+				}
+				let clamp = gpu.and_then(|g| g.eye_look_at_clamp_deg());
+				status.look_at_enabled = clamp.is_some();
+				status.look_at_clamp_deg = clamp;
+				status.apply_vmc_root_translation = gpu.is_some_and(|g| g.apply_vmc_root_translation());
+				status.audio_link_texture_needed = gpu.is_some_and(|g| g.audio_link_texture_needed());
+				let runtime_requirements = gpu.map(|g| g.runtime_requirements()).unwrap_or_default();
+				status.runtime_requires_audio_link_texture = runtime_requirements.audio_link_texture;
+				status.runtime_requires_screen_refraction = runtime_requirements.screen_refraction;
+				status.runtime_requires_fur = runtime_requirements.fur;
 				status.base_wardrobe_set = gpu.and_then(|g| g.base_wardrobe_set());
 				status.wardrobe_asset_upload = gpu.map(|g| g.wardrobe_asset_upload_plan()).unwrap_or_default();
 				status.runtime_parameter_definitions = gpu.map(|g| g.runtime_parameter_definitions()).unwrap_or_default();
 				status.runtime_parameter_conflicts = gpu.map(|g| g.runtime_parameter_conflicts()).unwrap_or_default();
 				status.wardrobe_actions = gpu.map(|g| g.wardrobe_actions()).unwrap_or_default();
 				status.runtime_actions = gpu.map(|g| g.runtime_actions()).unwrap_or_default();
-				status.active_profile_animator_actions = self.active_profile_animator_actions.iter().cloned().collect();
+				status
+					.active_profile_animator_actions
+					.clone_from(&self.active_profile_animator_actions);
 				status.runtime_action_target_write_collisions = gpu.map(|g| g.runtime_action_target_write_collisions()).unwrap_or_default();
 				status.runtime_action_restore_readiness = gpu.map(|g| g.runtime_action_restore_readiness()).unwrap_or_default();
 				status.runtime_action_restore_baseline_candidates =
@@ -3001,16 +3460,14 @@ impl AvatarApp {
 				status.menu_wardrobe_candidates = gpu.map(|g| g.menu_wardrobe_candidates()).unwrap_or_default();
 				status.contact_parameter_declarations = gpu.map(|g| g.contact_parameter_declarations()).unwrap_or_default();
 				status.contact_parameter_emission_enabled = gpu.map(|g| g.contact_parameter_emission_enabled()).unwrap_or(false);
-			}
-			status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
-			status.show_axes = gpu.is_some_and(|g| g.show_axes());
-			status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
-			status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
-			let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
-			if status.bone_collider_source != bone_collider_source {
-				status.bone_collider_source = bone_collider_source.to_string();
-			}
-			if refresh_runtime_metadata {
+				status.primary_motion_source = gpu.map(|g| g.primary_motion_source()).unwrap_or(self.opts.primary_motion_source);
+				status.show_axes = gpu.is_some_and(|g| g.show_axes());
+				status.show_bone_colliders = gpu.is_some_and(|g| g.show_bone_colliders());
+				status.bone_collider_count = gpu.map_or(0, |g| g.bone_collider_count());
+				let bone_collider_source = gpu.map_or("off", |g| g.bone_collider_source());
+				if status.bone_collider_source != bone_collider_source {
+					status.bone_collider_source = bone_collider_source.to_string();
+				}
 				let dynamics = gpu.map_or(Default::default(), |g| g.dynamics_counts());
 				status.dynamics_group_count = dynamics.groups;
 				status.dynamics_enabled_group_count = dynamics.enabled_groups;
@@ -3021,13 +3478,13 @@ impl AvatarApp {
 				status.dynamics_unknown_group_count = dynamics.unknown_groups;
 				status.dynamics_limit_group_count = dynamics.limit_groups;
 				status.dynamics_angle_limit_group_count = dynamics.angle_limit_groups;
-				status.dynamics_stretch_limit_group_count = dynamics.stretch_limit_groups;
 				status.dynamics_grabbing_enabled_group_count = dynamics.grabbing_enabled_groups;
 				status.dynamics_posing_enabled_group_count = dynamics.posing_enabled_groups;
 				status.dynamics_collider_count = dynamics.colliders;
 				status.dynamics_vrm_spring_bone_collider_count = dynamics.vrm_spring_bone_colliders;
 				status.dynamics_vrc_physbone_collider_count = dynamics.vrc_physbone_colliders;
 				status.dynamics_unknown_collider_count = dynamics.unknown_colliders;
+				status.dynamics_surface_constraint_count = dynamics.surface_constraints;
 				status.dynamics_contact_count = dynamics.contacts;
 				status.dynamics_vrc_contact_sender_count = dynamics.vrc_contact_senders;
 				status.dynamics_vrc_contact_receiver_count = dynamics.vrc_contact_receivers;
@@ -3043,7 +3500,19 @@ impl AvatarApp {
 				status.dynamics_contact_parameter_reset_to_zero_count = contact_emission_status.reset_to_zero_count;
 				status.dynamics_constraint_ref_count = dynamics.constraint_refs;
 				status.dynamics_vrc_constraint_ref_count = dynamics.vrc_constraint_refs;
+				let scene_constraints = gpu.map(|g| g.scene_node_constraint_counts()).unwrap_or_default();
+				status.scene_node_constraint_count = scene_constraints.total;
+				status.scene_parent_constraint_count = scene_constraints.parent;
+				status.scene_parent_constraint_source_count = scene_constraints.parent_sources;
+				status.scene_parent_constraint_multi_source_count = scene_constraints.parent_multi_source;
 				status.dynamics_groups = gpu.map(|g| g.dynamics_groups()).unwrap_or_default();
+				status.dynamics_stretch_limit_group_count = status
+					.dynamics_groups
+					.iter()
+					.filter(|group| runtime_dynamics_group_has_length_limit(group))
+					.count() as u32;
+				status.dynamics_response_categories = gpu.map(|g| g.dynamics_response_categories()).unwrap_or_default();
+				status.dynamics_response_groups = gpu.map(|g| g.dynamics_response_groups()).unwrap_or_default();
 				status.dynamics_rotation_translation_writeback_group_count =
 					runtime_dynamics_rotation_translation_writeback_group_count(&status) as u32;
 				status.dynamics_translation_writeback_candidate_count =
@@ -3058,6 +3527,9 @@ impl AvatarApp {
 				status.dynamics_colliders = gpu.map(|g| g.dynamics_colliders()).unwrap_or_default();
 				status.dynamics_constraint_refs = gpu.map(|g| g.dynamics_constraint_refs()).unwrap_or_default();
 				status.dynamics_warnings = runtime_dynamics_warnings(&status);
+				if let Some(gpu) = gpu {
+					status.dynamics_warnings.extend(gpu.dynamics_tuning_warnings());
+				}
 			}
 			status.camera_locked = self.camera_locked;
 			status.window_focused = self.window_focused;
@@ -3245,6 +3717,26 @@ impl AvatarApp {
 		}
 	}
 
+	fn update_runtime_parameters_from_ref(&self, parameter_values: &BTreeMap<String, f32>) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status
+				.runtime_parameter_values
+				.extend(parameter_values.iter().map(|(name, value)| (name.clone(), *value)));
+		}
+	}
+
+	fn update_runtime_parameter(&self, name: impl Into<String>, value: f32) {
+		let Some(status) = &self.runtime_status else {
+			return;
+		};
+		if let Ok(mut status) = status.lock() {
+			status.runtime_parameter_values.insert(name.into(), value);
+		}
+	}
+
 	fn apply_runtime_activation_status(&self, activation: &gpu::RuntimeActionActivation) {
 		if let Some(active_set_id) = &activation.active_wardrobe_set {
 			self.update_runtime_wardrobe_set(Some(active_set_id.clone()));
@@ -3253,7 +3745,7 @@ impl AvatarApp {
 			self.update_runtime_resolver_cache_key_deferred();
 		}
 		self.update_runtime_last_action(Some(activation.action_id.clone()));
-		self.update_runtime_parameters(activation.parameter_values.clone());
+		self.update_runtime_parameters_from_ref(&activation.parameter_values);
 	}
 
 	fn update_runtime_startup(&self) {
@@ -3524,7 +4016,7 @@ impl AvatarApp {
 			processed_texture_cache: self.opts.processed_texture_cache,
 			dynamics_enabled: self.opts.dynamics_enabled,
 			bone_colliders: self.opts.bone_colliders,
-			spring_bone_physics: self.opts.spring_bone_physics.clone(),
+			dynamics_physics: self.opts.dynamics_physics.clone(),
 			debug_material_dump: self.opts.debug_material_dump,
 			vmc_address: self.opts.vmc_address,
 			unmotion_zenoh: self.opts.unmotion_zenoh.clone(),
@@ -3662,6 +4154,12 @@ impl AvatarApp {
 	fn render_frame(&mut self) -> bool {
 		let now = Instant::now();
 		let wall = now.saturating_duration_since(self.last_wall);
+		let effective_frame_target_ms = self.effective_preview_frame_target_ms();
+		let frame_target_late_ms = if now > self.next_frame_at {
+			now.saturating_duration_since(self.next_frame_at).as_secs_f32() * 1000.0
+		} else {
+			0.0
+		};
 		self.last_wall = now;
 
 		let Some(win) = self.window.as_ref().cloned() else {
@@ -3701,6 +4199,7 @@ impl AvatarApp {
 		)
 		.or_else(|| wardrobe_transition_frame_role(self.wardrobe_changing_billboard_frame(now)))
 		.unwrap_or(gpu::RenderedFrameRole::RuntimeAvatar);
+		let frame_role_label = rendered_frame_role_label(&frame_role);
 		let evaluate_runtime_actions = should_evaluate_runtime_actions_for_frame(&frame_role);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
 		let render_work = {
@@ -3727,6 +4226,13 @@ impl AvatarApp {
 							BTreeMap::new()
 						}
 					};
+					let mut parameter_updates = parameter_updates;
+					match gpu.apply_dynamics_interaction_parameter_emissions() {
+						Ok(updates) => parameter_updates.extend(updates),
+						Err(err) => {
+							eprintln!("un-avatar-renderer: dynamics interaction parameter emission failed: {err}");
+						}
+					}
 					timings.contact_eval_ms = t_contact0.elapsed().as_secs_f32() * 1000.0;
 					let t_action0 = Instant::now();
 					let activations = match gpu.evaluate_runtime_parameter_actions() {
@@ -3760,16 +4266,23 @@ impl AvatarApp {
 		for activation in &runtime_parameter_activations {
 			self.apply_runtime_activation_status(activation);
 		}
-		if !runtime_parameter_activations.is_empty() {
-			self.request_redraw();
-		}
 		let inst_fps = if timings.wall_since_last_ms > 0.05 {
 			1000.0 / timings.wall_since_last_ms
 		} else {
 			self.fps_smooth
 		};
 		self.fps_smooth = self.fps_smooth * 0.9 + inst_fps * 0.1;
-		self.update_runtime_frame(&timings);
+		let pacing = self
+			.frame_pacing
+			.push(timings.wall_since_last_ms, frame_target_late_ms, effective_frame_target_ms);
+		if let Some(trace) = self.frame_trace.as_mut() {
+			let (unmotion_received_frames, motion_applied_frames) = self
+				.gpu
+				.as_ref()
+				.map_or((0, 0), |gpu| (gpu.unmotion_zenoh_received_frames(), gpu.motion_applied_frames()));
+			trace.push(frame_role_label, &timings, pacing, unmotion_received_frames, motion_applied_frames);
+		}
+		self.update_runtime_frame(&timings, pacing);
 		self.update_runtime_spout_stats();
 		#[cfg(windows)]
 		self.refresh_renderer_tray();
@@ -3786,12 +4299,16 @@ impl AvatarApp {
 			}
 		} else if self.opts.show_fps_in_title {
 			self.title_refresh = self.title_refresh.wrapping_add(1);
-			if self.title_refresh.is_multiple_of(16) {
+			if self.title_refresh.is_multiple_of(WINDOW_TITLE_REFRESH_FRAMES) {
 				win.set_title(&format!(
-					"{}{} — {:.0} FPS  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
+					"{}{} — {:.0}/{:.0} FPS  wall {:.1}/{:.1} ms s{}  cpu {:.2} ms  wait {:.2} ms  gpu~ {:.2} ms",
 					self.title_base,
 					self.title_diagnostic_suffix(),
 					self.fps_smooth,
+					self.frame_rate_limit.target_fps,
+					pacing.wall_ms,
+					pacing.wall_max_recent_ms,
+					pacing.wall_spike_count_recent,
 					frame_cpu_busy_ms(&timings),
 					timings.surface_acquire_ms,
 					timings.gpu_ms
@@ -3809,7 +4326,7 @@ impl AvatarApp {
 		}
 
 		if self.preview_window_enabled {
-			win.request_redraw();
+			self.schedule_next_window_frame_after_render(now);
 		}
 		if self
 			.wardrobe_transition
@@ -3825,6 +4342,17 @@ impl AvatarApp {
 		self.close_hotkey
 			.as_ref()
 			.is_some_and(|hotkey| hotkey.matches(key, self.current_modifiers))
+	}
+}
+
+impl Drop for AvatarApp {
+	fn drop(&mut self) {
+		if let Some(trace) = self.frame_trace.as_ref() {
+			match trace.write_json_with_threshold(self.effective_preview_frame_target_ms()) {
+				Ok(()) => eprintln!("un-avatar-renderer: frame trace written path={}", trace.path.display()),
+				Err(error) => eprintln!("un-avatar-renderer: frame trace write failed: {error}"),
+			}
+		}
 	}
 }
 
@@ -3952,12 +4480,15 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			self.opts.contact_shadow,
 			self.opts.aa,
 			self.opts.render_backend,
+			self.opts.gpu_adapter.as_deref(),
 			self.opts.texture_compression,
+			self.frame_rate_limit.target_fps,
 			self.opts.debug.clone(),
 			self.opts.disable_expression_morphs,
 			self.opts.disable_vmc_eye_look,
 			self.opts.eye_look_at_clamp_deg,
 			self.opts.apply_vmc_root_translation,
+			self.opts.synthetic_head_motion,
 			mesh_diagnostics,
 		) {
 			Ok(mut gpu) => {
@@ -3985,6 +4516,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			win.focus_window();
 		}
 		self.last_wall = Instant::now();
+		self.next_frame_at = self.last_wall;
 		let size = win.inner_size();
 		self.update_runtime_surface(size.width, size.height);
 		self.update_runtime_window_geometry();
@@ -4002,8 +4534,13 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				event_loop.exit();
 			}
 		} else if let Some(window) = &self.window {
-			event_loop.set_control_flow(ControlFlow::Wait);
-			window.request_redraw();
+			let now = Instant::now();
+			if now >= self.next_frame_at {
+				window.request_redraw();
+				event_loop.set_control_flow(ControlFlow::Wait);
+			} else {
+				self.wait_until_next_frame(event_loop, now);
+			}
 		}
 	}
 
@@ -4035,6 +4572,11 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.update_runtime_focus_status();
 			}
 			WindowEvent::RedrawRequested => {
+				let now = Instant::now();
+				if self.should_defer_early_redraw(now) {
+					self.wait_until_next_frame(event_loop, now);
+					return;
+				}
 				if self.render_frame() {
 					event_loop.exit();
 				}
@@ -4303,7 +4845,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(activation) = &outcome {
-					self.update_runtime_parameters(BTreeMap::from([(name.clone(), value)]));
+					self.update_runtime_parameter(&name, value);
 					if let Some(activation) = activation {
 						self.apply_runtime_activation_status(activation);
 					}
@@ -4313,6 +4855,12 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(outcome.map(|_| ()));
+				}
+			}
+			RendererControlEvent::SetTargetFps { target_fps, result } => {
+				self.set_target_fps(target_fps);
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(Ok(()));
 				}
 			}
 			RendererControlEvent::SetDynamicsEnabled {
@@ -4379,6 +4927,24 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				};
 				if let Ok(mut guard) = result.lock() {
 					*guard = Some(state.to_string());
+				}
+			}
+			RendererControlEvent::DumpSceneNodes { path, filter, result } => {
+				let outcome = match self.gpu.as_ref() {
+					Some(gpu) => gpu.dump_scene_nodes(&path, filter.as_deref()),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
+				}
+			}
+			RendererControlEvent::DumpRuntimeState { path, result } => {
+				let outcome = match self.gpu.as_ref() {
+					Some(gpu) => gpu.dump_runtime_state(&path),
+					None => Err("renderer is not initialized".to_string()),
+				};
+				if let Ok(mut guard) = result.lock() {
+					*guard = Some(outcome);
 				}
 			}
 			RendererControlEvent::SetExpressionOverride { name, weight } => {
@@ -4520,9 +5086,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			} => {
 				self.opts.dynamics_enabled = enabled;
 				self.opts.bone_colliders = bone_colliders;
-				self.opts.spring_bone_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
+				self.opts.dynamics_physics = physics_config.map(|physics| physics.normalized()).unwrap_or_default();
 				if let Some(gpu) = self.gpu.as_mut() {
-					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.spring_bone_physics.clone());
+					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.dynamics_physics.clone());
 				}
 				self.request_redraw();
 			}
@@ -4749,6 +5315,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 							let step_start = Instant::now();
 							self.apply_runtime_activation_status(activation);
 							log_slow_renderer_step("startup status runtime activation", step_start.elapsed());
+						}
+						let step_start = Instant::now();
+						self.update_runtime_action_metadata();
+						log_slow_renderer_step("startup status runtime action metadata", step_start.elapsed());
+						#[cfg(windows)]
+						{
+							self.last_renderer_tray_refresh_at = None;
+							self.refresh_renderer_tray();
 						}
 						let step_start = Instant::now();
 						self.update_runtime_spout(self.opts.spout.enabled);
@@ -5387,7 +5961,7 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	if status.dynamics_stretch_limit_group_count > 0 {
 		let samples = runtime_dynamics_stretch_limit_samples(status);
 		warnings.push(format!(
-			"dynamics stretch limits are partially supported by rotation_translation target writeback; targetless stretch groups remain metadata-only; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
+			"dynamics stretch limits are supported as simulation stretch; safe targets also use translation writeback while targetless groups keep node translations unchanged; runtime_stretch_limit_groups={} writeback_target_groups={}{}",
 			status.dynamics_stretch_limit_group_count,
 			status.dynamics_stretch_translation_writeback_target_group_count,
 			format_runtime_warning_samples(&samples)
@@ -5406,12 +5980,12 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			format_runtime_warning_samples(&samples)
 		));
 	}
-	if status.dynamics_grabbing_enabled_group_count > 0 || status.dynamics_posing_enabled_group_count > 0 {
+	let metadata_only_interaction_hook_count = status.dynamics_interaction_hooks.iter().filter(|hook| hook.metadata_only).count();
+	if metadata_only_interaction_hook_count > 0 {
 		let samples = runtime_dynamics_interaction_hook_samples(status);
 		warnings.push(format!(
-			"dynamics grabbing/posing interaction hooks are metadata-only in the current solver; grabbing_groups={} posing_groups={}{}",
-			status.dynamics_grabbing_enabled_group_count,
-			status.dynamics_posing_enabled_group_count,
+			"dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver; hooks={}{}",
+			metadata_only_interaction_hook_count,
 			format_runtime_warning_samples(&samples)
 		));
 	}
@@ -5431,6 +6005,13 @@ fn runtime_dynamics_warnings(status: &RendererRuntimeSnapshot) -> Vec<String> {
 			format_runtime_warning_samples(&samples)
 		));
 	}
+	let invalid_match_regexes = runtime_dynamics_invalid_match_regex_samples(status);
+	if !invalid_match_regexes.is_empty() {
+		warnings.push(format!(
+			"dynamics match override contains invalid regular expression(s){}",
+			format_runtime_warning_samples(&invalid_match_regexes)
+		));
+	}
 	warnings
 }
 
@@ -5443,18 +6024,47 @@ fn runtime_dynamics_group_samples(status: &RendererRuntimeSnapshot) -> Vec<Strin
 		.collect()
 }
 
+fn runtime_dynamics_invalid_match_regex_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
+	let mut samples = Vec::new();
+	for group in &status.dynamics_response_groups {
+		for message in &group.invalid_match_regexes {
+			if !message.is_empty() && !samples.contains(message) {
+				samples.push(message.clone());
+				if samples.len() >= 4 {
+					return samples;
+				}
+			}
+		}
+	}
+	samples
+}
+
 fn runtime_dynamics_stretch_limit_samples(status: &RendererRuntimeSnapshot) -> Vec<String> {
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-		})
+		.filter(|group| runtime_dynamics_group_has_length_limit(group))
 		.take(4)
 		.map(runtime_dynamics_group_sample_label)
 		.collect()
+}
+
+fn runtime_dynamics_group_has_length_limit(group: &crate::gpu::RuntimeDynamicsGroupStatus) -> bool {
+	let stretch_motion = group
+		.stretch_motion
+		.filter(|value| value.is_finite())
+		.unwrap_or(1.0)
+		.clamp(0.0, 1.0);
+	let has_length_range = group
+		.max_stretch
+		.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch > 0.0)
+		|| group
+			.max_squish
+			.is_some_and(|max_squish| max_squish.is_finite() && max_squish > 0.0)
+		|| group.max_stretch_sample_has_positive
+		|| group.max_squish_sample_has_positive;
+	let has_motion = stretch_motion > 0.0 || group.stretch_motion_sample_has_positive;
+	has_motion && has_length_range
 }
 
 fn runtime_dynamics_rotation_translation_writeback_group_count(status: &RendererRuntimeSnapshot) -> usize {
@@ -5536,9 +6146,7 @@ fn runtime_dynamics_stretch_translation_writeback_group_count(status: &RendererR
 		.dynamics_groups
 		.iter()
 		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
+			runtime_dynamics_group_has_length_limit(group)
 				&& group.writeback_mode == un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation
 				&& group.translation_writeback_candidate_count > 0
 		})
@@ -5549,12 +6157,7 @@ fn runtime_dynamics_stretch_translation_writeback_target_group_count(status: &Re
 	status
 		.dynamics_groups
 		.iter()
-		.filter(|group| {
-			group
-				.max_stretch
-				.is_some_and(|max_stretch| max_stretch.is_finite() && max_stretch.abs() > 0.0)
-				&& group.translation_writeback_target_count > 0
-		})
+		.filter(|group| runtime_dynamics_group_has_length_limit(group) && group.translation_writeback_target_count > 0)
 		.count()
 }
 
@@ -5574,6 +6177,7 @@ fn runtime_dynamics_interaction_hook_samples(status: &RendererRuntimeSnapshot) -
 	status
 		.dynamics_interaction_hooks
 		.iter()
+		.filter(|hook| hook.metadata_only)
 		.take(4)
 		.map(|hook| {
 			let id = if hook.source_id.is_empty() {
@@ -5643,6 +6247,65 @@ fn format_runtime_warning_samples(samples: &[String]) -> String {
 }
 
 #[derive(Clone, Serialize)]
+struct RuntimeCountEntry {
+	key: String,
+	count: u32,
+}
+
+fn runtime_count_entries(counts: &BTreeMap<String, u32>, limit: usize) -> Vec<RuntimeCountEntry> {
+	let mut entries = counts
+		.iter()
+		.map(|(key, count)| RuntimeCountEntry {
+			key: key.clone(),
+			count: *count,
+		})
+		.collect::<Vec<_>>();
+	entries.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.key.cmp(&b.key)));
+	entries.truncate(limit);
+	entries
+}
+
+fn runtime_sample_strings(samples: &[String], limit: usize) -> Vec<String> {
+	let mut out = Vec::new();
+	for sample in samples {
+		if out.len() >= limit {
+			break;
+		}
+		if !out.iter().any(|item| item == sample) {
+			out.push(sample.clone());
+		}
+	}
+	out
+}
+
+fn runtime_top_count_entry(counts: &BTreeMap<String, u32>) -> Option<RuntimeCountEntry> {
+	counts
+		.iter()
+		.max_by(|(left_key, left_count), (right_key, right_count)| left_count.cmp(right_count).then_with(|| right_key.cmp(left_key)))
+		.map(|(key, count)| RuntimeCountEntry {
+			key: key.clone(),
+			count: *count,
+		})
+}
+
+fn spawn_runtime_memory_refresh(status: Arc<Mutex<RendererRuntimeSnapshot>>, pending: Arc<AtomicBool>) {
+	if pending.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+		return;
+	}
+	let pending_for_worker = Arc::clone(&pending);
+	let spawn_result = thread::Builder::new().name("un-avatar-memory-stats".to_string()).spawn(move || {
+		let ram_mb = memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576);
+		if let Ok(mut status) = status.try_lock() {
+			status.ram_mb = ram_mb;
+		}
+		pending_for_worker.store(false, Ordering::Release);
+	});
+	if spawn_result.is_err() {
+		pending.store(false, Ordering::Release);
+	}
+}
+
+#[derive(Clone, Serialize)]
 struct RendererRuntimeSnapshot {
 	connected: bool,
 	#[serde(default)]
@@ -5653,7 +6316,12 @@ struct RendererRuntimeSnapshot {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	target_fps: f32,
+	frame_target_ms: f32,
 	cpu_ms: Option<f32>,
+	frame_wall_ms: Option<f32>,
+	frame_wall_max_recent_ms: Option<f32>,
+	frame_wall_spike_count_recent: Option<u32>,
 	frame_cpu_total_ms: Option<f32>,
 	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
@@ -5742,6 +6410,10 @@ struct RendererRuntimeSnapshot {
 	contact_probes: Vec<gpu::RuntimeContactProbeStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<gpu::RuntimeDynamicsGroupStatus>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_categories: Vec<un_avatar_skeleton::DynamicsResponseCategorySummary>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_groups: Vec<un_avatar_skeleton::DynamicsResponseGroupSummary>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_interaction_hooks: Vec<gpu::RuntimeDynamicsInteractionHookStatus>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -5850,6 +6522,20 @@ struct RendererRuntimeSnapshot {
 	#[serde(default)]
 	dynamics_unknown_collider_count: u32,
 	#[serde(default)]
+	dynamics_surface_constraint_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_count: u32,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_source_ids: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_collider_paths: Vec<String>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_collision_projection_collider_path_counts: Vec<RuntimeCountEntry>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	dynamics_collision_projection_top_collider_path: Option<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	dynamics_collision_projection_top_collider_count: Option<u32>,
+	#[serde(default)]
 	dynamics_contact_count: u32,
 	#[serde(default)]
 	dynamics_vrc_contact_sender_count: u32,
@@ -5871,6 +6557,14 @@ struct RendererRuntimeSnapshot {
 	dynamics_constraint_ref_count: u32,
 	#[serde(default)]
 	dynamics_vrc_constraint_ref_count: u32,
+	#[serde(default)]
+	scene_node_constraint_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_source_count: u32,
+	#[serde(default)]
+	scene_parent_constraint_multi_source_count: u32,
 	#[serde(default)]
 	camera_locked: bool,
 	#[serde(default)]
@@ -5916,7 +6610,12 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		scene_state: SCENE_STATE_STARTUP_PROGRESS.to_string(),
 		uptime_secs: 0,
 		fps: None,
+		target_fps: clamp_target_fps(opts.target_fps),
+		frame_target_ms: 1000.0 / clamp_target_fps(opts.target_fps),
 		cpu_ms: None,
+		frame_wall_ms: None,
+		frame_wall_max_recent_ms: None,
+		frame_wall_spike_count_recent: None,
 		frame_cpu_total_ms: None,
 		frame_motion_apply_ms: None,
 		frame_dynamics_step_ms: None,
@@ -5978,6 +6677,8 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		contact_parameter_emissions: Vec::new(),
 		contact_probes: Vec::new(),
 		dynamics_groups: Vec::new(),
+		dynamics_response_categories: Vec::new(),
+		dynamics_response_groups: Vec::new(),
 		dynamics_interaction_hooks: Vec::new(),
 		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
@@ -6036,6 +6737,13 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_vrm_spring_bone_collider_count: 0,
 		dynamics_vrc_physbone_collider_count: 0,
 		dynamics_unknown_collider_count: 0,
+		dynamics_surface_constraint_count: 0,
+		dynamics_collision_projection_count: 0,
+		dynamics_collision_projection_source_ids: Vec::new(),
+		dynamics_collision_projection_collider_paths: Vec::new(),
+		dynamics_collision_projection_collider_path_counts: Vec::new(),
+		dynamics_collision_projection_top_collider_path: None,
+		dynamics_collision_projection_top_collider_count: None,
 		dynamics_contact_count: 0,
 		dynamics_vrc_contact_sender_count: 0,
 		dynamics_vrc_contact_receiver_count: 0,
@@ -6047,6 +6755,10 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_contact_parameter_reset_to_zero_count: 0,
 		dynamics_constraint_ref_count: 0,
 		dynamics_vrc_constraint_ref_count: 0,
+		scene_node_constraint_count: 0,
+		scene_parent_constraint_count: 0,
+		scene_parent_constraint_source_count: 0,
+		scene_parent_constraint_multi_source_count: 0,
 		camera_locked: opts.camera_locked,
 		window_focused: false,
 		window_activation_seq: 0,
@@ -6123,7 +6835,7 @@ fn runtime_status_stream_requested(stream: &std::net::TcpStream) -> bool {
 
 fn write_runtime_status_snapshot(stream: &mut std::net::TcpStream, status: &Arc<Mutex<RendererRuntimeSnapshot>>) -> std::io::Result<()> {
 	let snapshot = status
-		.lock()
+		.try_lock()
 		.map_err(|_| std::io::Error::other("runtime status lock poisoned"))?
 		.clone();
 	let json = serde_json::to_string(&snapshot).map_err(std::io::Error::other)?;
@@ -6186,9 +6898,12 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 	let mut last_json = String::new();
 	let mut last_publish = Instant::now() - STATUS_KEEPALIVE_INTERVAL;
 	loop {
-		let snapshot = match status.lock() {
+		let snapshot = match status.try_lock() {
 			Ok(status) => status.clone(),
-			Err(_) => return,
+			Err(_) => {
+				thread::sleep(STATUS_PUBLISH_INTERVAL);
+				continue;
+			}
 		};
 		if let Ok(json) = serde_json::to_string(&snapshot) {
 			let should_publish = json != last_json || last_publish.elapsed() >= STATUS_KEEPALIVE_INTERVAL;
@@ -6299,6 +7014,8 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	}
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
+		Ok(RendererControlCommand::DumpSceneNodes { path, filter }) => dispatch_dump_scene_nodes_command(proxy, path, filter),
+		Ok(RendererControlCommand::DumpRuntimeState { path }) => dispatch_dump_runtime_state_command(proxy, path),
 		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
 		Ok(RendererControlCommand::ActivateAction {
 			action_id,
@@ -6319,6 +7036,7 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			parameter_value,
 		),
 		Ok(RendererControlCommand::SetParameter { name, value }) => dispatch_set_parameter_command(proxy, name, value),
+		Ok(RendererControlCommand::SetTargetFps { target_fps }) => dispatch_set_target_fps_command(proxy, target_fps),
 		Ok(RendererControlCommand::SetDynamicsEnabled { source_id, enabled }) => {
 			dispatch_set_dynamics_enabled_command(proxy, source_id, enabled)
 		}
@@ -6356,6 +7074,21 @@ fn dispatch_set_parameter_command(proxy: &EventLoopProxy<RendererControlEvent>, 
 		return "err event-loop-closed".to_string();
 	}
 	wait_command_result(result, Duration::from_secs(2), "set_parameter")
+}
+
+fn dispatch_set_target_fps_command(proxy: &EventLoopProxy<RendererControlEvent>, target_fps: f32) -> String {
+	if !target_fps.is_finite() {
+		return "err target_fps must be finite".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::SetTargetFps {
+		target_fps,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(2), "set_target_fps")
 }
 
 fn dispatch_set_dynamics_enabled_command(proxy: &EventLoopProxy<RendererControlEvent>, source_id: String, enabled: bool) -> String {
@@ -6535,6 +7268,37 @@ fn dispatch_screenshot_command(proxy: &EventLoopProxy<RendererControlEvent>, pat
 	wait_command_result(result, Duration::from_secs(10), "screenshot")
 }
 
+fn dispatch_dump_scene_nodes_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String, filter: Option<String>) -> String {
+	if path.trim().is_empty() {
+		return "err dump_scene_nodes path required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::DumpSceneNodes {
+		path: std::path::PathBuf::from(path),
+		filter,
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(5), "dump_scene_nodes")
+}
+
+fn dispatch_dump_runtime_state_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String) -> String {
+	if path.trim().is_empty() {
+		return "err dump_runtime_state path required".to_string();
+	}
+	let result: CommandResultSlot = Arc::new(Mutex::new(None));
+	let event = RendererControlEvent::DumpRuntimeState {
+		path: std::path::PathBuf::from(path),
+		result: Arc::clone(&result),
+	};
+	if proxy.send_event(event).is_err() {
+		return "err event-loop-closed".to_string();
+	}
+	wait_command_result(result, Duration::from_secs(5), "dump_runtime_state")
+}
+
 fn wait_command_result(result: CommandResultSlot, timeout: Duration, command_name: &str) -> String {
 	let deadline = Instant::now() + timeout;
 	loop {
@@ -6635,10 +7399,8 @@ pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
 	#[cfg(windows)]
 	let wardrobe_hotkeys = WardrobeHotkeyRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
 	let wardrobe_midi = WardrobeMidiRuntime::start(&opts.wardrobe_bindings, &opts.animator_bindings, event_proxy.clone());
-	if opts.runtime_bus_key.is_none() {
-		if let Some(address) = opts.runtime_control_address {
-			start_runtime_control_server(address, event_proxy.clone());
-		}
+	if let Some(address) = opts.runtime_control_address {
+		start_runtime_control_server(address, event_proxy.clone());
 	}
 
 	let mut app = AvatarApp::new(opts, event_proxy);
@@ -6763,6 +7525,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		mipmap_filter: TextureMipmapFilter,
 		#[arg(long, value_enum, default_value_t = RenderBackend::Vulkan, help = "wgpu backend: vulkan / dx12 / auto。既定はvulkan")]
 		render_backend: RenderBackend,
+		#[arg(
+			long,
+			value_name = "SELECTOR",
+			help = "wgpu adapter selector。auto なら従来通りHighPerformance adapterを自動選択"
+		)]
+		gpu_adapter: Option<String>,
 		#[arg(long, value_enum, default_value_t = BlockCompressionEncoder::Gpu, help = "BCn encoder: gpu / cpu。既定はgpu")]
 		block_compression_encoder: BlockCompressionEncoder,
 		#[arg(
@@ -6846,6 +7614,12 @@ pub fn run_cli() -> Result<(), RunError> {
 			help = "VMC と UNMotion 同時受信時の primary 選択 (既定 vmc)。"
 		)]
 		primary_motion_source: Option<crate::options::PrimaryMotionSource>,
+		#[arg(long, help = "診断用: renderer 内で Head を sin 波 yaw 駆動する。UNMF/Z を経由しない")]
+		debug_synthetic_head_motion: bool,
+		#[arg(long, default_value_t = 45.0, value_name = "DEG", help = "診断用 Head sin yaw 振幅")]
+		debug_synthetic_head_amplitude_deg: f32,
+		#[arg(long, default_value_t = 0.5, value_name = "HZ", help = "診断用 Head sin yaw 周波数")]
+		debug_synthetic_head_frequency_hz: f32,
 		#[arg(long, help = "XYZ デバッグ軸を表示（既定は非表示）")]
 		show_axes: bool,
 		#[arg(long, help = "起動直後にウィンドウを最小化する（既定は非最小化）")]
@@ -6854,6 +7628,8 @@ pub fn run_cli() -> Result<(), RunError> {
 			long,
 			help = "診断用: UNToon geometry outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
 		)]
+		disable_geometry_outlines: bool,
+		#[arg(long, help = "互換 alias: --disable-geometry-outlines と同じ")]
 		disable_mtoon_outlines: bool,
 		#[arg(
 			long,
@@ -6880,7 +7656,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		debug_skin_legacy_no_inv_mesh: bool,
 		#[arg(long, help = "診断用: UNToon rim lighting 寄与を 0 に固定")]
 		debug_disable_rim_lighting: bool,
-		#[arg(long, help = "診断用: shading_shift_factor と shadingShiftTexture の寄与を 0 に固定")]
+		#[arg(long, help = "互換 no-op: v1 MToon shading shift 診断キー。v2-UNToon shader では未使用")]
 		debug_force_shading_shift_zero: bool,
 		#[arg(long, help = "診断用: UNToon matcap / sphere add 寄与を 0 に固定")]
 		debug_disable_matcap: bool,
@@ -6932,6 +7708,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		// CLI からは位置指定なし。manifest 経由で指定された場合のみ apply される。
 		window_position: None,
 		show_fps_in_title: !cli.no_fps_title,
+		target_fps: AvatarWindowOptions::default().target_fps,
 		bench_frames: cli.bench_frames,
 		gltf_path: cli.gltf,
 		manifest_path: None,
@@ -6951,6 +7728,11 @@ pub fn run_cli() -> Result<(), RunError> {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
 		},
+		synthetic_head_motion: crate::options::SyntheticHeadMotionOptions {
+			enabled: cli.debug_synthetic_head_motion,
+			amplitude_deg: cli.debug_synthetic_head_amplitude_deg,
+			frequency_hz: cli.debug_synthetic_head_frequency_hz,
+		},
 		audio_link: Default::default(),
 		primary_motion_source: cli.primary_motion_source.unwrap_or_default(),
 		spout: SpoutWindowOptions {
@@ -6968,6 +7750,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		texture_compression: cli.texture_compression,
 		mipmap_filter: cli.mipmap_filter,
 		render_backend: cli.render_backend,
+		gpu_adapter: cli.gpu_adapter.clone().and_then(normalize_gpu_adapter_cli_value),
 		block_compression_encoder: cli.block_compression_encoder,
 		block_compression_cpu_threads: cli.block_compression_cpu_threads.max(1),
 		texture_compression_advanced: TextureCompressionAdvancedOptions::default(),
@@ -6984,7 +7767,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		},
 		dynamics_enabled: !cli.no_dynamics,
 		bone_colliders: Default::default(),
-		spring_bone_physics: DynamicsPhysicsConfig::default(),
+		dynamics_physics: DynamicsPhysicsConfig::default(),
 		debug: WindowDebugOptions {
 			log_path: cli.debug_log.clone(),
 			mirror_stderr: cli.debug_stderr,
@@ -7002,7 +7785,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		show_bone_colliders: false,
 		camera_locked: false,
 		start_minimized: cli.start_minimized,
-		disable_mtoon_outlines: cli.disable_mtoon_outlines,
+		disable_geometry_outlines: cli.disable_geometry_outlines || cli.disable_mtoon_outlines,
 		debug_disable_rim_lighting: cli.debug_disable_rim_lighting,
 		debug_force_shading_shift_zero: cli.debug_force_shading_shift_zero,
 		debug_disable_matcap: cli.debug_disable_matcap,
@@ -7018,7 +7801,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			debug_zero_morphs: cli.debug_zero_morphs,
 			relax_iris_alpha: cli.relax_iris_alpha,
 			debug_skin_legacy_no_inv_mesh: cli.debug_skin_legacy_no_inv_mesh,
-			disable_mtoon_outlines: cli.disable_mtoon_outlines,
+			disable_geometry_outlines: cli.disable_geometry_outlines || cli.disable_mtoon_outlines,
 			debug_disable_rim_lighting: cli.debug_disable_rim_lighting,
 			debug_force_shading_shift_zero: cli.debug_force_shading_shift_zero,
 			debug_disable_matcap: cli.debug_disable_matcap,
@@ -7030,6 +7813,9 @@ pub fn run_cli() -> Result<(), RunError> {
 			disable_fur: cli.debug_disable_fur,
 			avatar_outline: Default::default(),
 			skin_tone_matching: cli.skin_tone_matching,
+			mesh_cloth_assist: Default::default(),
+			mesh_cloth_assist_categories: un_avatar_skeleton::DynamicsPhysicsConfig::default().normalized().categories,
+			dynamic_deforming_node_indices: Default::default(),
 		},
 		contact_shadow: Default::default(),
 		ssao: Default::default(),
@@ -7058,8 +7844,8 @@ pub fn run_cli() -> Result<(), RunError> {
 	if cli.start_minimized {
 		opts.start_minimized = true;
 	}
-	if cli.disable_mtoon_outlines {
-		opts.disable_mtoon_outlines = true;
+	if cli.disable_geometry_outlines || cli.disable_mtoon_outlines {
+		opts.disable_geometry_outlines = true;
 	}
 	if cli.debug_disable_rim_lighting {
 		opts.debug_disable_rim_lighting = true;
@@ -7081,6 +7867,9 @@ pub fn run_cli() -> Result<(), RunError> {
 	}
 	if cli.debug_base_texture_only {
 		opts.debug_base_texture_only = true;
+	}
+	if let Some(target_fps) = target_fps_from_env() {
+		opts.target_fps = target_fps;
 	}
 	if cli.validate_startup {
 		validate_startup_options(&opts).map_err(RunError::EventLoop)?;
@@ -7122,6 +7911,15 @@ fn validate_startup_options(opts: &AvatarWindowOptions) -> Result<(), String> {
 		.map_err(|e| format!("startup validation: model import failed: {}: {e}", path.display()))
 	} else {
 		Ok(())
+	}
+}
+
+fn normalize_gpu_adapter_cli_value(value: String) -> Option<String> {
+	let value = value.trim().to_string();
+	if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+		None
+	} else {
+		Some(value)
 	}
 }
 
@@ -7243,6 +8041,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.render_backend != default.render_backend {
 		opts.render_backend = cli.render_backend;
 	}
+	if let Some(gpu_adapter) = cli.gpu_adapter {
+		opts.gpu_adapter = Some(gpu_adapter);
+	}
 	if cli.block_compression_encoder != default.block_compression_encoder {
 		opts.block_compression_encoder = cli.block_compression_encoder;
 	}
@@ -7306,6 +8107,11 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.unmotion_zenoh.base_key_expr != default.unmotion_zenoh.base_key_expr {
 		opts.unmotion_zenoh.base_key_expr = cli.unmotion_zenoh.base_key_expr;
+	}
+	if cli.synthetic_head_motion.enabled {
+		opts.synthetic_head_motion = cli.synthetic_head_motion;
+		opts.vmc_address = None;
+		opts.unmotion_zenoh.enabled = false;
 	}
 	if cli.primary_motion_source != default.primary_motion_source {
 		opts.primary_motion_source = cli.primary_motion_source;
@@ -7396,6 +8202,7 @@ fn load_default_window_icon() -> Option<Icon> {
 #[cfg(test)]
 mod tests {
 	use std::{
+		collections::BTreeMap,
 		io::{BufRead, BufReader, Read, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
 		path::Path,
@@ -7454,6 +8261,38 @@ mod tests {
 			billboard_view_proj: [[0.0; 4]; 4],
 			billboard_camera_pos: [0.0, 0.0, 2.0],
 		}
+	}
+
+	#[test]
+	fn runtime_count_entries_are_bounded_and_sorted() {
+		let counts = BTreeMap::from([
+			("Body/Back".to_string(), 2),
+			("Body/Chest".to_string(), 5),
+			("Body/Arm".to_string(), 5),
+		]);
+		let entries = super::runtime_count_entries(&counts, 2);
+		assert_eq!(entries.len(), 2);
+		assert_eq!(entries[0].key, "Body/Arm");
+		assert_eq!(entries[0].count, 5);
+		assert_eq!(entries[1].key, "Body/Chest");
+		assert_eq!(entries[1].count, 5);
+		let top = super::runtime_top_count_entry(&counts).unwrap();
+		assert_eq!(top.key, "Body/Arm");
+		assert_eq!(top.count, 5);
+	}
+
+	#[test]
+	fn runtime_sample_strings_are_bounded_and_unique() {
+		let samples = vec![
+			"physbone:a".to_string(),
+			"physbone:a".to_string(),
+			"physbone:b".to_string(),
+			"physbone:c".to_string(),
+		];
+
+		let out = super::runtime_sample_strings(&samples, 2);
+
+		assert_eq!(out, vec!["physbone:a".to_string(), "physbone:b".to_string()]);
 	}
 
 	#[test]
@@ -7532,6 +8371,31 @@ mod tests {
 	}
 
 	#[test]
+	fn frame_pacing_tracks_recent_wall_spikes() {
+		let mut pacing = super::FramePacingState::default();
+		let spike_threshold_ms = 16.7;
+		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
+			let snapshot = pacing.push(16.6, 0.0, spike_threshold_ms);
+			assert_eq!(snapshot.wall_spike_count_recent, 0);
+		}
+		let snapshot = pacing.push(
+			spike_threshold_ms + super::FRAME_PACING_SPIKE_TOLERANCE_MS + 0.1,
+			0.0,
+			spike_threshold_ms,
+		);
+		assert_eq!(snapshot.wall_spike_count_recent, 1);
+		assert!(snapshot.wall_max_recent_ms > spike_threshold_ms);
+		for _ in 0..super::FRAME_PACING_WINDOW_FRAMES {
+			let snapshot = pacing.push(16.6, 0.0, spike_threshold_ms);
+			if snapshot.wall_spike_count_recent == 0 {
+				assert_eq!(snapshot.wall_max_recent_ms, 16.6);
+				return;
+			}
+		}
+		panic!("old pacing spike should age out of the recent window");
+	}
+
+	#[test]
 	fn resumed_marks_startup_before_first_redraw() {
 		let source = include_str!("lib.rs");
 		let anchor = "fn resumed(&mut self, event_loop: &ActiveEventLoop)";
@@ -7543,6 +8407,27 @@ mod tests {
 		assert!(
 			startup < redraw,
 			"startup state must be established before the first redraw so Spout2 never receives a pre-startup runtime frame"
+		);
+	}
+
+	#[test]
+	fn startup_ready_publishes_runtime_action_metadata_before_redraw() {
+		let source = include_str!("lib.rs");
+		let anchor = "RendererControlEvent::StartupSceneReady { result } =>";
+		let startup_ready = source.split(anchor).nth(1).expect("startup ready handler exists");
+		let metadata = startup_ready
+			.find("self.update_runtime_action_metadata();")
+			.expect("startup ready publishes runtime action metadata");
+		let tray_refresh = startup_ready
+			.find("self.refresh_renderer_tray();")
+			.expect("startup ready refreshes renderer tray");
+		let spout = startup_ready
+			.find("self.update_runtime_spout(self.opts.spout.enabled);")
+			.expect("startup ready updates spout status");
+		let redraw = startup_ready.find("self.request_redraw();").expect("startup ready requests redraw");
+		assert!(
+			metadata < tray_refresh && tray_refresh < spout && metadata < redraw,
+			"tray-visible wardrobe/runtime actions must be in the runtime snapshot before startup redraw and tray refresh"
 		);
 	}
 
@@ -7564,18 +8449,29 @@ mod tests {
 			source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 			authored_enabled: true,
 			effective_enabled: true,
+			resident_in_active_assets: true,
+			solver_enabled: true,
 			runtime_enabled_override: None,
 			source_id: "physbone:hair".to_string(),
 			comment: String::new(),
 			category: String::new(),
 			bone_count: 2,
+			visual_target: true,
+			skinned_joint_count: 2,
+			mesh_subtree_node_count: 0,
 			root_node: Some(1),
 			root_path: Some("root/hair".to_string()),
 			tip_node: Some(2),
 			tip_path: Some("root/hair/tip".to_string()),
 			stiffness: 0.0,
+			pull: 0.0,
+			spring: 0.0,
+			integration_type: Default::default(),
 			drag_force: 0.0,
 			gravity_power: 0.0,
+			gravity_falloff: 0.0,
+			immobile: 0.0,
+			immobile_type: Default::default(),
 			gravity_dir: [0.0, -1.0, 0.0],
 			hit_radius: 0.0,
 			hit_radius_sample_count: 0,
@@ -7584,9 +8480,15 @@ mod tests {
 			center_node: None,
 			center_path: None,
 			limit_type: Some("Angle".to_string()),
+			limit_rotation: Some([0.0, 0.0, 0.0]),
 			max_angle_x: Some(45.0),
 			max_angle_z: Some(45.0),
 			max_stretch: Some(0.25),
+			max_squish: Some(0.0),
+			stretch_motion: None,
+			max_stretch_sample_has_positive: false,
+			max_squish_sample_has_positive: false,
+			stretch_motion_sample_has_positive: false,
 			writeback_mode: un_avatar_core::UnaDynamicsWritebackMode::RotationTranslation,
 			translation_writeback_candidate_count: 1,
 			translation_writeback_target_count: 1,
@@ -7646,23 +8548,61 @@ mod tests {
 			approximation: "sphere".to_string(),
 		}];
 		status.contact_parameter_emission_enabled = false;
+		status.dynamics_response_groups = vec![un_avatar_skeleton::DynamicsResponseGroupSummary {
+			source_id: "physbone:hair".to_string(),
+			category: "hair".to_string(),
+			matched_overrides: Vec::new(),
+			group_override_applied: false,
+			invalid_match_regexes: vec!["broken regex: regex parse error".to_string()],
+			joint_count: 1,
+			solver: un_avatar_skeleton::DynamicsSolver::Verlet,
+			average_rest_response: 0.0,
+			min_rest_response: 0.0,
+			max_rest_response: 0.0,
+			average_pull: 0.0,
+			average_stiffness: 0.0,
+			average_shape_preservation: 0.0,
+			min_shape_preservation: 0.0,
+			max_shape_preservation: 0.0,
+			average_bounce_response: 0.0,
+			min_bounce_response: 0.0,
+			max_bounce_response: 0.0,
+			average_max_stretch_response: 0.0,
+			min_max_stretch_response: 0.0,
+			max_max_stretch_response: 0.0,
+			average_max_squish_response: 0.0,
+			min_max_squish_response: 0.0,
+			max_max_squish_response: 0.0,
+			average_stretch_motion_response: 0.0,
+			min_stretch_motion_response: 0.0,
+			max_stretch_motion_response: 0.0,
+			average_spring: 0.0,
+			average_drag_force: 0.0,
+			average_damping_half_life_ms: None,
+			average_parent_motion_follow: 0.0,
+			min_parent_motion_follow: 0.0,
+			max_parent_motion_follow: 0.0,
+			average_orientation_follow: 0.0,
+			xpbd_compliance: 0.0,
+			..Default::default()
+		}];
 
 		let warnings = runtime_dynamics_warnings(&status);
-		assert_eq!(warnings.len(), 5);
+		assert_eq!(warnings.len(), 6);
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics groups are present but none are currently enabled")
 				&& warning.contains("samples=[physbone:hair@root/hair]")
 		));
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics stretch limits are partially supported")
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics stretch limits are supported as simulation stretch")
 				&& warning.contains("writeback_target_groups=1")
-				&& warning.contains("physbone:hair@root/hair")));
+				&& warning.contains("physbone:hair@root/hair")
+		));
 		assert!(!warnings
 			.iter()
 			.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target")));
 		assert!(warnings.iter().any(|warning| warning
-			.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver")
+			.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
 			&& warning.contains("samples=[physbone:hair@root/hair]")));
 		assert!(warnings.iter().any(|warning| warning
 			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
@@ -7673,6 +8613,10 @@ mod tests {
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")
 				&& warning.contains("samples=[contact:hand@root/hand<=contact:sender:ContactHand]")
+		));
+		assert!(warnings.iter().any(
+			|warning| warning.contains("dynamics match override contains invalid regular expression")
+				&& warning.contains("broken regex: regex parse error")
 		));
 	}
 
@@ -7962,18 +8906,29 @@ mod tests {
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
 				authored_enabled: false,
 				effective_enabled: true,
+				resident_in_active_assets: true,
+				solver_enabled: true,
 				runtime_enabled_override: Some(true),
 				source_id: "physbone:hair".to_string(),
 				comment: "Hair".to_string(),
 				category: "secondary".to_string(),
 				bone_count: 3,
+				visual_target: true,
+				skinned_joint_count: 3,
+				mesh_subtree_node_count: 1,
 				root_node: Some(1),
 				root_path: Some("root/hair".to_string()),
 				tip_node: Some(3),
 				tip_path: Some("root/hair/tip".to_string()),
 				stiffness: 0.35,
+				pull: 0.35,
+				spring: 0.0,
+				integration_type: Default::default(),
 				drag_force: 0.2,
 				gravity_power: 0.1,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: Default::default(),
 				gravity_dir: [0.0, -1.0, 0.0],
 				hit_radius: 0.04,
 				hit_radius_sample_count: 2,
@@ -7982,15 +8937,100 @@ mod tests {
 				center_node: Some(0),
 				center_path: Some("root".to_string()),
 				limit_type: Some("Angle".to_string()),
+				limit_rotation: Some([0.0, 0.0, 0.0]),
 				max_angle_x: Some(45.0),
 				max_angle_z: Some(30.0),
 				max_stretch: Some(0.0),
+				max_squish: Some(0.0),
+				stretch_motion: None,
+				max_stretch_sample_has_positive: false,
+				max_squish_sample_has_positive: false,
+				stretch_motion_sample_has_positive: false,
 				writeback_mode: Default::default(),
 				translation_writeback_candidate_count: 0,
 				translation_writeback_target_count: 0,
 				allow_grabbing: Some(true),
 				allow_posing: Some(false),
 				interaction_parameter: "HairPB".to_string(),
+			}];
+			status.dynamics_response_categories = vec![un_avatar_skeleton::DynamicsResponseCategorySummary {
+				category: "hair".to_string(),
+				group_count: 1,
+				joint_count: 3,
+				visual_target_group_count: 1,
+				nonvisual_group_count: 0,
+				visible_skinned_joint_count: 3,
+				visible_mesh_subtree_node_count: 1,
+				matched_override_group_count: 1,
+				group_override_group_count: 1,
+				xpbd_group_count: 1,
+				average_rest_response: 0.35,
+				min_rest_response: 0.20,
+				max_rest_response: 0.45,
+				average_pull: 0.35,
+				average_stiffness: 0.35,
+				average_shape_preservation: 0.34,
+				min_shape_preservation: 0.18,
+				max_shape_preservation: 0.42,
+				average_bounce_response: 0.2,
+				min_bounce_response: 0.1,
+				max_bounce_response: 0.3,
+				average_max_stretch_response: 0.25,
+				min_max_stretch_response: 0.1,
+				max_max_stretch_response: 0.4,
+				average_max_squish_response: 0.05,
+				min_max_squish_response: 0.0,
+				max_max_squish_response: 0.1,
+				average_stretch_motion_response: 0.6,
+				min_stretch_motion_response: 0.4,
+				max_stretch_motion_response: 0.8,
+				average_spring: 0.2,
+				average_drag_force: 0.2,
+				average_damping_half_life_ms: Some(120.0),
+				average_parent_motion_follow: 0.5,
+				min_parent_motion_follow: 0.3,
+				max_parent_motion_follow: 0.7,
+				average_orientation_follow: 0.17,
+				average_xpbd_compliance: 0.01,
+				..Default::default()
+			}];
+			status.dynamics_response_groups = vec![un_avatar_skeleton::DynamicsResponseGroupSummary {
+				source_id: "physbone:hair".to_string(),
+				category: "hair".to_string(),
+				matched_overrides: vec!["soft hair".to_string()],
+				group_override_applied: true,
+				invalid_match_regexes: vec!["broken regex: regex parse error".to_string()],
+				joint_count: 3,
+				solver: un_avatar_skeleton::DynamicsSolver::Xpbd,
+				average_rest_response: 0.35,
+				min_rest_response: 0.20,
+				max_rest_response: 0.45,
+				average_pull: 0.35,
+				average_stiffness: 0.35,
+				average_shape_preservation: 0.34,
+				min_shape_preservation: 0.18,
+				max_shape_preservation: 0.42,
+				average_bounce_response: 0.2,
+				min_bounce_response: 0.1,
+				max_bounce_response: 0.3,
+				average_max_stretch_response: 0.25,
+				min_max_stretch_response: 0.1,
+				max_max_stretch_response: 0.4,
+				average_max_squish_response: 0.05,
+				min_max_squish_response: 0.0,
+				max_max_squish_response: 0.1,
+				average_stretch_motion_response: 0.6,
+				min_stretch_motion_response: 0.4,
+				max_stretch_motion_response: 0.8,
+				average_spring: 0.2,
+				average_drag_force: 0.2,
+				average_damping_half_life_ms: Some(120.0),
+				average_parent_motion_follow: 0.5,
+				min_parent_motion_follow: 0.3,
+				max_parent_motion_follow: 0.7,
+				average_orientation_follow: 0.17,
+				xpbd_compliance: 0.01,
+				..Default::default()
 			}];
 			status.dynamics_interaction_hooks = vec![crate::gpu::RuntimeDynamicsInteractionHookStatus {
 				group_index: 0,
@@ -8011,6 +9051,8 @@ mod tests {
 			status.dynamics_colliders = vec![crate::gpu::RuntimeDynamicsColliderStatus {
 				index: 0,
 				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				source_id: "physbone:hair".to_string(),
+				collider_path: "root/collider".to_string(),
 				node: 5,
 				node_path: Some("root/collider".to_string()),
 				shape: un_avatar_core::UnaDynamicsColliderShape::Capsule,
@@ -8033,6 +9075,10 @@ mod tests {
 			}];
 			status.dynamics_constraint_ref_count = 3;
 			status.dynamics_vrc_constraint_ref_count = 2;
+			status.scene_node_constraint_count = 5;
+			status.scene_parent_constraint_count = 4;
+			status.scene_parent_constraint_source_count = 7;
+			status.scene_parent_constraint_multi_source_count = 2;
 			status.dynamics_limit_group_count = 4;
 			status.dynamics_angle_limit_group_count = 3;
 			status.dynamics_stretch_limit_group_count = 1;
@@ -8139,8 +9185,24 @@ mod tests {
 			Some("root/hair/tip")
 		);
 		assert_eq!(
+			dynamics_groups[0].get("category").and_then(|value| value.as_str()),
+			Some("secondary")
+		);
+		assert_eq!(
 			dynamics_groups[0].get("effective_enabled").and_then(|value| value.as_bool()),
 			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("visual_target").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("skinned_joint_count").and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			dynamics_groups[0].get("mesh_subtree_node_count").and_then(|value| value.as_u64()),
+			Some(1)
 		);
 		assert_eq!(
 			dynamics_groups[0].get("runtime_enabled_override").and_then(|value| value.as_bool()),
@@ -8178,6 +9240,145 @@ mod tests {
 			dynamics_groups[0].get("hit_radius_sample_max").and_then(|value| value.as_f64()),
 			Some(0.04)
 		);
+		let response_categories = snapshot
+			.get("dynamics_response_categories")
+			.and_then(|value| value.as_array())
+			.expect("dynamics response categories");
+		assert_eq!(response_categories.len(), 1);
+		assert_eq!(
+			response_categories[0].get("category").and_then(|value| value.as_str()),
+			Some("hair")
+		);
+		assert_eq!(
+			response_categories[0].get("average_rest_response").and_then(|value| value.as_f64()),
+			Some(0.35)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visual_target_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visible_skinned_joint_count")
+				.and_then(|value| value.as_u64()),
+			Some(3)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("visible_mesh_subtree_node_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("matched_override_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("group_override_group_count")
+				.and_then(|value| value.as_u64()),
+			Some(1)
+		);
+		assert_eq!(
+			response_categories[0].get("min_rest_response").and_then(|value| value.as_f64()),
+			Some(0.20)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_parent_motion_follow")
+				.and_then(|value| value.as_f64()),
+			Some(0.5)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_max_stretch_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.25)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_stretch_motion_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.6)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_damping_half_life_ms")
+				.and_then(|value| value.as_f64()),
+			Some(120.0)
+		);
+		assert_eq!(
+			response_categories[0]
+				.get("average_orientation_follow")
+				.and_then(|value| value.as_f64()),
+			Some(0.17)
+		);
+		let response_groups = snapshot
+			.get("dynamics_response_groups")
+			.and_then(|value| value.as_array())
+			.expect("dynamics response groups");
+		assert_eq!(response_groups.len(), 1);
+		assert_eq!(
+			response_groups[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
+		assert_eq!(response_groups[0].get("solver").and_then(|value| value.as_str()), Some("xpbd"));
+		assert_eq!(
+			response_groups[0]
+				.get("matched_overrides")
+				.and_then(|value| value.as_array())
+				.and_then(|items| items.first())
+				.and_then(|value| value.as_str()),
+			Some("soft hair")
+		);
+		assert_eq!(
+			response_groups[0].get("group_override_applied").and_then(|value| value.as_bool()),
+			Some(true)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("invalid_match_regexes")
+				.and_then(|value| value.as_array())
+				.and_then(|items| items.first())
+				.and_then(|value| value.as_str()),
+			Some("broken regex: regex parse error")
+		);
+		assert_eq!(
+			response_groups[0].get("average_bounce_response").and_then(|value| value.as_f64()),
+			Some(0.2)
+		);
+		assert_eq!(
+			response_groups[0].get("max_bounce_response").and_then(|value| value.as_f64()),
+			Some(0.3)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_max_stretch_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.25)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_stretch_motion_response")
+				.and_then(|value| value.as_f64()),
+			Some(0.6)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_shape_preservation")
+				.and_then(|value| value.as_f64()),
+			Some(0.34)
+		);
+		assert_eq!(
+			response_groups[0]
+				.get("average_damping_half_life_ms")
+				.and_then(|value| value.as_f64()),
+			Some(120.0)
+		);
 		let interaction_hooks = snapshot
 			.get("dynamics_interaction_hooks")
 			.and_then(|value| value.as_array())
@@ -8201,6 +9402,10 @@ mod tests {
 			.and_then(|value| value.as_array())
 			.expect("dynamics colliders");
 		assert_eq!(dynamics_colliders.len(), 1);
+		assert_eq!(
+			dynamics_colliders[0].get("source_id").and_then(|value| value.as_str()),
+			Some("physbone:hair")
+		);
 		assert_eq!(
 			dynamics_colliders[0].get("node_path").and_then(|value| value.as_str()),
 			Some("root/collider")
@@ -8250,6 +9455,26 @@ mod tests {
 			snapshot.get("dynamics_vrc_constraint_ref_count").and_then(|value| value.as_u64()),
 			Some(2)
 		);
+		assert_eq!(
+			snapshot.get("scene_node_constraint_count").and_then(|value| value.as_u64()),
+			Some(5)
+		);
+		assert_eq!(
+			snapshot.get("scene_parent_constraint_count").and_then(|value| value.as_u64()),
+			Some(4)
+		);
+		assert_eq!(
+			snapshot
+				.get("scene_parent_constraint_source_count")
+				.and_then(|value| value.as_u64()),
+			Some(7)
+		);
+		assert_eq!(
+			snapshot
+				.get("scene_parent_constraint_multi_source_count")
+				.and_then(|value| value.as_u64()),
+			Some(2)
+		);
 		assert_eq!(snapshot.get("dynamics_limit_group_count").and_then(|value| value.as_u64()), Some(4));
 		assert_eq!(
 			snapshot.get("dynamics_angle_limit_group_count").and_then(|value| value.as_u64()),
@@ -8293,16 +9518,20 @@ mod tests {
 			.get("dynamics_warnings")
 			.and_then(|value| value.as_array())
 			.expect("dynamics warnings");
-		assert_eq!(dynamics_warnings.len(), 3);
+		assert_eq!(dynamics_warnings.len(), 4);
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics stretch limits are partially supported"))));
-		assert!(dynamics_warnings.iter().any(|warning| warning
-			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics grabbing/posing interaction hooks are metadata-only in the current solver"))));
+			.is_some_and(|warning| warning.contains("dynamics stretch limits are supported as simulation stretch"))));
+		assert!(dynamics_warnings
+			.iter()
+			.any(|warning| warning.as_str().is_some_and(|warning| warning
+				.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver"))));
 		assert!(dynamics_warnings.iter().any(|warning| warning
 			.as_str()
 			.is_some_and(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))));
+		assert!(dynamics_warnings.iter().any(|warning| warning
+			.as_str()
+			.is_some_and(|warning| warning.contains("dynamics match override contains invalid regular expression"))));
 		assert_eq!(
 			snapshot
 				.get("dynamics_grabbing_enabled_group_count")
@@ -8687,8 +9916,8 @@ mod tests {
 
 	#[test]
 	fn standalone_runtime_bus_key_is_stable_for_manifest_path() {
-		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\Mizuki.toml"));
-		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/mizuki.toml"));
+		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\AvatarProfile.toml"));
+		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/avatarprofile.toml"));
 
 		assert!(first.starts_with("un-avatar/runtime/standalone/"));
 		assert_eq!(first, second);
@@ -8847,6 +10076,15 @@ mod tests {
 		};
 		assert_eq!(billboard_anchor, "spine");
 		assert_eq!(billboard_y_offset_mm, 42.0);
+	}
+
+	#[test]
+	fn parses_json_set_target_fps_control_command() {
+		let command = parse_renderer_control_command(r#"{"command":"set_target_fps","target_fps":144}"#).unwrap();
+		let RendererControlCommand::SetTargetFps { target_fps } = command else {
+			panic!("expected set_target_fps command");
+		};
+		assert_eq!(target_fps, 144.0);
 	}
 
 	#[test]
@@ -9011,7 +10249,7 @@ mod tests {
 	#[test]
 	fn parses_json_set_dynamics_control_command() {
 		let command = parse_renderer_control_command(
-			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0}}"#,
+			r#"{"command":"set_dynamics","enabled":false,"bone_colliders":{"enabled":false},"physics":{"simulation_hz":120.0,"surface_constraints_enabled":false,"surface_constraint_topology_max_edge_distance_m":0.04,"surface_constraint_topology_max_mean_edge_distance_m":0.02,"surface_constraint_spatial_max_distance_m":0.01,"surface_constraint_topology_stiffness":0.25,"surface_constraint_spatial_stiffness":0.8,"surface_constraint_min_edge_count":4,"overrides":[{"category":"ears","solver":"xpbd","damping_half_life_ms":90.0,"rest_response":0.08,"shape_preservation":0.05,"bounce_scale":0.4,"motion_coupling":0.35}],"match_overrides":[{"name":"soft named parts","source_id_contains":["cape"],"source_id_regex":["(?i)ribbon"],"damping_half_life_ms":160.0,"rest_response":0.05,"shape_preservation":0.025,"bounce_scale":0.65,"motion_coupling":0.3,"drag_scale":0.6}],"group_overrides":[{"sourceId":"physbone:ear-tip","solver":"verlet","damping_half_life_ms":120.0,"rest_response":0.03,"shape_preservation":0.02,"bounce_scale":0.8,"drag_scale":1.4}]}}"#,
 		)
 		.unwrap();
 		let RendererControlCommand::SetDynamics {
@@ -9024,7 +10262,38 @@ mod tests {
 		};
 		assert!(!enabled);
 		assert!(!bone_colliders.enabled);
-		assert_eq!(physics_config.unwrap().simulation_hz, 120.0);
+		let physics_config = physics_config.unwrap();
+		assert_eq!(physics_config.simulation_hz, 120.0);
+		assert!(!physics_config.surface_constraints_enabled);
+		assert_eq!(physics_config.surface_constraint_topology_max_edge_distance_m, 0.04);
+		assert_eq!(physics_config.surface_constraint_topology_max_mean_edge_distance_m, 0.02);
+		assert_eq!(physics_config.surface_constraint_spatial_max_distance_m, 0.01);
+		assert_eq!(physics_config.surface_constraint_topology_stiffness, 0.25);
+		assert_eq!(physics_config.surface_constraint_spatial_stiffness, 0.8);
+		assert_eq!(physics_config.surface_constraint_min_edge_count, 4);
+		assert_eq!(physics_config.overrides[0].category, "ears");
+		assert_eq!(physics_config.overrides[0].params.damping_half_life_ms, Some(90.0));
+		assert_eq!(physics_config.overrides[0].params.rest_response, Some(0.08));
+		assert_eq!(physics_config.overrides[0].params.shape_preservation, Some(0.05));
+		assert_eq!(physics_config.overrides[0].params.bounce_scale, Some(0.4));
+		assert_eq!(physics_config.overrides[0].params.motion_coupling, Some(0.35));
+		assert_eq!(physics_config.match_overrides.len(), 1);
+		assert_eq!(physics_config.match_overrides[0].name, "soft named parts");
+		assert_eq!(physics_config.match_overrides[0].source_id_contains, vec!["cape"]);
+		assert_eq!(physics_config.match_overrides[0].source_id_regex, vec!["(?i)ribbon"]);
+		assert_eq!(physics_config.match_overrides[0].params.damping_half_life_ms, Some(160.0));
+		assert_eq!(physics_config.match_overrides[0].params.rest_response, Some(0.05));
+		assert_eq!(physics_config.match_overrides[0].params.shape_preservation, Some(0.025));
+		assert_eq!(physics_config.match_overrides[0].params.bounce_scale, Some(0.65));
+		assert_eq!(physics_config.match_overrides[0].params.motion_coupling, Some(0.3));
+		assert_eq!(physics_config.match_overrides[0].params.drag_scale, Some(0.6));
+		assert_eq!(physics_config.group_overrides.len(), 1);
+		assert_eq!(physics_config.group_overrides[0].source_id, "physbone:ear-tip");
+		assert_eq!(physics_config.group_overrides[0].params.damping_half_life_ms, Some(120.0));
+		assert_eq!(physics_config.group_overrides[0].params.rest_response, Some(0.03));
+		assert_eq!(physics_config.group_overrides[0].params.shape_preservation, Some(0.02));
+		assert_eq!(physics_config.group_overrides[0].params.bounce_scale, Some(0.8));
+		assert_eq!(physics_config.group_overrides[0].params.drag_scale, Some(1.4));
 	}
 
 	#[test]
@@ -9203,7 +10472,7 @@ mod tests {
 			None,
 		);
 		assert_eq!(next.policy, AvatarOutlinePolicy::Override);
-		assert_eq!(next.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(next.kind, AvatarOutlineKind::Geometry);
 		assert_eq!(next.width, Some(0.004));
 	}
 

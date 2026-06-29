@@ -1368,6 +1368,28 @@ fn scene_world_matrices(nodes: &[UnaSceneNode], roots: &[usize]) -> Vec<Mat4> {
 	world
 }
 
+fn update_world_subtree(nodes: &[UnaSceneNode], parents: &[usize], world: &mut [Mat4], node_index: usize) {
+	if node_index >= nodes.len() || node_index >= world.len() {
+		return;
+	}
+	let parent_world = parents
+		.get(node_index)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.unwrap_or(Mat4::IDENTITY);
+	fn visit(nodes: &[UnaSceneNode], idx: usize, parent: Mat4, world: &mut [Mat4]) {
+		if idx >= nodes.len() || idx >= world.len() {
+			return;
+		}
+		let current = parent * Mat4::from_cols_array(&nodes[idx].transform);
+		world[idx] = current;
+		for &child in &nodes[idx].children {
+			visit(nodes, child, current, world);
+		}
+	}
+	visit(nodes, node_index, parent_world, world);
+}
+
 fn compact_scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<usize> {
 	let mut parents = vec![NO_PARENT; nodes.len()];
 	for (parent, node) in nodes.iter().enumerate() {
@@ -1383,6 +1405,22 @@ fn compact_scene_parent_indices(nodes: &[UnaSceneNode]) -> Vec<usize> {
 fn set_node_rotation(node: &mut UnaSceneNode, rotation: Quat) {
 	let (scale, _old_rotation, translation) = node_scale_rotation_translation(node);
 	node.transform = Mat4::from_scale_rotation_translation(scale, rotation.normalize(), translation).to_cols_array();
+}
+
+fn euler_deg_to_quat(value: [f32; 3]) -> Quat {
+	Quat::from_euler(EulerRot::XYZ, value[0].to_radians(), value[1].to_radians(), value[2].to_radians()).normalize()
+}
+
+fn constraint_vec3(value: [f32; 3]) -> Vec3 {
+	Vec3::new(value[0], value[1], value[2])
+}
+
+fn blend_constraint_axis(current: Vec3, target: Vec3, x: bool, y: bool, z: bool) -> Vec3 {
+	Vec3::new(
+		if x { target.x } else { current.x },
+		if y { target.y } else { current.y },
+		if z { target.z } else { current.z },
+	)
 }
 
 fn apply_rotation_constraint(nodes: &mut [UnaSceneNode], rest_nodes: &[UnaSceneNode], c: &UnaNodeConstraint) {
@@ -1425,7 +1463,7 @@ fn apply_roll_constraint(nodes: &mut [UnaSceneNode], rest_nodes: &[UnaSceneNode]
 
 fn apply_aim_constraint(
 	nodes: &mut [UnaSceneNode],
-	roots: &[usize],
+	world: &mut [Mat4],
 	rest_nodes: &[UnaSceneNode],
 	parents: &[usize],
 	c: &UnaNodeConstraint,
@@ -1434,7 +1472,6 @@ fn apply_aim_constraint(
 	if c.source_node >= nodes.len() || c.target_node >= nodes.len() || c.target_node >= rest_nodes.len() {
 		return;
 	}
-	let world = scene_world_matrices(nodes, roots);
 	let src_pos = world[c.source_node].transform_point3(Vec3::ZERO);
 	let dst_pos = world[c.target_node].transform_point3(Vec3::ZERO);
 	let to_vec = (src_pos - dst_pos).normalize_or_zero();
@@ -1458,6 +1495,107 @@ fn apply_aim_constraint(
 	let result = dst_rest_rotation.slerp(target.normalize(), c.weight.clamp(0.0, 1.0));
 	if let Some(dst) = nodes.get_mut(c.target_node) {
 		set_node_rotation(dst, result);
+		update_world_subtree(nodes, parents, world, c.target_node);
+	}
+}
+
+fn apply_parent_constraint(
+	nodes: &mut [UnaSceneNode],
+	world: &mut [Mat4],
+	rest_nodes: &[UnaSceneNode],
+	rest_world: &[Mat4],
+	parents: &[usize],
+	c: &UnaNodeConstraint,
+	translate_x: bool,
+	translate_y: bool,
+	translate_z: bool,
+	rotate_x: bool,
+	rotate_y: bool,
+	rotate_z: bool,
+) {
+	if c.target_node >= nodes.len() || c.target_node >= rest_nodes.len() {
+		return;
+	}
+	let constraint_weight = c.weight.clamp(0.0, 1.0);
+	if constraint_weight <= 0.0 {
+		return;
+	}
+	let current_parent_world = parents
+		.get(c.target_node)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.unwrap_or(Mat4::IDENTITY);
+	let target_rest_local = rest_nodes
+		.get(c.target_node)
+		.map(|node| Mat4::from_cols_array(&node.transform))
+		.unwrap_or(Mat4::IDENTITY);
+	let target_rest_world = current_parent_world * target_rest_local;
+	let source_iter = if c.sources.is_empty() { None } else { Some(c.sources.as_slice()) };
+	let mut total_weight = 0.0_f32;
+	let mut blended_translation = Vec3::ZERO;
+	let mut blended_rotation: Option<Quat> = None;
+	if let Some(sources) = source_iter {
+		for source in sources {
+			if source.source_node >= world.len() || source.source_node >= rest_world.len() {
+				continue;
+			}
+			let source_weight = source.weight.max(0.0);
+			if source_weight <= 0.0 {
+				continue;
+			}
+			let offset = Mat4::from_scale_rotation_translation(
+				Vec3::ONE,
+				euler_deg_to_quat(source.rotation_offset),
+				constraint_vec3(source.translation_offset),
+			);
+			let source_rest_world = rest_world[source.source_node];
+			let source_delta = world[source.source_node] * source_rest_world.inverse();
+			let (_, rotation, translation) = (source_delta * target_rest_world * offset).to_scale_rotation_translation();
+			let next_total = total_weight + source_weight;
+			let t = if next_total > 0.0 { source_weight / next_total } else { 0.0 };
+			blended_translation = if total_weight <= 0.0 {
+				translation
+			} else {
+				blended_translation.lerp(translation, t)
+			};
+			blended_rotation = Some(match blended_rotation {
+				Some(previous) => previous.slerp(rotation.normalize(), t),
+				None => rotation.normalize(),
+			});
+			total_weight = next_total;
+		}
+	} else if c.source_node < world.len() && c.source_node < rest_world.len() {
+		let source_delta = world[c.source_node] * rest_world[c.source_node].inverse();
+		let (_, rotation, translation) = (source_delta * target_rest_world).to_scale_rotation_translation();
+		blended_translation = translation;
+		blended_rotation = Some(rotation.normalize());
+		total_weight = 1.0;
+	}
+	if total_weight <= 0.0 {
+		return;
+	}
+	let (rest_scale, rest_rotation, rest_translation) = target_rest_world.to_scale_rotation_translation();
+	let target_translation = blend_constraint_axis(rest_translation, blended_translation, translate_x, translate_y, translate_z);
+	let target_rotation = if rotate_x && rotate_y && rotate_z {
+		blended_rotation.unwrap_or(rest_rotation)
+	} else if rotate_x || rotate_y || rotate_z {
+		blended_rotation.unwrap_or(rest_rotation)
+	} else {
+		rest_rotation
+	};
+	let constrained_translation = rest_translation.lerp(target_translation, constraint_weight);
+	let constrained_rotation = if rotate_x || rotate_y || rotate_z {
+		rest_rotation.slerp(target_rotation.normalize(), constraint_weight)
+	} else {
+		rest_rotation
+	};
+	let target_world = Mat4::from_scale_rotation_translation(rest_scale, constrained_rotation.normalize(), constrained_translation);
+	let local = current_parent_world.inverse() * target_world;
+	if local.to_cols_array().iter().all(|value| value.is_finite()) {
+		if let Some(target) = nodes.get_mut(c.target_node) {
+			target.transform = local.to_cols_array();
+			update_world_subtree(nodes, parents, world, c.target_node);
+		}
 	}
 }
 
@@ -1475,13 +1613,49 @@ pub fn apply_node_constraints_to_scene(
 		return;
 	}
 	let mut parents = None;
+	let mut rest_world = None;
+	let mut current_world = None;
 	for c in constraints {
 		match c.kind {
-			UnaNodeConstraintKind::Rotation => apply_rotation_constraint(nodes, rest_nodes, c),
-			UnaNodeConstraintKind::Roll { axis } => apply_roll_constraint(nodes, rest_nodes, c, axis),
+			UnaNodeConstraintKind::Rotation => {
+				apply_rotation_constraint(nodes, rest_nodes, c);
+				current_world = None;
+			}
+			UnaNodeConstraintKind::Roll { axis } => {
+				apply_roll_constraint(nodes, rest_nodes, c, axis);
+				current_world = None;
+			}
 			UnaNodeConstraintKind::Aim { axis } => {
 				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
-				apply_aim_constraint(nodes, roots, rest_nodes, parents, c, axis);
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_aim_constraint(nodes, world, rest_nodes, parents, c, axis);
+			}
+			UnaNodeConstraintKind::Parent {
+				translate_x,
+				translate_y,
+				translate_z,
+				rotate_x,
+				rotate_y,
+				rotate_z,
+				..
+			} => {
+				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
+				let rest_world = rest_world.get_or_insert_with(|| scene_world_matrices(rest_nodes, roots));
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_parent_constraint(
+					nodes,
+					world,
+					rest_nodes,
+					rest_world,
+					parents,
+					c,
+					translate_x,
+					translate_y,
+					translate_z,
+					rotate_x,
+					rotate_y,
+					rotate_z,
+				);
 			}
 		}
 	}
@@ -2107,6 +2281,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![unknown_node()],
@@ -2307,6 +2482,65 @@ mod tests {
 			applied.angle_between(rotation) < 1e-4,
 			"body motion should resolve normalized profile keys; got {applied:?}"
 		);
+	}
+
+	#[test]
+	fn body_motion_applies_parent_constraints_after_pose_update() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.5, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut document = UnaDocument {
+			scene: Some(un_avatar_core::UnaSceneSnapshot {
+				nodes: rest_nodes.clone(),
+				roots: vec![0],
+				node_constraints: vec![un_avatar_core::UnaNodeConstraint {
+					target_node: 2,
+					source_node: 1,
+					weight: 1.0,
+					kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+						translate_x: false,
+						translate_y: false,
+						translate_z: false,
+						rotate_x: true,
+						rotate_y: true,
+						rotate_z: true,
+						translation_at_rest: [0.0; 3],
+						rotation_at_rest: [0.0; 3],
+					},
+					sources: vec![un_avatar_core::UnaNodeConstraintSource {
+						source_node: 1,
+						weight: 1.0,
+						translation_offset: [0.0; 3],
+						rotation_offset: [0.0; 3],
+					}],
+				}],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("left_upper_arm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let frame = unmotion_body_frame(HumanoidBone::LeftUpperArm, Quat::from_rotation_z(0.45));
+
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+
+		let scene = document.scene.as_ref().expect("scene");
+		let (_, source_rotation, _) = Mat4::from_cols_array(&scene.nodes[1].transform).to_scale_rotation_translation();
+		let (_, target_rotation, target_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		assert!(target_rotation.angle_between(source_rotation) < 1e-4);
+		assert!((target_translation - Vec3::new(0.5, 1.0, 0.0)).length() < 1e-5);
 	}
 
 	#[test]
@@ -2624,6 +2858,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -2672,6 +2907,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -2720,6 +2956,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -2790,6 +3027,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -2870,6 +3108,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -2964,6 +3203,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3039,6 +3279,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3115,6 +3356,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3195,6 +3437,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3475,6 +3718,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3525,6 +3769,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3580,6 +3825,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3618,6 +3864,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3718,6 +3965,7 @@ mod tests {
 				meshes: vec![],
 				materials: vec![],
 				images: vec![],
+				lighting: None,
 				image_sources: vec![],
 				skins: vec![],
 				nodes: rest_nodes.clone(),
@@ -3784,6 +4032,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3873,6 +4122,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -3958,6 +4208,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -4037,6 +4288,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -4107,6 +4359,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: rest_nodes.clone(),
@@ -4161,6 +4414,7 @@ mod tests {
 				meshes: vec![],
 				materials: vec![],
 				images: vec![],
+				lighting: None,
 				image_sources: vec![],
 				skins: vec![],
 				nodes: rest_nodes.clone(),
@@ -4227,6 +4481,7 @@ mod tests {
 			source_node: 1,
 			weight: 1.0,
 			kind: un_avatar_core::UnaNodeConstraintKind::Rotation,
+			sources: Vec::new(),
 		}];
 
 		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
@@ -4238,12 +4493,292 @@ mod tests {
 	}
 
 	#[test]
+	fn node_parent_constraint_preserves_target_rest_offset_from_source_delta() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[1].transform =
+			Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::from_rotation_z(0.25), Vec3::new(0.25, 1.5, 0.0)).to_cols_array();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 2,
+			source_node: 1,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+				translate_x: true,
+				translate_y: true,
+				translate_z: true,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				translation_at_rest: [0.0; 3],
+				rotation_at_rest: [0.0; 3],
+			},
+			sources: vec![un_avatar_core::UnaNodeConstraintSource {
+				source_node: 1,
+				weight: 1.0,
+				translation_offset: [0.0; 3],
+				rotation_offset: [0.0; 3],
+			}],
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let (_, applied_rotation, translation) = Mat4::from_cols_array(&nodes[2].transform).to_scale_rotation_translation();
+		let expected = Mat4::from_scale_rotation_translation(Vec3::ONE, Quat::from_rotation_z(0.25), Vec3::new(0.25, 1.5, 0.0))
+			* Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0))
+			* Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0));
+		let (_, expected_rotation, expected_translation) = expected.to_scale_rotation_translation();
+		assert!((translation - expected_translation).length() < 1e-5);
+		assert!(applied_rotation.abs_diff_eq(expected_rotation, 1e-5) || applied_rotation.abs_diff_eq(-expected_rotation, 1e-5));
+	}
+
+	#[test]
+	fn node_parent_constraint_blends_multiple_source_deltas() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(-1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[1].transform = Mat4::from_translation(Vec3::new(-1.0, 1.0, 0.0)).to_cols_array();
+		nodes[2].transform = Mat4::from_translation(Vec3::new(1.0, 3.0, 0.0)).to_cols_array();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 3,
+			source_node: 1,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+				translate_x: true,
+				translate_y: true,
+				translate_z: true,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				translation_at_rest: [0.0; 3],
+				rotation_at_rest: [0.0; 3],
+			},
+			sources: vec![
+				un_avatar_core::UnaNodeConstraintSource {
+					source_node: 1,
+					weight: 0.25,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				},
+				un_avatar_core::UnaNodeConstraintSource {
+					source_node: 2,
+					weight: 0.75,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				},
+			],
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let (_, _, translation) = Mat4::from_cols_array(&nodes[3].transform).to_scale_rotation_translation();
+		assert!((translation - Vec3::new(0.0, 4.5, 0.0)).length() < 1e-5);
+	}
+
+	#[test]
+	fn node_parent_constraint_weight_is_not_accumulated_across_applications() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[1].transform = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0)).to_cols_array();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 2,
+			source_node: 1,
+			weight: 0.5,
+			kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+				translate_x: true,
+				translate_y: true,
+				translate_z: true,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				translation_at_rest: [0.0; 3],
+				rotation_at_rest: [0.0; 3],
+			},
+			sources: vec![un_avatar_core::UnaNodeConstraintSource {
+				source_node: 1,
+				weight: 1.0,
+				translation_offset: [0.0; 3],
+				rotation_offset: [0.0; 3],
+			}],
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+		let first = nodes[2].transform;
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		assert_eq!(nodes[2].transform, first);
+		let (_, _, translation) = Mat4::from_cols_array(&nodes[2].transform).to_scale_rotation_translation();
+		assert!((translation - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-5);
+	}
+
+	#[test]
+	fn node_parent_constraint_zero_weight_keeps_target_transform() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 2.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		let before = nodes[2].transform;
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 2,
+			source_node: 1,
+			weight: 0.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+				translate_x: true,
+				translate_y: true,
+				translate_z: true,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				translation_at_rest: [0.0; 3],
+				rotation_at_rest: [0.0; 3],
+			},
+			sources: Vec::new(),
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		assert_eq!(nodes[2].transform, before);
+	}
+
+	#[test]
+	fn node_parent_constraint_chain_uses_updated_subtree_world() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				children: vec![4],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[2].transform = Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0)).to_cols_array();
+		let parent_kind = un_avatar_core::UnaNodeConstraintKind::Parent {
+			translate_x: true,
+			translate_y: true,
+			translate_z: true,
+			rotate_x: true,
+			rotate_y: true,
+			rotate_z: true,
+			translation_at_rest: [0.0; 3],
+			rotation_at_rest: [0.0; 3],
+		};
+		let constraints = vec![
+			un_avatar_core::UnaNodeConstraint {
+				target_node: 1,
+				source_node: 2,
+				weight: 1.0,
+				kind: parent_kind.clone(),
+				sources: vec![un_avatar_core::UnaNodeConstraintSource {
+					source_node: 2,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			},
+			un_avatar_core::UnaNodeConstraint {
+				target_node: 3,
+				source_node: 4,
+				weight: 1.0,
+				kind: parent_kind,
+				sources: vec![un_avatar_core::UnaNodeConstraintSource {
+					source_node: 4,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			},
+		];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let world = scene_world_matrices(&nodes, &[0]);
+		let target_world_translation = world[3].transform_point3(Vec3::ZERO);
+		assert!(
+			(target_world_translation - Vec3::new(4.0, 0.0, 0.0)).length() < 1e-5,
+			"target_world_translation={target_world_translation:?}"
+		);
+	}
+
+	#[test]
 	fn frame_updates_expression_weight() {
 		let mut document = UnaDocument::default();
 		document.scene = Some(un_avatar_core::UnaSceneSnapshot {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
@@ -4284,6 +4819,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
@@ -4327,6 +4863,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
@@ -4373,6 +4910,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],
@@ -4419,6 +4957,7 @@ mod tests {
 			meshes: vec![],
 			materials: vec![],
 			images: vec![],
+			lighting: None,
 			image_sources: vec![],
 			skins: vec![],
 			nodes: vec![],

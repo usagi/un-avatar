@@ -25,6 +25,7 @@ use tauri::{
 	Emitter, Manager, Runtime, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_notification::NotificationExt;
+use un_avatar_skeleton::dynamics_token_filter_matches;
 
 mod i18n;
 
@@ -57,10 +58,10 @@ const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-type SpringBoneAuthoredParamsByCategory = BTreeMap<String, SpringBoneCategoryAuthoredParams>;
-type SpringBoneAuthoredParamsCache = BTreeMap<String, SpringBoneAuthoredParamsByCategory>;
+type DynamicsAuthoredParamsByCategory = BTreeMap<String, DynamicsCategoryAuthoredParams>;
+type DynamicsAuthoredParamsCache = BTreeMap<String, DynamicsAuthoredParamsByCategory>;
 
-static SPRING_BONE_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<SpringBoneAuthoredParamsCache>> = OnceLock::new();
+static DYNAMICS_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<DynamicsAuthoredParamsCache>> = OnceLock::new();
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
@@ -230,6 +231,12 @@ struct RendererInstance {
 	exit_code: Option<i32>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct RuntimeCountEntry {
+	key: String,
+	count: u32,
+}
+
 #[derive(Clone, Serialize)]
 struct RendererRuntimeStatus {
 	id: u32,
@@ -242,7 +249,12 @@ struct RendererRuntimeStatus {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	target_fps: Option<f32>,
+	frame_target_ms: Option<f32>,
 	cpu_ms: Option<f32>,
+	frame_wall_ms: Option<f32>,
+	frame_wall_max_recent_ms: Option<f32>,
+	frame_wall_spike_count_recent: Option<u32>,
 	frame_cpu_total_ms: Option<f32>,
 	frame_motion_apply_ms: Option<f32>,
 	frame_dynamics_step_ms: Option<f32>,
@@ -372,6 +384,20 @@ struct RendererRuntimeStatus {
 	#[serde(default)]
 	dynamics_unknown_collider_count: u32,
 	#[serde(default)]
+	dynamics_surface_constraint_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_source_ids: Vec<String>,
+	#[serde(default)]
+	dynamics_collision_projection_collider_paths: Vec<String>,
+	#[serde(default)]
+	dynamics_collision_projection_collider_path_counts: Vec<RuntimeCountEntry>,
+	#[serde(default)]
+	dynamics_collision_projection_top_collider_path: Option<String>,
+	#[serde(default)]
+	dynamics_collision_projection_top_collider_count: Option<u32>,
+	#[serde(default)]
 	dynamics_contact_count: u32,
 	#[serde(default)]
 	dynamics_vrc_contact_sender_count: u32,
@@ -421,6 +447,10 @@ struct RendererRuntimeStatus {
 	contact_parameter_emissions: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	contact_probes: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_categories: Vec<serde_json::Value>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	dynamics_response_groups: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	dynamics_groups: Vec<serde_json::Value>,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -631,7 +661,17 @@ struct RendererRuntimeTelemetry {
 	scene_state: String,
 	uptime_secs: u64,
 	fps: Option<f32>,
+	#[serde(default)]
+	target_fps: Option<f32>,
+	#[serde(default)]
+	frame_target_ms: Option<f32>,
 	cpu_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_max_recent_ms: Option<f32>,
+	#[serde(default)]
+	frame_wall_spike_count_recent: Option<u32>,
 	#[serde(default)]
 	frame_cpu_total_ms: Option<f32>,
 	#[serde(default)]
@@ -797,6 +837,20 @@ struct RendererRuntimeTelemetry {
 	#[serde(default)]
 	dynamics_unknown_collider_count: u32,
 	#[serde(default)]
+	dynamics_surface_constraint_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_count: u32,
+	#[serde(default)]
+	dynamics_collision_projection_source_ids: Vec<String>,
+	#[serde(default)]
+	dynamics_collision_projection_collider_paths: Vec<String>,
+	#[serde(default)]
+	dynamics_collision_projection_collider_path_counts: Vec<RuntimeCountEntry>,
+	#[serde(default)]
+	dynamics_collision_projection_top_collider_path: Option<String>,
+	#[serde(default)]
+	dynamics_collision_projection_top_collider_count: Option<u32>,
+	#[serde(default)]
 	dynamics_contact_count: u32,
 	#[serde(default)]
 	dynamics_vrc_contact_sender_count: u32,
@@ -846,6 +900,10 @@ struct RendererRuntimeTelemetry {
 	contact_parameter_emissions: Vec<serde_json::Value>,
 	#[serde(default)]
 	contact_probes: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_response_categories: Vec<serde_json::Value>,
+	#[serde(default)]
+	dynamics_response_groups: Vec<serde_json::Value>,
 	#[serde(default)]
 	dynamics_groups: Vec<serde_json::Value>,
 	#[serde(default)]
@@ -955,31 +1013,98 @@ struct RendererBoneColliderRadiiMm {
 }
 
 #[derive(Clone, Serialize)]
-struct RendererSpringBonePhysicsConfig {
+struct RendererDynamicsPhysicsConfig {
 	time_mode: String,
 	simulation_hz: f32,
 	substeps: u32,
+	surface_constraints_enabled: bool,
+	surface_constraint_topology_max_edge_distance_m: f32,
+	surface_constraint_topology_max_mean_edge_distance_m: f32,
+	surface_constraint_spatial_max_distance_m: f32,
+	surface_constraint_topology_stiffness: f32,
+	surface_constraint_spatial_stiffness: f32,
+	surface_constraint_min_edge_count: u32,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	mesh_cloth_assist: Option<RendererDynamicsMeshClothAssistConfig>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	overrides: Vec<RendererSpringBoneCategoryOverride>,
+	overrides: Vec<RendererDynamicsCategoryOverride>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	match_overrides: Vec<RendererDynamicsMatchOverride>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	collider_augment_overrides: Vec<RendererDynamicsColliderAugmentOverride>,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	group_overrides: Vec<RendererDynamicsGroupOverride>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct RendererDynamicsMeshClothAssistConfig {
+	enabled: bool,
+	body_dominance_threshold: f32,
+	min_existing_dynamic_weight: f32,
+	seed_missing_dynamic_influence: bool,
+	max_assist_weight: f32,
+	mesh_path_contains: Vec<String>,
 }
 
 #[derive(Clone, Serialize)]
-struct RendererSpringBoneCategoryOverride {
+struct RendererDynamicsCategoryOverride {
 	category: String,
 	#[serde(flatten)]
-	params: RendererSpringBonePhysicsParams,
+	params: RendererDynamicsPhysicsParams,
 }
 
-#[derive(Clone, Serialize)]
-struct RendererSpringBonePhysicsParams {
+#[derive(Clone, Serialize, Deserialize)]
+struct RendererDynamicsMatchOverride {
+	name: String,
+	#[serde(alias = "sourceId", alias = "source")]
+	source_id: String,
+	#[serde(default, alias = "sourceIdContains", alias = "source_contains", alias = "contains")]
+	source_id_contains: Vec<String>,
+	#[serde(default, alias = "sourceIdRegex", alias = "source_regex", alias = "regex")]
+	source_id_regex: Vec<String>,
+	#[serde(flatten)]
+	params: RendererDynamicsPhysicsParams,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct RendererDynamicsGroupOverride {
+	#[serde(alias = "sourceId", alias = "source")]
+	source_id: String,
+	#[serde(flatten)]
+	params: RendererDynamicsPhysicsParams,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct RendererDynamicsColliderAugmentOverride {
+	name: String,
+	#[serde(default, alias = "sourceIdContains", alias = "source_contains", alias = "contains")]
+	source_id_contains: Vec<String>,
+	#[serde(default, alias = "colliderPathContains", alias = "collider_contains")]
+	collider_path_contains: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct RendererDynamicsPhysicsParams {
 	#[serde(skip_serializing_if = "Option::is_none")]
 	solver: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	damping_half_life_ms: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	rest_response: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	stiffness_hz: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
+	shape_preservation: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	bounce_scale: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stretch_range_scale: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	stretch_motion: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
 	xpbd_compliance: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	motion_coupling: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	gravity_scale: Option<f32>,
 	#[serde(skip_serializing_if = "Option::is_none")]
@@ -990,12 +1115,34 @@ struct RendererSpringBonePhysicsParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-struct RendererSpringBoneSetting {
+struct RendererDynamicsSetting {
 	dynamics_enabled: bool,
 	dynamics_physics_configured: bool,
 	dynamics_simulation_hz: f32,
 	dynamics_substeps: u32,
-	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	#[serde(default = "default_dynamics_surface_constraints_enabled_setting")]
+	dynamics_surface_constraints_enabled: bool,
+	#[serde(default = "default_dynamics_surface_constraint_topology_max_edge_distance_m_setting")]
+	dynamics_surface_constraint_topology_max_edge_distance_m: f32,
+	#[serde(default = "default_dynamics_surface_constraint_topology_max_mean_edge_distance_m_setting")]
+	dynamics_surface_constraint_topology_max_mean_edge_distance_m: f32,
+	#[serde(default = "default_dynamics_surface_constraint_spatial_max_distance_m_setting")]
+	dynamics_surface_constraint_spatial_max_distance_m: f32,
+	#[serde(default = "default_dynamics_surface_constraint_topology_stiffness_setting")]
+	dynamics_surface_constraint_topology_stiffness: f32,
+	#[serde(default = "default_dynamics_surface_constraint_spatial_stiffness_setting")]
+	dynamics_surface_constraint_spatial_stiffness: f32,
+	#[serde(default = "default_dynamics_surface_constraint_min_edge_count_setting")]
+	dynamics_surface_constraint_min_edge_count: u32,
+	#[serde(default)]
+	dynamics_mesh_cloth_assist: Option<RendererDynamicsMeshClothAssistConfig>,
+	dynamics_category_overrides: Vec<DynamicsCategoryOverrideSetting>,
+	#[serde(default)]
+	dynamics_match_overrides: Vec<RendererDynamicsMatchOverride>,
+	#[serde(default)]
+	dynamics_collider_augment_overrides: Vec<RendererDynamicsColliderAugmentOverride>,
+	#[serde(default)]
+	dynamics_group_overrides: Vec<RendererDynamicsGroupOverride>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -1246,7 +1393,7 @@ enum RendererControlCommand {
 		enabled: bool,
 		bone_colliders: RendererBoneColliderConfig,
 		#[serde(skip_serializing_if = "Option::is_none")]
-		physics_config: Option<RendererSpringBonePhysicsConfig>,
+		physics_config: Option<RendererDynamicsPhysicsConfig>,
 	},
 	SetDynamicsEnabled {
 		source_id: String,
@@ -1259,6 +1406,9 @@ enum RendererControlCommand {
 	SetInputBindings {
 		wardrobe_bindings: Vec<WardrobeBindingSetting>,
 		animator_bindings: Vec<AnimatorBindingSetting>,
+	},
+	SetTargetFps {
+		target_fps: f32,
 	},
 	SetWardrobeTransition {
 		billboard_anchor: String,
@@ -1367,7 +1517,18 @@ struct AvatarSetting {
 	dynamics_physics_configured: bool,
 	dynamics_simulation_hz: f32,
 	dynamics_substeps: u32,
-	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_surface_constraints_enabled: bool,
+	dynamics_surface_constraint_topology_max_edge_distance_m: f32,
+	dynamics_surface_constraint_topology_max_mean_edge_distance_m: f32,
+	dynamics_surface_constraint_spatial_max_distance_m: f32,
+	dynamics_surface_constraint_topology_stiffness: f32,
+	dynamics_surface_constraint_spatial_stiffness: f32,
+	dynamics_surface_constraint_min_edge_count: u32,
+	dynamics_mesh_cloth_assist: Option<RendererDynamicsMeshClothAssistConfig>,
+	dynamics_category_overrides: Vec<DynamicsCategoryOverrideSetting>,
+	dynamics_match_overrides: Vec<RendererDynamicsMatchOverride>,
+	dynamics_collider_augment_overrides: Vec<RendererDynamicsColliderAugmentOverride>,
+	dynamics_group_overrides: Vec<RendererDynamicsGroupOverride>,
 	/// VMC `/VMC/Ext/Root/Pos` の translation を scene root へ加算するか。
 	/// manifest `[motion] apply_vmc_root_translation` に対応。既定 false（Waidayo 等の calibration 都合で
 	/// 意図せず非ゼロな translation が送られアバターが前後にズレる問題を防ぐため）。フルボディトラッカー
@@ -1377,6 +1538,7 @@ struct AvatarSetting {
 	spout_name: Option<String>,
 	spout_width: Option<u32>,
 	spout_height: Option<u32>,
+	target_fps: f32,
 	aa: String,
 	texture_resolution_limit: String,
 	texture_compression: String,
@@ -1501,6 +1663,7 @@ struct AvatarSetting {
 	window_height: u32,
 	icon_path: Option<String>,
 	allow_multiple_renderers: bool,
+	gpu_adapter: String,
 	notes: Option<String>,
 	group: String,
 	scene_cache_fingerprint: String,
@@ -1588,7 +1751,18 @@ struct PhysicsSettings {
 	dynamics_physics_configured: bool,
 	dynamics_simulation_hz: f32,
 	dynamics_substeps: u32,
-	dynamics_category_overrides: Vec<SpringBoneCategoryOverrideSetting>,
+	dynamics_surface_constraints_enabled: bool,
+	dynamics_surface_constraint_topology_max_edge_distance_m: f32,
+	dynamics_surface_constraint_topology_max_mean_edge_distance_m: f32,
+	dynamics_surface_constraint_spatial_max_distance_m: f32,
+	dynamics_surface_constraint_topology_stiffness: f32,
+	dynamics_surface_constraint_spatial_stiffness: f32,
+	dynamics_surface_constraint_min_edge_count: u32,
+	dynamics_mesh_cloth_assist: Option<RendererDynamicsMeshClothAssistConfig>,
+	dynamics_category_overrides: Vec<DynamicsCategoryOverrideSetting>,
+	dynamics_match_overrides: Vec<RendererDynamicsMatchOverride>,
+	dynamics_collider_augment_overrides: Vec<RendererDynamicsColliderAugmentOverride>,
+	dynamics_group_overrides: Vec<RendererDynamicsGroupOverride>,
 	bone_colliders_enabled: bool,
 	bone_collider_head: f32,
 	bone_collider_neck_chest: f32,
@@ -1659,7 +1833,7 @@ struct OutputSettings {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct SpringBoneCategoryOverrideSetting {
+struct DynamicsCategoryOverrideSetting {
 	category: String,
 	name: String,
 	mode: String,
@@ -1667,13 +1841,27 @@ struct SpringBoneCategoryOverrideSetting {
 	solver: String,
 	damping_configured: bool,
 	damping_half_life_ms: f32,
-	stiffness_configured: bool,
-	stiffness_hz: f32,
+	#[serde(alias = "stiffness_configured")]
+	rest_response_configured: bool,
+	#[serde(alias = "stiffness_hz")]
+	rest_response: f32,
+	shape_preservation_configured: bool,
+	shape_preservation: f32,
+	bounce_configured: bool,
+	bounce_scale: f32,
+	stretch_range_configured: bool,
+	stretch_range_scale: f32,
+	stretch_motion_configured: bool,
+	stretch_motion: f32,
+	motion_coupling_configured: bool,
+	motion_coupling: f32,
 	xpbd_compliance_configured: bool,
 	xpbd_compliance: f32,
 	constraint_iterations_configured: bool,
 	constraint_iterations: u32,
-	authored_stiffness_hz: f32,
+	#[serde(alias = "authored_stiffness_hz")]
+	authored_rest_response: f32,
+	authored_shape_preservation: f32,
 	authored_xpbd_compliance: f32,
 }
 
@@ -1737,6 +1925,7 @@ struct ManifestProfile {
 	created_at: Option<String>,
 	sort_order: Option<u32>,
 	allow_multiple_renderers: Option<bool>,
+	gpu_adapter: Option<String>,
 	notes: Option<String>,
 	group: Option<String>,
 	scene_cache: Option<ManifestProfileSceneCache>,
@@ -1747,6 +1936,16 @@ struct ManifestProfile {
 struct ManifestProfileSceneCache {
 	fingerprint: Option<String>,
 	prewarmed_at: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct GpuAdapterOption {
+	value: String,
+	label: String,
+	name: String,
+	device_type: String,
+	vendor: u32,
+	device: u32,
 }
 
 #[derive(Default, Deserialize)]
@@ -1807,6 +2006,12 @@ struct ManifestUnmotionZenoh {
 #[serde(default)]
 struct ManifestOutput {
 	spout2: Option<ManifestSpout>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestRuntime {
+	target_fps: Option<f32>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1974,7 +2179,35 @@ struct ManifestDynamicsPhysics {
 struct ManifestDynamicsSolverPhysics {
 	simulation_hz: Option<f32>,
 	substeps: Option<u32>,
+	surface_constraints: Option<ManifestDynamicsSurfaceConstraints>,
+	mesh_cloth_assist: Option<ManifestDynamicsMeshClothAssist>,
 	overrides: Option<Vec<ManifestDynamicsSolverCategoryOverride>>,
+	match_overrides: Option<Vec<ManifestDynamicsSolverMatchOverride>>,
+	collider_augment_overrides: Option<Vec<ManifestDynamicsSolverColliderAugmentOverride>>,
+	group_overrides: Option<Vec<ManifestDynamicsSolverGroupOverride>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsSurfaceConstraints {
+	enabled: Option<bool>,
+	topology_max_edge_distance_m: Option<f32>,
+	topology_max_mean_edge_distance_m: Option<f32>,
+	spatial_max_distance_m: Option<f32>,
+	topology_stiffness: Option<f32>,
+	spatial_stiffness: Option<f32>,
+	min_edge_count: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsMeshClothAssist {
+	enabled: Option<bool>,
+	body_dominance_threshold: Option<f32>,
+	min_existing_dynamic_weight: Option<f32>,
+	seed_missing_dynamic_influence: Option<bool>,
+	max_assist_weight: Option<f32>,
+	mesh_path_contains: Option<Vec<String>>,
 }
 
 #[derive(Default, Deserialize)]
@@ -1983,9 +2216,85 @@ struct ManifestDynamicsSolverCategoryOverride {
 	category: String,
 	solver: Option<String>,
 	damping_half_life_ms: Option<f32>,
+	rest_response: Option<f32>,
 	stiffness_hz: Option<f32>,
+	shape_preservation: Option<f32>,
+	bounce_scale: Option<f32>,
+	stretch_range_scale: Option<f32>,
+	stretch_motion: Option<f32>,
 	xpbd_compliance: Option<f32>,
+	motion_coupling: Option<f32>,
 	constraint_iterations: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsSolverGroupOverride {
+	#[serde(alias = "sourceId")]
+	source_id: String,
+	source: Option<String>,
+	solver: Option<String>,
+	damping_half_life_ms: Option<f32>,
+	rest_response: Option<f32>,
+	stiffness_hz: Option<f32>,
+	shape_preservation: Option<f32>,
+	bounce_scale: Option<f32>,
+	stretch_range_scale: Option<f32>,
+	stretch_motion: Option<f32>,
+	xpbd_compliance: Option<f32>,
+	motion_coupling: Option<f32>,
+	drag_scale: Option<f32>,
+	constraint_iterations: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsSolverMatchOverride {
+	name: Option<String>,
+	#[serde(alias = "sourceId")]
+	source_id: Option<String>,
+	source: Option<String>,
+	#[serde(alias = "sourceIdContains", alias = "source_contains", alias = "contains")]
+	source_id_contains: Option<Vec<String>>,
+	#[serde(alias = "sourceIdRegex", alias = "source_regex", alias = "regex")]
+	source_id_regex: Option<Vec<String>>,
+	solver: Option<String>,
+	damping_half_life_ms: Option<f32>,
+	rest_response: Option<f32>,
+	stiffness_hz: Option<f32>,
+	shape_preservation: Option<f32>,
+	bounce_scale: Option<f32>,
+	stretch_range_scale: Option<f32>,
+	stretch_motion: Option<f32>,
+	xpbd_compliance: Option<f32>,
+	motion_coupling: Option<f32>,
+	drag_scale: Option<f32>,
+	constraint_iterations: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestDynamicsSolverColliderAugmentOverride {
+	name: Option<String>,
+	#[serde(alias = "sourceIdContains", alias = "source_contains", alias = "contains")]
+	source_id_contains: Option<Vec<String>>,
+	#[serde(alias = "colliderPathContains", alias = "collider_contains")]
+	collider_path_contains: Option<Vec<String>>,
+}
+
+fn manifest_rest_response_override(rest_response: Option<f32>, legacy_stiffness_hz: Option<f32>) -> Option<f32> {
+	rest_response
+		.filter(|value| value.is_finite())
+		.map(|value| value.clamp(0.0, 1.0))
+		.or_else(|| {
+			legacy_stiffness_hz.filter(|value| value.is_finite()).map(|value| {
+				if value <= 1.0 {
+					value.clamp(0.0, 1.0)
+				} else {
+					(value / 60.0).clamp(0.0, 1.0)
+				}
+			})
+		})
 }
 
 #[derive(Default, Deserialize)]
@@ -2192,6 +2501,7 @@ struct AvatarManifestSummary {
 	audio_link: Option<ManifestAudioLink>,
 	physics: Option<ManifestPhysics>,
 	output: Option<ManifestOutput>,
+	runtime: Option<ManifestRuntime>,
 	aa: Option<String>,
 	render_quality: Option<ManifestRenderQuality>,
 	transparent: Option<bool>,
@@ -2540,6 +2850,7 @@ pub fn run() {
 			get_native_notification_status,
 			list_app_notifications,
 			list_avatar_settings,
+			list_gpu_adapters,
 			list_diagnostics_exports,
 			list_renderers,
 			launch_renderer,
@@ -3329,6 +3640,7 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 			("created_at".to_string(), toml::Value::String(created_at.clone())),
 			("sort_order".to_string(), toml::Value::Integer(next_avatar_sort_order()? as i64)),
 			("allow_multiple_renderers".to_string(), toml::Value::Boolean(false)),
+			("gpu_adapter".to_string(), toml::Value::String("auto".to_string())),
 			("group".to_string(), toml::Value::String(String::new())),
 			("notes".to_string(), toml::Value::String(String::new())),
 		])),
@@ -5582,9 +5894,34 @@ fn apply_avatar_setting_runtime_side_effects(setting: &AvatarSetting, fields: &[
 			apply_wardrobe_transition_to_matching_renderers,
 		),
 		(
+			"physics.dynamics.",
+			"apply UNPhysics dynamics to running renderers",
+			apply_dynamics_to_matching_renderers,
+		),
+		(
+			"physics.bone_colliders.",
+			"apply UNPhysics dynamics to running renderers",
+			apply_dynamics_to_matching_renderers,
+		),
+		(
+			"dynamics_enabled",
+			"apply UNPhysics dynamics to running renderers",
+			apply_dynamics_to_matching_renderers,
+		),
+		(
+			"spring_bones",
+			"apply UNPhysics dynamics to running renderers",
+			apply_dynamics_to_matching_renderers,
+		),
+		(
 			"output.spout2.",
 			"apply Spout2 output settings to running renderers",
 			apply_spout_output_to_matching_renderers,
+		),
+		(
+			"runtime.target_fps",
+			"apply target FPS to running renderers",
+			apply_target_fps_to_matching_renderers,
 		),
 	];
 
@@ -5631,6 +5968,9 @@ fn apply_avatar_setting_value(
 		AvatarSettingFieldDomain::RenderQuality => {
 			apply_render_quality_setting_value(manifest, field, value)?;
 		}
+		AvatarSettingFieldDomain::Runtime => {
+			apply_runtime_setting_value(manifest, field, value)?;
+		}
 		AvatarSettingFieldDomain::ContactShadow => {
 			apply_contact_shadow_setting_value(manifest, field, value)?;
 		}
@@ -5674,6 +6014,7 @@ enum AvatarSettingFieldDomain {
 	Motion,
 	AudioLink,
 	RenderQuality,
+	Runtime,
 	ContactShadow,
 	AvatarEffect,
 	Environment,
@@ -5697,6 +6038,7 @@ fn avatar_setting_field_domain(field: &str) -> Option<AvatarSettingFieldDomain> 
 		_ if field.starts_with("motion.") => Some(AvatarSettingFieldDomain::Motion),
 		_ if field.starts_with("audio_link.") => Some(AvatarSettingFieldDomain::AudioLink),
 		_ if field.starts_with("render_quality.") => Some(AvatarSettingFieldDomain::RenderQuality),
+		_ if field.starts_with("runtime.") => Some(AvatarSettingFieldDomain::Runtime),
 		_ if field.starts_with("effects.avatar.contact_shadow.") => Some(AvatarSettingFieldDomain::ContactShadow),
 		_ if field.starts_with("effects.avatar.") => Some(AvatarSettingFieldDomain::AvatarEffect),
 		_ if field.starts_with("environment.") => Some(AvatarSettingFieldDomain::Environment),
@@ -6431,8 +6773,19 @@ fn apply_physics_setting_value(
 				"[1, 8]",
 			)
 		}
+		"physics.dynamics.solver.match_overrides" => apply_dynamics_match_overrides_value(manifest, value),
+		"physics.dynamics.solver.collider_augment_overrides" => apply_dynamics_collider_augment_overrides_value(manifest, value),
+		"physics.dynamics.solver.group_overrides" => apply_dynamics_group_overrides_value(manifest, value),
+		"physics.dynamics.solver.surface_constraints" => apply_dynamics_surface_constraints_value(manifest, value),
+		field if field.starts_with("physics.dynamics.solver.surface_constraints.") => {
+			apply_dynamics_surface_constraints_field_value(manifest, field, value)
+		}
+		"physics.dynamics.solver.mesh_cloth_assist" => apply_dynamics_mesh_cloth_assist_value(manifest, value),
+		field if field.starts_with("physics.dynamics.solver.mesh_cloth_assist.") => {
+			apply_dynamics_mesh_cloth_assist_field_value(manifest, field, value)
+		}
 		field if field.starts_with("physics.dynamics.solver.overrides.") || field.starts_with("physics.spring_bone.overrides.") => {
-			apply_spring_bone_category_override_value(manifest, setting, field, value)
+			apply_dynamics_category_override_value(manifest, setting, field, value)
 		}
 		"physics.bone_colliders.enabled" => {
 			set_nested_json_bool(manifest, &["physics", "bone_colliders", "enabled"], &value, field)?;
@@ -6448,6 +6801,172 @@ fn apply_physics_setting_value(
 					set_collider_part_radius_mm(manifest, part, json_f32(&value, field)?)
 				}
 				_ => Err(format!("unsupported setting field: {field}")),
+			}
+		}
+		_ => Err(format!("unsupported setting field: {field}")),
+	}
+}
+
+fn apply_dynamics_mesh_cloth_assist_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let object = value
+		.as_object()
+		.ok_or_else(|| "physics.dynamics.solver.mesh_cloth_assist must be an object".to_string())?;
+	for (key, raw_value) in object {
+		let field = format!("physics.dynamics.solver.mesh_cloth_assist.{key}");
+		apply_dynamics_mesh_cloth_assist_field_value(manifest, &field, raw_value.clone())?;
+	}
+	Ok(())
+}
+
+fn apply_dynamics_surface_constraints_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let object = value
+		.as_object()
+		.ok_or_else(|| "physics.dynamics.solver.surface_constraints must be an object".to_string())?;
+	for (key, raw_value) in object {
+		let field = format!("physics.dynamics.solver.surface_constraints.{key}");
+		apply_dynamics_surface_constraints_field_value(manifest, &field, raw_value.clone())?;
+	}
+	Ok(())
+}
+
+fn apply_dynamics_surface_constraints_field_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let key = field
+		.strip_prefix("physics.dynamics.solver.surface_constraints.")
+		.ok_or_else(|| format!("unsupported setting field: {field}"))?;
+	match key {
+		"enabled" => set_nested_json_bool(
+			manifest,
+			&["physics", "dynamics", "solver", "surface_constraints", "enabled"],
+			&value,
+			field,
+		),
+		"topology_max_edge_distance_m" => set_nested_ranged_float(
+			manifest,
+			&[
+				"physics",
+				"dynamics",
+				"solver",
+				"surface_constraints",
+				"topology_max_edge_distance_m",
+			],
+			&value,
+			field,
+			0.001..=0.2,
+			"[0.001, 0.2]",
+		),
+		"topology_max_mean_edge_distance_m" => set_nested_ranged_float(
+			manifest,
+			&[
+				"physics",
+				"dynamics",
+				"solver",
+				"surface_constraints",
+				"topology_max_mean_edge_distance_m",
+			],
+			&value,
+			field,
+			0.001..=0.2,
+			"[0.001, 0.2]",
+		),
+		"spatial_max_distance_m" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "surface_constraints", "spatial_max_distance_m"],
+			&value,
+			field,
+			0.001..=0.1,
+			"[0.001, 0.1]",
+		),
+		"topology_stiffness" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "surface_constraints", "topology_stiffness"],
+			&value,
+			field,
+			0.0..=1.0,
+			"[0, 1]",
+		),
+		"spatial_stiffness" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "surface_constraints", "spatial_stiffness"],
+			&value,
+			field,
+			0.0..=1.0,
+			"[0, 1]",
+		),
+		"min_edge_count" => set_nested_ranged_u32(
+			manifest,
+			&["physics", "dynamics", "solver", "surface_constraints", "min_edge_count"],
+			&value,
+			field,
+			1..=64,
+			"[1, 64]",
+		),
+		_ => Err(format!("unsupported setting field: {field}")),
+	}
+}
+
+fn apply_dynamics_mesh_cloth_assist_field_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let key = field
+		.strip_prefix("physics.dynamics.solver.mesh_cloth_assist.")
+		.ok_or_else(|| format!("unsupported setting field: {field}"))?;
+	match key {
+		"enabled" => set_nested_json_bool(
+			manifest,
+			&["physics", "dynamics", "solver", "mesh_cloth_assist", "enabled"],
+			&value,
+			field,
+		),
+		"body_dominance_threshold" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "mesh_cloth_assist", "body_dominance_threshold"],
+			&value,
+			field,
+			0.05..=0.99,
+			"[0.05, 0.99]",
+		),
+		"min_existing_dynamic_weight" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "mesh_cloth_assist", "min_existing_dynamic_weight"],
+			&value,
+			field,
+			0.0..=0.95,
+			"[0, 0.95]",
+		),
+		"seed_missing_dynamic_influence" => set_nested_json_bool(
+			manifest,
+			&[
+				"physics",
+				"dynamics",
+				"solver",
+				"mesh_cloth_assist",
+				"seed_missing_dynamic_influence",
+			],
+			&value,
+			field,
+		),
+		"max_assist_weight" => set_nested_ranged_float(
+			manifest,
+			&["physics", "dynamics", "solver", "mesh_cloth_assist", "max_assist_weight"],
+			&value,
+			field,
+			0.0..=0.95,
+			"[0, 0.95]",
+		),
+		"mesh_path_contains" => {
+			if let Some(value) = string_list_toml_value(&value, field)? {
+				set_nested_value(
+					manifest,
+					&["physics", "dynamics", "solver", "mesh_cloth_assist", "mesh_path_contains"],
+					value,
+				)
+			} else {
+				remove_nested_key(
+					manifest,
+					&["physics", "dynamics", "solver", "mesh_cloth_assist", "mesh_path_contains"],
+				)
 			}
 		}
 		_ => Err(format!("unsupported setting field: {field}")),
@@ -6507,6 +7026,16 @@ fn apply_render_quality_setting_value(manifest: &mut toml::Value, field: &str, v
 	}
 }
 
+fn apply_runtime_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
+	match field {
+		"runtime.target_fps" => {
+			let fps = json_f32(&value, field)?;
+			set_nested_float(manifest, &["runtime", "target_fps"], clamp_target_fps(fps))
+		}
+		_ => Err(format!("unsupported runtime setting field: {field}")),
+	}
+}
+
 fn apply_profile_setting_value(manifest: &mut toml::Value, field: &str, value: serde_json::Value) -> Result<(), String> {
 	match field {
 		"profile.display_name" => {
@@ -6519,6 +7048,7 @@ fn apply_profile_setting_value(manifest: &mut toml::Value, field: &str, value: s
 			"allow_multiple_renderers",
 			toml::Value::Boolean(json_bool(&value, field)?),
 		),
+		"profile.gpu_adapter" => set_profile_value(manifest, "gpu_adapter", toml::Value::String(json_gpu_adapter(&value, field)?)),
 		"profile.notes" => set_profile_value(manifest, "notes", toml::Value::String(json_string(&value, field)?)),
 		"profile.group" => set_profile_value(
 			manifest,
@@ -7408,14 +7938,14 @@ fn set_renderer_motion_receivers(
 }
 
 #[tauri::command]
-fn set_renderer_dynamics(id: u32, setting: RendererSpringBoneSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+fn set_renderer_dynamics(id: u32, setting: RendererDynamicsSetting, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
 	send_renderer_command_by_id(
 		id,
 		state.inner(),
 		RendererControlCommand::SetDynamics {
 			enabled: setting.dynamics_enabled,
 			bone_colliders: renderer_bone_collider_config(&setting),
-			physics_config: renderer_spring_bone_physics_config(&setting),
+			physics_config: renderer_dynamics_physics_config(&setting),
 		},
 	)
 }
@@ -8080,7 +8610,12 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.unwrap_or_else(|| "unknown".to_string()),
 		uptime_secs: telemetry.as_ref().map_or(info.uptime_secs, |telemetry| telemetry.uptime_secs),
 		fps: telemetry.as_ref().and_then(|telemetry| telemetry.fps),
+		target_fps: telemetry.as_ref().and_then(|telemetry| telemetry.target_fps),
+		frame_target_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_target_ms),
 		cpu_ms: telemetry.as_ref().and_then(|telemetry| telemetry.cpu_ms),
+		frame_wall_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_ms),
+		frame_wall_max_recent_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_max_recent_ms),
+		frame_wall_spike_count_recent: telemetry.as_ref().and_then(|telemetry| telemetry.frame_wall_spike_count_recent),
 		frame_cpu_total_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_cpu_total_ms),
 		frame_motion_apply_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_motion_apply_ms),
 		frame_dynamics_step_ms: telemetry.as_ref().and_then(|telemetry| telemetry.frame_dynamics_step_ms),
@@ -8214,6 +8749,30 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 			.as_ref()
 			.map_or(0, |telemetry| telemetry.dynamics_vrc_physbone_collider_count),
 		dynamics_unknown_collider_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_unknown_collider_count),
+		dynamics_surface_constraint_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_surface_constraint_count),
+		dynamics_collision_projection_count: telemetry
+			.as_ref()
+			.map_or(0, |telemetry| telemetry.dynamics_collision_projection_count),
+		dynamics_collision_projection_source_ids: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_collision_projection_source_ids.clone())
+			.unwrap_or_default(),
+		dynamics_collision_projection_collider_paths: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_collision_projection_collider_paths.clone())
+			.unwrap_or_default(),
+		dynamics_collision_projection_collider_path_counts: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_collision_projection_collider_path_counts.clone())
+			.unwrap_or_default(),
+		dynamics_collision_projection_top_collider_path: telemetry
+			.as_ref()
+			.and_then(|telemetry| telemetry.dynamics_collision_projection_top_collider_path.clone()),
+		dynamics_collision_projection_top_collider_count: telemetry
+			.as_ref()
+			.and_then(|telemetry| telemetry.dynamics_collision_projection_top_collider_count),
 		dynamics_contact_count: telemetry.as_ref().map_or(0, |telemetry| telemetry.dynamics_contact_count),
 		dynamics_vrc_contact_sender_count: telemetry
 			.as_ref()
@@ -8295,6 +8854,14 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		contact_probes: telemetry
 			.as_ref()
 			.map(|telemetry| telemetry.contact_probes.clone())
+			.unwrap_or_default(),
+		dynamics_response_categories: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_response_categories.clone())
+			.unwrap_or_default(),
+		dynamics_response_groups: telemetry
+			.as_ref()
+			.map(|telemetry| telemetry.dynamics_response_groups.clone())
 			.unwrap_or_default(),
 		dynamics_groups: telemetry
 			.as_ref()
@@ -8539,7 +9106,7 @@ fn send_managed_renderer_shutdown(renderer: &ManagedRenderer) -> Result<(), Stri
 		.map_err(|e| format!("spawn renderer shutdown publisher: {e}"))
 }
 
-fn renderer_bone_collider_config(setting: &RendererSpringBoneSetting) -> RendererBoneColliderConfig {
+fn renderer_bone_collider_config(setting: &RendererDynamicsSetting) -> RendererBoneColliderConfig {
 	RendererBoneColliderConfig {
 		enabled: setting.bone_colliders_enabled,
 		radius_mm: RendererBoneColliderRadiiMm {
@@ -8553,40 +9120,166 @@ fn renderer_bone_collider_config(setting: &RendererSpringBoneSetting) -> Rendere
 	}
 }
 
-fn renderer_spring_bone_physics_config(setting: &RendererSpringBoneSetting) -> Option<RendererSpringBonePhysicsConfig> {
+fn renderer_dynamics_setting_from_avatar_setting(setting: &AvatarSetting) -> RendererDynamicsSetting {
+	RendererDynamicsSetting {
+		dynamics_enabled: setting.dynamics_enabled,
+		dynamics_physics_configured: setting.dynamics_physics_configured,
+		dynamics_simulation_hz: setting.dynamics_simulation_hz,
+		dynamics_substeps: setting.dynamics_substeps,
+		dynamics_surface_constraints_enabled: setting.dynamics_surface_constraints_enabled,
+		dynamics_surface_constraint_topology_max_edge_distance_m: setting.dynamics_surface_constraint_topology_max_edge_distance_m,
+		dynamics_surface_constraint_topology_max_mean_edge_distance_m: setting
+			.dynamics_surface_constraint_topology_max_mean_edge_distance_m,
+		dynamics_surface_constraint_spatial_max_distance_m: setting.dynamics_surface_constraint_spatial_max_distance_m,
+		dynamics_surface_constraint_topology_stiffness: setting.dynamics_surface_constraint_topology_stiffness,
+		dynamics_surface_constraint_spatial_stiffness: setting.dynamics_surface_constraint_spatial_stiffness,
+		dynamics_surface_constraint_min_edge_count: setting.dynamics_surface_constraint_min_edge_count,
+		dynamics_mesh_cloth_assist: setting.dynamics_mesh_cloth_assist.clone(),
+		dynamics_category_overrides: setting.dynamics_category_overrides.clone(),
+		dynamics_match_overrides: setting.dynamics_match_overrides.clone(),
+		dynamics_collider_augment_overrides: setting.dynamics_collider_augment_overrides.clone(),
+		dynamics_group_overrides: setting.dynamics_group_overrides.clone(),
+		bone_colliders_enabled: setting.bone_colliders_enabled,
+		bone_collider_head: setting.bone_collider_head,
+		bone_collider_neck_chest: setting.bone_collider_neck_chest,
+		bone_collider_torso: setting.bone_collider_torso,
+		bone_collider_upper_arms: setting.bone_collider_upper_arms,
+		bone_collider_lower_arms: setting.bone_collider_lower_arms,
+		bone_collider_hands: setting.bone_collider_hands,
+	}
+}
+
+fn finite_or(value: f32, fallback: f32) -> f32 {
+	if value.is_finite() {
+		value
+	} else {
+		fallback
+	}
+}
+
+fn default_dynamics_surface_constraints_enabled_setting() -> bool {
+	true
+}
+
+fn default_dynamics_surface_constraint_topology_max_edge_distance_m_setting() -> f32 {
+	0.06
+}
+
+fn default_dynamics_surface_constraint_topology_max_mean_edge_distance_m_setting() -> f32 {
+	0.03
+}
+
+fn default_dynamics_surface_constraint_spatial_max_distance_m_setting() -> f32 {
+	0.012
+}
+
+fn default_dynamics_surface_constraint_topology_stiffness_setting() -> f32 {
+	0.35
+}
+
+fn default_dynamics_surface_constraint_spatial_stiffness_setting() -> f32 {
+	0.9
+}
+
+fn default_dynamics_surface_constraint_min_edge_count_setting() -> u32 {
+	3
+}
+
+fn renderer_dynamics_physics_config(setting: &RendererDynamicsSetting) -> Option<RendererDynamicsPhysicsConfig> {
 	if !setting.dynamics_physics_configured {
 		return None;
 	}
 	let overrides: Vec<_> = setting
 		.dynamics_category_overrides
 		.iter()
-		.filter_map(renderer_spring_bone_category_override)
+		.filter_map(renderer_dynamics_category_override)
 		.collect();
-	Some(RendererSpringBonePhysicsConfig {
+	Some(RendererDynamicsPhysicsConfig {
 		time_mode: "time_based".to_string(),
 		simulation_hz: setting.dynamics_simulation_hz.clamp(30.0, 240.0),
 		substeps: setting.dynamics_substeps.clamp(1, 8),
+		surface_constraints_enabled: setting.dynamics_surface_constraints_enabled,
+		surface_constraint_topology_max_edge_distance_m: finite_or(
+			setting.dynamics_surface_constraint_topology_max_edge_distance_m,
+			default_dynamics_surface_constraint_topology_max_edge_distance_m_setting(),
+		)
+		.clamp(0.001, 0.2),
+		surface_constraint_topology_max_mean_edge_distance_m: finite_or(
+			setting.dynamics_surface_constraint_topology_max_mean_edge_distance_m,
+			default_dynamics_surface_constraint_topology_max_mean_edge_distance_m_setting(),
+		)
+		.clamp(0.001, 0.2),
+		surface_constraint_spatial_max_distance_m: finite_or(
+			setting.dynamics_surface_constraint_spatial_max_distance_m,
+			default_dynamics_surface_constraint_spatial_max_distance_m_setting(),
+		)
+		.clamp(0.001, 0.1),
+		surface_constraint_topology_stiffness: finite_or(
+			setting.dynamics_surface_constraint_topology_stiffness,
+			default_dynamics_surface_constraint_topology_stiffness_setting(),
+		)
+		.clamp(0.0, 1.0),
+		surface_constraint_spatial_stiffness: finite_or(
+			setting.dynamics_surface_constraint_spatial_stiffness,
+			default_dynamics_surface_constraint_spatial_stiffness_setting(),
+		)
+		.clamp(0.0, 1.0),
+		surface_constraint_min_edge_count: setting.dynamics_surface_constraint_min_edge_count.clamp(1, 64),
+		mesh_cloth_assist: setting.dynamics_mesh_cloth_assist.clone().map(normalize_mesh_cloth_assist_config),
 		overrides,
+		match_overrides: setting.dynamics_match_overrides.clone(),
+		collider_augment_overrides: setting.dynamics_collider_augment_overrides.clone(),
+		group_overrides: setting.dynamics_group_overrides.clone(),
 	})
 }
 
-fn renderer_spring_bone_category_override(
-	override_setting: &SpringBoneCategoryOverrideSetting,
-) -> Option<RendererSpringBoneCategoryOverride> {
+fn normalize_mesh_cloth_assist_config(config: RendererDynamicsMeshClothAssistConfig) -> RendererDynamicsMeshClothAssistConfig {
+	RendererDynamicsMeshClothAssistConfig {
+		enabled: config.enabled,
+		body_dominance_threshold: config.body_dominance_threshold.clamp(0.05, 0.99),
+		min_existing_dynamic_weight: config.min_existing_dynamic_weight.clamp(0.0, 0.95),
+		seed_missing_dynamic_influence: config.seed_missing_dynamic_influence,
+		max_assist_weight: config.max_assist_weight.clamp(0.0, 0.95),
+		mesh_path_contains: config
+			.mesh_path_contains
+			.into_iter()
+			.map(|value| value.trim().to_string())
+			.filter(|value| !value.is_empty())
+			.collect(),
+	}
+}
+
+fn renderer_dynamics_category_override(override_setting: &DynamicsCategoryOverrideSetting) -> Option<RendererDynamicsCategoryOverride> {
 	if override_setting.mode == "authored" {
 		return None;
 	}
-	let solver = normalize_spring_bone_solver(&override_setting.solver).unwrap_or_else(|| "verlet".to_string());
-	Some(RendererSpringBoneCategoryOverride {
-		category: normalize_spring_bone_category_id(&override_setting.category),
-		params: RendererSpringBonePhysicsParams {
+	let solver = normalize_dynamics_solver(&override_setting.solver).unwrap_or_else(|| "verlet".to_string());
+	Some(RendererDynamicsCategoryOverride {
+		category: normalize_dynamics_category_id(&override_setting.category),
+		params: RendererDynamicsPhysicsParams {
 			solver: Some(solver),
 			damping_half_life_ms: override_setting
 				.damping_configured
 				.then_some(override_setting.damping_half_life_ms.clamp(1.0, 10_000.0)),
-			stiffness_hz: override_setting
-				.stiffness_configured
-				.then_some(override_setting.stiffness_hz.clamp(0.0, 60.0)),
+			rest_response: override_setting
+				.rest_response_configured
+				.then_some(override_setting.rest_response.clamp(0.0, 1.0)),
+			stiffness_hz: None,
+			shape_preservation: override_setting
+				.shape_preservation_configured
+				.then_some(override_setting.shape_preservation.clamp(0.0, 1.0)),
+			bounce_scale: override_setting
+				.bounce_configured
+				.then_some(override_setting.bounce_scale.clamp(0.0, 4.0)),
+			stretch_range_scale: override_setting
+				.stretch_range_configured
+				.then_some(override_setting.stretch_range_scale.clamp(0.0, 4.0)),
+			stretch_motion: override_setting
+				.stretch_motion_configured
+				.then_some(override_setting.stretch_motion.clamp(0.0, 1.0)),
+			motion_coupling: override_setting
+				.motion_coupling_configured
+				.then_some(override_setting.motion_coupling.clamp(0.0, 1.0)),
 			xpbd_compliance: override_setting
 				.xpbd_compliance_configured
 				.then_some(override_setting.xpbd_compliance.clamp(0.0, 10.0)),
@@ -8597,6 +9290,94 @@ fn renderer_spring_bone_category_override(
 				.then_some(override_setting.constraint_iterations.clamp(1, 32)),
 		},
 	})
+}
+
+fn renderer_dynamics_params_from_manifest_group_override(
+	override_item: &ManifestDynamicsSolverGroupOverride,
+) -> RendererDynamicsPhysicsParams {
+	RendererDynamicsPhysicsParams {
+		solver: override_item.solver.as_deref().and_then(normalize_dynamics_solver),
+		damping_half_life_ms: override_item
+			.damping_half_life_ms
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(1.0, 10_000.0)),
+		rest_response: manifest_rest_response_override(override_item.rest_response, override_item.stiffness_hz),
+		stiffness_hz: None,
+		shape_preservation: override_item
+			.shape_preservation
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		bounce_scale: override_item
+			.bounce_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 4.0)),
+		stretch_range_scale: override_item
+			.stretch_range_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 4.0)),
+		stretch_motion: override_item
+			.stretch_motion
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		motion_coupling: override_item
+			.motion_coupling
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		xpbd_compliance: override_item
+			.xpbd_compliance
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 10.0)),
+		gravity_scale: None,
+		drag_scale: override_item
+			.drag_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 10.0)),
+		constraint_iterations: override_item.constraint_iterations.map(|value| value.clamp(1, 32)),
+	}
+}
+
+fn renderer_dynamics_params_from_manifest_match_override(
+	override_item: &ManifestDynamicsSolverMatchOverride,
+) -> RendererDynamicsPhysicsParams {
+	RendererDynamicsPhysicsParams {
+		solver: override_item.solver.as_deref().and_then(normalize_dynamics_solver),
+		damping_half_life_ms: override_item
+			.damping_half_life_ms
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(1.0, 10_000.0)),
+		rest_response: manifest_rest_response_override(override_item.rest_response, override_item.stiffness_hz),
+		stiffness_hz: None,
+		shape_preservation: override_item
+			.shape_preservation
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		bounce_scale: override_item
+			.bounce_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 4.0)),
+		stretch_range_scale: override_item
+			.stretch_range_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 4.0)),
+		stretch_motion: override_item
+			.stretch_motion
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		motion_coupling: override_item
+			.motion_coupling
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 1.0)),
+		xpbd_compliance: override_item
+			.xpbd_compliance
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 10.0)),
+		gravity_scale: None,
+		drag_scale: override_item
+			.drag_scale
+			.filter(|value| value.is_finite())
+			.map(|value| value.clamp(0.0, 10.0)),
+		constraint_iterations: override_item.constraint_iterations.map(|value| value.clamp(1, 32)),
+	}
 }
 
 fn manifest_path_key(path: &str) -> String {
@@ -8756,6 +9537,19 @@ fn apply_wardrobe_transition_to_matching_renderers(setting: &AvatarSetting, stat
 	)
 }
 
+fn apply_dynamics_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	let dynamics_setting = renderer_dynamics_setting_from_avatar_setting(setting);
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetDynamics {
+			enabled: dynamics_setting.dynamics_enabled,
+			bone_colliders: renderer_bone_collider_config(&dynamics_setting),
+			physics_config: renderer_dynamics_physics_config(&dynamics_setting),
+		},
+	)
+}
+
 fn apply_spout_output_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
 	send_renderer_command_to_matching_renderers(
 		setting,
@@ -8765,6 +9559,16 @@ fn apply_spout_output_to_matching_renderers(setting: &AvatarSetting, state: &Mut
 			name: setting.spout_name.clone(),
 			width: setting.spout_width,
 			height: setting.spout_height,
+		},
+	)
+}
+
+fn apply_target_fps_to_matching_renderers(setting: &AvatarSetting, state: &Mutex<SupervisorState>) -> Result<usize, String> {
+	send_renderer_command_to_matching_renderers(
+		setting,
+		state,
+		&RendererControlCommand::SetTargetFps {
+			target_fps: clamp_target_fps(setting.target_fps),
 		},
 	)
 }
@@ -9116,7 +9920,8 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let motion = motion_settings(manifest.motion.unwrap_or_default(), manifest.vmc_address, manifest.vmc_port);
 	let audio_link = audio_link_settings(manifest.audio_link.unwrap_or_default());
 	let output = output_settings(manifest.output, manifest.spout);
-	let avatar_path_for_spring_bones = manifest.avatar_path.clone();
+	let target_fps = runtime_target_fps(manifest.runtime);
+	let avatar_path_for_dynamics = manifest.avatar_path.clone();
 	let window = window_settings(
 		manifest.window.unwrap_or_default(),
 		manifest.icon_path,
@@ -9129,7 +9934,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let color_adjustment = color_adjustment_settings(environment.color.unwrap_or_default());
 	let lighting = lighting_settings(environment.lighting.unwrap_or_default());
 	let debug = debug_settings(manifest.debug.as_ref());
-	let physics = physics_settings(manifest.physics.as_ref(), avatar_path_for_spring_bones.as_ref(), path);
+	let physics = physics_settings(manifest.physics.as_ref(), avatar_path_for_dynamics.as_ref(), path);
 	let effects = manifest.effects.unwrap_or_default();
 	let avatar_effects = avatar_effect_settings(effects.avatar);
 	let post_effects = post_effect_settings(effects.post);
@@ -9170,12 +9975,25 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		dynamics_physics_configured: physics.dynamics_physics_configured,
 		dynamics_simulation_hz: physics.dynamics_simulation_hz,
 		dynamics_substeps: physics.dynamics_substeps,
+		dynamics_surface_constraints_enabled: physics.dynamics_surface_constraints_enabled,
+		dynamics_surface_constraint_topology_max_edge_distance_m: physics.dynamics_surface_constraint_topology_max_edge_distance_m,
+		dynamics_surface_constraint_topology_max_mean_edge_distance_m: physics
+			.dynamics_surface_constraint_topology_max_mean_edge_distance_m,
+		dynamics_surface_constraint_spatial_max_distance_m: physics.dynamics_surface_constraint_spatial_max_distance_m,
+		dynamics_surface_constraint_topology_stiffness: physics.dynamics_surface_constraint_topology_stiffness,
+		dynamics_surface_constraint_spatial_stiffness: physics.dynamics_surface_constraint_spatial_stiffness,
+		dynamics_surface_constraint_min_edge_count: physics.dynamics_surface_constraint_min_edge_count,
+		dynamics_mesh_cloth_assist: physics.dynamics_mesh_cloth_assist,
 		dynamics_category_overrides: physics.dynamics_category_overrides,
+		dynamics_match_overrides: physics.dynamics_match_overrides,
+		dynamics_collider_augment_overrides: physics.dynamics_collider_augment_overrides,
+		dynamics_group_overrides: physics.dynamics_group_overrides,
 		apply_vmc_root_translation: motion.apply_vmc_root_translation,
 		spout_enabled: output.spout_enabled,
 		spout_name: output.spout_name,
 		spout_width: output.spout_width,
 		spout_height: output.spout_height,
+		target_fps,
 		aa: render_quality.aa,
 		texture_resolution_limit: render_quality.texture_resolution_limit,
 		texture_compression: render_quality.texture_compression,
@@ -9270,6 +10088,7 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		window_height: window.height,
 		icon_path: window.icon_path,
 		allow_multiple_renderers: profile.allow_multiple_renderers.unwrap_or(false),
+		gpu_adapter: normalize_gpu_adapter_profile_value(profile.gpu_adapter.as_deref()),
 		notes: profile.notes,
 		group: profile.group.unwrap_or_default().trim().to_string(),
 		scene_cache_fingerprint,
@@ -9285,6 +10104,70 @@ fn resolve_avatar_setting(setting_id: &str) -> Result<AvatarSetting, String> {
 		}
 	}
 	Err(format!("avatar setting not found: {setting_id}"))
+}
+
+#[tauri::command]
+fn list_gpu_adapters() -> Result<Vec<GpuAdapterOption>, String> {
+	let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+	descriptor.backends = wgpu::Backends::all();
+	let instance = wgpu::Instance::new(descriptor);
+	let mut devices = BTreeMap::<String, GpuAdapterOption>::new();
+	for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all())) {
+		let info = adapter.get_info();
+		if !gpu_adapter_visible_in_profile_ui(&info) {
+			continue;
+		}
+		let device_type = format!("{:?}", info.device_type);
+		let value = gpu_device_selector_from_info(&info);
+		let label = format!(
+			"{} ({}, vendor {:04x}, device {:04x})",
+			info.name, device_type, info.vendor, info.device
+		);
+		devices.entry(value.clone()).or_insert(GpuAdapterOption {
+			value,
+			label,
+			name: info.name,
+			device_type,
+			vendor: info.vendor,
+			device: info.device,
+		});
+	}
+	let mut options = devices.into_values().collect::<Vec<_>>();
+	options.sort_by(|a, b| {
+		gpu_device_type_sort_key(&a.device_type)
+			.cmp(&gpu_device_type_sort_key(&b.device_type))
+			.then_with(|| a.name.cmp(&b.name))
+			.then_with(|| a.value.cmp(&b.value))
+	});
+	Ok(options)
+}
+
+fn normalize_gpu_adapter_profile_value(value: Option<&str>) -> String {
+	let value = value.unwrap_or_default().trim();
+	if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+		"auto".to_string()
+	} else {
+		value.to_string()
+	}
+}
+
+fn gpu_adapter_visible_in_profile_ui(info: &wgpu::AdapterInfo) -> bool {
+	!matches!(info.backend, wgpu::Backend::Noop | wgpu::Backend::Gl | wgpu::Backend::BrowserWebGpu)
+		&& !matches!(info.device_type, wgpu::DeviceType::Cpu)
+}
+
+fn gpu_device_type_sort_key(device_type: &str) -> u8 {
+	match device_type {
+		"DiscreteGpu" => 0,
+		"IntegratedGpu" => 1,
+		"VirtualGpu" => 2,
+		"Other" => 3,
+		_ => 4,
+	}
+}
+
+fn gpu_device_selector_from_info(info: &wgpu::AdapterInfo) -> String {
+	format!("gpu:{:04x}:{:04x}:{}", info.vendor, info.device, info.name)
 }
 
 fn resolve_avatar_setting_direct(setting_id: &str) -> Result<AvatarSetting, String> {
@@ -10032,6 +10915,19 @@ fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
 	{
 		profile.remove("scene_cache");
 	}
+	if let Some(root) = normalized.as_table_mut() {
+		let runtime_empty = root
+			.get_mut("runtime")
+			.and_then(toml::Value::as_table_mut)
+			.map(|runtime| {
+				runtime.remove("target_fps");
+				runtime.is_empty()
+			})
+			.unwrap_or(false);
+		if runtime_empty {
+			root.remove("runtime");
+		}
+	}
 	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
 	format!("{:016x}", fnv1a64(serialized.as_bytes()))
 }
@@ -10358,6 +11254,17 @@ fn json_render_backend(value: &serde_json::Value, field: &str) -> Result<String,
 	json_lowercase_choice(value, field, &["vulkan", "dx12", "auto"])
 }
 
+fn json_gpu_adapter(value: &serde_json::Value, field: &str) -> Result<String, String> {
+	let value = json_string(value, field)?.trim().to_string();
+	if value.is_empty() {
+		return Ok("auto".to_string());
+	}
+	if value.chars().any(|ch| ch == '\n' || ch == '\r' || ch == '\0') {
+		return Err(format!("{field} must not contain control separators"));
+	}
+	Ok(value)
+}
+
 fn json_block_compression_encoder(value: &serde_json::Value, field: &str) -> Result<String, String> {
 	json_lowercase_choice(value, field, &["gpu", "cpu"])
 }
@@ -10418,7 +11325,7 @@ fn normalize_light_reference(value: &str) -> Option<&'static str> {
 	}
 }
 
-fn normalize_spring_bone_solver(value: &str) -> Option<String> {
+fn normalize_dynamics_solver(value: &str) -> Option<String> {
 	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
 		"verlet" | "balanced" | "compat_univrm" | "compat_euler" | "compat" | "univrm" | "euler" => Some("verlet".to_string()),
 		"xpbd" | "quality" => Some("xpbd".to_string()),
@@ -10426,11 +11333,11 @@ fn normalize_spring_bone_solver(value: &str) -> Option<String> {
 	}
 }
 
-fn validate_spring_bone_solver(value: &str) -> Result<String, String> {
-	normalize_spring_bone_solver(value).ok_or_else(|| "UNPhysics solver must be one of verlet, xpbd".to_string())
+fn validate_dynamics_solver(value: &str) -> Result<String, String> {
+	normalize_dynamics_solver(value).ok_or_else(|| "UNPhysics solver must be one of verlet, xpbd".to_string())
 }
 
-fn normalize_spring_bone_category_id(value: &str) -> String {
+fn normalize_dynamics_category_id(value: &str) -> String {
 	let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
 	if normalized.is_empty() {
 		"other".to_string()
@@ -10439,56 +11346,86 @@ fn normalize_spring_bone_category_id(value: &str) -> String {
 	}
 }
 
-fn builtin_spring_bone_categories() -> &'static [(&'static str, &'static str)] {
+fn normalize_dynamics_match_text(value: &str) -> String {
+	let mut out = String::with_capacity(value.len());
+	let mut prev_was_separator = true;
+	let mut prev_was_lower_or_digit = false;
+	for ch in value.trim().chars() {
+		if ch == '_' || !ch.is_alphanumeric() {
+			if !prev_was_separator && !out.is_empty() {
+				out.push('_');
+			}
+			prev_was_separator = true;
+			prev_was_lower_or_digit = false;
+			continue;
+		}
+		let is_upper = ch.is_uppercase();
+		if is_upper && prev_was_lower_or_digit && !prev_was_separator {
+			out.push('_');
+		}
+		for lower in ch.to_lowercase() {
+			out.push(lower);
+		}
+		prev_was_separator = false;
+		prev_was_lower_or_digit = ch.is_lowercase() || ch.is_numeric();
+	}
+	while out.ends_with('_') {
+		out.pop();
+	}
+	out
+}
+
+fn builtin_dynamics_categories() -> &'static [(&'static str, &'static str)] {
 	&[
 		("hair", "Hair"),
 		("ears", "Ears"),
 		("tail", "Tail"),
 		("cloth", "Cloth"),
 		("accessory", "Accessory"),
+		("soft_body", "Soft Body"),
 		("other", "Other"),
 	]
 }
 
-fn spring_bone_category_override_settings(
+fn dynamics_category_override_settings(
 	physics: Option<&ManifestDynamicsSolverPhysics>,
 	avatar_path: Option<&PathBuf>,
 	manifest_path: &Path,
-) -> Vec<SpringBoneCategoryOverrideSetting> {
+) -> Vec<DynamicsCategoryOverrideSetting> {
 	let authored_by_category = avatar_path
-		.and_then(|path| model_spring_bone_category_authored_params(path, manifest_path))
+		.and_then(|path| model_dynamics_category_authored_params(path, manifest_path))
 		.unwrap_or_default();
 	let category_ids: Vec<String> = if authored_by_category.is_empty() {
-		builtin_spring_bone_categories()
+		builtin_dynamics_categories()
 			.iter()
 			.map(|(category, _)| (*category).to_string())
 			.collect()
 	} else {
-		builtin_spring_bone_categories()
+		builtin_dynamics_categories()
 			.iter()
 			.filter(|(category, _)| authored_by_category.contains_key(*category))
 			.map(|(category, _)| (*category).to_string())
 			.collect()
 	};
-	let mut settings: Vec<SpringBoneCategoryOverrideSetting> = category_ids
+	let mut settings: Vec<DynamicsCategoryOverrideSetting> = category_ids
 		.iter()
 		.map(|category| {
 			let authored = authored_by_category.get(category.as_str()).copied().unwrap_or_default();
-			spring_bone_category_setting(category, category_label_from_id(category), authored)
+			dynamics_category_setting(category, category_label_from_id(category), authored)
 		})
 		.collect();
 	let Some(overrides) = physics.and_then(|physics| physics.overrides.as_ref()) else {
 		return settings;
 	};
 	for override_item in overrides {
-		let category = normalize_spring_bone_category_id(&override_item.category);
+		let category = normalize_dynamics_category_id(&override_item.category);
 		let index = settings.iter().position(|setting| setting.category == category).unwrap_or_else(|| {
 			let authored = authored_by_category.get(category.as_str()).copied().unwrap_or_default();
-			settings.push(spring_bone_category_setting(&category, category_label_from_id(&category), authored));
+			settings.push(dynamics_category_setting(&category, category_label_from_id(&category), authored));
 			settings.len() - 1
 		});
 		let setting = &mut settings[index];
-		if let Some(solver) = override_item.solver.as_deref().and_then(normalize_spring_bone_solver) {
+		if let Some(solver) = override_item.solver.as_deref().and_then(normalize_dynamics_solver) {
 			setting.mode = if solver == "xpbd" {
 				"override_xpbd".to_string()
 			} else {
@@ -10500,9 +11437,29 @@ fn spring_bone_category_override_settings(
 			setting.damping_configured = true;
 			setting.damping_half_life_ms = value.clamp(1.0, 10_000.0);
 		}
-		if let Some(value) = override_item.stiffness_hz.filter(|value| value.is_finite()) {
-			setting.stiffness_configured = true;
-			setting.stiffness_hz = value.clamp(0.0, 60.0);
+		if let Some(value) = manifest_rest_response_override(override_item.rest_response, override_item.stiffness_hz) {
+			setting.rest_response_configured = true;
+			setting.rest_response = value;
+		}
+		if let Some(value) = override_item.shape_preservation.filter(|value| value.is_finite()) {
+			setting.shape_preservation_configured = true;
+			setting.shape_preservation = value.clamp(0.0, 1.0);
+		}
+		if let Some(value) = override_item.bounce_scale.filter(|value| value.is_finite()) {
+			setting.bounce_configured = true;
+			setting.bounce_scale = value.clamp(0.0, 4.0);
+		}
+		if let Some(value) = override_item.stretch_range_scale.filter(|value| value.is_finite()) {
+			setting.stretch_range_configured = true;
+			setting.stretch_range_scale = value.clamp(0.0, 4.0);
+		}
+		if let Some(value) = override_item.stretch_motion.filter(|value| value.is_finite()) {
+			setting.stretch_motion_configured = true;
+			setting.stretch_motion = value.clamp(0.0, 1.0);
+		}
+		if let Some(value) = override_item.motion_coupling.filter(|value| value.is_finite()) {
+			setting.motion_coupling_configured = true;
+			setting.motion_coupling = value.clamp(0.0, 1.0);
 		}
 		if let Some(value) = override_item.xpbd_compliance.filter(|value| value.is_finite()) {
 			setting.xpbd_compliance_configured = true;
@@ -10514,7 +11471,12 @@ fn spring_bone_category_override_settings(
 		}
 		if setting.mode == "authored"
 			&& (setting.damping_configured
-				|| setting.stiffness_configured
+				|| setting.rest_response_configured
+				|| setting.shape_preservation_configured
+				|| setting.bounce_configured
+				|| setting.stretch_range_configured
+				|| setting.stretch_motion_configured
+				|| setting.motion_coupling_configured
 				|| setting.xpbd_compliance_configured
 				|| setting.constraint_iterations_configured)
 		{
@@ -10533,12 +11495,113 @@ fn spring_bone_category_override_settings(
 	settings
 }
 
-fn spring_bone_category_setting(
-	category: &str,
-	name: String,
-	authored: SpringBoneCategoryAuthoredParams,
-) -> SpringBoneCategoryOverrideSetting {
-	SpringBoneCategoryOverrideSetting {
+fn dynamics_group_override_settings(physics: Option<&ManifestDynamicsSolverPhysics>) -> Vec<RendererDynamicsGroupOverride> {
+	let Some(group_overrides) = physics.and_then(|physics| physics.group_overrides.as_ref()) else {
+		return Vec::new();
+	};
+	group_overrides
+		.iter()
+		.filter_map(|override_item| {
+			let source_id = override_item.source_id.trim();
+			let source_id = if source_id.is_empty() {
+				override_item.source.as_deref().unwrap_or("").trim()
+			} else {
+				source_id
+			};
+			if source_id.is_empty() {
+				return None;
+			}
+			Some(RendererDynamicsGroupOverride {
+				source_id: source_id.to_string(),
+				params: renderer_dynamics_params_from_manifest_group_override(override_item),
+			})
+		})
+		.collect()
+}
+
+fn dynamics_match_override_settings(physics: Option<&ManifestDynamicsSolverPhysics>) -> Vec<RendererDynamicsMatchOverride> {
+	let Some(match_overrides) = physics.and_then(|physics| physics.match_overrides.as_ref()) else {
+		return Vec::new();
+	};
+	match_overrides
+		.iter()
+		.filter_map(|override_item| {
+			let source_id = override_item.source_id.as_deref().unwrap_or_default().trim().to_string();
+			let source_id = if source_id.is_empty() {
+				override_item.source.as_deref().unwrap_or_default().trim().to_string()
+			} else {
+				source_id
+			};
+			let source_id_contains: Vec<_> = override_item
+				.source_id_contains
+				.as_deref()
+				.unwrap_or_default()
+				.iter()
+				.map(|value| value.trim().to_string())
+				.filter(|value| !value.is_empty())
+				.collect();
+			let source_id_regex: Vec<_> = override_item
+				.source_id_regex
+				.as_deref()
+				.unwrap_or_default()
+				.iter()
+				.map(|value| value.trim().to_string())
+				.filter(|value| !value.is_empty())
+				.collect();
+			let name = override_item.name.as_deref().unwrap_or_default().trim().to_string();
+			if source_id.is_empty() && source_id_contains.is_empty() && source_id_regex.is_empty() {
+				return None;
+			}
+			Some(RendererDynamicsMatchOverride {
+				name,
+				source_id,
+				source_id_contains,
+				source_id_regex,
+				params: renderer_dynamics_params_from_manifest_match_override(override_item),
+			})
+		})
+		.collect()
+}
+
+fn dynamics_collider_augment_override_settings(
+	physics: Option<&ManifestDynamicsSolverPhysics>,
+) -> Vec<RendererDynamicsColliderAugmentOverride> {
+	let Some(overrides) = physics.and_then(|physics| physics.collider_augment_overrides.as_ref()) else {
+		return Vec::new();
+	};
+	overrides
+		.iter()
+		.filter_map(|override_item| {
+			let source_id_contains: Vec<_> = override_item
+				.source_id_contains
+				.as_deref()
+				.unwrap_or_default()
+				.iter()
+				.map(|value| value.trim().to_string())
+				.filter(|value| !value.is_empty())
+				.collect();
+			let collider_path_contains: Vec<_> = override_item
+				.collider_path_contains
+				.as_deref()
+				.unwrap_or_default()
+				.iter()
+				.map(|value| value.trim().to_string())
+				.filter(|value| !value.is_empty())
+				.collect();
+			if source_id_contains.is_empty() || collider_path_contains.is_empty() {
+				return None;
+			}
+			Some(RendererDynamicsColliderAugmentOverride {
+				name: override_item.name.as_deref().unwrap_or_default().trim().to_string(),
+				source_id_contains,
+				collider_path_contains,
+			})
+		})
+		.collect()
+}
+
+fn dynamics_category_setting(category: &str, name: String, authored: DynamicsCategoryAuthoredParams) -> DynamicsCategoryOverrideSetting {
+	DynamicsCategoryOverrideSetting {
 		category: category.to_string(),
 		name,
 		mode: "authored".to_string(),
@@ -10546,13 +11609,24 @@ fn spring_bone_category_setting(
 		solver: "verlet".to_string(),
 		damping_configured: false,
 		damping_half_life_ms: 120.0,
-		stiffness_configured: false,
-		stiffness_hz: authored.stiffness_hz,
+		rest_response_configured: false,
+		rest_response: authored.rest_response,
+		shape_preservation_configured: false,
+		shape_preservation: authored.shape_preservation.clamp(0.0, 1.0),
+		bounce_configured: false,
+		bounce_scale: 1.0,
+		stretch_range_configured: false,
+		stretch_range_scale: 1.0,
+		stretch_motion_configured: false,
+		stretch_motion: 1.0,
+		motion_coupling_configured: false,
+		motion_coupling: 0.5,
 		xpbd_compliance_configured: false,
 		xpbd_compliance: authored.xpbd_compliance,
 		constraint_iterations_configured: false,
 		constraint_iterations: 4,
-		authored_stiffness_hz: authored.stiffness_hz,
+		authored_rest_response: authored.rest_response,
+		authored_shape_preservation: authored.shape_preservation,
 		authored_xpbd_compliance: authored.xpbd_compliance,
 	}
 }
@@ -10575,30 +11649,32 @@ fn category_label_from_id(category: &str) -> String {
 }
 
 #[derive(Clone, Copy)]
-struct SpringBoneCategoryAuthoredParams {
+struct DynamicsCategoryAuthoredParams {
 	count: usize,
-	stiffness_hz: f32,
+	rest_response: f32,
+	shape_preservation: f32,
 	xpbd_compliance: f32,
 }
 
-impl Default for SpringBoneCategoryAuthoredParams {
+impl Default for DynamicsCategoryAuthoredParams {
 	fn default() -> Self {
 		Self {
 			count: 0,
-			stiffness_hz: 1.0,
-			xpbd_compliance: xpbd_compliance_from_vrm_stiffness(1.0),
+			rest_response: 0.1,
+			shape_preservation: 0.1,
+			xpbd_compliance: xpbd_compliance_from_rest_response(0.1),
 		}
 	}
 }
 
-fn model_spring_bone_category_authored_params(avatar_path: &Path, manifest_path: &Path) -> Option<SpringBoneAuthoredParamsByCategory> {
+fn model_dynamics_category_authored_params(avatar_path: &Path, manifest_path: &Path) -> Option<DynamicsAuthoredParamsByCategory> {
 	let resolved = resolve_avatar_metadata_path(&avatar_path.display().to_string(), Some(&manifest_path.display().to_string()));
 	let ext = resolved.extension().and_then(|ext| ext.to_str()).unwrap_or_default();
-	if !matches!(ext.to_ascii_lowercase().as_str(), "vrm" | "glb") {
+	if !matches!(ext.to_ascii_lowercase().as_str(), "vrm" | "glb" | "unavatar") {
 		return None;
 	}
-	let cache_key = spring_bone_authored_params_cache_key(&resolved)?;
-	if let Some(cached) = SPRING_BONE_AUTHORED_PARAMS_CACHE
+	let cache_key = dynamics_authored_params_cache_key(&resolved)?;
+	if let Some(cached) = DYNAMICS_AUTHORED_PARAMS_CACHE
 		.get_or_init(|| Mutex::new(BTreeMap::new()))
 		.lock()
 		.ok()
@@ -10606,41 +11682,60 @@ fn model_spring_bone_category_authored_params(avatar_path: &Path, manifest_path:
 	{
 		return Some(cached);
 	}
-	let bytes = fs::read(&resolved).ok()?;
-	let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).ok();
-	let result = un_avatar_io_vrm::import_vrm_bytes(Some(&resolved), &bytes, root).ok()?;
+	let result = if ext.eq_ignore_ascii_case("unavatar") {
+		let mut ctx = un_avatar_io::ImportContext::dummy();
+		un_avatar_io::AvatarImporter::import(
+			&un_avatar_io_gltf::GltfImporter,
+			&mut ctx,
+			un_avatar_io::ImportInput::Path(resolved.clone()),
+			un_avatar_io::ImportOptions,
+		)
+		.ok()?
+	} else {
+		let bytes = fs::read(&resolved).ok()?;
+		let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).ok();
+		un_avatar_io_vrm::import_vrm_bytes(Some(&resolved), &bytes, root).ok()?
+	};
 	let document = result.document;
 	let scene = document.scene.as_ref()?;
-	let spring_bones = document.spring_bones.as_ref()?;
-	let mut sums = BTreeMap::<String, (f32, usize)>::new();
-	for group in &spring_bones.groups {
-		let category = classify_spring_bone_group_for_profile(scene, group);
-		let entry = sums.entry(category).or_insert((0.0, 0));
-		entry.0 += group.stiffness.max(0.0);
-		entry.1 += 1;
+	let dynamics = document.dynamics()?;
+	let mut sums = BTreeMap::<String, (f32, f32, usize)>::new();
+	for group in &dynamics.groups {
+		let category = classify_dynamics_group_for_profile(scene, group);
+		let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
+		let authored_pull = if group.pull.is_finite() && group.pull > 0.0 {
+			group.pull
+		} else {
+			group.stiffness
+		};
+		entry.0 += authored_pull.max(0.0);
+		entry.1 += group.stiffness.max(0.0);
+		entry.2 += 1;
 	}
 	let mut out = BTreeMap::new();
-	for (category, (sum, count)) in sums {
+	for (category, (pull_sum, shape_sum, count)) in sums {
 		if count == 0 {
 			continue;
 		}
-		let stiffness = sum / count as f32;
+		let rest_response = pull_sum / count as f32;
+		let shape_preservation = shape_sum / count as f32;
 		out.insert(
 			category,
-			SpringBoneCategoryAuthoredParams {
+			DynamicsCategoryAuthoredParams {
 				count,
-				stiffness_hz: stiffness,
-				xpbd_compliance: xpbd_compliance_from_vrm_stiffness(stiffness),
+				rest_response,
+				shape_preservation,
+				xpbd_compliance: xpbd_compliance_from_rest_response(rest_response),
 			},
 		);
 	}
-	if let Ok(mut cache) = SPRING_BONE_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+	if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
 		cache.insert(cache_key, out.clone());
 	}
 	Some(out)
 }
 
-fn spring_bone_authored_params_cache_key(path: &Path) -> Option<String> {
+fn dynamics_authored_params_cache_key(path: &Path) -> Option<String> {
 	let metadata = fs::metadata(path).ok()?;
 	let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
 	Some(format!(
@@ -10652,48 +11747,165 @@ fn spring_bone_authored_params_cache_key(path: &Path) -> Option<String> {
 	))
 }
 
-fn classify_spring_bone_group_for_profile(scene: &un_avatar_core::UnaSceneSnapshot, group: &un_avatar_core::UnaSpringBoneGroup) -> String {
-	let explicit = normalize_spring_bone_category_id(&group.category);
+fn classify_dynamics_group_for_profile(scene: &un_avatar_core::UnaSceneSnapshot, group: &un_avatar_core::UnaSpringBoneGroup) -> String {
+	let explicit = normalize_dynamics_category_id(&group.category);
 	if explicit != "other" {
 		return explicit;
 	}
-	let mut haystack = group.comment.to_ascii_lowercase();
+	let mut primary = normalize_dynamics_match_text(&group.comment);
+	if let Some(leaf) = group.source_id.rsplit(['/', ':']).next() {
+		primary.push(' ');
+		primary.push_str(&normalize_dynamics_match_text(leaf));
+	}
 	for &node_index in &group.bone_node_indices {
 		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
-			haystack.push(' ');
-			haystack.push_str(&name.to_ascii_lowercase());
+			primary.push(' ');
+			primary.push_str(&normalize_dynamics_match_text(name));
 		}
 	}
-	for (category, _) in builtin_spring_bone_categories() {
-		if *category == "other" {
-			continue;
-		}
-		if haystack.contains(category) {
-			return (*category).to_string();
-		}
+	if let Some(category) = classify_dynamics_category_from_text(&primary) {
+		return category;
 	}
-	for (category, aliases) in [
-		("hair", ["hair", "bang", "髪", "前髪", "横髪", "後ろ髪"].as_slice()),
-		("ears", ["ear", "耳", "ミミ", "けもみみ"].as_slice()),
-		("tail", ["tail", "尻尾", "しっぽ"].as_slice()),
-		("cloth", ["cloth", "skirt", "sleeve", "cape", "布", "スカート", "袖"].as_slice()),
-		(
-			"accessory",
-			["accessory", "ornament", "chain", "cord", "ribbon", "装飾", "飾り"].as_slice(),
-		),
-	] {
-		if aliases.iter().any(|alias| haystack.contains(alias)) {
-			return category.to_string();
-		}
+	if let Some(category) = classify_dynamics_category_from_text(&normalize_dynamics_match_text(&group.source_id)) {
+		return category;
 	}
 	"other".to_string()
 }
 
-fn xpbd_compliance_from_vrm_stiffness(stiffness: f32) -> f32 {
-	if !stiffness.is_finite() || stiffness <= f32::EPSILON {
+fn classify_dynamics_category_from_text(haystack: &str) -> Option<String> {
+	let mut best: Option<(&str, usize)> = None;
+	for (category, _) in builtin_dynamics_categories() {
+		if *category == "other" {
+			continue;
+		}
+		if dynamics_token_filter_matches(haystack, category) {
+			best = Some((category, category.chars().count()));
+		}
+	}
+	for (category, aliases) in [
+		(
+			"hair",
+			["hair", "bangs", "side_hair", "back_hair", "髪", "前髪", "横髪", "後ろ髪"].as_slice(),
+		),
+		(
+			"ears",
+			["ears", "ear", "animal_ear", "long_ear", "耳", "ミミ", "けもみみ"].as_slice(),
+		),
+		("tail", ["tail", "尻尾", "しっぽ"].as_slice()),
+		(
+			"cloth",
+			[
+				"cloth",
+				"skirt",
+				"sleeve",
+				"cape",
+				"shirt",
+				"sweater",
+				"blouse",
+				"dress",
+				"coat",
+				"frill",
+				"frills",
+				"stocking",
+				"stockings",
+				"布",
+				"スカート",
+				"袖",
+				"ケープ",
+				"シャツ",
+				"セーター",
+				"ブラウス",
+				"ドレス",
+				"コート",
+				"フリル",
+				"靴下",
+				"ストッキング",
+			]
+			.as_slice(),
+		),
+		(
+			"accessory",
+			[
+				"accessory",
+				"ornament",
+				"chain",
+				"cord",
+				"ribbon",
+				"accessories",
+				"bag",
+				"bookbag",
+				"earring",
+				"earrings",
+				"earringroot",
+				"shoe",
+				"shoes",
+				"maryjane",
+				"mary_jane",
+				"footwear",
+				"boot",
+				"boots",
+				"watch",
+				"pocket_watch",
+				"brooch",
+				"broach",
+				"hat",
+				"hatroot",
+				"tie",
+				"tieroot",
+				"bowroot",
+				"bow_tie",
+				"bowties",
+				"necklace",
+				"potion",
+				"bottle",
+				"cable",
+				"nervecable",
+				"strings",
+				"装飾",
+				"飾り",
+				"鞄",
+				"バッグ",
+				"時計",
+				"ブローチ",
+				"靴",
+				"ブーツ",
+				"帽子",
+				"ネクタイ",
+				"蝶ネクタイ",
+				"首飾り",
+				"ネックレス",
+				"瓶",
+				"ボトル",
+				"ケーブル",
+				"紐",
+			]
+			.as_slice(),
+		),
+		(
+			"soft_body",
+			["breast", "bust", "butt", "cheek", "胸", "尻", "お尻", "頬"].as_slice(),
+		),
+	] {
+		if let Some(alias_len) = aliases
+			.iter()
+			.filter(|alias| dynamics_token_filter_matches(haystack, alias))
+			.map(|alias| alias.chars().count())
+			.max()
+		{
+			match best {
+				Some((_, best_len)) if best_len >= alias_len => {}
+				_ => best = Some((category, alias_len)),
+			}
+		}
+	}
+	best.map(|(category, _)| category.to_string())
+}
+
+fn xpbd_compliance_from_rest_response(rest_response: f32) -> f32 {
+	if !rest_response.is_finite() || rest_response <= f32::EPSILON {
 		return 10.0;
 	}
-	let effective_hz = (stiffness * 10.0).clamp(0.1, 32.0);
+	let effective_hz = (rest_response * 10.0).clamp(0.1, 32.0);
 	let omega = std::f32::consts::TAU * effective_hz;
 	(1.0 / (omega * omega)).clamp(0.0, 10.0)
 }
@@ -10792,7 +12004,52 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 			.unwrap_or(60.0)
 			.clamp(30.0, 240.0),
 		dynamics_substeps: dynamics_solver.and_then(|physics| physics.substeps).unwrap_or(1).clamp(1, 8),
-		dynamics_category_overrides: spring_bone_category_override_settings(dynamics_solver, avatar_path, manifest_path),
+		dynamics_surface_constraints_enabled: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.enabled)
+			.unwrap_or_else(default_dynamics_surface_constraints_enabled_setting),
+		dynamics_surface_constraint_topology_max_edge_distance_m: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.topology_max_edge_distance_m)
+			.filter(|value| value.is_finite())
+			.unwrap_or_else(default_dynamics_surface_constraint_topology_max_edge_distance_m_setting)
+			.clamp(0.001, 0.2),
+		dynamics_surface_constraint_topology_max_mean_edge_distance_m: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.topology_max_mean_edge_distance_m)
+			.filter(|value| value.is_finite())
+			.unwrap_or_else(default_dynamics_surface_constraint_topology_max_mean_edge_distance_m_setting)
+			.clamp(0.001, 0.2),
+		dynamics_surface_constraint_spatial_max_distance_m: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.spatial_max_distance_m)
+			.filter(|value| value.is_finite())
+			.unwrap_or_else(default_dynamics_surface_constraint_spatial_max_distance_m_setting)
+			.clamp(0.001, 0.1),
+		dynamics_surface_constraint_topology_stiffness: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.topology_stiffness)
+			.filter(|value| value.is_finite())
+			.unwrap_or_else(default_dynamics_surface_constraint_topology_stiffness_setting)
+			.clamp(0.0, 1.0),
+		dynamics_surface_constraint_spatial_stiffness: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.spatial_stiffness)
+			.filter(|value| value.is_finite())
+			.unwrap_or_else(default_dynamics_surface_constraint_spatial_stiffness_setting)
+			.clamp(0.0, 1.0),
+		dynamics_surface_constraint_min_edge_count: dynamics_solver
+			.and_then(|physics| physics.surface_constraints.as_ref())
+			.and_then(|surface| surface.min_edge_count)
+			.unwrap_or_else(default_dynamics_surface_constraint_min_edge_count_setting)
+			.clamp(1, 64),
+		dynamics_mesh_cloth_assist: dynamics_solver
+			.and_then(|physics| physics.mesh_cloth_assist.as_ref())
+			.map(mesh_cloth_assist_setting),
+		dynamics_category_overrides: dynamics_category_override_settings(dynamics_solver, avatar_path, manifest_path),
+		dynamics_match_overrides: dynamics_match_override_settings(dynamics_solver),
+		dynamics_collider_augment_overrides: dynamics_collider_augment_override_settings(dynamics_solver),
+		dynamics_group_overrides: dynamics_group_override_settings(dynamics_solver),
 		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
@@ -10800,6 +12057,36 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 		bone_collider_upper_arms: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.upper_arms), 55.0),
 		bone_collider_lower_arms: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.lower_arms), 45.0),
 		bone_collider_hands: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.hands), 50.0),
+	}
+}
+
+fn mesh_cloth_assist_setting(mesh_cloth_assist: &ManifestDynamicsMeshClothAssist) -> RendererDynamicsMeshClothAssistConfig {
+	RendererDynamicsMeshClothAssistConfig {
+		enabled: mesh_cloth_assist.enabled.unwrap_or(false),
+		body_dominance_threshold: mesh_cloth_assist
+			.body_dominance_threshold
+			.filter(|value| value.is_finite())
+			.unwrap_or(0.55)
+			.clamp(0.05, 0.99),
+		min_existing_dynamic_weight: mesh_cloth_assist
+			.min_existing_dynamic_weight
+			.filter(|value| value.is_finite())
+			.unwrap_or(0.05)
+			.clamp(0.0, 0.95),
+		seed_missing_dynamic_influence: mesh_cloth_assist.seed_missing_dynamic_influence.unwrap_or(true),
+		max_assist_weight: mesh_cloth_assist
+			.max_assist_weight
+			.filter(|value| value.is_finite())
+			.unwrap_or(0.35)
+			.clamp(0.0, 0.95),
+		mesh_path_contains: mesh_cloth_assist
+			.mesh_path_contains
+			.clone()
+			.unwrap_or_default()
+			.into_iter()
+			.map(|value| value.trim().to_string())
+			.filter(|value| !value.is_empty())
+			.collect(),
 	}
 }
 
@@ -10820,6 +12107,18 @@ fn render_quality_settings(render_quality: ManifestRenderQuality, legacy_aa: Opt
 		processed_texture_cache: render_quality.processed_texture_cache.unwrap_or(true),
 		skin_tone_matching: render_quality.skin_tone_matching.unwrap_or(false),
 	}
+}
+
+fn clamp_target_fps(value: f32) -> f32 {
+	if value.is_finite() {
+		value.clamp(30.0, 300.0)
+	} else {
+		60.0
+	}
+}
+
+fn runtime_target_fps(runtime: Option<ManifestRuntime>) -> f32 {
+	runtime.and_then(|runtime| runtime.target_fps).map(clamp_target_fps).unwrap_or(60.0)
 }
 
 fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, legacy_vmc_port: Option<u16>) -> MotionSettings {
@@ -11359,7 +12658,7 @@ fn set_collider_part_radius_mm(manifest: &mut toml::Value, part: &str, value: f3
 	set_nested_float(manifest, &["physics", "bone_colliders", "radius_mm", part], value)
 }
 
-fn apply_spring_bone_category_override_value(
+fn apply_dynamics_category_override_value(
 	manifest: &mut toml::Value,
 	setting: &AvatarSetting,
 	field: &str,
@@ -11373,11 +12672,11 @@ fn apply_spring_bone_category_override_value(
 	let (category, key) = rest
 		.split_once('.')
 		.ok_or_else(|| format!("invalid UNPhysics override field: {field}"))?;
-	let category = normalize_spring_bone_category_id(category);
-	let authored = spring_bone_authored_params_for_setting(setting, &category);
+	let category = normalize_dynamics_category_id(category);
+	let authored = dynamics_authored_params_for_setting(setting, &category);
 	if key == "mode" {
-		let mode = validate_spring_bone_override_mode(json_string(&value, field)?.as_str())?;
-		set_spring_bone_category_mode(manifest, &category, &mode, authored)?;
+		let mode = validate_dynamics_override_mode(json_string(&value, field)?.as_str())?;
+		set_dynamics_category_mode(manifest, &category, &mode, authored)?;
 		return Ok(());
 	}
 	if key == "reset" {
@@ -11388,35 +12687,367 @@ fn apply_spring_bone_category_override_value(
 			.map(|item| item.mode.as_str())
 			.unwrap_or("authored")
 			.to_string();
-		set_spring_bone_category_mode(manifest, &category, &mode, authored)?;
+		set_dynamics_category_mode(manifest, &category, &mode, authored)?;
 		return Ok(());
 	}
 	if key == "preset" {
 		let preset = json_string(&value, field)?;
-		if spring_bone_category_override_solver(manifest, &category).as_deref() != Some("xpbd") {
-			return Err(format!("{field} can be applied only when UNPhysics mode is Override: XPBD"));
-		}
-		set_spring_bone_category_recommended_preset(manifest, &category, &preset)?;
+		let solver = dynamics_category_override_solver(manifest, &category).unwrap_or_else(|| "verlet".to_string());
+		set_dynamics_category_recommended_preset(manifest, &category, &solver, &preset)?;
 		return Ok(());
 	}
 	let (toml_key, toml_value) = match key {
 		"solver" => (
 			"solver",
-			toml::Value::String(validate_spring_bone_solver(json_string(&value, field)?.as_str())?),
+			toml::Value::String(validate_dynamics_solver(json_string(&value, field)?.as_str())?),
 		),
 		"damping_half_life_ms" => (
 			"damping_half_life_ms",
 			ranged_float_toml_value(&value, field, 1.0..=10_000.0, "[1, 10000]")?,
 		),
-		"stiffness_hz" => ("stiffness_hz", ranged_float_toml_value(&value, field, 0.0..=60.0, "[0, 60]")?),
+		"rest_response" => ("rest_response", ranged_float_toml_value(&value, field, 0.0..=1.0, "[0, 1]")?),
+		"stiffness_hz" => ("rest_response", ranged_float_toml_value(&value, field, 0.0..=1.0, "[0, 1]")?),
+		"shape_preservation" => ("shape_preservation", ranged_float_toml_value(&value, field, 0.0..=1.0, "[0, 1]")?),
+		"bounce_scale" => ("bounce_scale", ranged_float_toml_value(&value, field, 0.0..=4.0, "[0, 4]")?),
+		"stretch_range_scale" => ("stretch_range_scale", ranged_float_toml_value(&value, field, 0.0..=4.0, "[0, 4]")?),
+		"stretch_motion" => ("stretch_motion", ranged_float_toml_value(&value, field, 0.0..=1.0, "[0, 1]")?),
+		"motion_coupling" => ("motion_coupling", ranged_float_toml_value(&value, field, 0.0..=1.0, "[0, 1]")?),
 		"xpbd_compliance" => ("xpbd_compliance", ranged_float_toml_value(&value, field, 0.0..=10.0, "[0, 10]")?),
 		"constraint_iterations" => ("constraint_iterations", ranged_u32_toml_value(&value, field, 1..=32, "[1, 32]")?),
 		_ => return Err(format!("unknown UNPhysics override field: {field}")),
 	};
-	set_spring_bone_category_override_value(manifest, &category, toml_key, toml_value)
+	set_dynamics_category_override_value(manifest, &category, toml_key, toml_value)
 }
 
-fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) -> Option<String> {
+fn apply_dynamics_group_overrides_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let items = value
+		.as_array()
+		.ok_or_else(|| "physics.dynamics.solver.group_overrides must be an array".to_string())?;
+	let mut overrides = Vec::new();
+	for (index, item) in items.iter().enumerate() {
+		let table = item
+			.as_object()
+			.ok_or_else(|| format!("physics.dynamics.solver.group_overrides[{index}] must be an object"))?;
+		let source_id = table
+			.get("source_id")
+			.or_else(|| table.get("sourceId"))
+			.or_else(|| table.get("source"))
+			.and_then(serde_json::Value::as_str)
+			.unwrap_or("")
+			.trim();
+		if source_id.is_empty() {
+			continue;
+		}
+		let mut toml_table = toml::map::Map::new();
+		toml_table.insert("source_id".to_string(), toml::Value::String(source_id.to_string()));
+		for (key, raw_value) in table {
+			match key.as_str() {
+				"source_id" | "sourceId" | "source" => {}
+				"solver" => {
+					toml_table.insert(
+						"solver".to_string(),
+						toml::Value::String(validate_dynamics_solver(json_string(raw_value, key)?.as_str())?),
+					);
+				}
+				"damping_half_life_ms" => {
+					toml_table.insert(
+						"damping_half_life_ms".to_string(),
+						ranged_float_toml_value(raw_value, key, 1.0..=10_000.0, "[1, 10000]")?,
+					);
+				}
+				"rest_response" | "stiffness_hz" => {
+					toml_table.insert(
+						"rest_response".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"shape_preservation" => {
+					toml_table.insert(
+						"shape_preservation".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"bounce_scale" => {
+					toml_table.insert(
+						"bounce_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=4.0, "[0, 4]")?,
+					);
+				}
+				"stretch_range_scale" => {
+					toml_table.insert(
+						"stretch_range_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=4.0, "[0, 4]")?,
+					);
+				}
+				"stretch_motion" => {
+					toml_table.insert(
+						"stretch_motion".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"motion_coupling" => {
+					toml_table.insert(
+						"motion_coupling".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"drag_scale" => {
+					toml_table.insert(
+						"drag_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=10.0, "[0, 10]")?,
+					);
+				}
+				"xpbd_compliance" => {
+					toml_table.insert(
+						"xpbd_compliance".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=10.0, "[0, 10]")?,
+					);
+				}
+				"constraint_iterations" => {
+					toml_table.insert(
+						"constraint_iterations".to_string(),
+						ranged_u32_toml_value(raw_value, key, 1..=32, "[1, 32]")?,
+					);
+				}
+				_ => return Err(format!("unknown UNPhysics group override field: {key}")),
+			}
+		}
+		overrides.push(toml::Value::Table(toml_table));
+	}
+	if overrides.is_empty() {
+		remove_nested_key(manifest, &["physics", "dynamics", "solver", "group_overrides"])
+	} else {
+		set_nested_value(
+			manifest,
+			&["physics", "dynamics", "solver", "group_overrides"],
+			toml::Value::Array(overrides),
+		)
+	}
+}
+
+fn string_list_values(value: &serde_json::Value, field: &str) -> Result<Vec<String>, String> {
+	let array = value.as_array().ok_or_else(|| format!("{field} must be an array"))?;
+	let items = array
+		.iter()
+		.map(|item| json_string(item, field).map(|value| value.trim().to_string()))
+		.collect::<Result<Vec<_>, _>>()?
+		.into_iter()
+		.filter(|value| !value.is_empty())
+		.collect();
+	Ok(items)
+}
+
+fn string_list_toml_value(value: &serde_json::Value, field: &str) -> Result<Option<toml::Value>, String> {
+	let items: Vec<_> = string_list_values(value, field)?.into_iter().map(toml::Value::String).collect();
+	Ok((!items.is_empty()).then_some(toml::Value::Array(items)))
+}
+
+fn apply_dynamics_collider_augment_overrides_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let items = value
+		.as_array()
+		.ok_or_else(|| "physics.dynamics.solver.collider_augment_overrides must be an array".to_string())?;
+	let mut overrides = Vec::new();
+	for (index, item) in items.iter().enumerate() {
+		let table = item
+			.as_object()
+			.ok_or_else(|| format!("physics.dynamics.solver.collider_augment_overrides[{index}] must be an object"))?;
+		let mut toml_table = toml::map::Map::new();
+		for (key, raw_value) in table {
+			match key.as_str() {
+				"name" => {
+					let value = json_string(raw_value, key)?.trim().to_string();
+					if !value.is_empty() {
+						toml_table.insert("name".to_string(), toml::Value::String(value));
+					}
+				}
+				"source_id_contains" | "sourceIdContains" | "source_contains" | "contains" => {
+					if let Some(value) = string_list_toml_value(raw_value, key)? {
+						toml_table.insert("source_id_contains".to_string(), value);
+					}
+				}
+				"collider_path_contains" | "colliderPathContains" | "collider_contains" => {
+					if let Some(value) = string_list_toml_value(raw_value, key)? {
+						toml_table.insert("collider_path_contains".to_string(), value);
+					}
+				}
+				_ => return Err(format!("unknown UNPhysics collider augment override field: {key}")),
+			}
+		}
+		let has_source = toml_table
+			.get("source_id_contains")
+			.and_then(toml::Value::as_array)
+			.map(|values| !values.is_empty())
+			.unwrap_or(false);
+		let has_collider = toml_table
+			.get("collider_path_contains")
+			.and_then(toml::Value::as_array)
+			.map(|values| !values.is_empty())
+			.unwrap_or(false);
+		if has_source && has_collider {
+			overrides.push(toml::Value::Table(toml_table));
+		}
+	}
+	if overrides.is_empty() {
+		remove_nested_key(manifest, &["physics", "dynamics", "solver", "collider_augment_overrides"])
+	} else {
+		set_nested_value(
+			manifest,
+			&["physics", "dynamics", "solver", "collider_augment_overrides"],
+			toml::Value::Array(overrides),
+		)
+	}
+}
+
+fn validate_dynamics_match_regexes(values: &[String], field: &str) -> Result<(), String> {
+	for pattern in values {
+		regex::Regex::new(pattern).map_err(|error| format!("{field} contains invalid regular expression {pattern:?}: {error}"))?;
+	}
+	Ok(())
+}
+
+fn apply_dynamics_match_overrides_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	migrate_legacy_spring_bone_solver_to_v2(manifest)?;
+	let items = value
+		.as_array()
+		.ok_or_else(|| "physics.dynamics.solver.match_overrides must be an array".to_string())?;
+	let mut overrides = Vec::new();
+	for (index, item) in items.iter().enumerate() {
+		let table = item
+			.as_object()
+			.ok_or_else(|| format!("physics.dynamics.solver.match_overrides[{index}] must be an object"))?;
+		let mut toml_table = toml::map::Map::new();
+		for (key, raw_value) in table {
+			match key.as_str() {
+				"name" => {
+					let value = json_string(raw_value, key)?.trim().to_string();
+					if !value.is_empty() {
+						toml_table.insert("name".to_string(), toml::Value::String(value));
+					}
+				}
+				"source_id" | "sourceId" | "source" => {
+					let value = json_string(raw_value, key)?.trim().to_string();
+					if !value.is_empty() {
+						toml_table.insert("source_id".to_string(), toml::Value::String(value));
+					}
+				}
+				"source_id_contains" | "sourceIdContains" | "source_contains" | "contains" => {
+					if let Some(value) = string_list_toml_value(raw_value, key)? {
+						toml_table.insert("source_id_contains".to_string(), value);
+					}
+				}
+				"source_id_regex" | "sourceIdRegex" | "source_regex" | "regex" => {
+					let values = string_list_values(raw_value, key)?;
+					validate_dynamics_match_regexes(&values, key)?;
+					if !values.is_empty() {
+						toml_table.insert(
+							"source_id_regex".to_string(),
+							toml::Value::Array(values.into_iter().map(toml::Value::String).collect()),
+						);
+					}
+				}
+				"solver" => {
+					toml_table.insert(
+						"solver".to_string(),
+						toml::Value::String(validate_dynamics_solver(json_string(raw_value, key)?.as_str())?),
+					);
+				}
+				"damping_half_life_ms" => {
+					toml_table.insert(
+						"damping_half_life_ms".to_string(),
+						ranged_float_toml_value(raw_value, key, 1.0..=10_000.0, "[1, 10000]")?,
+					);
+				}
+				"rest_response" | "stiffness_hz" => {
+					toml_table.insert(
+						"rest_response".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"shape_preservation" => {
+					toml_table.insert(
+						"shape_preservation".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"bounce_scale" => {
+					toml_table.insert(
+						"bounce_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=4.0, "[0, 4]")?,
+					);
+				}
+				"stretch_range_scale" => {
+					toml_table.insert(
+						"stretch_range_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=4.0, "[0, 4]")?,
+					);
+				}
+				"stretch_motion" => {
+					toml_table.insert(
+						"stretch_motion".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"motion_coupling" => {
+					toml_table.insert(
+						"motion_coupling".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=1.0, "[0, 1]")?,
+					);
+				}
+				"drag_scale" => {
+					toml_table.insert(
+						"drag_scale".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=10.0, "[0, 10]")?,
+					);
+				}
+				"xpbd_compliance" => {
+					toml_table.insert(
+						"xpbd_compliance".to_string(),
+						ranged_float_toml_value(raw_value, key, 0.0..=10.0, "[0, 10]")?,
+					);
+				}
+				"constraint_iterations" => {
+					toml_table.insert(
+						"constraint_iterations".to_string(),
+						ranged_u32_toml_value(raw_value, key, 1..=32, "[1, 32]")?,
+					);
+				}
+				_ => return Err(format!("unknown UNPhysics match override field: {key}")),
+			}
+		}
+		let has_matcher = toml_table
+			.get("source_id")
+			.and_then(toml::Value::as_str)
+			.map(|value| !value.trim().is_empty())
+			.unwrap_or(false)
+			|| toml_table
+				.get("source_id_contains")
+				.and_then(toml::Value::as_array)
+				.map(|values| !values.is_empty())
+				.unwrap_or(false)
+			|| toml_table
+				.get("source_id_regex")
+				.and_then(toml::Value::as_array)
+				.map(|values| !values.is_empty())
+				.unwrap_or(false);
+		if !has_matcher {
+			continue;
+		}
+		overrides.push(toml::Value::Table(toml_table));
+	}
+	if overrides.is_empty() {
+		remove_nested_key(manifest, &["physics", "dynamics", "solver", "match_overrides"])
+	} else {
+		set_nested_value(
+			manifest,
+			&["physics", "dynamics", "solver", "match_overrides"],
+			toml::Value::Array(overrides),
+		)
+	}
+}
+
+fn dynamics_category_override_solver(manifest: &toml::Value, category: &str) -> Option<String> {
 	dynamics_solver_table(manifest)
 		.or_else(|| manifest.get("physics")?.get("spring_bone"))?
 		.get("overrides")?
@@ -11425,28 +13056,29 @@ fn spring_bone_category_override_solver(manifest: &toml::Value, category: &str) 
 		.find(|item| {
 			item.get("category")
 				.and_then(toml::Value::as_str)
-				.map(normalize_spring_bone_category_id)
+				.map(normalize_dynamics_category_id)
 				.as_deref() == Some(category)
 		})?
 		.get("solver")?
 		.as_str()
-		.and_then(normalize_spring_bone_solver)
+		.and_then(normalize_dynamics_solver)
 }
 
-fn spring_bone_authored_params_for_setting(setting: &AvatarSetting, category: &str) -> SpringBoneCategoryAuthoredParams {
+fn dynamics_authored_params_for_setting(setting: &AvatarSetting, category: &str) -> DynamicsCategoryAuthoredParams {
 	setting
 		.dynamics_category_overrides
 		.iter()
-		.find(|item| normalize_spring_bone_category_id(&item.category) == category)
-		.map(|item| SpringBoneCategoryAuthoredParams {
+		.find(|item| normalize_dynamics_category_id(&item.category) == category)
+		.map(|item| DynamicsCategoryAuthoredParams {
 			count: item.dynamics_group_count,
-			stiffness_hz: item.authored_stiffness_hz,
+			rest_response: item.authored_rest_response,
+			shape_preservation: item.authored_shape_preservation,
 			xpbd_compliance: item.authored_xpbd_compliance,
 		})
 		.unwrap_or_default()
 }
 
-fn validate_spring_bone_override_mode(value: &str) -> Result<String, String> {
+fn validate_dynamics_override_mode(value: &str) -> Result<String, String> {
 	match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
 		"authored" | "authored_verlet" => Ok("authored".to_string()),
 		"override_verlet" | "verlet" => Ok("override_verlet".to_string()),
@@ -11455,142 +13087,312 @@ fn validate_spring_bone_override_mode(value: &str) -> Result<String, String> {
 	}
 }
 
-fn set_spring_bone_category_mode(
+#[derive(Clone, Copy)]
+struct DynamicsCategoryModeSeed {
+	rest_response: f32,
+	shape_preservation: f32,
+	motion_coupling: f32,
+	damping_half_life_ms: f32,
+	bounce_scale: f32,
+	xpbd_compliance: f32,
+	constraint_iterations: u32,
+}
+
+fn dynamics_category_mode_seed(category: &str, authored: DynamicsCategoryAuthoredParams) -> DynamicsCategoryModeSeed {
+	if let Some(preset) = dynamics_recommended_preset(category, "natural") {
+		return DynamicsCategoryModeSeed {
+			rest_response: preset.rest_response,
+			shape_preservation: preset.shape_preservation,
+			motion_coupling: preset.motion_coupling,
+			damping_half_life_ms: preset.damping_half_life_ms,
+			bounce_scale: preset.bounce_scale,
+			xpbd_compliance: preset.xpbd_compliance,
+			constraint_iterations: preset.constraint_iterations,
+		};
+	}
+	let authored_response = authored.rest_response.clamp(0.0, 1.0);
+	let authored_shape = authored.shape_preservation.clamp(0.0, 1.0);
+	let (pull_scale, shape_scale, motion_coupling_scale) = match normalize_dynamics_category_id(category).as_str() {
+		"hair" => (0.70_f32, 0.25_f32, 0.80_f32),
+		"ears" => (0.75_f32, 0.50_f32, 0.80_f32),
+		"tail" => (0.60_f32, 0.45_f32, 0.70_f32),
+		"cloth" => (0.55_f32, 0.40_f32, 0.45_f32),
+		"accessory" => (0.75_f32, 0.50_f32, 0.85_f32),
+		"soft_body" => (0.65_f32, 0.35_f32, 0.68_f32),
+		_ => (0.85_f32, 0.55_f32, 0.90_f32),
+	};
+	DynamicsCategoryModeSeed {
+		rest_response: (authored_response * pull_scale).clamp(0.0, 1.0),
+		shape_preservation: (authored_shape * shape_scale).clamp(0.0, 1.0),
+		motion_coupling: (0.5_f32 * motion_coupling_scale).clamp(0.0, 1.0),
+		damping_half_life_ms: 130.0,
+		bounce_scale: 0.75,
+		xpbd_compliance: authored.xpbd_compliance.clamp(0.0, 10.0),
+		constraint_iterations: 4,
+	}
+}
+
+fn set_dynamics_category_mode(
 	manifest: &mut toml::Value,
 	category: &str,
 	mode: &str,
-	authored: SpringBoneCategoryAuthoredParams,
+	authored: DynamicsCategoryAuthoredParams,
 ) -> Result<(), String> {
+	let seed = dynamics_category_mode_seed(category, authored);
 	match mode {
-		"authored" => remove_spring_bone_category_override(manifest, category),
-		"override_verlet" => replace_spring_bone_category_override(
+		"authored" => remove_dynamics_category_override(manifest, category),
+		"override_verlet" => replace_dynamics_category_override(
 			manifest,
 			category,
 			[
 				("solver".to_string(), toml::Value::String("verlet".to_string())),
+				("rest_response".to_string(), toml::Value::Float(f64::from(seed.rest_response))),
 				(
-					"stiffness_hz".to_string(),
-					toml::Value::Float(f64::from(authored.stiffness_hz.clamp(0.0, 60.0))),
+					"shape_preservation".to_string(),
+					toml::Value::Float(f64::from(seed.shape_preservation)),
 				),
+				("motion_coupling".to_string(), toml::Value::Float(f64::from(seed.motion_coupling))),
+				(
+					"damping_half_life_ms".to_string(),
+					toml::Value::Float(f64::from(seed.damping_half_life_ms)),
+				),
+				("bounce_scale".to_string(), toml::Value::Float(f64::from(seed.bounce_scale))),
 			],
 		),
-		"override_xpbd" => replace_spring_bone_category_override(
+		"override_xpbd" => replace_dynamics_category_override(
 			manifest,
 			category,
 			[
 				("solver".to_string(), toml::Value::String("xpbd".to_string())),
+				("rest_response".to_string(), toml::Value::Float(f64::from(seed.rest_response))),
+				("xpbd_compliance".to_string(), toml::Value::Float(f64::from(seed.xpbd_compliance))),
 				(
-					"xpbd_compliance".to_string(),
-					toml::Value::Float(f64::from(authored.xpbd_compliance.clamp(0.0, 10.0))),
+					"shape_preservation".to_string(),
+					toml::Value::Float(f64::from(seed.shape_preservation)),
 				),
-				("constraint_iterations".to_string(), toml::Value::Integer(4)),
+				("motion_coupling".to_string(), toml::Value::Float(f64::from(seed.motion_coupling))),
+				(
+					"damping_half_life_ms".to_string(),
+					toml::Value::Float(f64::from(seed.damping_half_life_ms)),
+				),
+				("bounce_scale".to_string(), toml::Value::Float(f64::from(seed.bounce_scale))),
+				(
+					"constraint_iterations".to_string(),
+					toml::Value::Integer(i64::from(seed.constraint_iterations)),
+				),
 			],
 		),
 		_ => Err("UNPhysics override mode must be authored, override_verlet, or override_xpbd".to_string()),
 	}
 }
 
-fn set_spring_bone_category_recommended_preset(manifest: &mut toml::Value, category: &str, preset: &str) -> Result<(), String> {
-	let preset = spring_bone_recommended_preset(category, preset)
+fn set_dynamics_category_recommended_preset(manifest: &mut toml::Value, category: &str, solver: &str, preset: &str) -> Result<(), String> {
+	let preset = dynamics_recommended_preset(category, preset)
 		.ok_or_else(|| format!("unknown UNPhysics recommended preset: {category}.{preset}"))?;
-	replace_spring_bone_category_override(
-		manifest,
-		category,
-		[
-			("solver".to_string(), toml::Value::String("xpbd".to_string())),
-			(
-				"damping_half_life_ms".to_string(),
-				toml::Value::Float(f64::from(preset.damping_half_life_ms)),
-			),
-			("xpbd_compliance".to_string(), toml::Value::Float(f64::from(preset.xpbd_compliance))),
-			(
-				"constraint_iterations".to_string(),
-				toml::Value::Integer(i64::from(preset.constraint_iterations)),
-			),
-		],
-	)
+	match validate_dynamics_solver(solver)?.as_str() {
+		"xpbd" => replace_dynamics_category_override(
+			manifest,
+			category,
+			[
+				("solver".to_string(), toml::Value::String("xpbd".to_string())),
+				("rest_response".to_string(), toml::Value::Float(f64::from(preset.rest_response))),
+				(
+					"shape_preservation".to_string(),
+					toml::Value::Float(f64::from(preset.shape_preservation)),
+				),
+				("motion_coupling".to_string(), toml::Value::Float(f64::from(preset.motion_coupling))),
+				(
+					"damping_half_life_ms".to_string(),
+					toml::Value::Float(f64::from(preset.damping_half_life_ms)),
+				),
+				("bounce_scale".to_string(), toml::Value::Float(f64::from(preset.bounce_scale))),
+				("xpbd_compliance".to_string(), toml::Value::Float(f64::from(preset.xpbd_compliance))),
+				(
+					"constraint_iterations".to_string(),
+					toml::Value::Integer(i64::from(preset.constraint_iterations)),
+				),
+			],
+		),
+		_ => replace_dynamics_category_override(
+			manifest,
+			category,
+			[
+				("solver".to_string(), toml::Value::String("verlet".to_string())),
+				("rest_response".to_string(), toml::Value::Float(f64::from(preset.rest_response))),
+				(
+					"shape_preservation".to_string(),
+					toml::Value::Float(f64::from(preset.shape_preservation)),
+				),
+				("motion_coupling".to_string(), toml::Value::Float(f64::from(preset.motion_coupling))),
+				(
+					"damping_half_life_ms".to_string(),
+					toml::Value::Float(f64::from(preset.damping_half_life_ms)),
+				),
+				("bounce_scale".to_string(), toml::Value::Float(f64::from(preset.bounce_scale))),
+			],
+		),
+	}
 }
 
 #[derive(Clone, Copy)]
-struct SpringBoneRecommendedPreset {
+struct DynamicsRecommendedPreset {
+	rest_response: f32,
+	shape_preservation: f32,
+	motion_coupling: f32,
 	damping_half_life_ms: f32,
+	bounce_scale: f32,
 	xpbd_compliance: f32,
 	constraint_iterations: u32,
 }
 
-fn spring_bone_recommended_preset(category: &str, preset: &str) -> Option<SpringBoneRecommendedPreset> {
+fn dynamics_recommended_preset(category: &str, preset: &str) -> Option<DynamicsRecommendedPreset> {
 	let preset = preset.trim().to_ascii_lowercase().replace('-', "_");
 	match (category, preset.as_str()) {
-		("hair", "soft") => Some(SpringBoneRecommendedPreset {
+		("hair", "soft") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.04,
+			shape_preservation: 0.025,
+			motion_coupling: 0.35,
 			damping_half_life_ms: 190.0,
+			bounce_scale: 0.65,
 			xpbd_compliance: 0.018,
 			constraint_iterations: 5,
 		}),
-		("hair", "natural") => Some(SpringBoneRecommendedPreset {
+		("hair", "natural") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.10,
+			shape_preservation: 0.08,
+			motion_coupling: 0.50,
 			damping_half_life_ms: 130.0,
+			bounce_scale: 0.85,
 			xpbd_compliance: 0.009,
 			constraint_iterations: 6,
 		}),
-		("hair", "snappy") => Some(SpringBoneRecommendedPreset {
+		("hair", "snappy") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.20,
+			shape_preservation: 0.18,
+			motion_coupling: 0.70,
 			damping_half_life_ms: 80.0,
+			bounce_scale: 0.55,
 			xpbd_compliance: 0.0045,
 			constraint_iterations: 6,
 		}),
-		("ears", "soft") => Some(SpringBoneRecommendedPreset {
+		("ears", "soft") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.02,
+			shape_preservation: 0.015,
+			motion_coupling: 0.30,
 			damping_half_life_ms: 160.0,
+			bounce_scale: 0.45,
 			xpbd_compliance: 0.012,
 			constraint_iterations: 5,
 		}),
-		("ears", "natural") => Some(SpringBoneRecommendedPreset {
+		("ears", "natural") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.08,
+			shape_preservation: 0.06,
+			motion_coupling: 0.50,
 			damping_half_life_ms: 95.0,
+			bounce_scale: 0.70,
 			xpbd_compliance: 0.004,
 			constraint_iterations: 6,
 		}),
-		("ears", "snappy") => Some(SpringBoneRecommendedPreset {
+		("ears", "snappy") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.18,
+			shape_preservation: 0.15,
+			motion_coupling: 0.75,
 			damping_half_life_ms: 55.0,
+			bounce_scale: 0.50,
 			xpbd_compliance: 0.0018,
 			constraint_iterations: 7,
 		}),
-		("tail", "soft") => Some(SpringBoneRecommendedPreset {
+		("tail", "soft") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.025,
+			shape_preservation: 0.018,
+			motion_coupling: 0.25,
 			damping_half_life_ms: 260.0,
+			bounce_scale: 0.85,
 			xpbd_compliance: 0.028,
 			constraint_iterations: 5,
 		}),
-		("tail", "natural") => Some(SpringBoneRecommendedPreset {
+		("tail", "natural") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.07,
+			shape_preservation: 0.055,
+			motion_coupling: 0.40,
 			damping_half_life_ms: 180.0,
+			bounce_scale: 0.95,
 			xpbd_compliance: 0.014,
 			constraint_iterations: 6,
 		}),
-		("tail", "heavy") => Some(SpringBoneRecommendedPreset {
+		("tail", "heavy") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.14,
+			shape_preservation: 0.11,
+			motion_coupling: 0.55,
 			damping_half_life_ms: 320.0,
+			bounce_scale: 0.70,
 			xpbd_compliance: 0.006,
 			constraint_iterations: 8,
 		}),
-		("cloth", "light") => Some(SpringBoneRecommendedPreset {
+		("cloth", "light") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.035,
+			shape_preservation: 0.02,
+			motion_coupling: 0.30,
 			damping_half_life_ms: 150.0,
+			bounce_scale: 0.35,
 			xpbd_compliance: 0.018,
 			constraint_iterations: 5,
 		}),
-		("cloth", "natural") => Some(SpringBoneRecommendedPreset {
+		("cloth", "natural") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.08,
+			shape_preservation: 0.05,
+			motion_coupling: 0.45,
 			damping_half_life_ms: 110.0,
+			bounce_scale: 0.45,
 			xpbd_compliance: 0.007,
 			constraint_iterations: 6,
 		}),
-		("cloth", "firm") => Some(SpringBoneRecommendedPreset {
+		("cloth", "firm") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.16,
+			shape_preservation: 0.12,
+			motion_coupling: 0.70,
 			damping_half_life_ms: 70.0,
+			bounce_scale: 0.25,
 			xpbd_compliance: 0.0025,
 			constraint_iterations: 8,
+		}),
+		("soft_body", "subtle") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.055,
+			shape_preservation: 0.025,
+			motion_coupling: 0.68,
+			damping_half_life_ms: 90.0,
+			bounce_scale: 0.35,
+			xpbd_compliance: 0.006,
+			constraint_iterations: 5,
+		}),
+		("soft_body", "natural") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.035,
+			shape_preservation: 0.018,
+			motion_coupling: 0.52,
+			damping_half_life_ms: 140.0,
+			bounce_scale: 0.55,
+			xpbd_compliance: 0.012,
+			constraint_iterations: 5,
+		}),
+		("soft_body", "lively") => Some(DynamicsRecommendedPreset {
+			rest_response: 0.025,
+			shape_preservation: 0.012,
+			motion_coupling: 0.42,
+			damping_half_life_ms: 180.0,
+			bounce_scale: 0.75,
+			xpbd_compliance: 0.018,
+			constraint_iterations: 6,
 		}),
 		_ => None,
 	}
 }
 
-fn replace_spring_bone_category_override<const N: usize>(
+fn replace_dynamics_category_override<const N: usize>(
 	manifest: &mut toml::Value,
 	category: &str,
 	values: [(String, toml::Value); N],
 ) -> Result<(), String> {
-	remove_spring_bone_category_override(manifest, category)?;
+	remove_dynamics_category_override(manifest, category)?;
 	let solver = dynamics_solver_table_mut(manifest)?;
 	let overrides = solver
 		.entry("overrides".to_string())
@@ -11606,12 +13408,7 @@ fn replace_spring_bone_category_override<const N: usize>(
 	Ok(())
 }
 
-fn set_spring_bone_category_override_value(
-	manifest: &mut toml::Value,
-	category: &str,
-	key: &str,
-	value: toml::Value,
-) -> Result<(), String> {
+fn set_dynamics_category_override_value(manifest: &mut toml::Value, category: &str, key: &str, value: toml::Value) -> Result<(), String> {
 	let solver = dynamics_solver_table_mut(manifest)?;
 	let overrides = solver
 		.entry("overrides".to_string())
@@ -11623,7 +13420,7 @@ fn set_spring_bone_category_override_value(
 		.position(|item| {
 			item.get("category")
 				.and_then(toml::Value::as_str)
-				.map(normalize_spring_bone_category_id)
+				.map(normalize_dynamics_category_id)
 				.as_deref() == Some(category)
 		})
 		.unwrap_or_else(|| {
@@ -11639,7 +13436,7 @@ fn set_spring_bone_category_override_value(
 	Ok(())
 }
 
-fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &str) -> Result<(), String> {
+fn remove_dynamics_category_override(manifest: &mut toml::Value, category: &str) -> Result<(), String> {
 	let solver = dynamics_solver_table_mut(manifest)?;
 	let Some(overrides) = solver.get_mut("overrides").and_then(toml::Value::as_array_mut) else {
 		return Ok(());
@@ -11647,7 +13444,7 @@ fn remove_spring_bone_category_override(manifest: &mut toml::Value, category: &s
 	overrides.retain(|item| {
 		item.get("category")
 			.and_then(toml::Value::as_str)
-			.map(normalize_spring_bone_category_id)
+			.map(normalize_dynamics_category_id)
 			.as_deref()
 			!= Some(category)
 	});
@@ -12104,23 +13901,29 @@ mod tests {
 		io::{BufRead, BufReader, Cursor, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
 		path::{Path, PathBuf},
-		sync::{atomic::Ordering, Arc, Mutex},
+		sync::{
+			atomic::{AtomicBool, Ordering},
+			Arc, Mutex,
+		},
 		thread,
 		time::{Duration, Instant},
 	};
+	use un_avatar_skeleton::dynamics_token_filter_matches;
 
 	use super::{
 		apply_avatar_setting_value, attach_standalone_renderer_manifest_in_state, avatar_model_picker_parent, avatar_setting_field_domain,
-		build_launcher_task_specs, data_image_base64_parts, diagnostics_archive_path, diagnostics_generated_at_secs,
-		encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp, manifest_wardrobe_shortcut_settings, midi_note_on_event,
-		migrate_avatar_manifest_to_v2, parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count,
-		read_avatar_setting, read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, repo_root,
-		resolve_renderer_window_icon_path, resolve_screenshot_path, screenshot_profile_filename_stem, send_renderer_control,
+		build_launcher_task_specs, classify_dynamics_category_from_text, data_image_base64_parts, diagnostics_archive_path,
+		diagnostics_generated_at_secs, encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp,
+		manifest_wardrobe_shortcut_settings, midi_note_on_event, migrate_avatar_manifest_to_v2, model_dynamics_category_authored_params,
+		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
+		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_dynamics_physics_config, repo_root, resolve_renderer_window_icon_path,
+		resolve_screenshot_path, runtime_status_from_renderer, screenshot_profile_filename_stem, send_renderer_control,
 		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, standalone_renderer_runtime_bus_key,
 		startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
 		unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate,
 		write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
-		ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererRuntimeTelemetry, RendererSpoutProfileState,
+		ManagedRenderer, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererDynamicsSetting, RendererInstance,
+		RendererRuntimeTelemetry, RendererRuntimeTelemetryCache, RendererSpoutProfileState, RendererState, RuntimeCountEntry,
 		SupervisorState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
 
@@ -12133,7 +13936,12 @@ mod tests {
 			scene_state: "avatar_scene".to_string(),
 			uptime_secs: 1,
 			fps: Some(60.0),
+			target_fps: Some(60.0),
+			frame_target_ms: Some(16.666_666),
 			cpu_ms: Some(1.0),
+			frame_wall_ms: Some(16.6),
+			frame_wall_max_recent_ms: Some(16.9),
+			frame_wall_spike_count_recent: Some(1),
 			frame_cpu_total_ms: Some(1.4),
 			frame_motion_apply_ms: None,
 			frame_dynamics_step_ms: Some(0.2),
@@ -12223,6 +14031,13 @@ mod tests {
 			dynamics_vrm_spring_bone_collider_count: 0,
 			dynamics_vrc_physbone_collider_count: 0,
 			dynamics_unknown_collider_count: 0,
+			dynamics_surface_constraint_count: 0,
+			dynamics_collision_projection_count: 0,
+			dynamics_collision_projection_source_ids: Vec::new(),
+			dynamics_collision_projection_collider_paths: Vec::new(),
+			dynamics_collision_projection_collider_path_counts: Vec::new(),
+			dynamics_collision_projection_top_collider_path: None,
+			dynamics_collision_projection_top_collider_count: None,
 			dynamics_contact_count: 0,
 			dynamics_vrc_contact_sender_count: 0,
 			dynamics_vrc_contact_receiver_count: 0,
@@ -12248,6 +14063,8 @@ mod tests {
 			contact_parameter_emission_enabled: false,
 			contact_parameter_emissions: Vec::new(),
 			contact_probes: Vec::new(),
+			dynamics_response_categories: Vec::new(),
+			dynamics_response_groups: Vec::new(),
 			dynamics_groups: Vec::new(),
 			dynamics_interaction_hooks: Vec::new(),
 			dynamics_colliders: Vec::new(),
@@ -12266,6 +14083,68 @@ mod tests {
 			startup_message: None,
 			note: None,
 		}
+	}
+
+	fn managed_renderer_with_telemetry(telemetry: RendererRuntimeTelemetry) -> ManagedRenderer {
+		ManagedRenderer {
+			info: RendererInstance {
+				id: 1,
+				name: "test".to_string(),
+				state: RendererState::Running,
+				pid: None,
+				uptime_secs: 0,
+				avatar_path: None,
+				manifest_path: Some("target/tmp/test.toml".to_string()),
+				vmc_address: None,
+				vmc_port: None,
+				motion_vmc_enabled: false,
+				motion_unmotion_enabled: false,
+				unmotion_zenoh_key: None,
+				primary_motion_source: "vmc".to_string(),
+				spout_enabled: false,
+				spout_name: None,
+				spout_width: None,
+				spout_height: None,
+				transparent: false,
+				input_passthrough: false,
+				decorations: true,
+				always_on_top: false,
+				window_width: 800,
+				window_height: 600,
+				last_stderr: None,
+				stderr_tail: Vec::new(),
+				exit_code: None,
+			},
+			child: None,
+			started_at: Instant::now(),
+			runtime_bus_key: "test/runtime".to_string(),
+			runtime_status_cache: Arc::new(Mutex::new(RendererRuntimeTelemetryCache {
+				telemetry: Some(telemetry),
+				updated_at: Some(Instant::now()),
+				last_error: None,
+			})),
+			runtime_status_stream_stop: Arc::new(AtomicBool::new(false)),
+			stderr_tail: Arc::new(Mutex::new(Vec::new())),
+			crash_notified: false,
+		}
+	}
+
+	#[test]
+	fn dynamics_profile_category_matching_uses_token_boundaries() {
+		assert!(dynamics_token_filter_matches("Avatar/LongCoat", "longcoat"));
+		assert!(dynamics_token_filter_matches("Avatar/LongCoat", "long_coat"));
+		assert!(dynamics_token_filter_matches("Avatar/Long_Coat", "longcoat"));
+		assert!(dynamics_token_filter_matches("Avatar/Hair1_L", "hair"));
+		assert!(!dynamics_token_filter_matches("Avatar/ChairBack", "hair"));
+		assert!(!dynamics_token_filter_matches("Avatar/Earring_L", "ear"));
+		assert_eq!(
+			classify_dynamics_category_from_text("physbone:Avatar/Earring_L"),
+			Some("accessory".to_string())
+		);
+		assert_ne!(
+			classify_dynamics_category_from_text("physbone:Avatar/ChairBack"),
+			Some("hair".to_string())
+		);
 	}
 
 	fn collect_static_i18n_keys_from_source_dir(dir: &Path, out: &mut BTreeSet<String>) {
@@ -12565,7 +14444,7 @@ display_name = "Mizuki"
 			let (mut stream, _) = listener.accept().unwrap();
 			writeln!(
 				stream,
-				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"active_wardrobe_set":"field_drape","wardrobe_asset_upload":{{"mode":"scoped","active_asset_groups":["","outfit:field_drape"],"resident_mesh_primitive_count":80,"resident_material_count":23,"resident_image_count":58,"resident_dynamics_count":76,"last_mesh_buffer_scoped_load_count":4,"last_mesh_buffer_scoped_unload_count":2,"last_image_texture_scoped_load_count":6,"last_image_texture_scoped_unload_count":3,"last_material_slot_scoped_upload_count":5,"scoped_upload_supported":true,"all_resident":false}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_rotation_translation_writeback_group_count":2,"dynamics_translation_writeback_candidate_count":3,"dynamics_translation_writeback_target_count":2,"dynamics_stretch_translation_writeback_group_count":1,"dynamics_stretch_translation_writeback_target_group_count":1,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_interaction_hooks":[{{"group_index":0,"source_id":"physbone:hair","parameter":"HairPB","suffix_parameters":["HairPB_IsGrabbed"],"metadata_only":true}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver"],"note":null}}"#
+				r#"{{"connected":true,"uptime_secs":7,"fps":59.5,"cpu_ms":1.25,"gpu_ms":2.5,"ram_mb":null,"surface_width":800,"surface_height":600,"aa":"smaa","texture_resolution_limit":"4k","texture_compression":"auto","processed_texture_cache":true,"texture_summary":{{"image_count":3,"resized_count":1,"compression_mode":"auto","compression_bc_supported":true,"compression_astc_supported":false,"compression_etc2_supported":false,"compressed_count":2,"compression_fallback_count":1,"compressed_mip_bytes":1024,"cache_enabled":true,"cache_hits":1,"cache_misses":2,"cache_writes":2,"compressed_cache_hits":0,"compressed_cache_misses":2,"compressed_cache_writes":1,"source_bytes":4096,"uploaded_mip_bytes":2048,"max_source_dimension":2048,"max_uploaded_dimension":1024,"limit_max_dimension":4096}},"active_wardrobe_set":"field_drape","wardrobe_asset_upload":{{"mode":"scoped","active_asset_groups":["","outfit:field_drape"],"resident_mesh_primitive_count":80,"resident_material_count":23,"resident_image_count":58,"resident_dynamics_count":76,"last_mesh_buffer_scoped_load_count":4,"last_mesh_buffer_scoped_unload_count":2,"last_image_texture_scoped_load_count":6,"last_image_texture_scoped_unload_count":3,"last_material_slot_scoped_upload_count":5,"scoped_upload_supported":true,"all_resident":false}},"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_group_count":9,"dynamics_limit_group_count":8,"dynamics_angle_limit_group_count":7,"dynamics_stretch_limit_group_count":6,"dynamics_rotation_translation_writeback_group_count":2,"dynamics_translation_writeback_candidate_count":3,"dynamics_translation_writeback_target_count":2,"dynamics_stretch_translation_writeback_group_count":1,"dynamics_stretch_translation_writeback_target_group_count":1,"dynamics_grabbing_enabled_group_count":5,"dynamics_posing_enabled_group_count":4,"dynamics_surface_constraint_count":11,"dynamics_contact_count":3,"dynamics_contact_parameter_declaration_count":2,"dynamics_contact_probe_count":1,"dynamics_contact_probe_would_emit_count":1,"dynamics_contact_parameter_emission_count":1,"dynamics_contact_parameter_emitted_count":1,"dynamics_contact_parameter_reset_to_zero_count":0,"dynamics_constraint_ref_count":2,"runtime_parameter_definitions":[{{"name":"Hat","owner_keys":["action:hat:on"],"source_kinds":["action_condition"],"value_samples":[1.0],"current_value":1.0}}],"runtime_parameter_conflicts":[{{"name":"Hat","reason":"contact_transient_overlaps_action_parameter","owner_keys":["action:hat:on","contact:hand"],"source_kinds":["action_condition","contact_receiver"],"value_samples":[0.0,1.0]}}],"runtime_actions":[{{"action_id":"hat:on","condition_parameter_names":["Hat"],"current_condition_state":"active"}}],"runtime_action_target_write_collisions":[{{"target_kind":"node_visibility","target_key":"Root/Hat","owner_keys":["action:hat:on","action:hat:off"],"action_ids":["hat:on","hat:off"],"writes":[]}}],"runtime_action_restore_readiness":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","restore_target":true,"current_value_available":true,"current_value":true,"baseline_required":true,"ready":false,"reason":"baseline_not_captured"}}],"runtime_action_restore_baseline_candidates":[{{"owner_key":"action:hat:on","action_id":"hat:on","effect_kind":"node_visibility","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true}}],"runtime_action_restore_baseline_capture_plan":[{{"owner_key":"action:hat:on","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"source_action_ids":["hat:on"],"source_effect_kinds":["node_visibility"]}}],"runtime_action_restore_apply_plan":[{{"owner_key":"action:hat:on","action_id":"hat:on","condition_state":"inactive","target_kind":"node_visibility","target_key":"Root/Hat","baseline_value":true,"current_value_available":true,"current_value":false,"ready":true,"reason":"ready"}}],"menu_wardrobe_candidates":[{{"menu_path":["Wardrobe"],"menu_label":"Wardrobe","action_id":"wardrobe:field_drape","wardrobe_set_id":"field_drape","match_kind":"condition","inverted":false}}],"contact_parameter_declarations":[{{"owner_key":"contact:hand","node":1,"parameter":"ContactHand"}}],"contact_parameter_emission_enabled":true,"contact_parameter_emissions":[{{"owner_key":"contact:hand","receiver_index":0,"receiver_node":1,"parameter":"ContactHand","value":1.0,"emitted":true,"sender_source_ids":["contact:sender"]}}],"contact_probes":[{{"index":0,"would_emit":true}}],"dynamics_groups":[{{"index":0,"source_id":"physbone:hair"}}],"dynamics_interaction_hooks":[{{"group_index":0,"source_id":"physbone:hair","parameter":"HairPB","suffix_parameters":["HairPB_IsGrabbed"],"metadata_only":true}}],"dynamics_colliders":[{{"index":0,"node_path":"root/collider"}}],"dynamics_constraint_refs":[{{"index":0,"source_id":"constraint:parent"}}],"dynamics_warnings":["6 dynamics groups carry stretch limits; targetless stretch groups use simulation stretch without translation writeback"],"note":null}}"#
 			)
 			.unwrap();
 		});
@@ -12607,6 +14486,7 @@ display_name = "Mizuki"
 		assert_eq!(telemetry.dynamics_stretch_translation_writeback_target_group_count, 1);
 		assert_eq!(telemetry.dynamics_grabbing_enabled_group_count, 5);
 		assert_eq!(telemetry.dynamics_posing_enabled_group_count, 4);
+		assert_eq!(telemetry.dynamics_surface_constraint_count, 11);
 		assert_eq!(telemetry.dynamics_contact_count, 3);
 		assert_eq!(telemetry.dynamics_contact_parameter_declaration_count, 2);
 		assert_eq!(telemetry.dynamics_contact_probe_count, 1);
@@ -12722,8 +14602,90 @@ display_name = "Mizuki"
 		);
 		assert_eq!(
 			telemetry.dynamics_warnings.first().map(String::as_str),
-			Some("6 dynamics groups carry stretch limits; targetless stretch groups remain metadata-only in the current solver")
+			Some("6 dynamics groups carry stretch limits; targetless stretch groups use simulation stretch without translation writeback")
 		);
+	}
+
+	#[test]
+	fn runtime_telemetry_reads_dynamics_projection_path_counts() {
+		let telemetry: RendererRuntimeTelemetry = serde_json::from_str(
+			r#"{
+				"connected": true,
+				"uptime_secs": 7,
+				"fps": 60.0,
+				"cpu_ms": 1.0,
+				"gpu_ms": 1.0,
+				"ram_mb": null,
+				"surface_width": 800,
+				"surface_height": 600,
+				"spout_enabled": false,
+				"spout_name": null,
+				"spout_width": null,
+				"spout_height": null,
+				"dynamics_collision_projection_count": 11,
+				"dynamics_collision_projection_source_ids": ["physbone:cloth", "physbone:hair"],
+				"dynamics_collision_projection_collider_paths": ["Body/Upper", "Body/Lower"],
+				"dynamics_collision_projection_collider_path_counts": [
+					{"key": "Body/Upper", "count": 7},
+					{"key": "Body/Lower", "count": 4}
+				],
+				"dynamics_collision_projection_top_collider_path": "Body/Upper",
+				"dynamics_collision_projection_top_collider_count": 7,
+				"note": null
+			}"#,
+		)
+		.unwrap();
+		assert_eq!(telemetry.dynamics_collision_projection_count, 11);
+		assert_eq!(
+			telemetry.dynamics_collision_projection_source_ids,
+			["physbone:cloth", "physbone:hair"]
+		);
+		assert_eq!(telemetry.dynamics_collision_projection_collider_paths, ["Body/Upper", "Body/Lower"]);
+		assert_eq!(telemetry.dynamics_collision_projection_collider_path_counts.len(), 2);
+		assert_eq!(telemetry.dynamics_collision_projection_collider_path_counts[0].key, "Body/Upper");
+		assert_eq!(telemetry.dynamics_collision_projection_collider_path_counts[0].count, 7);
+		assert_eq!(
+			telemetry.dynamics_collision_projection_top_collider_path.as_deref(),
+			Some("Body/Upper")
+		);
+		assert_eq!(telemetry.dynamics_collision_projection_top_collider_count, Some(7));
+	}
+
+	#[test]
+	fn runtime_status_keeps_dynamics_projection_samples() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.dynamics_surface_constraint_count = 13;
+		telemetry.dynamics_collision_projection_count = 11;
+		telemetry.dynamics_collision_projection_source_ids = vec!["physbone:cloth".to_string(), "physbone:hair".to_string()];
+		telemetry.dynamics_collision_projection_collider_paths = vec!["Body/Upper".to_string(), "Body/Lower".to_string()];
+		telemetry.dynamics_collision_projection_collider_path_counts = vec![
+			RuntimeCountEntry {
+				key: "Body/Upper".to_string(),
+				count: 7,
+			},
+			RuntimeCountEntry {
+				key: "Body/Lower".to_string(),
+				count: 4,
+			},
+		];
+		telemetry.dynamics_collision_projection_top_collider_path = Some("Body/Upper".to_string());
+		telemetry.dynamics_collision_projection_top_collider_count = Some(7);
+		let renderer = managed_renderer_with_telemetry(telemetry);
+
+		let status = runtime_status_from_renderer(&renderer);
+
+		assert_eq!(status.dynamics_collision_projection_count, 11);
+		assert_eq!(status.dynamics_surface_constraint_count, 13);
+		assert_eq!(status.dynamics_collision_projection_source_ids, ["physbone:cloth", "physbone:hair"]);
+		assert_eq!(status.dynamics_collision_projection_collider_paths, ["Body/Upper", "Body/Lower"]);
+		assert_eq!(status.dynamics_collision_projection_collider_path_counts.len(), 2);
+		assert_eq!(status.dynamics_collision_projection_collider_path_counts[0].key, "Body/Upper");
+		assert_eq!(status.dynamics_collision_projection_collider_path_counts[0].count, 7);
+		assert_eq!(
+			status.dynamics_collision_projection_top_collider_path.as_deref(),
+			Some("Body/Upper")
+		);
+		assert_eq!(status.dynamics_collision_projection_top_collider_count, Some(7));
 	}
 
 	#[test]
@@ -13933,7 +15895,7 @@ display_name = "Mizuki"
 		loop {
 			let _ = session.put(
 				format!("{key}/status"),
-				r#"{"connected":true,"protocol":"zenoh-json-v1","control_capabilities":["shutdown"],"uptime_secs":9,"fps":60.0,"cpu_ms":1.0,"gpu_ms":2.0,"ram_mb":null,"surface_width":640,"surface_height":360,"aa":"msaa","texture_resolution_limit":"off","texture_compression":"source","processed_texture_cache":true,"texture_summary":{"image_count":1,"uploaded_mip_bytes":512},"spout_available":true,"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"note":null}"#,
+				r#"{"connected":true,"protocol":"zenoh-json-v1","control_capabilities":["shutdown"],"uptime_secs":9,"fps":60.0,"cpu_ms":1.0,"gpu_ms":2.0,"ram_mb":null,"surface_width":640,"surface_height":360,"aa":"msaa","texture_resolution_limit":"off","texture_compression":"source","processed_texture_cache":true,"texture_summary":{"image_count":1,"uploaded_mip_bytes":512},"spout_available":true,"spout_enabled":false,"spout_name":null,"spout_width":null,"spout_height":null,"dynamics_response_categories":[{"category":"hair","group_count":2,"joint_count":5,"xpbd_group_count":1,"average_rest_response":0.2,"min_rest_response":0.1,"max_rest_response":0.3,"average_pull":0.2,"average_stiffness":0.3,"average_shape_preservation":0.25,"min_shape_preservation":0.12,"max_shape_preservation":0.31,"average_bounce_response":0.4,"min_bounce_response":0.2,"max_bounce_response":0.5,"average_spring":0.4,"average_drag_force":0.5,"average_damping_half_life_ms":140.0,"average_parent_motion_follow":0.6,"min_parent_motion_follow":0.4,"max_parent_motion_follow":0.7,"average_orientation_follow":0.15,"average_xpbd_compliance":0.01}],"dynamics_response_groups":[{"source_id":"physbone:hair","category":"hair","joint_count":5,"solver":"xpbd","average_rest_response":0.2,"min_rest_response":0.1,"max_rest_response":0.3,"average_pull":0.2,"average_stiffness":0.3,"average_shape_preservation":0.25,"min_shape_preservation":0.12,"max_shape_preservation":0.31,"average_bounce_response":0.4,"min_bounce_response":0.2,"max_bounce_response":0.5,"average_spring":0.4,"average_drag_force":0.5,"average_damping_half_life_ms":140.0,"average_parent_motion_follow":0.6,"min_parent_motion_follow":0.4,"max_parent_motion_follow":0.7,"average_orientation_follow":0.15,"xpbd_compliance":0.01}],"note":null}"#,
 			).wait();
 			if let Some(telemetry) = cache.lock().unwrap().telemetry.clone() {
 				stop.store(true, Ordering::Release);
@@ -13944,6 +15906,56 @@ display_name = "Mizuki"
 				assert_eq!(
 					telemetry.texture_summary.as_ref().map(|summary| summary.uploaded_mip_bytes),
 					Some(512)
+				);
+				assert_eq!(telemetry.dynamics_response_categories.len(), 1);
+				assert_eq!(
+					telemetry.dynamics_response_categories[0]
+						.get("category")
+						.and_then(serde_json::Value::as_str),
+					Some("hair")
+				);
+				assert_eq!(
+					telemetry.dynamics_response_categories[0]
+						.get("average_rest_response")
+						.and_then(serde_json::Value::as_f64),
+					Some(0.2)
+				);
+				assert_eq!(
+					telemetry.dynamics_response_categories[0]
+						.get("min_rest_response")
+						.and_then(serde_json::Value::as_f64),
+					Some(0.1)
+				);
+				assert_eq!(
+					telemetry.dynamics_response_categories[0]
+						.get("average_damping_half_life_ms")
+						.and_then(serde_json::Value::as_f64),
+					Some(140.0)
+				);
+				assert_eq!(telemetry.dynamics_response_groups.len(), 1);
+				assert_eq!(
+					telemetry.dynamics_response_groups[0]
+						.get("source_id")
+						.and_then(serde_json::Value::as_str),
+					Some("physbone:hair")
+				);
+				assert_eq!(
+					telemetry.dynamics_response_groups[0]
+						.get("average_bounce_response")
+						.and_then(serde_json::Value::as_f64),
+					Some(0.4)
+				);
+				assert_eq!(
+					telemetry.dynamics_response_groups[0]
+						.get("max_bounce_response")
+						.and_then(serde_json::Value::as_f64),
+					Some(0.5)
+				);
+				assert_eq!(
+					telemetry.dynamics_response_groups[0]
+						.get("average_damping_half_life_ms")
+						.and_then(serde_json::Value::as_f64),
+					Some(140.0)
 				);
 				return;
 			}
@@ -14321,8 +16333,10 @@ display_name = "Mizuki"
 				&& field_rules.contains(r#"field === "wardrobe.bindings""#)
 				&& field_rules.contains(r#"field.startsWith("animator.")"#)
 				&& field_rules.contains(r#"field.startsWith("output.spout2.")"#)
+				&& field_rules.contains(r#"field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX)"#)
+				&& field_rules.contains(r#"field.startsWith(DYNAMICS_BONE_COLLIDER_FIELD_PREFIX)"#)
 				&& field_rules.contains("canApplyWithoutRestart"),
-			"wardrobe transition, wardrobe bindings, UNAnimator, and Spout2 output fields should be classified as live-applicable profile settings"
+			"wardrobe transition, wardrobe bindings, UNAnimator, Spout2 output, and UNPhysics fields should be classified as live-applicable profile settings"
 		);
 		let launch_time_rules = field_rules
 			.split("export function isLaunchTimeRendererField")
@@ -14359,8 +16373,41 @@ display_name = "Mizuki"
 				&& backend.contains("apply_animator_profile_to_matching_renderers")
 				&& backend.contains(r#""output.spout2.""#)
 				&& backend.contains("apply_spout_output_to_matching_renderers")
+				&& backend.contains(r#""physics.dynamics.""#)
+				&& backend.contains("apply_dynamics_to_matching_renderers")
 				&& backend.contains("SetWardrobeTransition"),
 			"saved live profile edits must be sent to matching running renderers instead of requiring restart"
+		);
+	}
+
+	#[test]
+	fn static_profile_setting_edits_are_coalesced_for_high_frequency_controls() {
+		let supervisor_src = repo_root().join("apps").join("un-avatar-supervisor").join("src");
+		let app_svelte = fs::read_to_string(supervisor_src.join("App.svelte")).expect("App.svelte should be readable");
+		let range_field = fs::read_to_string(supervisor_src.join("lib").join("RangeNumberField.svelte"))
+			.expect("RangeNumberField.svelte should be readable");
+
+		assert!(
+			app_svelte.contains("const profileSettingUpdateCoalesceMs = 80")
+				&& app_svelte.contains("type PendingProfileSettingUpdate")
+				&& app_svelte.contains("pendingProfileSettingUpdates")
+				&& app_svelte.contains("scheduleCoalescedProfileSettingUpdate")
+				&& app_svelte.contains("flushCoalescedProfileSettingUpdate"),
+			"high-frequency profile setting edits should be coalesced before supervisor IPC"
+		);
+		assert!(
+			app_svelte.contains("isCoalescibleProfileSettingValue(value)")
+				&& app_svelte.contains("scheduleCoalescedProfileSettingUpdate(targetSetting, field, value)")
+				&& app_svelte.contains("replaceAvatarSetting(setting, selectedSettingId === pending.settingId)"),
+			"numeric/vector edits should use last-write-wins without stealing profile selection after delayed flush"
+		);
+		assert!(
+			range_field.contains("const inputCoalesceMs = 80")
+				&& range_field.contains("queueRangeInput")
+				&& range_field.contains("flushRangeInput")
+				&& range_field.contains("oninput={(event) => queueRangeInput(finiteNumberFromInput(event))}")
+				&& range_field.contains("onchange={(event) => flushRangeInput(finiteNumberFromInput(event))}"),
+			"range sliders should debounce drag input and flush the final value on change"
 		);
 	}
 
@@ -15665,6 +17712,149 @@ id = "test"
 		fs::write(path, glb).unwrap();
 	}
 
+	#[test]
+	fn authored_dynamics_params_read_unavatar_profiles() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-authored-dynamics-unavatar-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		let manifest_path = dir.join("profile.toml");
+		write_glb_with_json_and_bin_bytes(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"scene": 0,
+				"scenes": [{"nodes": [0]}],
+				"nodes": [
+					{"name": "Root", "children": [1]},
+					{"name": "SquirrelEars_Root", "children": [2]},
+					{"name": "SquirrelEars_Tip"}
+				],
+				"extensionsUsed": ["UN_avatar"],
+				"extensions": {
+					"UN_avatar": {
+						"specVersion": "2.1",
+						"dynamics": [{
+							"id": "physbone:ears",
+							"name": "SquirrelEars",
+							"source": "vrc_physbone",
+							"roots": [{"path": "Root/SquirrelEars_Root"}],
+							"integrationType": "advanced",
+							"pull": 0.36,
+							"spring": 0.83,
+							"stiffness": 0.2,
+							"sourceParams": {
+								"pull": 0.36,
+								"spring": 0.83,
+								"stiffness": 0.2
+							}
+						}]
+					}
+				}
+			}"#,
+			&[],
+		);
+		let authored = model_dynamics_category_authored_params(&avatar_path, &manifest_path).expect("authored params");
+		let ears = authored.get("ears").expect("ears category");
+		assert_eq!(ears.count, 1);
+		assert!((ears.rest_response - 0.36).abs() < 1e-6);
+		assert!((ears.shape_preservation - 0.2).abs() < 1e-6);
+		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn dynamics_authored_category_classification_matches_runtime_leaf_priority() {
+		let dir = std::env::temp_dir().join(format!("un-avatar-authored-category-priority-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&dir);
+		fs::create_dir_all(&dir).unwrap();
+		let avatar_path = dir.join("avatar.unavatar");
+		let manifest_path = dir.join("profile.toml");
+		write_glb_with_json_and_bin_bytes(
+			&avatar_path,
+			r#"{
+				"asset": {"version": "2.0"},
+				"scene": 0,
+				"scenes": [{"nodes": [0]}],
+				"nodes": [
+					{"name": "Root", "children": [1, 3, 5, 10, 12]},
+					{"name": "CYCRPleated_skirtRoot", "children": [2]},
+					{"name": "cycr_PocketWatch_Root", "children": [7]},
+					{"name": "Upperarm_L", "children": [4]},
+					{"name": "coat_hand_root_L", "children": [8]},
+					{"name": "Chest", "children": [6]},
+					{"name": "Breast_L", "children": [9]},
+					{"name": "cycr_PocketWatch_Tip"},
+					{"name": "coat_hand_tip_L"},
+					{"name": "Breast_Tip_L"},
+					{"name": "EarringsRoot_L", "children": [11]},
+					{"name": "EarringsTip_L"},
+					{"name": "Cycr_MaryJaneShoesL_Root", "children": [13]},
+					{"name": "Cycr_MaryJaneShoesL_Tip"}
+				],
+				"extensionsUsed": ["UN_avatar"],
+				"extensions": {
+					"UN_avatar": {
+						"specVersion": "2.1",
+						"dynamics": [
+							{
+								"id": "physbone:B_White&Brown/Armature/Hips/CYCRPleated_skirtRoot/cycr_PocketWatch_Root",
+								"name": "cycr_PocketWatch_Root",
+								"source": "vrc_physbone",
+								"roots": [{"path": "Root/CYCRPleated_skirtRoot/cycr_PocketWatch_Root"}],
+								"pull": 0.20,
+								"spring": 0.10,
+								"stiffness": 0.05
+							},
+							{
+								"id": "physbone:Armature/Hips/Spine/Chest/Shoulder_L/Upperarm_L/coat_hand_root_L",
+								"name": "coat_hand_root_L",
+								"source": "vrc_physbone",
+								"roots": [{"path": "Root/Upperarm_L/coat_hand_root_L"}],
+								"pull": 0.30,
+								"spring": 0.10,
+								"stiffness": 0.05
+							},
+							{
+								"id": "physbone:Armature/Hips/Spine/Chest/Breast_L",
+								"name": "Breast_L",
+								"source": "vrc_physbone",
+								"roots": [{"path": "Root/Chest/Breast_L"}],
+								"pull": 0.40,
+								"spring": 0.10,
+								"stiffness": 0.05
+							},
+							{
+								"id": "physbone:A_Brown&Gold/Armature/Hips/Spine/Chest/Neck/Head/EarringsRoot_L",
+								"name": "EarringsRoot_L",
+								"source": "vrc_physbone",
+								"roots": [{"path": "Root/EarringsRoot_L"}],
+								"pull": 0.50,
+								"spring": 0.10,
+								"stiffness": 0.05
+							},
+							{
+								"id": "physbone:B_White&Brown/Armature/Hips/Upperleg_L/Lowerleg_L/Foot_L/Cycr_MaryJaneShoesL_Root",
+								"name": "Cycr_MaryJaneShoesL_Root",
+								"source": "vrc_physbone",
+								"roots": [{"path": "Root/Cycr_MaryJaneShoesL_Root"}],
+								"pull": 0.50,
+								"spring": 0.10,
+								"stiffness": 0.05
+							}
+						]
+					}
+				}
+			}"#,
+			&[],
+		);
+		let authored = model_dynamics_category_authored_params(&avatar_path, &manifest_path).expect("authored params");
+		assert_eq!(authored.get("accessory").map(|item| item.count), Some(3));
+		assert_eq!(authored.get("cloth").map(|item| item.count), Some(1));
+		assert_eq!(authored.get("soft_body").map(|item| item.count), Some(1));
+		assert_eq!(authored.get("other").map(|item| item.count), None);
+		let _ = fs::remove_dir_all(&dir);
+	}
+
 	fn write_glb_with_declared_bin_len_and_prefix(path: &Path, json: &str, declared_bin_len: u64, bin_prefix: &[u8]) {
 		let mut json_bytes = json.as_bytes().to_vec();
 		while !json_bytes.len().is_multiple_of(4) {
@@ -15936,6 +18126,40 @@ processed_texture_cache = true
 	}
 
 	#[test]
+	fn runtime_target_fps_setting_clamps_manifest_value() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(&mut manifest, &setting, "runtime.target_fps", serde_json::json!(500)).unwrap();
+		assert_eq!(
+			manifest
+				.get("runtime")
+				.and_then(toml::Value::as_table)
+				.and_then(|runtime| runtime.get("target_fps"))
+				.and_then(toml::Value::as_float),
+			Some(300.0)
+		);
+
+		apply_avatar_setting_value(&mut manifest, &setting, "runtime.target_fps", serde_json::json!(12)).unwrap();
+		assert_eq!(
+			manifest
+				.get("runtime")
+				.and_then(toml::Value::as_table)
+				.and_then(|runtime| runtime.get("target_fps"))
+				.and_then(toml::Value::as_float),
+			Some(30.0)
+		);
+	}
+
+	#[test]
 	fn render_quality_advanced_texture_preferences_save_normalized_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
 		let mut manifest = parse_manifest_value(
@@ -16071,6 +18295,31 @@ prewarmed_at = "20260614T000000Z"
 	}
 
 	#[test]
+	fn scene_cache_fingerprint_ignores_runtime_target_fps() {
+		let base: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+"#,
+		)
+		.unwrap();
+		let with_target_fps: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+
+[runtime]
+target_fps = 300
+"#,
+		)
+		.unwrap();
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&base),
+			crate::scene_cache_manifest_fingerprint(&with_target_fps)
+		);
+	}
+
+	#[test]
 	fn scene_cache_fingerprint_changes_with_output_mode() {
 		let window_preview: toml::Value = toml::from_str(
 			r#"
@@ -16106,8 +18355,20 @@ minimized = true
 	}
 
 	#[test]
-	fn spring_bone_category_override_setting_updates_manifest_values() {
+	fn dynamics_category_override_setting_updates_manifest_values() {
 		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let ears_setting = setting
+			.dynamics_category_overrides
+			.iter()
+			.find(|item| item.category == "ears")
+			.expect("ears setting");
+		let ears_json = serde_json::to_value(ears_setting).expect("ears setting json");
+		assert!(ears_json.get("rest_response").is_some());
+		assert!(ears_json.get("rest_response_configured").is_some());
+		assert!(ears_json.get("authored_rest_response").is_some());
+		assert!(ears_json.get("stiffness_hz").is_none());
+		assert!(ears_json.get("stiffness_configured").is_none());
+		assert!(ears_json.get("authored_stiffness_hz").is_none());
 		let mut manifest = parse_manifest_value(
 			r#"title = "Test"
 
@@ -16125,6 +18386,24 @@ id = "test"
 			serde_json::json!("override_xpbd"),
 		)
 		.unwrap();
+		{
+			let overrides = manifest
+				.get("physics")
+				.and_then(|v| v.get("dynamics"))
+				.and_then(|v| v.get("solver"))
+				.and_then(|v| v.get("overrides"))
+				.and_then(toml::Value::as_array)
+				.expect("overrides");
+			let item = overrides[0].as_table().expect("override item");
+			assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("xpbd"));
+			assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.08).abs() < 1e-6);
+			assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.06).abs() < 1e-6);
+			assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.5).abs() < 1e-6);
+			assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 95.0).abs() < 1e-6);
+			assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.70).abs() < 1e-6);
+			assert!((item.get("xpbd_compliance").and_then(toml::Value::as_float).unwrap_or_default() - 0.004).abs() < 1e-6);
+			assert_eq!(item.get("constraint_iterations").and_then(toml::Value::as_integer), Some(6));
+		}
 		apply_avatar_setting_value(
 			&mut manifest,
 			&setting,
@@ -16137,6 +18416,34 @@ id = "test"
 			&setting,
 			"physics.dynamics.solver.overrides.ears.constraint_iterations",
 			serde_json::json!(8),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.bounce_scale",
+			serde_json::json!(0.35),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.rest_response",
+			serde_json::json!(0.12),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.shape_preservation",
+			serde_json::json!(0.09),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.motion_coupling",
+			serde_json::json!(0.4),
 		)
 		.unwrap();
 
@@ -16153,6 +18460,11 @@ id = "test"
 		assert_eq!(item.get("category").and_then(toml::Value::as_str), Some("ears"));
 		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("xpbd"));
 		assert!((item.get("xpbd_compliance").and_then(toml::Value::as_float).unwrap_or_default() - 0.015).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.35).abs() < 1e-6);
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.12).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.09).abs() < 1e-6);
+		assert!(item.get("stiffness_hz").is_none());
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.4).abs() < 1e-6);
 		assert_eq!(item.get("constraint_iterations").and_then(toml::Value::as_integer), Some(8));
 
 		apply_avatar_setting_value(
@@ -16173,6 +18485,57 @@ id = "test"
 		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("xpbd"));
 		assert_eq!(item.get("constraint_iterations").and_then(toml::Value::as_integer), Some(7));
 		assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 55.0).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.50).abs() < 1e-6);
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.18).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.15).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.75).abs() < 1e-6);
+		assert!(item.get("stiffness_hz").is_none());
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.mode",
+			serde_json::json!("override_verlet"),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("overrides");
+		let item = overrides[0].as_table().expect("override item");
+		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("verlet"));
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.08).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.06).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.5).abs() < 1e-6);
+		assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 95.0).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.70).abs() < 1e-6);
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.ears.preset",
+			serde_json::json!("soft"),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("overrides");
+		let item = overrides[0].as_table().expect("override item");
+		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("verlet"));
+		assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 160.0).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.45).abs() < 1e-6);
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.02).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.015).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.30).abs() < 1e-6);
+		assert!(item.get("xpbd_compliance").is_none());
+		assert!(item.get("constraint_iterations").is_none());
 
 		apply_avatar_setting_value(
 			&mut manifest,
@@ -16189,6 +18552,678 @@ id = "test"
 			.and_then(toml::Value::as_array)
 			.expect("overrides");
 		assert!(overrides.is_empty());
+	}
+
+	#[test]
+	fn soft_body_recommended_preset_writes_unphysics_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		assert!(setting.dynamics_category_overrides.iter().any(|item| item.category == "soft_body"));
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[profile]
+id = "test"
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.soft_body.mode",
+			serde_json::json!("override_verlet"),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("overrides");
+		let item = overrides[0].as_table().expect("override item");
+		assert_eq!(item.get("category").and_then(toml::Value::as_str), Some("soft_body"));
+		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("verlet"));
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.035).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.018).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.52).abs() < 1e-6);
+		assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 140.0).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.55).abs() < 1e-6);
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.overrides.soft_body.preset",
+			serde_json::json!("lively"),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("overrides");
+		let item = overrides[0].as_table().expect("override item");
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.025).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.012).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.42).abs() < 1e-6);
+		assert!((item.get("damping_half_life_ms").and_then(toml::Value::as_float).unwrap_or_default() - 180.0).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.75).abs() < 1e-6);
+	}
+
+	#[test]
+	fn dynamics_group_overrides_survive_runtime_setting_payload() {
+		let path = std::env::temp_dir().join(format!("un-avatar-group-override-profile-{}.toml", std::process::id()));
+		fs::write(
+			&path,
+			r#"title = "Group Override Test"
+avatar_path = "target/tmp/usagi.unavatar"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+
+[[physics.dynamics.solver.overrides]]
+category = "ears"
+solver = "xpbd"
+rest_response = 0.03
+
+[[physics.dynamics.solver.match_overrides]]
+name = "soft cape"
+source_id_contains = ["cape"]
+source_id_regex = ["(?i)ribbon"]
+solver = "verlet"
+rest_response = 0.07
+shape_preservation = 0.04
+bounce_scale = 0.7
+stretch_range_scale = 0.5
+stretch_motion = 0.4
+motion_coupling = 0.3
+drag_scale = 0.6
+
+[[physics.dynamics.solver.group_overrides]]
+source_id = "physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+solver = "verlet"
+rest_response = 0.12
+shape_preservation = 0.09
+bounce_scale = 0.8
+motion_coupling = 0.45
+drag_scale = 1.4
+"#,
+		)
+		.unwrap();
+		let setting = read_avatar_setting(&path, ProfileStorage::User).expect("setting");
+		assert_eq!(setting.dynamics_match_overrides.len(), 1);
+		assert_eq!(setting.dynamics_group_overrides.len(), 1);
+		let renderer_setting: RendererDynamicsSetting =
+			serde_json::from_value(serde_json::to_value(&setting).expect("json")).expect("renderer setting");
+		let physics = renderer_dynamics_physics_config(&renderer_setting).expect("physics config");
+		assert_eq!(physics.match_overrides.len(), 1);
+		assert_eq!(physics.match_overrides[0].name, "soft cape");
+		assert_eq!(physics.match_overrides[0].source_id_contains, ["cape"]);
+		assert_eq!(physics.match_overrides[0].source_id_regex, ["(?i)ribbon"]);
+		assert_eq!(physics.match_overrides[0].params.solver.as_deref(), Some("verlet"));
+		assert_eq!(physics.match_overrides[0].params.rest_response, Some(0.07));
+		assert_eq!(physics.match_overrides[0].params.shape_preservation, Some(0.04));
+		assert_eq!(physics.match_overrides[0].params.bounce_scale, Some(0.7));
+		assert_eq!(physics.match_overrides[0].params.stretch_range_scale, Some(0.5));
+		assert_eq!(physics.match_overrides[0].params.stretch_motion, Some(0.4));
+		assert_eq!(physics.match_overrides[0].params.motion_coupling, Some(0.3));
+		assert_eq!(physics.match_overrides[0].params.drag_scale, Some(0.6));
+		assert_eq!(physics.group_overrides.len(), 1);
+		assert_eq!(
+			physics.group_overrides[0].source_id,
+			"physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone"
+		);
+		assert_eq!(physics.group_overrides[0].params.solver.as_deref(), Some("verlet"));
+		assert_eq!(physics.group_overrides[0].params.rest_response, Some(0.12));
+		assert_eq!(physics.group_overrides[0].params.shape_preservation, Some(0.09));
+		assert_eq!(physics.group_overrides[0].params.bounce_scale, Some(0.8));
+		assert_eq!(physics.group_overrides[0].params.motion_coupling, Some(0.45));
+		assert_eq!(physics.group_overrides[0].params.drag_scale, Some(1.4));
+		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn dynamics_collider_augment_overrides_survive_runtime_setting_payload() {
+		let path = std::env::temp_dir().join(format!("un-avatar-collider-augment-profile-{}.toml", std::process::id()));
+		fs::write(
+			&path,
+			r#"title = "Collider Augment Test"
+avatar_path = "target/tmp/usagi.unavatar"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+
+[[physics.dynamics.solver.collider_augment_overrides]]
+name = " cloth body "
+source_id_contains = [" cloth source ", "", "cloth panel"]
+collider_path_contains = [" torso collider ", "limb collider"]
+
+[[physics.dynamics.solver.collider_augment_overrides]]
+name = "incomplete"
+source_id_contains = ["cloth source"]
+"#,
+		)
+		.unwrap();
+		let setting = read_avatar_setting(&path, ProfileStorage::User).expect("setting");
+		assert_eq!(setting.dynamics_collider_augment_overrides.len(), 1);
+		assert_eq!(setting.dynamics_collider_augment_overrides[0].name, "cloth body");
+		assert_eq!(
+			setting.dynamics_collider_augment_overrides[0].source_id_contains,
+			["cloth source", "cloth panel"]
+		);
+		assert_eq!(
+			setting.dynamics_collider_augment_overrides[0].collider_path_contains,
+			["torso collider", "limb collider"]
+		);
+		let renderer_setting: RendererDynamicsSetting =
+			serde_json::from_value(serde_json::to_value(&setting).expect("json")).expect("renderer setting");
+		let physics = renderer_dynamics_physics_config(&renderer_setting).expect("physics config");
+		assert_eq!(physics.collider_augment_overrides.len(), 1);
+		assert_eq!(physics.collider_augment_overrides[0].name, "cloth body");
+		assert_eq!(
+			physics.collider_augment_overrides[0].source_id_contains,
+			["cloth source", "cloth panel"]
+		);
+		assert_eq!(
+			physics.collider_augment_overrides[0].collider_path_contains,
+			["torso collider", "limb collider"]
+		);
+		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn dynamics_surface_constraints_survive_runtime_setting_payload() {
+		let path = std::env::temp_dir().join(format!("un-avatar-surface-constraints-profile-{}.toml", std::process::id()));
+		fs::write(
+			&path,
+			r#"title = "Surface Constraint Test"
+avatar_path = "target/tmp/usagi.unavatar"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+
+[physics.dynamics.solver.surface_constraints]
+enabled = false
+topology_max_edge_distance_m = 0.04
+topology_max_mean_edge_distance_m = 0.02
+spatial_max_distance_m = 0.01
+topology_stiffness = 0.25
+spatial_stiffness = 0.8
+min_edge_count = 4
+"#,
+		)
+		.unwrap();
+		let setting = read_avatar_setting(&path, ProfileStorage::User).expect("setting");
+		assert!(!setting.dynamics_surface_constraints_enabled);
+		assert!((setting.dynamics_surface_constraint_topology_max_edge_distance_m - 0.04).abs() < 1e-6);
+		assert!((setting.dynamics_surface_constraint_topology_max_mean_edge_distance_m - 0.02).abs() < 1e-6);
+		assert!((setting.dynamics_surface_constraint_spatial_max_distance_m - 0.01).abs() < 1e-6);
+		assert!((setting.dynamics_surface_constraint_topology_stiffness - 0.25).abs() < 1e-6);
+		assert!((setting.dynamics_surface_constraint_spatial_stiffness - 0.8).abs() < 1e-6);
+		assert_eq!(setting.dynamics_surface_constraint_min_edge_count, 4);
+		let renderer_setting: RendererDynamicsSetting =
+			serde_json::from_value(serde_json::to_value(&setting).expect("json")).expect("renderer setting");
+		let physics = renderer_dynamics_physics_config(&renderer_setting).expect("physics config");
+		assert!(!physics.surface_constraints_enabled);
+		assert!((physics.surface_constraint_topology_max_edge_distance_m - 0.04).abs() < 1e-6);
+		assert!((physics.surface_constraint_topology_max_mean_edge_distance_m - 0.02).abs() < 1e-6);
+		assert!((physics.surface_constraint_spatial_max_distance_m - 0.01).abs() < 1e-6);
+		assert!((physics.surface_constraint_topology_stiffness - 0.25).abs() < 1e-6);
+		assert!((physics.surface_constraint_spatial_stiffness - 0.8).abs() < 1e-6);
+		assert_eq!(physics.surface_constraint_min_edge_count, 4);
+		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn dynamics_surface_constraints_setting_updates_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.surface_constraints",
+			serde_json::json!({
+				"enabled": false,
+				"topology_max_edge_distance_m": 0.04,
+				"topology_max_mean_edge_distance_m": 0.02,
+				"spatial_max_distance_m": 0.01,
+				"topology_stiffness": 0.25,
+				"spatial_stiffness": 0.8,
+				"min_edge_count": 4
+			}),
+		)
+		.unwrap();
+		let surface = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("surface_constraints"))
+			.and_then(toml::Value::as_table)
+			.expect("surface_constraints");
+		assert_eq!(surface.get("enabled").and_then(toml::Value::as_bool), Some(false));
+		assert!(
+			(surface
+				.get("topology_max_edge_distance_m")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.04)
+				.abs() < 1e-6
+		);
+		assert!(
+			(surface
+				.get("topology_max_mean_edge_distance_m")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.02)
+				.abs() < 1e-6
+		);
+		assert!(
+			(surface
+				.get("spatial_max_distance_m")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.01)
+				.abs() < 1e-6
+		);
+		assert!(
+			(surface
+				.get("topology_stiffness")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.25)
+				.abs() < 1e-6
+		);
+		assert!((surface.get("spatial_stiffness").and_then(toml::Value::as_float).unwrap_or_default() - 0.8).abs() < 1e-6);
+		assert_eq!(surface.get("min_edge_count").and_then(toml::Value::as_integer), Some(4));
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_survives_runtime_setting_payload() {
+		let path = std::env::temp_dir().join(format!("un-avatar-mesh-cloth-assist-profile-{}.toml", std::process::id()));
+		fs::write(
+			&path,
+			r#"title = "Mesh Cloth Assist Test"
+avatar_path = "target/tmp/usagi.unavatar"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+
+[physics.dynamics.solver.mesh_cloth_assist]
+enabled = true
+body_dominance_threshold = 0.7
+min_existing_dynamic_weight = 0.02
+seed_missing_dynamic_influence = true
+max_assist_weight = 0.45
+mesh_path_contains = ["Cloth_Panel", " Cloth "]
+"#,
+		)
+		.unwrap();
+		let setting = read_avatar_setting(&path, ProfileStorage::User).expect("setting");
+		let assist = setting.dynamics_mesh_cloth_assist.as_ref().expect("mesh cloth assist");
+		assert!(assist.enabled);
+		assert!((assist.body_dominance_threshold - 0.7).abs() < 1e-6);
+		assert!((assist.min_existing_dynamic_weight - 0.02).abs() < 1e-6);
+		assert!(assist.seed_missing_dynamic_influence);
+		assert!((assist.max_assist_weight - 0.45).abs() < 1e-6);
+		assert_eq!(assist.mesh_path_contains, ["Cloth_Panel", "Cloth"]);
+		let renderer_setting: RendererDynamicsSetting =
+			serde_json::from_value(serde_json::to_value(&setting).expect("json")).expect("renderer setting");
+		let physics = renderer_dynamics_physics_config(&renderer_setting).expect("physics config");
+		let assist = physics.mesh_cloth_assist.expect("runtime mesh cloth assist");
+		assert!(assist.enabled);
+		assert_eq!(assist.mesh_path_contains, ["Cloth_Panel", "Cloth"]);
+		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn dynamics_mesh_cloth_assist_setting_updates_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.mesh_cloth_assist",
+			serde_json::json!({
+				"enabled": true,
+				"body_dominance_threshold": 0.72,
+				"min_existing_dynamic_weight": 0.03,
+				"seed_missing_dynamic_influence": false,
+				"max_assist_weight": 0.5,
+				"mesh_path_contains": [" Cloth_Panel ", "", "Cloth"]
+			}),
+		)
+		.unwrap();
+		let assist = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("mesh_cloth_assist"))
+			.and_then(toml::Value::as_table)
+			.expect("mesh_cloth_assist");
+		assert_eq!(assist.get("enabled").and_then(toml::Value::as_bool), Some(true));
+		assert!(
+			(assist
+				.get("body_dominance_threshold")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.72)
+				.abs() < 1e-6
+		);
+		assert!(
+			(assist
+				.get("min_existing_dynamic_weight")
+				.and_then(toml::Value::as_float)
+				.unwrap_or_default()
+				- 0.03)
+				.abs() < 1e-6
+		);
+		assert_eq!(
+			assist.get("seed_missing_dynamic_influence").and_then(toml::Value::as_bool),
+			Some(false)
+		);
+		assert!((assist.get("max_assist_weight").and_then(toml::Value::as_float).unwrap_or_default() - 0.5).abs() < 1e-6);
+		let mesh_paths = assist
+			.get("mesh_path_contains")
+			.and_then(toml::Value::as_array)
+			.expect("mesh_path_contains");
+		assert_eq!(mesh_paths.len(), 2);
+		assert_eq!(mesh_paths[0].as_str(), Some("Cloth_Panel"));
+		assert_eq!(mesh_paths[1].as_str(), Some("Cloth"));
+
+		let error = apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.mesh_cloth_assist.max_assist_weight",
+			serde_json::json!(2.0),
+		)
+		.unwrap_err();
+		assert!(error.contains("max_assist_weight must be in [0, 0.95]"));
+	}
+
+	#[test]
+	fn dynamics_collider_augment_override_setting_updates_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.collider_augment_overrides",
+			serde_json::json!([
+				{
+					"name": " body colliders ",
+					"source_id_contains": [" cloth source ", "", "cloth panel"],
+					"collider_path_contains": [" torso collider ", "limb collider"]
+				},
+				{
+					"name": "incomplete",
+					"source_id_contains": ["cloth source"]
+				}
+			]),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("collider_augment_overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("collider_augment_overrides");
+		assert_eq!(overrides.len(), 1);
+		let item = overrides[0].as_table().expect("collider augment override table");
+		assert_eq!(item.get("name").and_then(toml::Value::as_str), Some("body colliders"));
+		assert_eq!(
+			item.get("source_id_contains")
+				.and_then(toml::Value::as_array)
+				.map(|items| items.iter().filter_map(toml::Value::as_str).collect::<Vec<_>>()),
+			Some(vec!["cloth source", "cloth panel"])
+		);
+		assert_eq!(
+			item.get("collider_path_contains")
+				.and_then(toml::Value::as_array)
+				.map(|items| items.iter().filter_map(toml::Value::as_str).collect::<Vec<_>>()),
+			Some(vec!["torso collider", "limb collider"])
+		);
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.collider_augment_overrides",
+			serde_json::json!([]),
+		)
+		.unwrap();
+		assert!(manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("collider_augment_overrides"))
+			.is_none());
+	}
+
+	#[test]
+	fn dynamics_group_override_setting_updates_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.group_overrides",
+			serde_json::json!([
+				{
+					"sourceId": " physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone ",
+					"solver": "xpbd",
+					"rest_response": 0.07,
+					"shape_preservation": 0.04,
+					"bounce_scale": 0.65,
+					"motion_coupling": 0.3,
+					"drag_scale": 0.75,
+					"xpbd_compliance": 0.12,
+					"constraint_iterations": 6
+				},
+				{
+					"source_id": "   ",
+					"solver": "verlet"
+				}
+			]),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("group_overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("group_overrides");
+		assert_eq!(overrides.len(), 1);
+		let item = overrides[0].as_table().expect("group override table");
+		assert_eq!(
+			item.get("source_id").and_then(toml::Value::as_str),
+			Some("physbone:Armature/Hips/Spine/Chest/Neck/Head/Bone")
+		);
+		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("xpbd"));
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.07).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.04).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.65).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.3).abs() < 1e-6);
+		assert!((item.get("drag_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.75).abs() < 1e-6);
+		assert!((item.get("xpbd_compliance").and_then(toml::Value::as_float).unwrap_or_default() - 0.12).abs() < 1e-6);
+		assert_eq!(item.get("constraint_iterations").and_then(toml::Value::as_integer), Some(6));
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.group_overrides",
+			serde_json::json!([]),
+		)
+		.unwrap();
+		assert!(manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("group_overrides"))
+			.is_none());
+	}
+
+	#[test]
+	fn dynamics_match_override_setting_updates_manifest_values() {
+		let setting = read_avatar_setting(&repo_root().join("profiles").join("main.toml"), ProfileStorage::Seed).unwrap();
+		let mut manifest = parse_manifest_value(
+			r#"title = "Test"
+
+[physics.dynamics]
+enabled = true
+
+[physics.dynamics.solver]
+simulation_hz = 120
+"#,
+			Path::new("test.toml"),
+		)
+		.unwrap();
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.match_overrides",
+			serde_json::json!([
+				{
+					"name": " cape and ribbons ",
+					"source_id_contains": [" cape ", "", "skirt"],
+					"source_id_regex": [" (?i)ribbon "],
+					"solver": "xpbd",
+					"rest_response": 0.06,
+					"shape_preservation": 0.025,
+					"bounce_scale": 0.7,
+					"stretch_range_scale": 0.55,
+					"stretch_motion": 0.35,
+					"motion_coupling": 0.28,
+					"drag_scale": 0.6,
+					"xpbd_compliance": 0.02,
+					"constraint_iterations": 5
+				},
+				{
+					"name": "draft rule"
+				},
+				{}
+			]),
+		)
+		.unwrap();
+		let overrides = manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("match_overrides"))
+			.and_then(toml::Value::as_array)
+			.expect("match_overrides");
+		assert_eq!(overrides.len(), 1);
+		let item = overrides[0].as_table().expect("match override table");
+		assert_eq!(item.get("name").and_then(toml::Value::as_str), Some("cape and ribbons"));
+		assert_eq!(item.get("solver").and_then(toml::Value::as_str), Some("xpbd"));
+		assert_eq!(
+			item.get("source_id_contains")
+				.and_then(toml::Value::as_array)
+				.map(|items| items.iter().filter_map(toml::Value::as_str).collect::<Vec<_>>()),
+			Some(vec!["cape", "skirt"])
+		);
+		assert_eq!(
+			item.get("source_id_regex")
+				.and_then(toml::Value::as_array)
+				.map(|items| items.iter().filter_map(toml::Value::as_str).collect::<Vec<_>>()),
+			Some(vec!["(?i)ribbon"])
+		);
+		assert!((item.get("rest_response").and_then(toml::Value::as_float).unwrap_or_default() - 0.06).abs() < 1e-6);
+		assert!((item.get("shape_preservation").and_then(toml::Value::as_float).unwrap_or_default() - 0.025).abs() < 1e-6);
+		assert!((item.get("bounce_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.7).abs() < 1e-6);
+		assert!((item.get("stretch_range_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.55).abs() < 1e-6);
+		assert!((item.get("stretch_motion").and_then(toml::Value::as_float).unwrap_or_default() - 0.35).abs() < 1e-6);
+		assert!((item.get("motion_coupling").and_then(toml::Value::as_float).unwrap_or_default() - 0.28).abs() < 1e-6);
+		assert!((item.get("drag_scale").and_then(toml::Value::as_float).unwrap_or_default() - 0.6).abs() < 1e-6);
+		assert!((item.get("xpbd_compliance").and_then(toml::Value::as_float).unwrap_or_default() - 0.02).abs() < 1e-6);
+		assert_eq!(item.get("constraint_iterations").and_then(toml::Value::as_integer), Some(5));
+
+		let error = apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.match_overrides",
+			serde_json::json!([
+				{
+					"name": "broken",
+					"source_id_regex": ["("]
+				}
+			]),
+		)
+		.expect_err("invalid regex should be rejected on Supervisor save");
+		assert!(error.contains("invalid regular expression"));
+
+		apply_avatar_setting_value(
+			&mut manifest,
+			&setting,
+			"physics.dynamics.solver.match_overrides",
+			serde_json::json!([]),
+		)
+		.unwrap();
+		assert!(manifest
+			.get("physics")
+			.and_then(|v| v.get("dynamics"))
+			.and_then(|v| v.get("solver"))
+			.and_then(|v| v.get("match_overrides"))
+			.is_none());
 	}
 
 	#[test]

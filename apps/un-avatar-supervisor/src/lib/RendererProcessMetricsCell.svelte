@@ -7,6 +7,11 @@
 
 	$: startupLabel = startupStatusLabel(status);
 	$: frameDetails = [
+		["target fps", runtimeMetric(status?.target_fps)],
+		["target frame", runtimeMetric(status?.frame_target_ms, " ms")],
+		["wall", runtimeMetric(status?.frame_wall_ms, " ms")],
+		["wall max", runtimeMetric(status?.frame_wall_max_recent_ms, " ms")],
+		["spikes", runtimeMetric(status?.frame_wall_spike_count_recent)],
 		[$_("renderers.metrics.frame_total"), runtimeMetric(status?.frame_cpu_total_ms, " ms")],
 		[$_("renderers.metrics.frame_wait"), runtimeMetric(status?.frame_surface_acquire_ms, " ms")],
 		[$_("renderers.metrics.frame_motion"), runtimeMetric(status?.frame_motion_apply_ms, " ms")],
@@ -34,7 +39,9 @@
 	{:else}
 		<div class="process-metric-row">
 			<span class={fpsHealthClass(status?.fps)}
-				><strong>{runtimeMetric(status?.fps)}</strong><small>{$_("renderers.metrics.fps")}</small></span
+				><strong>{runtimeMetric(status?.fps)}</strong><small
+					>/ {runtimeMetric(status?.target_fps)} {$_("renderers.metrics.fps")}</small
+				></span
 			>
 			<span class={gpuHealthClass(status?.gpu_ms)}
 				><strong>{runtimeMetric(status?.gpu_ms, " ms")}</strong><small>{$_("renderers.metrics.gpu")}</small></span
@@ -46,7 +53,10 @@
 	{/if}
 	<small>{$_("renderers.metrics.cpu")} {runtimeMetric(status?.cpu_ms, " ms")}</small>
 	<small title={frameDetailTitle}>
-		{$_("renderers.metrics.frame_total")} {runtimeMetric(status?.frame_cpu_total_ms, " ms")} / {$_("renderers.metrics.frame_draw")}
+		target {runtimeMetric(status?.frame_target_ms, " ms")} / wall {runtimeMetric(status?.frame_wall_ms, " ms")} / max
+		{runtimeMetric(status?.frame_wall_max_recent_ms, " ms")} / spikes
+		{runtimeMetric(status?.frame_wall_spike_count_recent)} / {$_("renderers.metrics.frame_total")}
+		{runtimeMetric(status?.frame_cpu_total_ms, " ms")} / {$_("renderers.metrics.frame_draw")}
 		{runtimeMetric(status?.frame_draw_state_refresh_ms, " ms")} / {$_("renderers.metrics.frame_wait")}
 		{runtimeMetric(status?.frame_surface_acquire_ms, " ms")}
 	</small>

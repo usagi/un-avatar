@@ -3228,6 +3228,30 @@ dd {
 	color: var(--muted);
 }
 
+.quality-fieldset {
+	grid-column: 1 / -1;
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 8px 12px;
+	min-width: 0;
+	margin: 0;
+	padding: 10px;
+	border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--panel-subtle) 34%, transparent);
+}
+
+.quality-fieldset > legend {
+	padding: 0 6px;
+	color: var(--muted);
+	font-size: 11px;
+}
+
+.quality-fieldset > label,
+.quality-fieldset > .toggle-field {
+	min-width: 0;
+}
+
 .range-number-field {
 	display: grid;
 	grid-template-columns: minmax(120px, 1fr) 76px;
@@ -4067,6 +4091,14 @@ dd {
 	grid-column: 1 / -1;
 }
 
+.identity-gpu-row {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.8fr);
+	gap: 12px;
+	min-width: 0;
+}
+
 .notes-field {
 	grid-column: 1 / -1;
 }
@@ -4498,13 +4530,6 @@ dd {
 	min-width: 0;
 }
 
-.physics-source-note {
-	color: var(--muted);
-	font-size: 10.5px;
-	line-height: 1.25;
-	padding-left: 50px;
-}
-
 .profile-wide-field {
 	grid-column: 1 / -1;
 }
@@ -4569,6 +4594,19 @@ dd {
 	min-width: max-content;
 }
 
+.dynamics-override-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: end;
+	justify-content: flex-end;
+	gap: 6px;
+	min-width: 0;
+}
+
+.dynamics-override-actions > button {
+	min-width: max-content;
+}
+
 .dynamics-override-title strong {
 	display: inline-flex;
 	align-items: center;
@@ -4613,6 +4651,32 @@ dd {
 }
 
 .dynamics-preset-actions button {
+	min-height: 26px;
+	padding: 3px 9px;
+	font-size: 12px;
+}
+
+.dynamics-template-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	padding: 8px;
+	border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+	border-radius: 7px;
+	background: color-mix(in srgb, var(--panel-subtle) 38%, transparent);
+}
+
+.dynamics-template-actions > span {
+	margin-right: 2px;
+	color: var(--muted);
+	font-size: 11px;
+	font-weight: 800;
+	text-transform: uppercase;
+}
+
+.dynamics-template-actions button {
 	min-height: 26px;
 	padding: 3px 9px;
 	font-size: 12px;

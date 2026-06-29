@@ -45,12 +45,24 @@ tauri-plugin-notification = "2.3.3"
 tauri-plugin-single-instance = "2.4.2"
 toml = { workspace = true }
 un-avatar-core = { path = "../../../crates/un-avatar-core" }
+un-avatar-io = { path = "../../../crates/un-avatar-io" }
+un-avatar-io-gltf = { path = "../../../crates/un-avatar-io-gltf" }
 un-avatar-io-vrm = { path = "../../../crates/un-avatar-io-vrm" }
+un-avatar-skeleton = { path = "../../../crates/un-avatar-skeleton" }
 midir = "0.10"
+pollster = "0.4"
+regex = { workspace = true }
 # i18n: shared crate `un-i18n` (<https://github.com/usagi/un-common>). Pin `rev` on release branches.
 un-i18n = { git = "https://github.com/usagi/un-common.git", branch = "main", package = "un-i18n" }
 rust-i18n = "4"
 tracing = "0.1"
+wgpu = { version = "29", default-features = false, features = [
+ "std",
+ "parking_lot",
+ "dx12",
+ "vulkan",
+ "gles",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = [

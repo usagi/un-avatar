@@ -2,6 +2,25 @@ import type { CameraOrbitPreset } from "./cameraPresets";
 import type { ColorModeChangeHandler } from "./profileColorActions";
 import type { RendererWindowPatch } from "./rendererTypes";
 
+export type DynamicsGroupOverrideSeed = {
+	solver?: string;
+	damping_half_life_ms?: number;
+	rest_response?: number;
+	shape_preservation?: number;
+	bounce_scale?: number;
+	stretch_range_scale?: number;
+	stretch_motion?: number;
+	motion_coupling?: number;
+	xpbd_compliance?: number;
+};
+
+export type DynamicsMatchOverrideSeed = DynamicsGroupOverrideSeed & {
+	name?: string;
+	source_id?: string;
+	source_id_contains: string[];
+	source_id_regex?: string[];
+};
+
 export type RendererPaneActions = {
 	onSetSpoutOutput: (enabled: boolean, size: { width: number; height: number } | null, label?: string) => void | Promise<void>;
 	onSaveSpoutProfile: () => void | Promise<void>;
@@ -23,4 +42,6 @@ export type RendererPaneActions = {
 	onActivateRuntimeAction: (rendererId: number, actionId: string, label: string) => void | Promise<void>;
 	onActivateWardrobeMenuCandidate: (rendererId: number, actionId: string, wardrobeSetId: string) => void | Promise<void>;
 	onSetDynamicsEnabled: (rendererId: number, sourceId: string, enabled: boolean) => void | Promise<void>;
+	onAddDynamicsMatchOverride: (rendererId: number, seed: DynamicsMatchOverrideSeed) => void | Promise<void>;
+	onAddDynamicsGroupOverride: (rendererId: number, sourceId: string, seed: DynamicsGroupOverrideSeed | null) => void | Promise<void>;
 };

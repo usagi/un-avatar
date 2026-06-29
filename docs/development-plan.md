@@ -1609,7 +1609,7 @@ UN Avatar を単なるランタイムではなく、制作補助ツールとし�
 
 完了条件。
 
-- SpringBone/PhysBone相当をGUIで調整できる
+- UNPhysics / UNDynamics の正規化済み物理グループを GUI で調整できる
 
 #### Commit 5.3: Material editor
 
@@ -1843,7 +1843,7 @@ UNAは、UN Avatar の完全内部表現形式であり、同時に各形式間�
 例。
 
 - original VRM extensions
-- original VRC PhysBone settings
+- original VRC PhysBone authored settings as source metadata
 - original lilToon parameters
 - original Unity prefab metadata
 - original USD material network
@@ -1889,13 +1889,14 @@ UNAは、UN Avatar の完全内部表現形式であり、同時に各形式間�
 
 - VRC prefab import/export
 - VRC Avatar Descriptor
-- PhysBone
+- PhysBone authored parameter extraction
 - Expression Menu
 - Animator Controller
 - Unity固有material情報
 
 ランタイムはUnityに依存しない。
 ただし、VRC prefab IOのための補助ブリッジとしてUnity Editorを利用する。
+VRC PhysBone は公開・作者向けフィールドを source metadata として保持し、Runtime では UNPhysics / UNDynamics の独自 response terms へ lower する。VRChat SDK / client 内部 solver の数値互換は目標にしない。
 
 ---
 
@@ -1903,8 +1904,8 @@ UNAは、UN Avatar の完全内部表現形式であり、同時に各形式間�
 
 ### 12.1 目標
 
-- VRM SpringBone相当
-- VRC PhysBone相当
+- VRM SpringBone / VRC PhysBone authored intent を入力にした UNPhysics / UNDynamics
+- source metadata と runtime solver の分離
 - UN独自拡張
 - 固定タイムステップ
 - 再現性
@@ -2194,7 +2195,7 @@ UN Avatar の最終到達像は以下。
 - Spout2 / OBS向け低遅延出力
 - VRM / glTF / BVH / FBX / USD / VRC / blend / UNA のIOハブ
 - MToon互換からUN独自PBRまでの広いレンダリング表現
-- SpringBone / PhysBone相当の物理ボーン
+- SpringBone / PhysBone authored intent を UNPhysics / UNDynamics へ正規化した物理ボーン
 - 表情・ポーズ・アニメーションの編集・再生
 - 配信・検証・制作補助を兼ねる統合ランタイム
 - plugin化されたIO/出力/bridgeにより、将来の形式追加に耐える構造

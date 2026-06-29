@@ -127,6 +127,7 @@ namespace UNAvatar.UnityExporter
             return new Dictionary<string, object>
             {
                 ["limitType"] = sourceParams != null && sourceParams.TryGetValue("limitType", out var limitType) ? limitType : "",
+                ["limitRotation"] = sourceParams != null && sourceParams.TryGetValue("limitRotation", out var limitRotation) ? limitRotation : new List<object> { 0.0f, 0.0f, 0.0f },
                 ["maxAngleX"] = sourceParams != null && sourceParams.TryGetValue("maxAngleX", out var maxAngleX) ? maxAngleX : 0.0f,
                 ["maxAngleZ"] = sourceParams != null && sourceParams.TryGetValue("maxAngleZ", out var maxAngleZ) ? maxAngleZ : 0.0f,
                 ["maxStretch"] = sourceParams != null && sourceParams.TryGetValue("maxStretch", out var maxStretch) ? maxStretch : 0.0f,
@@ -292,7 +293,7 @@ namespace UNAvatar.UnityExporter
 
             var pull = ReadFloatMember(type, component, "pull", 0.0f);
             var spring = ReadFloatMember(type, component, "spring", 0.0f);
-            var stiffness = ReadFloatMember(type, component, "stiffness", spring > 0.0f ? spring : pull);
+            var stiffness = ReadFloatMember(type, component, "stiffness", 0.0f);
             var radius = ReadFloatMember(type, component, "radius", 0.02f);
             var gravity = ReadFloatMember(type, component, "gravity", 0.0f);
             var multiChildType = ReadMember(type, component, "multiChildType")?.ToString() ?? "";
@@ -329,13 +330,17 @@ namespace UNAvatar.UnityExporter
             {
                 ["pull"] = ReadFloatMember(type, component, "pull", 0.0f),
                 ["spring"] = ReadFloatMember(type, component, "spring", 0.0f),
+                ["momentum"] = ReadFloatMember(type, component, "momentum", 0.0f),
                 ["stiffness"] = ReadFloatMember(type, component, "stiffness", 0.0f),
+                ["integrationType"] = ReadMember(type, component, "integrationType")?.ToString() ?? "",
                 ["gravity"] = ReadFloatMember(type, component, "gravity", 0.0f),
                 ["gravityFalloff"] = ReadFloatMember(type, component, "gravityFalloff", 0.0f),
                 ["immobile"] = ReadFloatMember(type, component, "immobile", 0.0f),
+                ["immobileType"] = ReadMember(type, component, "immobileType")?.ToString() ?? "",
                 ["radius"] = ReadFloatMember(type, component, "radius", 0.02f),
                 ["pullCurve"] = ReadAnimationCurveMember(type, component, "pullCurve"),
                 ["springCurve"] = ReadAnimationCurveMember(type, component, "springCurve"),
+                ["momentumCurve"] = ReadAnimationCurveMember(type, component, "momentumCurve"),
                 ["stiffnessCurve"] = ReadAnimationCurveMember(type, component, "stiffnessCurve"),
                 ["gravityCurve"] = ReadAnimationCurveMember(type, component, "gravityCurve"),
                 ["gravityFalloffCurve"] = ReadAnimationCurveMember(type, component, "gravityFalloffCurve"),
@@ -345,6 +350,7 @@ namespace UNAvatar.UnityExporter
                 ["multiChildType"] = ReadMember(type, component, "multiChildType")?.ToString() ?? "",
                 ["maxStretch"] = ReadFloatMember(type, component, "maxStretch", 0.0f),
                 ["limitType"] = ReadMember(type, component, "limitType")?.ToString() ?? "",
+                ["limitRotation"] = Vector3Json(ReadVector3Member(type, component, "limitRotation", Vector3.zero)),
                 ["maxAngleX"] = ReadFloatMember(type, component, "maxAngleX", 0.0f),
                 ["maxAngleZ"] = ReadFloatMember(type, component, "maxAngleZ", 0.0f),
                 ["maxAngleXCurve"] = ReadAnimationCurveMember(type, component, "maxAngleXCurve"),

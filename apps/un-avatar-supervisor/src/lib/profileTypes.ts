@@ -2,7 +2,7 @@ import type { SettingSummaryLabelData } from "./profileLabels";
 import type { LightingDiagramSource } from "./profileDiagrams";
 import type { CameraDiagramSource } from "./profileDiagrams";
 import type { PrimaryMotionSource } from "./rendererTypes";
-import type { DynamicsCategoryOverrideSetting } from "./dynamicsPresets";
+import type { DynamicsCategoryOverrideSetting, DynamicsGroupOverrideSetting, DynamicsMatchOverrideSetting } from "./dynamicsPresets";
 
 export type ProfileSettingValue = boolean | string | number | string[] | number[] | Record<string, unknown>[] | null;
 
@@ -43,6 +43,7 @@ export type PreviewWindowPreset = "compact" | "half_hd" | "hd";
 export type AudioLinkSource = "none" | "input_device";
 
 export type QualitySetting = {
+	target_fps: number;
 	aa: string;
 	texture_resolution_limit: string;
 	texture_compression: TextureCompressionMode;
@@ -122,6 +123,10 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	dynamics_simulation_hz: number;
 	dynamics_substeps: number;
 	dynamics_category_overrides: DynamicsCategoryOverrideSetting[];
+	dynamics_match_overrides: DynamicsMatchOverrideSetting[];
+	dynamics_collider_augment_overrides: DynamicsColliderAugmentOverrideSetting[];
+	dynamics_group_overrides: DynamicsGroupOverrideSetting[];
+	dynamics_mesh_cloth_assist: DynamicsMeshClothAssistSetting | null;
 	apply_vmc_root_translation: boolean;
 	camera_target: [number, number, number] | null;
 	camera_longitude_deg: number | null;
@@ -132,6 +137,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	spout_name: string | null;
 	spout_width: number | null;
 	spout_height: number | null;
+	target_fps: number;
 	aa: string;
 	texture_resolution_limit: string;
 	texture_compression: TextureCompressionMode;
@@ -206,11 +212,27 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	window_x: number | null;
 	window_y: number | null;
 	allow_multiple_renderers: boolean;
+	gpu_adapter: string;
 	notes: string | null;
 	group: string;
 	scene_cache_fingerprint: string;
 	scene_cache_prewarmed_fingerprint: string | null;
 	scene_cache_prewarmed_at: string | null;
+};
+
+export type DynamicsMeshClothAssistSetting = {
+	enabled: boolean;
+	body_dominance_threshold: number;
+	min_existing_dynamic_weight: number;
+	seed_missing_dynamic_influence: boolean;
+	max_assist_weight: number;
+	mesh_path_contains: string[];
+};
+
+export type DynamicsColliderAugmentOverrideSetting = {
+	name: string;
+	source_id_contains: string[];
+	collider_path_contains: string[];
 };
 
 export type AnimatorActionMode = "off" | "toggle" | "one_shot";
@@ -275,7 +297,19 @@ export type SpoutOutputSetting = Pick<
 	"spout_enabled" | "spout_name" | "spout_width" | "spout_height" | "minimized" | "window_width" | "window_height"
 >;
 
-export type IdentitySetting = Pick<AvatarSetting, "name" | "group" | "icon_path" | "avatar_path" | "allow_multiple_renderers" | "notes">;
+export type IdentitySetting = Pick<
+	AvatarSetting,
+	"name" | "group" | "icon_path" | "avatar_path" | "allow_multiple_renderers" | "gpu_adapter" | "render_backend" | "notes"
+>;
+
+export type GpuAdapterOption = {
+	value: string;
+	label: string;
+	name: string;
+	device_type: string;
+	vendor: number;
+	device: number;
+};
 
 export type WardrobeSetOption = {
 	id: string;
@@ -333,6 +367,10 @@ export type MotionSetting = Pick<
 	| "dynamics_enabled"
 	| "contact_parameter_emission"
 	| "dynamics_category_overrides"
+	| "dynamics_match_overrides"
+	| "dynamics_collider_augment_overrides"
+	| "dynamics_group_overrides"
+	| "dynamics_mesh_cloth_assist"
 	| "apply_vmc_root_translation"
 	| "bone_colliders_enabled"
 	| "bone_collider_head"

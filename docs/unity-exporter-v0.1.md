@@ -17,6 +17,14 @@ Unity Project / VRC SDK / lilToon / Modular Avatar
 
 Runtime は Rust / wgpu のまま自立させる。Unity DLL、VRC SDK、lilToon、Modular Avatar を Runtime crate や renderer process に入れない。
 
+UNPhysics / UNDynamics 向けの current exporter 出力は、`.unavatar` 生成後に次の軽量ゲートで確認できる。
+
+```powershell
+cargo run -p un-avatar-cli -- dynamics-scan target/tmp/avatar.unavatar --require-current-exporter --json
+```
+
+このコマンドは importer や renderer を通さず GLB JSON chunk の `sourceParams` だけを検査する。`pull`、`spring`、`momentum`、`stiffness`、`gravityFalloff`、`immobile`、`immobileType`、`integrationType`、`limitRotation` と各 curve が dynamics source ごとに揃わない場合は失敗する。描画や solver 挙動の確認は別途 `diagnose`、Renderer runtime status、Supervisor diagnostics で行う。
+
 ## 2. Repo 配置
 
 Exporter は同一 repository に内包する。ただし Rust workspace からは疎結合にする。
@@ -186,11 +194,11 @@ preview exporter では per-set bake を行わない。Export 対象 clone は B
 
 Exporter report は renderer ごとの node id / path / glTF mesh / primitive / material / image index を `wardrobeAssetOwnershipDiagnostics` に出す。Package metadata 本体には、renderer path と PhysBone source path の top-level name から既存 capture と同じ `outfit:<top>` group を推定し、wardrobe set が宣言している group だけ `wardrobe.assetGroupOwnership` として自動追加する。推定できない renderer / dynamics や非 outfit group は未所有のまま残す。
 
-## 8. PhysBone Extraction
+## 8. Dynamics Source Extraction
 
-PhysBone は完全互換ではなく、Runtime の軽量 dynamics へ近似する。
+PhysBone は内部 solver の完全互換を目標にしない。Exporter は VRC PhysBone の authored term を欠落させず `UN_avatar.dynamics[]` の source metadata として保持し、Runtime importer が UNPhysics / UNDynamics の source-neutral response terms へ lower する。
 
-Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone` を反射で検出する。現在有効な PhysBone component だけを `UN_avatar.dynamics[]` に出力し、Runtime importer が SpringBone-like runtime group へ lower する。
+Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone` を反射で検出する。現在有効な PhysBone component だけを `UN_avatar.dynamics[]` に出力し、Runtime importer が UNDynamics runtime group へ lower する。
 
 初期抽出。
 
@@ -205,7 +213,7 @@ Preview exporter は VRC SDK への asmdef 直接依存を避け、`VRCPhysBone`
 - endpoint position
 - collision / grabbing / posing / limit source hints
 
-現段階では `drag` は runtime default 相当、limits / grabbing / posing は source metadata として保存し、Runtime importer が runtime dynamics group の `limit` / `interaction` metadata へ正規化する。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。`endpointPosition` は leaf root に synthetic endpoint child を作って通常 chain へ正規化する。PhysBone source id は原則 `physbone:<transform path>` とし、同一 Transform 上に複数 component がある場合だけ `:2` 以降の ordinal を付ける。Contact source id は `contact:<transform path>:<sender|receiver>` を基本にし、同一種別の重複だけ ordinal を付ける。PhysBone collider は `sourceParams.colliders` に保存し、Sphere / Capsule は runtime solver collider と debug draw へ接続する。`insideBounds` collider は tail を collider 内側へ留める制約として近似する。`maxStretch` / `maxSquish` / `stretchMotion` または対応 curve が authored されている PhysBone は `writebackMode:"rotation_translation"` を出して stretch intent を保持する。現 solver backend は safe target がある multi-node chain の next chain node だけ `maxStretch` を local translation writeback へ反映し、target の無い group は diagnostics に留める。`maxSquish` / `stretchMotion` curve の忠実再現、grabbing、posing の挙動再現はまだ非対応。`allowCollision=false` は source collider を solver へ渡さない。
+現段階では `drag` は runtime default 相当、limits / grabbing / posing は source metadata として保存し、Runtime importer が runtime dynamics group の `limit` / `interaction` metadata へ正規化する。`ignoreTransforms` は chain traversal の除外に使い、`multiChildType=Ignore` は最初の有効 child chain だけへ近似する。`endpointPosition` は leaf root では synthetic endpoint child、non-leaf root では各 terminal leaf から root-local endpoint world position へ向かう synthetic endpoint tail として通常 chain へ正規化する。PhysBone source id は原則 `physbone:<transform path>` とし、同一 Transform 上に複数 component がある場合だけ `:2` 以降の ordinal を付ける。Contact source id は `contact:<transform path>:<sender|receiver>` を基本にし、同一種別の重複だけ ordinal を付ける。PhysBone collider は `sourceParams.colliders` に保存し、Sphere / Capsule は runtime solver collider と debug draw へ接続する。`insideBounds` collider は tail を collider 内側へ留める制約として近似する。`maxAngleXCurve` / `maxAngleZCurve` は base angle の倍率 curve として保存し、Runtime importer が joint ごとの実効 angle limit sample へ lower する。`maxStretchCurve` / `maxSquishCurve` / `stretchMotionCurve` も base scalar の倍率 curve として保存し、Runtime importer が joint ごとの実効 stretch / squish / stretch motion sample へ lower する。`maxStretch` / `maxSquish` / `stretchMotion` または対応 curve が authored されている PhysBone は `writebackMode:"rotation_translation"` を出して stretch intent を保持する。現 solver backend は `maxStretch` / `maxSquish` を tail simulation の length range として反映し、scalar / curve `stretchMotion` はその range の参加率として扱う。safe target がある group だけ local translation writeback も行う。target の無い group は node translation を維持したまま simulation stretch / squish として扱う。grabbing、posing の挙動再現はまだ非対応。`allowCollision=false` は source collider を solver へ渡さない。
 
 Contacts / interactions / limits の完全再現は非目標。
 
@@ -289,7 +297,7 @@ v0.1 実装では asset-backed EXR / HDR を `UN_avatar.textureAssets` に保持
 
 - Unity Runtime player を作ること
 - U.N. Avatar Runtime を Unity に依存させること
-- VRC SDK runtime 互換
+- VRC SDK runtime 互換を品質目標にした実装。Exporter は VRC / MA / PhysBone 由来の公開・作者向け設定と project 内 authored data を source metadata として保存し、Runtime importer が UNPhysics / UNDynamics の独自 response terms へ lower する。
 - Animator Controller / FX Layer 完全再生
 - Poiyomi 完全再現
 - `.unitypackage` を Runtime が直接読む構成

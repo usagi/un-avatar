@@ -72,6 +72,10 @@ let avatarSettings = [
 		dynamics_simulation_hz: 60,
 		dynamics_substeps: 1,
 		dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
+		dynamics_match_overrides: [],
+		dynamics_collider_augment_overrides: [],
+		dynamics_group_overrides: [],
+		dynamics_mesh_cloth_assist: null,
 		apply_vmc_root_translation: false,
 		camera_target: null,
 		camera_longitude_deg: null,
@@ -158,6 +162,7 @@ let avatarSettings = [
 		window_y: null,
 		icon_path: null,
 		allow_multiple_renderers: false,
+		gpu_adapter: "auto",
 		notes: "Primary streaming avatar",
 		group: "Main",
 	},
@@ -191,6 +196,10 @@ let avatarSettings = [
 		dynamics_simulation_hz: 60,
 		dynamics_substeps: 1,
 		dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
+		dynamics_match_overrides: [],
+		dynamics_collider_augment_overrides: [],
+		dynamics_group_overrides: [],
+		dynamics_mesh_cloth_assist: null,
 		apply_vmc_root_translation: false,
 		camera_target: null,
 		camera_longitude_deg: null,
@@ -277,6 +286,7 @@ let avatarSettings = [
 		window_y: null,
 		icon_path: null,
 		allow_multiple_renderers: false,
+		gpu_adapter: "auto",
 		notes: "Diagnostics profile",
 		group: "Debug",
 	},
@@ -312,6 +322,25 @@ export function installDevIpcMock(): void {
 				return [];
 			case "list_avatar_settings":
 				return avatarSettings;
+			case "list_gpu_adapters":
+				return [
+					{
+						value: "gpu:10de:2684:NVIDIA GeForce RTX",
+						label: "NVIDIA GeForce RTX (DiscreteGpu, vendor 10de, device 2684)",
+						name: "NVIDIA GeForce RTX",
+						device_type: "DiscreteGpu",
+						vendor: 0x10de,
+						device: 0x2684,
+					},
+					{
+						value: "gpu:8086:a780:Intel UHD Graphics",
+						label: "Intel UHD Graphics (IntegratedGpu, vendor 8086, device a780)",
+						name: "Intel UHD Graphics",
+						device_type: "IntegratedGpu",
+						vendor: 0x8086,
+						device: 0xa780,
+					},
+				];
 			case "read_vrm_metadata":
 				return {
 					path: String(args.path ?? "assets/example/main.vrm"),

@@ -4,11 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{
-	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
-	path::PathBuf,
-};
+use std::{borrow::Cow, collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,16 +19,16 @@ pub enum UnaShadingModel {
 	LitLambert,
 	/// `KHR_materials_unlit` 相当。
 	Unlit,
-	/// Legacy v1 avatar toon path for VRM/MToon inputs.
+	/// MToon/VRM source compatibility marker. Runtime rendering is v2-UNToon.
 	MToonLike,
-	/// v2 avatar toon path for `.unavatar` / lilToon-compatible inputs.
+	/// v2-UNToon path for `.unavatar` / lilToon-compatible inputs.
 	LilToonLike,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnaRuntimeToonModel {
-	MToonLike,
-	LilToonLike,
+	/// Independent v2-UNToon runtime. Source profiles are normalized before drawing.
+	UNToon,
 }
 
 impl UnaShadingModel {
@@ -46,16 +42,13 @@ impl UnaShadingModel {
 		}
 	}
 
+	/// True only for normalized v2-UNToon material shading.
+	///
+	/// `MToonLike` is a source compatibility marker; importers should attach a
+	/// `liltoon_like` semantic payload and normalize runtime rendering through
+	/// `UnaMaterialPbr::liltoon_like_runtime()`.
 	pub fn is_toon_like(self) -> bool {
-		matches!(self, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
-	}
-
-	pub fn is_liltoon_like(self) -> bool {
 		matches!(self, UnaShadingModel::LilToonLike)
-	}
-
-	pub fn is_mtoon_like(self) -> bool {
-		matches!(self, UnaShadingModel::MToonLike)
 	}
 }
 
@@ -153,6 +146,29 @@ impl UnaRuntimeActionSet {
 		self.actions.iter().find(|action| action.matches_query(query))
 	}
 
+	pub fn restore_effect_snapshot(&self) -> Self {
+		let mut actions = Vec::with_capacity(self.actions.len());
+		for action in &self.actions {
+			let mut effects = None;
+			for effect in &action.effects {
+				if effect.is_restore_target() {
+					effects
+						.get_or_insert_with(|| Vec::with_capacity(action.effects.len()))
+						.push(effect.clone());
+				}
+			}
+			if let Some(effects) = effects {
+				actions.push(UnaRuntimeAction {
+					id: action.id.clone(),
+					conditions: action.conditions.clone(),
+					effects,
+					..UnaRuntimeAction::default()
+				});
+			}
+		}
+		Self { actions }
+	}
+
 	pub fn evaluation_target_write_collisions(&self) -> Vec<UnaEvaluationTargetWriteCollision> {
 		let mut writes_by_target: BTreeMap<(UnaEvaluationTargetKind, String), Vec<UnaEvaluationRuntimeActionTargetWrite>> = BTreeMap::new();
 		for action in &self.actions {
@@ -166,21 +182,15 @@ impl UnaRuntimeActionSet {
 		writes_by_target
 			.into_iter()
 			.filter_map(|((target_kind, target_key), writes)| {
-				let owner_keys = writes
-					.iter()
-					.map(|write| write.owner_key.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let mut owner_keys = writes.iter().map(|write| write.owner_key.clone()).collect::<Vec<_>>();
+				owner_keys.sort_unstable();
+				owner_keys.dedup();
 				if owner_keys.len() < 2 {
 					return None;
 				}
-				let action_ids = writes
-					.iter()
-					.map(|write| write.action_id.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let mut action_ids = writes.iter().map(|write| write.action_id.clone()).collect::<Vec<_>>();
+				action_ids.sort_unstable();
+				action_ids.dedup();
 				Some(UnaEvaluationTargetWriteCollision {
 					target_kind,
 					target_key,
@@ -285,13 +295,15 @@ impl UnaRuntimeAction {
 	}
 
 	pub fn condition_parameter_names(&self) -> Vec<String> {
-		let mut names = BTreeSet::new();
+		let mut names = Vec::new();
 		for condition in &self.conditions {
 			if let Some(name) = condition.parameter_name.as_deref().filter(|name| !name.is_empty()) {
-				names.insert(name.to_string());
+				names.push(name.to_string());
 			}
 		}
-		names.into_iter().collect()
+		names.sort_unstable();
+		names.dedup();
+		names
 	}
 
 	pub fn current_parameter_condition_state(
@@ -570,6 +582,7 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 	match short_type {
 		"ModularAvatarBlendshapeSync"
 		| "ModularAvatarMergeArmature"
+		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMeshCutter"
 		| "ModularAvatarMeshSettings"
 		| "ModularAvatarScaleAdjuster"
@@ -579,7 +592,6 @@ pub fn modular_avatar_component_support_kind(short_type: &str) -> &'static str {
 		"ModularAvatarConvertConstraints"
 		| "ModularAvatarFloorAdjuster"
 		| "ModularAvatarMMDLayerControl"
-		| "ModularAvatarMergeAnimator"
 		| "ModularAvatarMergeBlendTree"
 		| "ModularAvatarPlatformFilter"
 		| "ModularAvatarRenameVRChatCollisionTags"
@@ -921,8 +933,25 @@ fn scene_material_source_hash(scene: &UnaSceneSnapshot) -> Option<u64> {
 	Some(stable_json_hash(&Value::Array(materials)))
 }
 
+pub fn unavatar_modular_avatar_value(source: &Value) -> Option<&Value> {
+	source
+		.get("modularAvatar")
+		.or_else(|| source.get("source").and_then(|source| source.get("modularAvatar")))
+}
+
+pub fn unavatar_modular_avatar_components_value(source: &Value) -> Option<&Value> {
+	unavatar_modular_avatar_value(source)?.get("components")
+}
+
+pub fn unavatar_modular_avatar_components_slice(source: &Value) -> &[Value] {
+	unavatar_modular_avatar_components_value(source)
+		.and_then(Value::as_array)
+		.map(Vec::as_slice)
+		.unwrap_or(&[])
+}
+
 fn unavatar_modular_avatar_components_hash(unavatar: &UnaUnavatarExtension) -> Option<u64> {
-	let components = unavatar.source.get("modularAvatar")?.get("components")?;
+	let components = unavatar_modular_avatar_components_value(&unavatar.source)?;
 	Some(stable_json_hash(components))
 }
 
@@ -1051,6 +1080,17 @@ pub enum UnaRuntimeActionEffect {
 }
 
 impl UnaRuntimeActionEffect {
+	pub fn is_restore_target(&self) -> bool {
+		matches!(
+			self,
+			UnaRuntimeActionEffect::NodeVisibility { .. }
+				| UnaRuntimeActionEffect::MaterialColor { .. }
+				| UnaRuntimeActionEffect::MaterialScalar { .. }
+				| UnaRuntimeActionEffect::MaterialSlot { .. }
+				| UnaRuntimeActionEffect::DynamicsEnabled { .. }
+		)
+	}
+
 	pub fn evaluation_target_write(&self, action_id: &str) -> UnaEvaluationRuntimeActionTargetWrite {
 		let owner_key = runtime_action_owner_key(action_id);
 		let action_id = action_id.to_string();
@@ -1214,7 +1254,7 @@ pub struct UnaRuntimeMaterialSlotTarget {
 ///
 /// The historical Rust type name is retained for serde/API compatibility while
 /// new code should use [`UnaDynamicsSourceGroup`].
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct UnaSpringBoneGroup {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1225,17 +1265,47 @@ pub struct UnaSpringBoneGroup {
 	pub source_id: String,
 	#[serde(default)]
 	pub comment: String,
-	/// UN Avatar 側で推定・編集する SpringBone 物理カテゴリ。
+	/// UN Avatar 側で推定・編集する UNDynamics カテゴリ。
 	///
 	/// 永続 schema では固定 enum にしない。GUI の表示名変更やユーザー定義カテゴリ追加で
 	/// 既存ファイルを壊さないため、文字列 ID を正本にする。
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub category: String,
-	/// VRM 0 の `stiffiness` / 1 の関節剛性に相当（大きいほど理想姿勢に引く）。
+	/// UNDynamics normalized local shape-preservation intent.
+	///
+	/// VRC PhysBone inputs lower authored Stiffness here. VRM SpringBone inputs
+	/// usually lower authored stiffness into `pull` instead and leave this at 0,
+	/// because VRM stiffness is a rest-pose pull term rather than a separate
+	/// shape-preservation response.
 	#[serde(default = "one_f32")]
 	pub stiffness: f32,
+	/// UNDynamics normalized pull toward the authored/rest pose.
+	///
+	/// VRM SpringBone inputs historically only provided `stiffness`; importers should mirror
+	/// that value into `pull` when they want the v2 solver to treat it as a source-neutral
+	/// rest-pose pull term. VRC PhysBone inputs lower the authored Pull field here.
+	#[serde(default)]
+	pub pull: f32,
+	/// UNDynamics normalized spring acceleration term. VRC PhysBone inputs lower the authored
+	/// Spring field here; legacy VRM inputs leave it at zero.
+	#[serde(default)]
+	pub spring: f32,
+	/// UNDynamics integration semantics selected after source lowering.
+	#[serde(default, skip_serializing_if = "UnaDynamicsIntegrationType::is_default")]
+	pub integration_type: UnaDynamicsIntegrationType,
 	#[serde(default)]
 	pub gravity_power: f32,
+	/// UNDynamics normalized gravity falloff. `0` means full authored gravity, `1` means gravity
+	/// fades out when the chain points along the authored gravity direction.
+	#[serde(default)]
+	pub gravity_falloff: f32,
+	/// UNDynamics normalized immobile factor. `0` follows parent motion normally, `1` damps out
+	/// inertia from parent/world motion as much as the current solver backend can represent.
+	#[serde(default)]
+	pub immobile: f32,
+	/// How `immobile` interprets parent/root motion.
+	#[serde(default, skip_serializing_if = "UnaDynamicsImmobileType::is_default")]
+	pub immobile_type: UnaDynamicsImmobileType,
 	#[serde(default = "default_spring_gravity_dir")]
 	pub gravity_dir: [f32; 3],
 	#[serde(default = "default_spring_drag")]
@@ -1247,22 +1317,170 @@ pub struct UnaSpringBoneGroup {
 	pub hit_radius: f32,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub hit_radius_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub stiffness_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub pull_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub spring_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub gravity_power_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub gravity_falloff_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub immobile_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_angle_x_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_angle_z_samples: Vec<f32>,
 	#[serde(default, skip_serializing_if = "UnaDynamicsWritebackMode::is_default")]
 	pub writeback_mode: UnaDynamicsWritebackMode,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub limit: Option<UnaDynamicsLimit>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub interaction: Option<UnaDynamicsInteraction>,
+	/// First chain node index used by interaction/animator parameter measurement.
+	///
+	/// Solver/writeback may need an extra parent anchor before the authored
+	/// dynamics root. That anchor must stay in `bone_node_indices`, but sensor
+	/// parameters such as `*_Angle` should measure the authored chain.
+	#[serde(default, skip_serializing_if = "usize_is_zero")]
+	pub interaction_chain_start_index: usize,
 	/// glTF ノードインデックスのチェーン（親→子）。
 	pub bone_node_indices: Vec<usize>,
 }
 
 pub type UnaDynamicsSourceGroup = UnaSpringBoneGroup;
 
+impl<'de> Deserialize<'de> for UnaSpringBoneGroup {
+	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		#[derive(Deserialize)]
+		struct SerdeGroup {
+			#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
+			source_kind: UnaDynamicsSourceKind,
+			#[serde(default = "default_true")]
+			enabled: bool,
+			#[serde(default, skip_serializing_if = "String::is_empty")]
+			source_id: String,
+			#[serde(default)]
+			comment: String,
+			#[serde(default, skip_serializing_if = "String::is_empty")]
+			category: String,
+			#[serde(default = "one_f32")]
+			stiffness: f32,
+			#[serde(default)]
+			pull: Option<f32>,
+			#[serde(default)]
+			spring: f32,
+			#[serde(default, skip_serializing_if = "UnaDynamicsIntegrationType::is_default")]
+			integration_type: UnaDynamicsIntegrationType,
+			#[serde(default)]
+			gravity_power: f32,
+			#[serde(default)]
+			gravity_falloff: f32,
+			#[serde(default)]
+			immobile: f32,
+			#[serde(default, skip_serializing_if = "UnaDynamicsImmobileType::is_default")]
+			immobile_type: UnaDynamicsImmobileType,
+			#[serde(default = "default_spring_gravity_dir")]
+			gravity_dir: [f32; 3],
+			#[serde(default = "default_spring_drag")]
+			drag_force: f32,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			center_node: Option<usize>,
+			#[serde(default)]
+			hit_radius: f32,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			hit_radius_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			stiffness_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			pull_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			spring_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			gravity_power_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			gravity_falloff_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			immobile_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			max_angle_x_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "Vec::is_empty")]
+			max_angle_z_samples: Vec<f32>,
+			#[serde(default, skip_serializing_if = "UnaDynamicsWritebackMode::is_default")]
+			writeback_mode: UnaDynamicsWritebackMode,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			limit: Option<UnaDynamicsLimit>,
+			#[serde(default, skip_serializing_if = "Option::is_none")]
+			interaction: Option<UnaDynamicsInteraction>,
+			#[serde(default, skip_serializing_if = "usize_is_zero")]
+			interaction_chain_start_index: usize,
+			bone_node_indices: Vec<usize>,
+		}
+
+		let mut group = SerdeGroup::deserialize(deserializer)?;
+		let pull_was_missing = group.pull.is_none();
+		let mut pull = group.pull.unwrap_or_default();
+		let mut stiffness = group.stiffness;
+		if pull_was_missing && group.source_kind == UnaDynamicsSourceKind::VrmSpringBone {
+			pull = stiffness;
+			stiffness = 0.0;
+			if group.pull_samples.is_empty() && !group.stiffness_samples.is_empty() {
+				group.pull_samples = group.stiffness_samples.clone();
+				group.stiffness_samples.clear();
+			}
+		}
+
+		Ok(Self {
+			source_kind: group.source_kind,
+			enabled: group.enabled,
+			source_id: group.source_id,
+			comment: group.comment,
+			category: group.category,
+			stiffness,
+			pull,
+			spring: group.spring,
+			integration_type: group.integration_type,
+			gravity_power: group.gravity_power,
+			gravity_falloff: group.gravity_falloff,
+			immobile: group.immobile,
+			immobile_type: group.immobile_type,
+			gravity_dir: group.gravity_dir,
+			drag_force: group.drag_force,
+			center_node: group.center_node,
+			hit_radius: group.hit_radius,
+			hit_radius_samples: group.hit_radius_samples,
+			stiffness_samples: group.stiffness_samples,
+			pull_samples: group.pull_samples,
+			spring_samples: group.spring_samples,
+			gravity_power_samples: group.gravity_power_samples,
+			gravity_falloff_samples: group.gravity_falloff_samples,
+			immobile_samples: group.immobile_samples,
+			max_angle_x_samples: group.max_angle_x_samples,
+			max_angle_z_samples: group.max_angle_z_samples,
+			writeback_mode: group.writeback_mode,
+			limit: group.limit,
+			interaction: group.interaction,
+			interaction_chain_start_index: group.interaction_chain_start_index.min(group.bone_node_indices.len()),
+			bone_node_indices: group.bone_node_indices,
+		})
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsParameters {
 	pub stiffness: f32,
+	pub pull: f32,
+	pub spring: f32,
+	pub integration_type: UnaDynamicsIntegrationType,
 	pub gravity_power: f32,
+	pub gravity_falloff: f32,
+	pub immobile: f32,
+	pub immobile_type: UnaDynamicsImmobileType,
 	pub gravity_dir: [f32; 3],
 	pub drag_force: f32,
 	pub center_node: Option<usize>,
@@ -1272,7 +1490,16 @@ pub struct UnaDynamicsParameters {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct UnaDynamicsChain<'a> {
 	pub bone_node_indices: &'a [usize],
+	pub interaction_start_index: usize,
 	pub hit_radius_samples: &'a [f32],
+	pub stiffness_samples: &'a [f32],
+	pub pull_samples: &'a [f32],
+	pub spring_samples: &'a [f32],
+	pub gravity_power_samples: &'a [f32],
+	pub gravity_falloff_samples: &'a [f32],
+	pub immobile_samples: &'a [f32],
+	pub max_angle_x_samples: &'a [f32],
+	pub max_angle_z_samples: &'a [f32],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1281,6 +1508,35 @@ pub enum UnaDynamicsWritebackMode {
 	#[default]
 	RotationOnly,
 	RotationTranslation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsImmobileType {
+	#[default]
+	AllMotion,
+	World,
+}
+
+impl UnaDynamicsImmobileType {
+	pub fn is_default(&self) -> bool {
+		matches!(self, Self::AllMotion)
+	}
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaDynamicsIntegrationType {
+	#[default]
+	Standard,
+	VrcSimplified,
+	VrcAdvanced,
+}
+
+impl UnaDynamicsIntegrationType {
+	pub fn is_default(&self) -> bool {
+		matches!(self, Self::Standard)
+	}
 }
 
 impl UnaDynamicsWritebackMode {
@@ -1297,15 +1553,25 @@ pub fn una_dynamics_translation_writeback_candidate_count(
 	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation {
 		return 0;
 	}
-	let skinned_joint_nodes = scene
+	let skinned_joint_nodes = skinned_joint_node_indices(scene);
+	translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, bone_node_indices)
+}
+
+fn skinned_joint_node_indices(scene: &UnaSceneSnapshot) -> Vec<usize> {
+	let mut nodes = scene
 		.skins
 		.iter()
 		.flat_map(|skin| skin.joint_nodes.iter().copied())
-		.collect::<BTreeSet<_>>();
+		.collect::<Vec<_>>();
+	sort_dedup(&mut nodes);
+	nodes
+}
+
+fn translation_writeback_candidate_count_for_skinned_nodes(skinned_joint_nodes: &[usize], bone_node_indices: &[usize]) -> usize {
 	bone_node_indices
 		.iter()
 		.skip(1)
-		.filter(|node| !skinned_joint_nodes.contains(node))
+		.filter(|node| skinned_joint_nodes.binary_search(node).is_err())
 		.count()
 }
 
@@ -1317,12 +1583,17 @@ pub fn una_dynamics_translation_writeback_target_count(
 	if writeback_mode != UnaDynamicsWritebackMode::RotationTranslation || bone_node_indices.len() < 2 {
 		return 0;
 	}
+	let skinned_joint_nodes = skinned_joint_node_indices(scene);
 	let mut count = 0;
 	for joint_index in 0..bone_node_indices.len() - 1 {
 		if joint_index + 2 < bone_node_indices.len() {
 			let anchor = bone_node_indices[joint_index + 1];
 			let target = bone_node_indices[joint_index + 2];
-			count += una_dynamics_translation_writeback_candidate_count(scene, writeback_mode, &[anchor, target]);
+			count += translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, &[anchor, target]);
+		} else if bone_node_indices.len() == 2 {
+			let anchor = bone_node_indices[joint_index];
+			let target = bone_node_indices[joint_index + 1];
+			count += translation_writeback_candidate_count_for_skinned_nodes(&skinned_joint_nodes, &[anchor, target]);
 		}
 	}
 	count
@@ -1344,7 +1615,7 @@ pub struct UnaDynamicsGroup<'a> {
 }
 
 impl<'a> UnaDynamicsGroup<'a> {
-	fn from_spring_bone_group(group: &'a UnaSpringBoneGroup, effective_enabled: bool) -> Self {
+	fn from_source_group(group: &'a UnaDynamicsSourceGroup, effective_enabled: bool) -> Self {
 		Self {
 			source_kind: group.source_kind,
 			authored_enabled: group.enabled,
@@ -1354,7 +1625,13 @@ impl<'a> UnaDynamicsGroup<'a> {
 			category: &group.category,
 			parameters: UnaDynamicsParameters {
 				stiffness: group.stiffness,
+				pull: group.pull,
+				spring: group.spring,
+				integration_type: group.integration_type,
 				gravity_power: group.gravity_power,
+				gravity_falloff: group.gravity_falloff,
+				immobile: group.immobile,
+				immobile_type: group.immobile_type,
 				gravity_dir: group.gravity_dir,
 				drag_force: group.drag_force,
 				center_node: group.center_node,
@@ -1362,7 +1639,16 @@ impl<'a> UnaDynamicsGroup<'a> {
 			},
 			chain: UnaDynamicsChain {
 				bone_node_indices: &group.bone_node_indices,
+				interaction_start_index: group.interaction_chain_start_index.min(group.bone_node_indices.len()),
 				hit_radius_samples: &group.hit_radius_samples,
+				stiffness_samples: &group.stiffness_samples,
+				pull_samples: &group.pull_samples,
+				spring_samples: &group.spring_samples,
+				gravity_power_samples: &group.gravity_power_samples,
+				gravity_falloff_samples: &group.gravity_falloff_samples,
+				immobile_samples: &group.immobile_samples,
+				max_angle_x_samples: &group.max_angle_x_samples,
+				max_angle_z_samples: &group.max_angle_z_samples,
 			},
 			writeback_mode: group.writeback_mode,
 			limit: group.limit.as_ref(),
@@ -1376,11 +1662,23 @@ pub struct UnaDynamicsLimit {
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub limit_type: String,
 	#[serde(default)]
+	pub limit_rotation: [f32; 3],
+	#[serde(default)]
 	pub max_angle_x: f32,
 	#[serde(default)]
 	pub max_angle_z: f32,
 	#[serde(default)]
 	pub max_stretch: f32,
+	#[serde(default)]
+	pub max_squish: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub stretch_motion: Option<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_stretch_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub max_squish_samples: Vec<f32>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub stretch_motion_samples: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1407,6 +1705,7 @@ pub enum UnaDynamicsContactKind {
 pub enum UnaDynamicsColliderShape {
 	Sphere,
 	Capsule,
+	Plane,
 	#[default]
 	Unknown,
 }
@@ -1417,6 +1716,8 @@ pub struct UnaDynamicsCollider {
 	pub source_kind: UnaDynamicsSourceKind,
 	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub source_id: String,
+	#[serde(default, skip_serializing_if = "String::is_empty")]
+	pub collider_path: String,
 	pub node: usize,
 	#[serde(default)]
 	pub shape: UnaDynamicsColliderShape,
@@ -1618,13 +1919,13 @@ impl<'a> UnaRuntimeDynamics<'a> {
 
 	pub fn dynamics_group(self, index: usize) -> Option<UnaDynamicsGroup<'a>> {
 		self.group(index)
-			.map(|group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
+			.map(|group| UnaDynamicsGroup::from_source_group(group, self.group_enabled(group)))
 	}
 
 	pub fn dynamics_groups(self) -> impl Iterator<Item = UnaDynamicsGroup<'a>> + 'a {
 		self.groups()
 			.iter()
-			.map(move |group| UnaDynamicsGroup::from_spring_bone_group(group, self.group_enabled(group)))
+			.map(move |group| UnaDynamicsGroup::from_source_group(group, self.group_enabled(group)))
 	}
 
 	pub fn has_groups(self) -> bool {
@@ -1655,6 +1956,26 @@ impl<'a> UnaRuntimeDynamics<'a> {
 			.copied()
 	}
 
+	pub fn source_id_resident_in_scene(self, scene: &UnaSceneSnapshot, source_id: &str) -> bool {
+		let Some(runtime_state) = self.runtime_state else {
+			return true;
+		};
+		if runtime_state.active_asset_groups.is_empty() || scene.asset_group_ownership.is_empty() || source_id.is_empty() {
+			return true;
+		}
+		let mut owned_by_asset_group = false;
+		for group in &scene.asset_group_ownership {
+			if !group.dynamics_source_ids.iter().any(|owned| owned == source_id) {
+				continue;
+			}
+			owned_by_asset_group = true;
+			if runtime_state.active_asset_groups.iter().any(|active| active == &group.group_id) {
+				return true;
+			}
+		}
+		!owned_by_asset_group
+	}
+
 	pub fn source_group_count(self, source_kind: UnaDynamicsSourceKind) -> usize {
 		self.groups().iter().filter(|group| group.source_kind == source_kind).count()
 	}
@@ -1668,38 +1989,47 @@ impl<'a> UnaRuntimeDynamics<'a> {
 	}
 
 	pub fn reset_node_indices(self) -> Vec<usize> {
-		let mut nodes = BTreeSet::new();
+		let mut nodes = Vec::new();
 		for node in self.dynamic_bone_node_indices() {
-			nodes.insert(node);
+			nodes.push(node);
 		}
 		for constraint_ref in self.constraint_refs() {
-			nodes.insert(constraint_ref.target_node);
+			nodes.push(constraint_ref.target_node);
 			nodes.extend(constraint_ref.source_nodes.iter().copied());
 		}
-		nodes.into_iter().collect()
+		nodes.sort_unstable();
+		nodes.dedup();
+		nodes
 	}
 
 	pub fn reset_node_indices_for_source_id(self, source_id: &str) -> Vec<usize> {
 		if source_id.is_empty() {
 			return Vec::new();
 		}
-		let mut nodes = BTreeSet::new();
+		let mut nodes = Vec::new();
 		for group in self.groups().iter().filter(|group| group.source_id == source_id) {
 			nodes.extend(group.bone_node_indices.iter().copied());
 		}
+		nodes.sort_unstable();
+		nodes.dedup();
 		if nodes.is_empty() {
 			return Vec::new();
 		}
 		let source_nodes = nodes.clone();
 		for constraint_ref in self.constraint_refs() {
-			let overlaps = source_nodes.contains(&constraint_ref.target_node)
-				|| constraint_ref.source_nodes.iter().any(|node| source_nodes.contains(node));
+			let overlaps = source_nodes.binary_search(&constraint_ref.target_node).is_ok()
+				|| constraint_ref
+					.source_nodes
+					.iter()
+					.any(|node| source_nodes.binary_search(node).is_ok());
 			if overlaps {
-				nodes.insert(constraint_ref.target_node);
+				nodes.push(constraint_ref.target_node);
 				nodes.extend(constraint_ref.source_nodes.iter().copied());
 			}
 		}
-		nodes.into_iter().collect()
+		nodes.sort_unstable();
+		nodes.dedup();
+		nodes
 	}
 
 	pub fn colliders(self) -> impl Iterator<Item = &'a UnaDynamicsCollider> {
@@ -1757,7 +2087,7 @@ impl<'a> UnaRuntimeDynamics<'a> {
 				if !limit.limit_type.is_empty() || limit.max_angle_x.abs() > 0.0 || limit.max_angle_z.abs() > 0.0 {
 					counts.angle_limit_groups += 1;
 				}
-				if limit.max_stretch.abs() > 0.0 {
+				if dynamics_limit_has_stretch_range(limit) {
 					counts.stretch_limit_groups += 1;
 				}
 			}
@@ -1802,6 +2132,17 @@ impl<'a> UnaRuntimeDynamics<'a> {
 		}
 		counts
 	}
+}
+
+fn dynamics_limit_has_positive_sample(samples: &[f32]) -> bool {
+	samples.iter().any(|value| value.is_finite() && *value > 0.0)
+}
+
+fn dynamics_limit_has_stretch_range(limit: &UnaDynamicsLimit) -> bool {
+	(limit.max_stretch.is_finite() && limit.max_stretch > 0.0)
+		|| (limit.max_squish.is_finite() && limit.max_squish > 0.0)
+		|| dynamics_limit_has_positive_sample(&limit.max_stretch_samples)
+		|| dynamics_limit_has_positive_sample(&limit.max_squish_samples)
 }
 
 fn contact_owner_key(source_id: &str, fallback_index: usize) -> String {
@@ -1856,6 +2197,10 @@ fn contact_probe_shape(contact: &UnaDynamicsContact, world: &[[f32; 16]]) -> Opt
 				radius,
 			})
 		}
+		UnaDynamicsColliderShape::Plane => Some(ContactProbeShape::BoundingSphere {
+			center,
+			radius: contact_probe_local_radius(contact) * scale,
+		}),
 		UnaDynamicsColliderShape::Unknown => Some(ContactProbeShape::BoundingSphere {
 			center,
 			radius: contact_probe_local_radius(contact) * scale,
@@ -1867,6 +2212,7 @@ fn contact_probe_local_radius(contact: &UnaDynamicsContact) -> f32 {
 	let radius = contact.radius.max(0.0);
 	match contact.shape {
 		UnaDynamicsColliderShape::Capsule => radius + contact.height.max(0.0) * 0.5,
+		UnaDynamicsColliderShape::Plane => radius.max(contact.height.max(0.0) * 0.5),
 		UnaDynamicsColliderShape::Sphere | UnaDynamicsColliderShape::Unknown => radius,
 	}
 }
@@ -1996,14 +2342,23 @@ fn segment_segment_distance(a0: [f32; 3], a1: [f32; 3], b0: [f32; 3], b1: [f32; 
 }
 
 fn contact_matched_tags(receiver_tags: &[String], sender_tags: &[String]) -> Vec<String> {
-	let sender = sender_tags.iter().collect::<BTreeSet<_>>();
+	let mut sender = sender_tags.iter().map(String::as_str).collect::<Vec<_>>();
+	sender.sort_unstable();
+	sender.dedup();
+	let mut matched = receiver_tags
+		.iter()
+		.filter(|tag| sender.binary_search(&tag.as_str()).is_ok())
+		.cloned()
+		.collect::<Vec<_>>();
+	matched.sort_unstable();
+	matched.dedup();
+	matched
+}
+
+fn contact_tags_match(receiver_tags: &[String], sender_tags: &[String]) -> bool {
 	receiver_tags
 		.iter()
-		.filter(|tag| sender.contains(tag))
-		.cloned()
-		.collect::<BTreeSet<_>>()
-		.into_iter()
-		.collect()
+		.any(|receiver_tag| sender_tags.iter().any(|sender_tag| sender_tag == receiver_tag))
 }
 
 fn scene_world_matrices(scene: &UnaSceneSnapshot) -> Vec<[f32; 16]> {
@@ -2147,11 +2502,12 @@ impl<'a> UnaRuntimeDynamicsMut<'a> {
 	}
 
 	pub fn set_all_groups_enabled(&mut self, enabled: bool) -> usize {
-		let source_ids = self
+		let mut source_ids = self
 			.groups_mut()
 			.iter()
 			.filter_map(|group| (!group.source_id.is_empty()).then_some(group.source_id.clone()))
-			.collect::<BTreeSet<_>>();
+			.collect::<Vec<_>>();
+		sort_dedup(&mut source_ids);
 		let count = source_ids.len();
 		if count > 0 {
 			if let Some(runtime_state) = self.runtime_state.as_deref_mut() {
@@ -2247,6 +2603,18 @@ impl UnaRuntimeState {
 }
 
 impl UnaDocument {
+	pub fn dynamics(&self) -> Option<&UnaDynamicsSettings> {
+		self.spring_bones.as_ref()
+	}
+
+	pub fn dynamics_mut(&mut self) -> Option<&mut UnaDynamicsSettings> {
+		self.spring_bones.as_mut()
+	}
+
+	pub fn set_dynamics(&mut self, dynamics: Option<UnaDynamicsSettings>) {
+		self.spring_bones = dynamics;
+	}
+
 	pub fn runtime_model(&self) -> UnaRuntimeModel<'_> {
 		UnaRuntimeModel { document: self }
 	}
@@ -2535,7 +2903,16 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 
 	pub fn contact_parameter_emissions(self) -> Vec<UnaEvaluationContactParameterEmission> {
 		let contacts = self.dynamics.contacts().collect::<Vec<_>>();
-		let probes = self.contact_probes();
+		let world = scene_world_matrices(self.scene);
+		let senders = contacts
+			.iter()
+			.filter_map(|sender| {
+				if sender.kind != UnaDynamicsContactKind::Sender {
+					return None;
+				}
+				Some((sender, contact_probe_shape(sender, &world)?))
+			})
+			.collect::<Vec<_>>();
 		contacts
 			.iter()
 			.enumerate()
@@ -2543,13 +2920,21 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 				if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
 					return None;
 				}
-				let sender_source_ids = probes
-					.iter()
-					.filter(|probe| probe.receiver_index == receiver_index && probe.would_emit)
-					.map(|probe| probe.sender_source_id.clone())
-					.collect::<BTreeSet<_>>()
-					.into_iter()
-					.collect::<Vec<_>>();
+				let receiver_shape = contact_probe_shape(receiver, &world);
+				let mut sender_source_ids = Vec::new();
+				if let Some(receiver_shape) = receiver_shape {
+					for (sender, sender_shape) in &senders {
+						if !contact_tags_match(&receiver.collision_tags, &sender.collision_tags) {
+							continue;
+						}
+						let (overlap, _, _, _, _, _) = contact_probe_overlap(receiver_shape, *sender_shape);
+						if overlap {
+							sender_source_ids.push(sender.source_id.clone());
+						}
+					}
+				}
+				sender_source_ids.sort_unstable();
+				sender_source_ids.dedup();
 				let emitted = !sender_source_ids.is_empty();
 				Some(UnaEvaluationContactParameterEmission {
 					owner_key: contact_owner_key(&receiver.source_id, receiver_index),
@@ -2563,6 +2948,50 @@ impl<'a> UnaRuntimeSceneDynamics<'a> {
 				})
 			})
 			.collect()
+	}
+
+	pub fn contact_parameter_values(self) -> BTreeMap<String, f32> {
+		self.contact_parameter_value_pairs().into_iter().collect()
+	}
+
+	pub fn contact_parameter_value_pairs(self) -> Vec<(String, f32)> {
+		let world = scene_world_matrices(self.scene);
+		let senders = self
+			.dynamics
+			.contacts()
+			.filter_map(|sender| {
+				if sender.kind != UnaDynamicsContactKind::Sender {
+					return None;
+				}
+				Some((sender, contact_probe_shape(sender, &world)?))
+			})
+			.collect::<Vec<_>>();
+		let mut values = Vec::<(String, f32)>::new();
+		for receiver in self.dynamics.contacts() {
+			if receiver.kind != UnaDynamicsContactKind::Receiver || receiver.parameter.is_empty() {
+				continue;
+			}
+			let mut emitted = false;
+			if let Some(receiver_shape) = contact_probe_shape(receiver, &world) {
+				for (sender, sender_shape) in &senders {
+					if !contact_tags_match(&receiver.collision_tags, &sender.collision_tags) {
+						continue;
+					}
+					let (overlap, _, _, _, _, _) = contact_probe_overlap(receiver_shape, *sender_shape);
+					if overlap {
+						emitted = true;
+						break;
+					}
+				}
+			}
+			let next_value = if emitted { 1.0 } else { 0.0 };
+			if let Some((_, value)) = values.iter_mut().find(|(name, _)| name == &receiver.parameter) {
+				*value = value.max(next_value);
+			} else {
+				values.push((receiver.parameter.clone(), next_value));
+			}
+		}
+		values
 	}
 }
 
@@ -2715,14 +3144,8 @@ impl<'a> UnaRuntimeModel<'a> {
 				}
 			}
 		}
-		if let Some(components) = self
-			.document
-			.unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
-			.and_then(|modular_avatar| modular_avatar.get("components"))
-			.and_then(Value::as_array)
-		{
+		if let Some(unavatar) = self.document.unavatar.as_ref() {
+			let components = unavatar_modular_avatar_components_slice(&unavatar.source);
 			for (component_index, component) in components.iter().enumerate() {
 				let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
 				if short_type != "ModularAvatarParameters" {
@@ -2830,16 +3253,10 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	fn modular_avatar_parameter_conflicts(self) -> Vec<UnaRuntimeParameterConflict> {
 		let mut parameters = BTreeMap::<String, Vec<(String, String, Option<f32>)>>::new();
-		let Some(components) = self
-			.document
-			.unavatar
-			.as_ref()
-			.and_then(|unavatar| unavatar.source.get("modularAvatar"))
-			.and_then(|modular_avatar| modular_avatar.get("components"))
-			.and_then(Value::as_array)
-		else {
+		let Some(unavatar) = self.document.unavatar.as_ref() else {
 			return Vec::new();
 		};
+		let components = unavatar_modular_avatar_components_slice(&unavatar.source);
 		for (component_index, component) in components.iter().enumerate() {
 			let short_type = component.get("shortType").and_then(Value::as_str).unwrap_or_default();
 			if short_type != "ModularAvatarParameters" {
@@ -2862,10 +3279,12 @@ impl<'a> UnaRuntimeModel<'a> {
 		let mut conflicts = Vec::new();
 		for (name, entries) in parameters {
 			let owner_keys = entries.iter().map(|(owner_key, _, _)| owner_key.clone()).collect::<Vec<_>>();
-			let sync_types = entries
+			let mut sync_types = entries
 				.iter()
 				.filter_map(|(_, sync_type, _)| (sync_type != "NotSynced").then_some(sync_type.clone()))
-				.collect::<BTreeSet<_>>();
+				.collect::<Vec<_>>();
+			sync_types.sort_unstable();
+			sync_types.dedup();
 			if sync_types.len() > 1 {
 				conflicts.push(UnaRuntimeParameterConflict {
 					name: name.clone(),
@@ -2958,10 +3377,17 @@ impl<'a> UnaRuntimeModel<'a> {
 	}
 
 	pub fn runtime_action_restore_readiness(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreReadiness> {
-		action
-			.effects
+		self.runtime_action_effects_restore_readiness(&action.id, &action.effects)
+	}
+
+	pub fn runtime_action_effects_restore_readiness(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreReadiness> {
+		effects
 			.iter()
-			.map(|effect| self.runtime_action_effect_restore_readiness(&action.id, effect))
+			.map(|effect| self.runtime_action_effect_restore_readiness(action_id, effect))
 			.collect()
 	}
 
@@ -2996,8 +3422,48 @@ impl<'a> UnaRuntimeModel<'a> {
 			.collect()
 	}
 
+	pub fn runtime_action_restore_baseline_candidates(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
+		self.runtime_action_effects_restore_baseline_candidates(&action.id, &action.effects)
+	}
+
+	pub fn runtime_action_effects_restore_baseline_candidates(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineCandidate> {
+		self.runtime_action_effects_restore_readiness(action_id, effects)
+			.into_iter()
+			.filter_map(|readiness| {
+				if !readiness.restore_target {
+					return None;
+				}
+				let baseline_value = readiness.current_value?;
+				Some(UnaEvaluationRestoreBaselineCandidate {
+					owner_key: readiness.owner_key,
+					action_id: readiness.action_id,
+					effect_kind: readiness.effect_kind,
+					target_kind: readiness.target_kind,
+					target_key: readiness.target_key,
+					baseline_value,
+				})
+			})
+			.collect()
+	}
+
 	pub fn runtime_action_set_restore_baseline_capture_plan(self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		restore_baseline_capture_plan_from_candidates(self.runtime_action_set_restore_baseline_candidates(actions))
+	}
+
+	pub fn runtime_action_restore_baseline_capture_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		restore_baseline_capture_plan_from_candidates(self.runtime_action_restore_baseline_candidates(action))
+	}
+
+	pub fn runtime_action_effects_restore_baseline_capture_plan(
+		self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		restore_baseline_capture_plan_from_candidates(self.runtime_action_effects_restore_baseline_candidates(action_id, effects))
 	}
 
 	pub fn runtime_action_restore_apply_plan(self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreApplyEntry> {
@@ -3169,7 +3635,7 @@ impl<'a> UnaRuntimeModel<'a> {
 
 	pub fn dynamics(self) -> UnaRuntimeDynamics<'a> {
 		UnaRuntimeDynamics {
-			dynamics: self.document.spring_bones.as_ref(),
+			dynamics: self.document.dynamics(),
 			runtime_state: Some(&self.document.runtime_state),
 		}
 	}
@@ -3179,14 +3645,14 @@ impl<'a> UnaRuntimeModelMut<'a> {
 	pub fn scene_and_dynamics_mut(self) -> Option<UnaRuntimeSceneDynamicsMut<'a>> {
 		let UnaDocument {
 			scene,
-			spring_bones,
+			spring_bones: dynamics,
 			runtime_state,
 			..
 		} = self.document;
 		Some(UnaRuntimeSceneDynamicsMut {
 			scene: scene.as_mut()?,
 			dynamics: UnaRuntimeDynamicsMut {
-				dynamics: spring_bones.as_mut(),
+				dynamics: dynamics.as_mut(),
 				runtime_state: Some(runtime_state),
 			},
 		})
@@ -3242,20 +3708,41 @@ impl<'a> UnaRuntimeModelMut<'a> {
 	}
 
 	pub fn apply_contact_parameter_emissions(&mut self) -> Vec<UnaEvaluationContactParameterEmission> {
+		self.apply_contact_parameter_emissions_with_changes().0
+	}
+
+	pub fn apply_contact_parameter_emissions_with_changes(
+		&mut self,
+	) -> (Vec<UnaEvaluationContactParameterEmission>, BTreeMap<String, f32>) {
 		if !self.document.runtime_model().contact_parameter_emission_enabled() {
-			return Vec::new();
+			return (Vec::new(), BTreeMap::new());
 		}
 		let emissions = self.document.runtime_model().contact_parameter_emissions();
-		let mut contact_parameter_values = BTreeMap::<String, f32>::new();
+		let mut contact_parameter_values = Vec::<(String, f32)>::new();
 		for emission in &emissions {
-			let value = contact_parameter_values.entry(emission.parameter.clone()).or_insert(0.0);
-			*value = value.max(emission.value);
+			if let Some((_, value)) = contact_parameter_values.iter_mut().find(|(name, _)| name == &emission.parameter) {
+				*value = value.max(emission.value);
+			} else {
+				contact_parameter_values.push((emission.parameter.clone(), emission.value));
+			}
 		}
-		let runtime_state = self.runtime_state_mut();
-		for (name, value) in contact_parameter_values {
-			runtime_state.parameter_values.insert(name, value);
+		let changed = apply_runtime_parameter_value_pairs(self.runtime_state_mut(), contact_parameter_values);
+		(emissions, changed)
+	}
+
+	pub fn apply_contact_parameter_values_with_changes(&mut self) -> BTreeMap<String, f32> {
+		if !self.document.runtime_model().contact_parameter_emission_enabled() {
+			return BTreeMap::new();
 		}
-		emissions
+		let Some(values) = self
+			.document
+			.runtime_model()
+			.scene_profile_dynamics()
+			.map(UnaRuntimeSceneDynamics::contact_parameter_value_pairs)
+		else {
+			return BTreeMap::new();
+		};
+		apply_runtime_parameter_value_pairs(self.runtime_state_mut(), values)
 	}
 
 	pub fn capture_runtime_action_restore_baselines(&mut self, actions: &UnaRuntimeActionSet) -> Vec<UnaEvaluationRestoreBaselineEntry> {
@@ -3263,6 +3750,30 @@ impl<'a> UnaRuntimeModelMut<'a> {
 			.document
 			.runtime_model()
 			.runtime_action_set_restore_baseline_capture_plan(actions);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	pub fn capture_runtime_action_restore_baseline(&mut self, action: &UnaRuntimeAction) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		let plan = self.document.runtime_model().runtime_action_restore_baseline_capture_plan(action);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	pub fn capture_runtime_action_effect_restore_baseline(
+		&mut self,
+		action_id: &str,
+		effects: &[UnaRuntimeActionEffect],
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
+		let plan = self
+			.document
+			.runtime_model()
+			.runtime_action_effects_restore_baseline_capture_plan(action_id, effects);
+		self.capture_runtime_action_restore_baseline_plan(plan)
+	}
+
+	fn capture_runtime_action_restore_baseline_plan(
+		&mut self,
+		plan: Vec<UnaEvaluationRestoreBaselineEntry>,
+	) -> Vec<UnaEvaluationRestoreBaselineEntry> {
 		let runtime_state = self.runtime_state_mut();
 		for entry in &plan {
 			let owner_entries = runtime_state.restore_baselines.entry(entry.owner_key.clone()).or_default();
@@ -3464,8 +3975,7 @@ impl<'a> UnaRuntimeModelMut<'a> {
 					.ok_or_else(|| format!("restore baseline is not a bool for dynamics enabled: {value}"))?;
 				let matches = self
 					.document
-					.spring_bones
-					.as_ref()
+					.dynamics()
 					.is_some_and(|settings| settings.groups.iter().any(|group| group.source_id == *source_id));
 				if matches {
 					self.document
@@ -3487,6 +3997,17 @@ impl<'a> UnaRuntimeModelMut<'a> {
 		}
 		None
 	}
+}
+
+fn apply_runtime_parameter_value_pairs(runtime_state: &mut UnaRuntimeState, values: Vec<(String, f32)>) -> BTreeMap<String, f32> {
+	let mut changed = BTreeMap::new();
+	for (name, value) in values {
+		if runtime_state.parameter_values.get(&name).copied() != Some(value) {
+			changed.insert(name.clone(), value);
+		}
+		runtime_state.parameter_values.insert(name, value);
+	}
+	changed
 }
 
 fn resolve_runtime_material_index(scene: &UnaSceneSnapshot, target: &UnaRuntimeMaterialTarget) -> Option<usize> {
@@ -3749,9 +4270,42 @@ pub enum UnaNodeConstraintAimAxis {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaNodeConstraintKind {
-	Roll { axis: UnaNodeConstraintAxis },
-	Aim { axis: UnaNodeConstraintAimAxis },
+	Roll {
+		axis: UnaNodeConstraintAxis,
+	},
+	Aim {
+		axis: UnaNodeConstraintAimAxis,
+	},
 	Rotation,
+	Parent {
+		#[serde(default = "true_bool")]
+		translate_x: bool,
+		#[serde(default = "true_bool")]
+		translate_y: bool,
+		#[serde(default = "true_bool")]
+		translate_z: bool,
+		#[serde(default = "true_bool")]
+		rotate_x: bool,
+		#[serde(default = "true_bool")]
+		rotate_y: bool,
+		#[serde(default = "true_bool")]
+		rotate_z: bool,
+		#[serde(default)]
+		translation_at_rest: [f32; 3],
+		#[serde(default)]
+		rotation_at_rest: [f32; 3],
+	},
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaNodeConstraintSource {
+	pub source_node: usize,
+	#[serde(default = "one_f32")]
+	pub weight: f32,
+	#[serde(default)]
+	pub translation_offset: [f32; 3],
+	#[serde(default)]
+	pub rotation_offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -3761,6 +4315,8 @@ pub struct UnaNodeConstraint {
 	#[serde(default = "one_f32")]
 	pub weight: f32,
 	pub kind: UnaNodeConstraintKind,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub sources: Vec<UnaNodeConstraintSource>,
 }
 
 /// VRM 固有メタ／Humanoid／MToon ヒントと、拡張 JSON 正本（ブレンドシェイプ・表情・SpringBone 等は `source` に完全保持）。
@@ -3801,6 +4357,8 @@ pub struct UnaSceneSnapshot {
 	pub meshes: Vec<Vec<UnaMeshBuffers>>,
 	pub materials: Vec<UnaMaterialPbr>,
 	pub images: Vec<UnaImageRgba>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub lighting: Option<UnaSceneLighting>,
 	/// Source package metadata for `images`, without duplicating source bytes in memory.
 	/// The binary itself remains owned by the `.unavatar` / glTF package layer.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3817,6 +4375,49 @@ pub struct UnaSceneSnapshot {
 	/// Runtime hot switch state remains in [`UnaRuntimeState::active_asset_groups`].
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub asset_group_ownership: Vec<UnaSceneAssetGroupOwnership>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneLighting {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub environment: Option<UnaSceneEnvironmentLight>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub directional: Option<UnaSceneDirectionalLight>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneEnvironmentLight {
+	pub color: [f32; 3],
+	pub intensity: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sky_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub equator_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ground_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub spherical_harmonics: Option<UnaSceneSphericalHarmonics>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneSphericalHarmonics {
+	pub ar: [f32; 4],
+	pub ag: [f32; 4],
+	pub ab: [f32; 4],
+	pub br: [f32; 4],
+	pub bg: [f32; 4],
+	pub bb: [f32; 4],
+	pub c: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneDirectionalLight {
+	pub color: [f32; 3],
+	pub intensity: f32,
+	/// Direction from the shaded surface toward the light, in U.N. Avatar/glTF world axes.
+	pub direction: [f32; 3],
+	pub azimuth_deg: f32,
+	pub elevation_deg: f32,
 }
 
 impl UnaSceneSnapshot {
@@ -3867,17 +4468,18 @@ impl UnaSceneSnapshot {
 		if active_asset_groups.is_empty() {
 			return UnaSceneScopedAssetSelection::default();
 		}
-		let mut remaining_active_groups = active_asset_groups.iter().cloned().collect::<BTreeSet<_>>();
-		let mut owned_active_groups = BTreeSet::new();
-		let mut mesh_primitives = BTreeSet::<(usize, usize)>::new();
-		let mut materials = BTreeSet::new();
-		let mut images = BTreeSet::new();
-		let mut dynamics_source_ids = BTreeSet::new();
+		let mut active_groups = active_asset_groups.to_vec();
+		sort_dedup(&mut active_groups);
+		let mut owned_active_groups = Vec::new();
+		let mut mesh_primitives = Vec::<(usize, usize)>::new();
+		let mut materials = Vec::new();
+		let mut images = Vec::new();
+		let mut dynamics_source_ids = Vec::new();
 		for group in &self.asset_group_ownership {
-			if !remaining_active_groups.contains(&group.group_id) {
+			if active_groups.binary_search(&group.group_id).is_err() {
 				continue;
 			}
-			owned_active_groups.insert(group.group_id.clone());
+			owned_active_groups.push(group.group_id.clone());
 			mesh_primitives.extend(
 				group
 					.mesh_primitives
@@ -3888,15 +4490,23 @@ impl UnaSceneSnapshot {
 			images.extend(group.images.iter().copied());
 			dynamics_source_ids.extend(group.dynamics_source_ids.iter().cloned());
 		}
-		for group in &owned_active_groups {
-			remaining_active_groups.remove(group);
+		sort_dedup(&mut owned_active_groups);
+		let mut missing_active_asset_groups = active_groups
+			.into_iter()
+			.filter(|group| owned_active_groups.binary_search(group).is_err())
+			.collect::<Vec<_>>();
+		if let Ok(index) = missing_active_asset_groups.binary_search(&String::new()) {
+			missing_active_asset_groups.remove(index);
+			owned_active_groups.push(String::new());
 		}
-		if remaining_active_groups.remove("") {
-			owned_active_groups.insert(String::new());
-		}
+		sort_dedup(&mut owned_active_groups);
+		sort_dedup(&mut mesh_primitives);
+		sort_dedup(&mut materials);
+		sort_dedup(&mut images);
+		sort_dedup(&mut dynamics_source_ids);
 		UnaSceneScopedAssetSelection {
-			owned_active_groups: owned_active_groups.into_iter().collect(),
-			missing_active_asset_groups: remaining_active_groups.into_iter().collect(),
+			owned_active_groups,
+			missing_active_asset_groups,
 			mesh_primitives: mesh_primitives
 				.into_iter()
 				.map(|(mesh_index, primitive_index)| UnaMeshPrimitiveKey {
@@ -3904,11 +4514,16 @@ impl UnaSceneSnapshot {
 					primitive_index,
 				})
 				.collect(),
-			materials: materials.into_iter().collect(),
-			images: images.into_iter().collect(),
-			dynamics_source_ids: dynamics_source_ids.into_iter().collect(),
+			materials,
+			images,
+			dynamics_source_ids,
 		}
 	}
+}
+
+fn sort_dedup<T: Ord>(values: &mut Vec<T>) {
+	values.sort_unstable();
+	values.dedup();
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -4093,6 +4708,10 @@ fn default_true() -> bool {
 	true
 }
 
+fn usize_is_zero(value: &usize) -> bool {
+	*value == 0
+}
+
 fn is_false(value: &bool) -> bool {
 	!*value
 }
@@ -4211,23 +4830,17 @@ pub struct UnaMaterialPbr {
 
 impl UnaMaterialPbr {
 	pub fn runtime_toon_model(&self) -> Option<UnaRuntimeToonModel> {
-		match self.shading {
-			UnaShadingModel::MToonLike => Some(UnaRuntimeToonModel::MToonLike),
-			UnaShadingModel::LilToonLike => Some(UnaRuntimeToonModel::LilToonLike),
-			UnaShadingModel::LitLambert | UnaShadingModel::Unlit => None,
-		}
+		self.liltoon_like_runtime().map(|_| UnaRuntimeToonModel::UNToon)
 	}
 
 	pub fn liltoon_like_runtime(&self) -> Option<&UnaLilToonLikeMaterial> {
-		self.shading.is_liltoon_like().then_some(self.liltoon_like.as_ref()).flatten()
+		matches!(self.shading, UnaShadingModel::LilToonLike | UnaShadingModel::MToonLike)
+			.then_some(self.liltoon_like.as_ref())
+			.flatten()
 	}
 
 	pub fn liltoon_like_source_profile(&self) -> Option<&UnaLilToonLikeMaterial> {
 		self.liltoon_like.as_ref()
-	}
-
-	pub fn mtoon_like_runtime(&self) -> Option<&UnaMtoonMaterial> {
-		self.shading.is_mtoon_like().then_some(self.mtoon.as_ref()).flatten()
 	}
 
 	pub fn mtoon_source_profile(&self) -> Option<&UnaMtoonMaterial> {
@@ -4254,6 +4867,23 @@ pub enum UnaLilToonLikeSourceProfile {
 	MtoonConverted,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaLilToonLikeRuntimeVariant {
+	#[default]
+	UNToon,
+	Gem,
+	Refraction,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaColorFactorColorSpace {
+	#[default]
+	Linear,
+	Srgb,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaLilToonLikeBlendMode {
@@ -4268,6 +4898,10 @@ pub enum UnaLilToonLikeBlendMode {
 pub struct UnaLilToonLikeMainColor {
 	#[serde(default = "default_liltoon_main_texture_hsvg")]
 	pub main_texture_hsvg_factor: [f32; 4],
+	#[serde(default)]
+	pub main_uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub uv_animation_mask_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub main_color_adjust_mask_texture_index: Option<usize>,
 	#[serde(default)]
@@ -5028,6 +5662,40 @@ pub struct UnaLilToonLikeBlendState {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeStencilState {
+	#[serde(default)]
+	pub reference: u8,
+	#[serde(default = "default_liltoon_stencil_mask")]
+	pub read_mask: u8,
+	#[serde(default = "default_liltoon_stencil_mask")]
+	pub write_mask: u8,
+	#[serde(default = "default_liltoon_stencil_compare")]
+	pub compare: u8,
+	#[serde(default)]
+	pub pass_op: u8,
+	#[serde(default)]
+	pub fail_op: u8,
+	#[serde(default)]
+	pub depth_fail_op: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikePipelineState {
+	#[serde(default)]
+	pub stencil: UnaLilToonLikeStencilState,
+	#[serde(default)]
+	pub outline_stencil: UnaLilToonLikeStencilState,
+	#[serde(default)]
+	pub fur_stencil: UnaLilToonLikeStencilState,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub color_mask: u8,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub outline_color_mask: u8,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub fur_color_mask: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeRendering {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub render_queue_number: Option<i32>,
@@ -5043,6 +5711,8 @@ pub struct UnaLilToonLikeRendering {
 	pub distance_fade_rim_fresnel_power_factor: f32,
 	#[serde(default)]
 	pub distance_fade_mode_factor: f32,
+	#[serde(default)]
+	pub light_direction_override_factor: [f32; 4],
 	#[serde(default = "default_liltoon_light_min_limit")]
 	pub light_min_limit_factor: f32,
 	#[serde(default = "one_f32")]
@@ -5057,12 +5727,18 @@ pub struct UnaLilToonLikeRendering {
 	pub aa_strength_factor: f32,
 	#[serde(default)]
 	pub gsaa_strength_factor: f32,
+	#[serde(default)]
+	pub pipeline_state: UnaLilToonLikePipelineState,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
+	#[serde(default)]
+	pub runtime_variant: UnaLilToonLikeRuntimeVariant,
+	#[serde(default)]
+	pub color_factor_color_space: UnaColorFactorColorSpace,
 	#[serde(default)]
 	pub flip_backface_normal_factor: f32,
 	#[serde(default)]
@@ -5111,11 +5787,11 @@ pub struct UnaLilToonLikeMaterial {
 
 impl UnaLilToonLikeMaterial {
 	pub fn is_gem_profile(&self) -> bool {
-		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonGem
+		self.runtime_variant == UnaLilToonLikeRuntimeVariant::Gem
 	}
 
 	pub fn is_refraction_profile(&self) -> bool {
-		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonRefraction
+		self.runtime_variant == UnaLilToonLikeRuntimeVariant::Refraction
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
@@ -5124,6 +5800,85 @@ impl UnaLilToonLikeMaterial {
 
 	pub fn uses_reflection_source_cube(&self) -> bool {
 		self.reflection.cube_override_factor > 0.5 || self.is_gem_profile()
+	}
+
+	pub fn from_mtoon_compat(mtoon: &UnaMtoonMaterial, emissive_factor: [f32; 3], emissive_texture_index: Option<usize>) -> Self {
+		let mut out = Self {
+			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			runtime_variant: UnaLilToonLikeRuntimeVariant::UNToon,
+			..Default::default()
+		};
+
+		out.shadow.enabled_factor = 1.0;
+		out.shadow.strength_factor = 1.0;
+		out.shadow.color_factor = mtoon.shade_color_factor;
+		out.shadow.color_texture_index = mtoon.shade_multiply_texture_index;
+		out.shadow.strength_mask_texture_index = mtoon.shading_shift_texture_index;
+		out.shadow.border_factor = (1.0 - mtoon.shading_toony_factor).clamp(0.0, 1.0);
+		out.shadow.main_strength_factor = mtoon.gi_equalization_factor.clamp(0.0, 1.0);
+
+		out.matcap.enabled_factor = if mtoon.matcap_texture_index.is_some() { 1.0 } else { 0.0 };
+		out.matcap.color_factor = [mtoon.matcap_factor[0], mtoon.matcap_factor[1], mtoon.matcap_factor[2]];
+		out.matcap.texture_index = mtoon.matcap_texture_index;
+		out.matcap.blend_factor = 1.0;
+		out.matcap.main_strength_factor = 1.0;
+		out.matcap.enable_lighting_factor = 0.0;
+
+		out.rim.enabled_factor =
+			if mtoon.rim_multiply_texture_index.is_some() || mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001) {
+				1.0
+			} else {
+				0.0
+			};
+		out.rim.color_factor = [
+			mtoon.parametric_rim_color_factor[0],
+			mtoon.parametric_rim_color_factor[1],
+			mtoon.parametric_rim_color_factor[2],
+			1.0,
+		];
+		out.rim.texture_index = mtoon.rim_multiply_texture_index;
+		out.rim.fresnel_power_factor = mtoon.parametric_rim_fresnel_power_factor;
+		out.rim.main_strength_factor = 1.0;
+		out.rim.enable_lighting_factor = mtoon.rim_lighting_mix_factor.clamp(0.0, 1.0);
+
+		out.reflection.enabled_factor = if mtoon.reflection_cube_texture_index.is_some() { 1.0 } else { 0.0 };
+		out.reflection.cube_texture_index = mtoon.reflection_cube_texture_index;
+		out.reflection.cube_override_factor = out.reflection.enabled_factor;
+		out.reflection.apply_reflection_factor = out.reflection.enabled_factor;
+
+		out.outline.enabled_factor = if mtoon.outline_width_factor > 0.0 && mtoon.outline_width_mode != UnaMtoonOutlineWidthMode::None {
+			1.0
+		} else {
+			0.0
+		};
+		out.outline.width_factor = mtoon.outline_width_factor;
+		out.outline.width_mask_texture_index = mtoon.outline_width_multiply_texture_index;
+		out.outline.color_factor = [
+			mtoon.outline_color_factor[0],
+			mtoon.outline_color_factor[1],
+			mtoon.outline_color_factor[2],
+			1.0,
+		];
+		out.outline.enable_lighting_factor = mtoon.outline_lighting_mix_factor.clamp(0.0, 1.0);
+
+		out.main_color.main_uv_scroll_rotate_factor = [
+			mtoon.uv_animation_scroll_x_speed_factor,
+			mtoon.uv_animation_scroll_y_speed_factor,
+			mtoon.uv_animation_rotation_speed_factor,
+			0.0,
+		];
+		out.main_color.uv_animation_mask_texture_index = mtoon.uv_animation_mask_texture_index;
+
+		out.emission.enabled_factor = if emissive_texture_index.is_some() || emissive_factor.iter().any(|value| value.abs() > 0.00001) {
+			1.0
+		} else {
+			0.0
+		};
+		out.emission.color_factor = [emissive_factor[0], emissive_factor[1], emissive_factor[2], 1.0];
+		out.emission.texture_index = emissive_texture_index;
+		out.emission.main_strength_factor = 1.0;
+		out.emission.blend_factor = 1.0;
+		out
 	}
 }
 
@@ -5168,6 +5923,8 @@ impl Default for UnaLilToonLikeMainColor {
 	fn default() -> Self {
 		Self {
 			main_texture_hsvg_factor: default_liltoon_main_texture_hsvg(),
+			main_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			uv_animation_mask_texture_index: None,
 			main_color_adjust_mask_texture_index: None,
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
@@ -5598,6 +6355,45 @@ impl Default for UnaLilToonLikeBlendState {
 	}
 }
 
+fn default_liltoon_stencil_mask() -> u8 {
+	255
+}
+
+fn default_liltoon_stencil_compare() -> u8 {
+	8
+}
+
+fn default_liltoon_color_mask() -> u8 {
+	15
+}
+
+impl Default for UnaLilToonLikeStencilState {
+	fn default() -> Self {
+		Self {
+			reference: 0,
+			read_mask: default_liltoon_stencil_mask(),
+			write_mask: default_liltoon_stencil_mask(),
+			compare: default_liltoon_stencil_compare(),
+			pass_op: 0,
+			fail_op: 0,
+			depth_fail_op: 0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikePipelineState {
+	fn default() -> Self {
+		Self {
+			stencil: UnaLilToonLikeStencilState::default(),
+			outline_stencil: UnaLilToonLikeStencilState::default(),
+			fur_stencil: UnaLilToonLikeStencilState::default(),
+			color_mask: default_liltoon_color_mask(),
+			outline_color_mask: default_liltoon_color_mask(),
+			fur_color_mask: default_liltoon_color_mask(),
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeRendering {
 	fn default() -> Self {
 		Self {
@@ -5608,6 +6404,7 @@ impl Default for UnaLilToonLikeRendering {
 			distance_fade_rim_color_factor: [0.0, 0.0, 0.0, 0.0],
 			distance_fade_rim_fresnel_power_factor: default_liltoon_distance_fade_rim_fresnel_power(),
 			distance_fade_mode_factor: 0.0,
+			light_direction_override_factor: [0.0, 0.0, 0.0, 0.0],
 			light_min_limit_factor: default_liltoon_light_min_limit(),
 			light_max_limit_factor: 1.0,
 			monochrome_lighting_factor: 0.0,
@@ -5615,6 +6412,7 @@ impl Default for UnaLilToonLikeRendering {
 			vertex_light_strength_factor: 0.0,
 			aa_strength_factor: 1.0,
 			gsaa_strength_factor: 0.0,
+			pipeline_state: UnaLilToonLikePipelineState::default(),
 		}
 	}
 }
@@ -5623,6 +6421,8 @@ impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			runtime_variant: UnaLilToonLikeRuntimeVariant::UNToon,
+			color_factor_color_space: UnaColorFactorColorSpace::Linear,
 			flip_backface_normal_factor: 0.0,
 			main_color: UnaLilToonLikeMainColor::default(),
 			texture_uv_offset_scales: BTreeMap::new(),
@@ -5745,6 +6545,10 @@ impl Default for UnaMtoonMaterial {
 
 fn one_f32() -> f32 {
 	1.0
+}
+
+fn true_bool() -> bool {
+	true
 }
 
 fn one_vec3() -> [f32; 3] {
@@ -7202,24 +8006,45 @@ mod tests {
 					category: "hair".to_string(),
 					enabled: false,
 					stiffness: 0.7,
+					pull: 0.7,
+					spring: 0.0,
+					integration_type: Default::default(),
 					gravity_power: 0.2,
+					gravity_falloff: 0.0,
+					immobile: 0.0,
+					immobile_type: Default::default(),
 					gravity_dir: [0.0, -1.0, 0.0],
 					drag_force: 0.3,
 					center_node: Some(10),
 					hit_radius: 0.04,
 					hit_radius_samples: Vec::new(),
+					stiffness_samples: Vec::new(),
+					pull_samples: Vec::new(),
+					spring_samples: Vec::new(),
+					gravity_power_samples: Vec::new(),
+					gravity_falloff_samples: Vec::new(),
+					immobile_samples: Vec::new(),
+					max_angle_x_samples: Vec::new(),
+					max_angle_z_samples: Vec::new(),
 					writeback_mode: Default::default(),
 					limit: Some(UnaDynamicsLimit {
 						limit_type: "angle".to_string(),
+						limit_rotation: [0.0, 0.0, 0.0],
 						max_angle_x: 45.0,
 						max_angle_z: 25.0,
 						max_stretch: 0.1,
+						max_squish: 0.0,
+						stretch_motion: None,
+						max_stretch_samples: Vec::new(),
+						max_squish_samples: Vec::new(),
+						stretch_motion_samples: Vec::new(),
 					}),
 					interaction: Some(UnaDynamicsInteraction {
 						allow_grabbing: Some(true),
 						allow_posing: Some(false),
 						parameter: "HairPB".to_string(),
 					}),
+					interaction_chain_start_index: 0,
 					bone_node_indices: vec![1, 2, 3],
 				}],
 				colliders: Vec::new(),
@@ -7853,6 +8678,53 @@ mod tests {
 		assert_eq!(writes[3].target_key, "Smile");
 		assert_eq!(writes[4].target_kind, UnaEvaluationTargetKind::DynamicsEnabled);
 		assert_eq!(writes[4].target_key, "physbone:hair");
+	}
+
+	#[test]
+	fn runtime_action_restore_effect_snapshot_keeps_only_restore_inputs() {
+		let actions = UnaRuntimeActionSet {
+			actions: vec![UnaRuntimeAction {
+				id: "variant:coat".to_string(),
+				label: "Coat".to_string(),
+				triggers: vec![UnaRuntimeActionTrigger::SupervisorCommand {
+					command: "coat".to_string(),
+				}],
+				conditions: vec![UnaRuntimeActionCondition {
+					parameter_name: Some("Coat".to_string()),
+					parameter_value: Some(1.0),
+					..Default::default()
+				}],
+				effects: vec![
+					UnaRuntimeActionEffect::WardrobeSet {
+						set_id: "coat".to_string(),
+					},
+					UnaRuntimeActionEffect::ExpressionWeight {
+						name: "Smile".to_string(),
+						weight: 1.0,
+					},
+					UnaRuntimeActionEffect::NodeVisibility {
+						target: UnaRuntimeNodeTarget {
+							path: Some("Root/Coat".to_string()),
+							..Default::default()
+						},
+						visible: true,
+					},
+				],
+			}],
+		};
+
+		let snapshot = actions.restore_effect_snapshot();
+
+		assert_eq!(snapshot.actions.len(), 1);
+		assert_eq!(snapshot.actions[0].id, "variant:coat");
+		assert!(snapshot.actions[0].label.is_empty());
+		assert!(snapshot.actions[0].triggers.is_empty());
+		assert_eq!(snapshot.actions[0].conditions.len(), 1);
+		assert_eq!(snapshot.actions[0].effects.len(), 1);
+		assert!(matches!(
+			snapshot.actions[0].effects[0],
+			UnaRuntimeActionEffect::NodeVisibility { .. }
+		));
 	}
 
 	#[test]
@@ -8568,6 +9440,15 @@ mod tests {
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("MenuToggle"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
+
+		document.runtime_state.parameter_values.clear();
+		let changed = document.runtime_model_mut().apply_contact_parameter_values_with_changes();
+		assert_eq!(
+			changed,
+			BTreeMap::from([("ContactFar".to_string(), 0.0), ("ContactHand".to_string(), 1.0)])
+		);
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactFar"), Some(&0.0));
 	}
 
 	#[test]
@@ -8633,6 +9514,11 @@ mod tests {
 		assert_eq!(separated.len(), 1);
 		assert!(!separated[0].emitted);
 		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&0.0));
+
+		document.scene.as_mut().unwrap().nodes[2].transform[12] = 0.08;
+		let changed = document.runtime_model_mut().apply_contact_parameter_values_with_changes();
+		assert_eq!(changed, BTreeMap::from([("ContactHand".to_string(), 1.0)]));
+		assert_eq!(document.runtime_model().runtime_parameter_values().get("ContactHand"), Some(&1.0));
 	}
 
 	#[test]
@@ -8681,7 +9567,7 @@ mod tests {
 	}
 
 	#[test]
-	fn runtime_resolver_cache_key_hashes_material_source_profile() {
+	fn runtime_resolver_cache_key_hashes_material_payload_metadata() {
 		let mut document = UnaDocument {
 			scene: Some(UnaSceneSnapshot {
 				materials: vec![UnaMaterialPbr {
@@ -8812,7 +9698,7 @@ mod tests {
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarFloorAdjuster"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarGlobalCollider"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMMDLayerControl"), "unsupported");
-		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "unsupported");
+		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeAnimator"), "approximate");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarMergeBlendTree"), "unsupported");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPBBlocker"), "metadata");
 		assert_eq!(modular_avatar_component_support_kind("ModularAvatarPlatformFilter"), "unsupported");
@@ -8864,30 +9750,65 @@ mod tests {
 		};
 		assert_eq!(material.runtime_toon_model(), None);
 		assert!(material.liltoon_like_runtime().is_none());
-		assert!(material.mtoon_like_runtime().is_none());
 
 		material.shading = UnaShadingModel::LilToonLike;
-		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::LilToonLike));
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::UNToon));
 		assert!(material.liltoon_like_runtime().is_some());
 		assert!(material.liltoon_like_source_profile().is_some());
-		assert!(material.mtoon_like_runtime().is_none());
 
 		material.shading = UnaShadingModel::MToonLike;
-		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::MToonLike));
-		assert!(material.liltoon_like_runtime().is_none());
-		assert!(material.mtoon_like_runtime().is_some());
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::UNToon));
+		assert!(material.liltoon_like_runtime().is_some());
 		assert!(material.mtoon_source_profile().is_some());
+
+		material.liltoon_like = None;
+		assert_eq!(material.runtime_toon_model(), None);
+		assert!(material.liltoon_like_runtime().is_none());
+		assert!(
+			material.mtoon_source_profile().is_some(),
+			"MToon provenance may remain, but runtime UNToon requires importer-normalized semantic material"
+		);
 	}
 
 	#[test]
-	fn liltoon_source_profile_helpers_capture_special_runtime_semantics() {
+	fn mtoon_compat_loader_maps_source_texture_slots_to_untoon_profile() {
+		let mtoon = UnaMtoonMaterial {
+			shade_multiply_texture_index: Some(10),
+			shading_shift_texture_index: Some(11),
+			matcap_texture_index: Some(12),
+			rim_multiply_texture_index: Some(13),
+			reflection_cube_texture_index: Some(14),
+			outline_width_multiply_texture_index: Some(15),
+			uv_animation_mask_texture_index: Some(16),
+			uv_animation_scroll_x_speed_factor: 0.25,
+			uv_animation_scroll_y_speed_factor: -0.5,
+			uv_animation_rotation_speed_factor: 0.75,
+			..Default::default()
+		};
+
+		let compat = UnaLilToonLikeMaterial::from_mtoon_compat(&mtoon, [0.1, 0.2, 0.3], Some(17));
+
+		assert_eq!(compat.shadow.color_texture_index, Some(10));
+		assert_eq!(compat.shadow.strength_mask_texture_index, Some(11));
+		assert_eq!(compat.matcap.texture_index, Some(12));
+		assert_eq!(compat.rim.texture_index, Some(13));
+		assert_eq!(compat.reflection.cube_texture_index, Some(14));
+		assert_eq!(compat.outline.width_mask_texture_index, Some(15));
+		assert_eq!(compat.main_color.uv_animation_mask_texture_index, Some(16));
+		assert_eq!(compat.main_color.main_uv_scroll_rotate_factor, [0.25, -0.5, 0.75, 0.0]);
+		assert_eq!(compat.emission.texture_index, Some(17));
+	}
+
+	#[test]
+	fn liltoon_runtime_variant_helpers_capture_special_runtime_semantics() {
 		let mut material = UnaLilToonLikeMaterial::default();
 		assert!(!material.is_gem_profile());
 		assert!(!material.is_refraction_profile());
 		assert!(!material.needs_screen_refraction());
 		assert!(!material.uses_reflection_source_cube());
 
-		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonGem;
+		material.source_profile = UnaLilToonLikeSourceProfile::Liltoon;
+		material.runtime_variant = UnaLilToonLikeRuntimeVariant::Gem;
 		assert!(material.is_gem_profile());
 		assert!(!material.is_refraction_profile());
 		assert!(material.uses_reflection_source_cube());
@@ -8896,7 +9817,7 @@ mod tests {
 		material.reflection.gem_refraction_strength_factor = 0.0;
 		assert!(material.needs_screen_refraction());
 
-		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		material.runtime_variant = UnaLilToonLikeRuntimeVariant::Refraction;
 		assert!(!material.is_gem_profile());
 		assert!(material.is_refraction_profile());
 		assert!(!material.needs_screen_refraction());
@@ -8905,7 +9826,7 @@ mod tests {
 	}
 
 	#[test]
-	fn runtime_dynamics_reports_spring_bone_groups() {
+	fn runtime_dynamics_reports_source_group_counts() {
 		let document = UnaDocument {
 			spring_bones: Some(UnaSpringBoneSettings {
 				groups: vec![
@@ -8961,6 +9882,29 @@ mod tests {
 		assert_eq!(dynamics.dynamic_bone_node_indices().collect::<Vec<_>>(), vec![0, 1, 2, 3]);
 		assert_eq!(dynamics.reset_node_indices(), vec![0, 1, 2, 3, 6, 7]);
 		assert_eq!(dynamics.colliders().map(|collider| collider.node).collect::<Vec<_>>(), vec![4, 5]);
+	}
+
+	#[test]
+	fn legacy_vrm_spring_bone_stiffness_deserializes_to_runtime_pull() {
+		let document: UnaDocument = serde_json::from_str(
+			r#"{
+				"spring_bones": {
+					"groups": [{
+						"source_kind": "vrm_spring_bone",
+						"enabled": true,
+						"stiffness": 0.75,
+						"stiffness_samples": [0.25, 0.5, 0.75],
+						"bone_node_indices": [0, 1]
+					}]
+				}
+			}"#,
+		)
+		.expect("legacy document");
+		let group = document.runtime_model().dynamics().dynamics_group(0).expect("dynamics group");
+		assert_eq!(group.parameters.stiffness, 0.0);
+		assert!((group.parameters.pull - 0.75).abs() < 1e-6);
+		assert!(group.chain.stiffness_samples.is_empty());
+		assert_eq!(group.chain.pull_samples, &[0.25, 0.5, 0.75]);
 	}
 
 	#[test]
@@ -9069,7 +10013,7 @@ mod tests {
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 1],),
-			0
+			1
 		);
 		assert_eq!(
 			una_dynamics_translation_writeback_target_count(&unskinned_scene, UnaDynamicsWritebackMode::RotationOnly, &[0, 1, 2]),
@@ -9089,6 +10033,10 @@ mod tests {
 				UnaDynamicsWritebackMode::RotationTranslation,
 				&[0, 1, 2],
 			),
+			0
+		);
+		assert_eq!(
+			una_dynamics_translation_writeback_target_count(&skinned_target_scene, UnaDynamicsWritebackMode::RotationTranslation, &[0, 2],),
 			0
 		);
 	}

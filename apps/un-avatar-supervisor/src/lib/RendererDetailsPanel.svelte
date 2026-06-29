@@ -45,6 +45,8 @@
 	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
+	export let onAddDynamicsMatchOverride: RendererPaneActions["onAddDynamicsMatchOverride"];
+	export let onAddDynamicsGroupOverride: RendererPaneActions["onAddDynamicsGroupOverride"];
 	export let onOpenProfile: () => void;
 	export let onRevealProfilesDir: () => void | Promise<void>;
 	export let onSelectRendererPaneTab: (tab: RendererPaneTab) => void;
@@ -89,6 +91,8 @@
 			{onActivateRuntimeAction}
 			{onActivateWardrobeMenuCandidate}
 			{onSetDynamicsEnabled}
+			{onAddDynamicsMatchOverride}
+			{onAddDynamicsGroupOverride}
 		/>
 	{:else}
 		<RendererReadyPanel

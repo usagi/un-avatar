@@ -32,6 +32,8 @@
 	export let onActivateRuntimeAction: RendererPaneActions["onActivateRuntimeAction"];
 	export let onActivateWardrobeMenuCandidate: RendererPaneActions["onActivateWardrobeMenuCandidate"];
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
+	export let onAddDynamicsMatchOverride: RendererPaneActions["onAddDynamicsMatchOverride"];
+	export let onAddDynamicsGroupOverride: RendererPaneActions["onAddDynamicsGroupOverride"];
 </script>
 
 {#if rendererPaneTab === "overview"}
@@ -83,6 +85,13 @@
 {:else if rendererPaneTab === "diagnostics"}
 	{#await import("./RendererDiagnosticsPane.svelte") then module}
 		{@const RendererDiagnosticsPane = module.default}
-		<RendererDiagnosticsPane {renderer} {runtimeStatus} {busy} {onSetDynamicsEnabled} />
+		<RendererDiagnosticsPane
+			{renderer}
+			{runtimeStatus}
+			{busy}
+			{onSetDynamicsEnabled}
+			{onAddDynamicsMatchOverride}
+			{onAddDynamicsGroupOverride}
+		/>
 	{/await}
 {/if}

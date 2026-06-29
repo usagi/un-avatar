@@ -315,27 +315,36 @@ namespace UNAvatar.UnityExporter
                 source = "unity_capture_diff"
             };
 
+            var currentVisibility = SnapshotVisibilityState.Build(current.nodes);
             var baseNodes = ToFirstDictionary(baseline.nodes, n => n.nodeId);
             foreach (var node in current.nodes)
             {
                 if (baseNodes.TryGetValue(node.nodeId, out var baseNode) && baseNode.visible != node.visible)
                 {
+                    if (!currentVisibility.IsParentEffective(node.path))
+                    {
+                        continue;
+                    }
                     set.operations.Add(new WardrobeOperationDraft
                     {
                         type = "subtreeEnabled",
                         target = Target(node.nodeId, node.path),
                         boolValue = node.visible
                     });
-                    AddAssetGroupIfVisible(set, node.path, node.visible);
+                    AddAssetGroupIfVisible(set, node.path, node.visible && currentVisibility.IsNodeEffective(node.path));
                 }
             }
-            AddDisabledDescendantsUnderEnabledSubtrees(set, current.nodes);
+            AddDisabledDescendantsUnderEnabledSubtrees(set, current);
 
             var baseRenderers = ToFirstDictionary(baseline.renderers, RendererKey);
             foreach (var renderer in current.renderers)
             {
                 if (baseRenderers.TryGetValue(RendererKey(renderer), out var baseRenderer) && baseRenderer.enabled != renderer.enabled)
                 {
+                    if (!currentVisibility.IsNodeEffective(renderer.path))
+                    {
+                        continue;
+                    }
                     set.operations.Add(new WardrobeOperationDraft
                     {
                         type = "rendererEnabled",
@@ -364,7 +373,76 @@ namespace UNAvatar.UnityExporter
             return set;
         }
 
-        private static void AddDisabledDescendantsUnderEnabledSubtrees(WardrobeSetDraft set, IEnumerable<NodeStateDraft> currentNodes)
+        private sealed class SnapshotVisibilityState
+        {
+            private readonly Dictionary<string, bool> effectiveByPath;
+
+            private SnapshotVisibilityState(Dictionary<string, bool> effectiveByPath)
+            {
+                this.effectiveByPath = effectiveByPath;
+            }
+
+            public static SnapshotVisibilityState Build(IEnumerable<NodeStateDraft> nodes)
+            {
+                var nodeList = new List<NodeStateDraft>(nodes);
+                nodeList.Sort((left, right) => PathDepth(left.path).CompareTo(PathDepth(right.path)));
+                var effective = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (var node in nodeList)
+                {
+                    var path = NormalizePath(node.path);
+                    var parentEffective = ParentEffective(effective, path);
+                    effective[path] = parentEffective && node.visible;
+                }
+                return new SnapshotVisibilityState(effective);
+            }
+
+            public bool IsNodeEffective(string path)
+            {
+                path = NormalizePath(path);
+                return effectiveByPath.TryGetValue(path, out var effective) ? effective : true;
+            }
+
+            public bool IsParentEffective(string path)
+            {
+                return ParentEffective(effectiveByPath, NormalizePath(path));
+            }
+
+            private static bool ParentEffective(Dictionary<string, bool> effective, string path)
+            {
+                var parent = ParentPath(path);
+                return string.IsNullOrEmpty(parent) || !effective.TryGetValue(parent, out var parentEffective) || parentEffective;
+            }
+
+            private static string ParentPath(string path)
+            {
+                if (string.IsNullOrEmpty(path))
+                {
+                    return "";
+                }
+                var index = path.LastIndexOf('/');
+                return index <= 0 ? "" : path.Substring(0, index);
+            }
+
+            private static int PathDepth(string path)
+            {
+                path = NormalizePath(path);
+                if (string.IsNullOrEmpty(path))
+                {
+                    return 0;
+                }
+                var depth = 0;
+                foreach (var c in path)
+                {
+                    if (c == '/')
+                    {
+                        depth++;
+                    }
+                }
+                return depth + 1;
+            }
+        }
+
+        private static void AddDisabledDescendantsUnderEnabledSubtrees(WardrobeSetDraft set, WardrobeSnapshotDraft current)
         {
             var enabledSubtreePaths = new List<string>();
             foreach (var operation in set.operations)
@@ -384,6 +462,7 @@ namespace UNAvatar.UnityExporter
                 return;
             }
 
+            var renderRelevantPaths = RenderRelevantNodePaths(current);
             var existingVisibilityTargets = new HashSet<string>(StringComparer.Ordinal);
             foreach (var operation in set.operations)
             {
@@ -392,13 +471,17 @@ namespace UNAvatar.UnityExporter
                     existingVisibilityTargets.Add(operation.target.nodeId ?? "");
                 }
             }
-            foreach (var node in currentNodes)
+            foreach (var node in current.nodes)
             {
                 if (node.visible || existingVisibilityTargets.Contains(node.nodeId))
                 {
                     continue;
                 }
                 var nodePath = NormalizePath(node.path);
+                if (!renderRelevantPaths.Contains(nodePath))
+                {
+                    continue;
+                }
                 var isDisabledDescendant = false;
                 foreach (var path in enabledSubtreePaths)
                 {
@@ -420,6 +503,26 @@ namespace UNAvatar.UnityExporter
                 });
                 existingVisibilityTargets.Add(node.nodeId);
             }
+        }
+
+        private static HashSet<string> RenderRelevantNodePaths(WardrobeSnapshotDraft snapshot)
+        {
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            if (snapshot == null)
+            {
+                return paths;
+            }
+            foreach (var renderer in snapshot.renderers)
+            {
+                var path = NormalizePath(renderer.path);
+                while (!string.IsNullOrEmpty(path))
+                {
+                    paths.Add(path);
+                    var index = path.LastIndexOf('/');
+                    path = index <= 0 ? "" : path.Substring(0, index);
+                }
+            }
+            return paths;
         }
 
         public static List<WardrobeOperationDraft> BaseOperations(WardrobeSnapshotDraft snapshot)
@@ -649,7 +752,7 @@ namespace UNAvatar.UnityExporter
             var compressed = new List<WardrobeOperationDraft>();
             foreach (var operation in sorted)
             {
-                if (operation.type != "subtreeEnabled" && operation.type != "subtreeVisibility")
+                if (!IsNodeVisibilityOperation(operation))
                 {
                     compressed.Add(operation);
                     continue;
@@ -659,9 +762,17 @@ namespace UNAvatar.UnityExporter
                 var isRedundant = false;
                 foreach (var existing in compressed)
                 {
-                    if ((existing.type == "subtreeEnabled" || existing.type == "subtreeVisibility") &&
-                        existing.boolValue == operation.boolValue &&
-                        IsAncestorOrSelf(existing.target != null ? existing.target.path ?? "" : "", path))
+                    if (!IsNodeVisibilityOperation(existing) || existing.boolValue != operation.boolValue)
+                    {
+                        continue;
+                    }
+                    var existingPath = existing.target != null ? existing.target.path ?? "" : "";
+                    if (operation.boolValue && IsSubtreeVisibilityOperation(existing) && IsAncestorOrSelf(existingPath, path))
+                    {
+                        isRedundant = true;
+                        break;
+                    }
+                    if (!operation.boolValue && IsAncestorOrSelf(existingPath, path))
                     {
                         isRedundant = true;
                         break;
@@ -679,7 +790,7 @@ namespace UNAvatar.UnityExporter
 
         private static int OperationPathDepth(WardrobeOperationDraft operation)
         {
-            if ((operation.type != "subtreeEnabled" && operation.type != "subtreeVisibility") ||
+            if (!IsNodeVisibilityOperation(operation) ||
                 operation.target == null ||
                 string.IsNullOrWhiteSpace(operation.target.path))
             {
@@ -694,6 +805,21 @@ namespace UNAvatar.UnityExporter
                 }
             }
             return depth;
+        }
+
+        private static bool IsNodeVisibilityOperation(WardrobeOperationDraft operation)
+        {
+            return operation != null &&
+                (operation.type == "subtreeEnabled" ||
+                    operation.type == "subtreeVisibility" ||
+                    operation.type == "nodeEnabled" ||
+                    operation.type == "nodeVisibility");
+        }
+
+        private static bool IsSubtreeVisibilityOperation(WardrobeOperationDraft operation)
+        {
+            return operation != null &&
+                (operation.type == "subtreeEnabled" || operation.type == "subtreeVisibility");
         }
 
         private static bool IsAncestorOrSelf(string ancestorPath, string path)

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 glam = { version = "0.32", features = ["bytemuck"] }
+regex = { workspace = true }
 serde = { workspace = true }
 un-avatar-core = { path = "../un-avatar-core" }
 un-avatar-types = { path = "../un-avatar-types" }

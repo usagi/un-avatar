@@ -1,18 +1,22 @@
 <script lang="ts">
 	import { _ } from "svelte-i18n";
-	import { Power } from "lucide-svelte";
-	import type { RendererPaneActions } from "./rendererPaneActions";
+	import { Power, SlidersHorizontal } from "lucide-svelte";
+	import type { DynamicsGroupOverrideSeed, DynamicsMatchOverrideSeed, RendererPaneActions } from "./rendererPaneActions";
 	import type { RendererDiagnosticsData, RendererRuntimeDiagnosticsData } from "./rendererTypes";
 
 	export let renderer: RendererDiagnosticsData;
 	export let runtimeStatus: RendererRuntimeDiagnosticsData | null;
 	export let busy = false;
 	export let onSetDynamicsEnabled: RendererPaneActions["onSetDynamicsEnabled"];
+	export let onAddDynamicsMatchOverride: RendererPaneActions["onAddDynamicsMatchOverride"];
+	export let onAddDynamicsGroupOverride: RendererPaneActions["onAddDynamicsGroupOverride"];
 
 	const sampleLimit = 4;
 
 	$: rendererRunning = renderer.pid != null;
 	$: dynamicsGroups = runtimeStatus?.dynamics_groups ?? [];
+	$: dynamicsResponseCategories = runtimeStatus?.dynamics_response_categories ?? [];
+	$: dynamicsResponseGroups = runtimeStatus?.dynamics_response_groups ?? [];
 	$: canSetDynamicsEnabled = runtimeStatus?.control_capabilities?.includes("set_dynamics_enabled") ?? false;
 
 	function sampledLines<T>(items: T[], label: (item: T) => string): string {
@@ -33,13 +37,85 @@
 		const override = group.runtime_enabled_override == null ? "" : `, override=${group.runtime_enabled_override}`;
 		const parameter = group.interaction_parameter ? `, param=${group.interaction_parameter}` : "";
 		const writeback = group.writeback_mode ? `, writeback=${group.writeback_mode}` : "";
+		const response = group.source_id ? responseGroupForSource(group.source_id) : undefined;
+		const responseSummary = response
+			? `, category=${response.category}, rest=${response.average_rest_response?.toFixed(3) ?? response.average_pull.toFixed(3)}, shape=${response.average_shape_preservation.toFixed(3)}, follow=${response.average_parent_motion_follow.toFixed(3)}`
+			: "";
+		const responseOverride =
+			response?.matched_overrides?.length || response?.group_override_applied
+				? `, tuned=${[...(response.matched_overrides ?? []), ...(response.group_override_applied ? ["exact"] : [])].join("|")}`
+				: "";
 		const translationCandidates =
 			group.translation_writeback_candidate_count == null
 				? ""
 				: `, translationCandidates=${group.translation_writeback_candidate_count}`;
 		const translationTargets =
 			group.translation_writeback_target_count == null ? "" : `, translationTargets=${group.translation_writeback_target_count}`;
-		return `${path} (${group.source_kind}, ${state}, source=${sourceState}${override}, bones=${group.bone_count}${writeback}${translationCandidates}${translationTargets}${parameter})`;
+		const visibility =
+			group.visual_target == null
+				? ""
+				: `, visual=${group.visual_target}, skinnedJoints=${group.skinned_joint_count ?? 0}, meshSubtrees=${group.mesh_subtree_node_count ?? 0}`;
+		return `${path} (${group.source_kind}, ${state}, source=${sourceState}${override}, bones=${group.bone_count}${visibility}${responseSummary}${responseOverride}${writeback}${translationCandidates}${translationTargets}${parameter})`;
+	}
+
+	function responseCategoryLabel(category: RendererRuntimeDiagnosticsData["dynamics_response_categories"][number]): string {
+		const fmt = (value: number) => value.toFixed(3);
+		const fmtRange = (average: number, min?: number, max?: number) =>
+			min == null || max == null ? fmt(average) : `${fmt(average)}[${fmt(min)}..${fmt(max)}]`;
+		const compliance =
+			category.xpbd_group_count > 0
+				? ` xpbd=${category.xpbd_group_count} compliance=${category.average_xpbd_compliance.toFixed(5)}`
+				: "";
+		const visibility =
+			category.visual_target_group_count == null && category.visible_skinned_joint_count == null
+				? ""
+				: ` visualGroups=${category.visual_target_group_count ?? 0} nonvisualGroups=${category.nonvisual_group_count ?? 0} visibleJoints=${category.visible_skinned_joint_count ?? 0} meshSubtrees=${category.visible_mesh_subtree_node_count ?? 0}`;
+		const matched = category.matched_override_group_count ? ` matched=${category.matched_override_group_count}` : "";
+		const exact = category.group_override_group_count ? ` exact=${category.group_override_group_count}` : "";
+		const rest = category.average_rest_response ?? category.average_pull;
+		const bounce = category.average_bounce_response ?? category.average_spring;
+		const shape = category.average_shape_preservation;
+		const orient = category.average_orientation_follow ?? shape * category.average_parent_motion_follow;
+		const damping = category.average_damping_half_life_ms == null ? "" : ` damp=${fmt(category.average_damping_half_life_ms)}`;
+		const stretch =
+			category.average_max_stretch_response == null || category.average_max_stretch_response === 0
+				? ""
+				: ` stretch=${fmtRange(category.average_max_stretch_response, category.min_max_stretch_response, category.max_max_stretch_response)}`;
+		const squish =
+			category.average_max_squish_response == null || category.average_max_squish_response === 0
+				? ""
+				: ` squish=${fmtRange(category.average_max_squish_response, category.min_max_squish_response, category.max_max_squish_response)}`;
+		const stretchMotion =
+			category.average_stretch_motion_response == null || (stretch === "" && squish === "")
+				? ""
+				: ` stretchMotion=${fmtRange(category.average_stretch_motion_response, category.min_stretch_motion_response, category.max_stretch_motion_response)}`;
+		return `${category.category}: groups=${category.group_count} joints=${category.joint_count}${visibility}${matched}${exact}${compliance} rest=${fmtRange(rest, category.min_rest_response, category.max_rest_response)} shape=${fmtRange(shape, category.min_shape_preservation, category.max_shape_preservation)} bounce=${fmtRange(bounce, category.min_bounce_response, category.max_bounce_response)}${stretch}${squish}${stretchMotion} drag=${fmt(category.average_drag_force)}${damping} follow=${fmtRange(category.average_parent_motion_follow, category.min_parent_motion_follow, category.max_parent_motion_follow)} orient=${fmt(orient)}`;
+	}
+
+	function responseGroupLabel(group: RendererRuntimeDiagnosticsData["dynamics_response_groups"][number]): string {
+		const fmt = (value: number) => value.toFixed(3);
+		const fmtRange = (average: number, min?: number, max?: number) =>
+			min == null || max == null ? fmt(average) : `${fmt(average)}[${fmt(min)}..${fmt(max)}]`;
+		const compliance = group.solver === "xpbd" ? ` compliance=${group.xpbd_compliance.toFixed(5)}` : "";
+		const rest = group.average_rest_response ?? group.average_pull;
+		const bounce = group.average_bounce_response ?? group.average_spring;
+		const damping = group.average_damping_half_life_ms == null ? "" : ` damp=${fmt(group.average_damping_half_life_ms)}`;
+		const overrides = group.matched_overrides?.length ? ` overrides=${group.matched_overrides.join(",")}` : "";
+		const exact = group.group_override_applied ? " exact=true" : "";
+		const invalidRegexes = group.invalid_match_regexes?.length ? ` invalidRegex=${group.invalid_match_regexes.join(" | ")}` : "";
+		const stretch =
+			group.average_max_stretch_response == null || group.average_max_stretch_response === 0
+				? ""
+				: ` stretch=${fmtRange(group.average_max_stretch_response, group.min_max_stretch_response, group.max_max_stretch_response)}`;
+		const squish =
+			group.average_max_squish_response == null || group.average_max_squish_response === 0
+				? ""
+				: ` squish=${fmtRange(group.average_max_squish_response, group.min_max_squish_response, group.max_max_squish_response)}`;
+		const stretchMotion =
+			group.average_stretch_motion_response == null || (stretch === "" && squish === "")
+				? ""
+				: ` stretchMotion=${fmtRange(group.average_stretch_motion_response, group.min_stretch_motion_response, group.max_stretch_motion_response)}`;
+		return `${group.source_id}: ${group.category} joints=${group.joint_count} solver=${group.solver}${compliance} rest=${fmtRange(rest, group.min_rest_response, group.max_rest_response)} shape=${fmtRange(group.average_shape_preservation, group.min_shape_preservation, group.max_shape_preservation)} bounce=${fmtRange(bounce, group.min_bounce_response, group.max_bounce_response)}${stretch}${squish}${stretchMotion} drag=${fmt(group.average_drag_force)}${damping} follow=${fmtRange(group.average_parent_motion_follow, group.min_parent_motion_follow, group.max_parent_motion_follow)} orient=${fmt(group.average_orientation_follow)}${overrides}${exact}${invalidRegexes}`;
 	}
 
 	function interactionHookLabel(hook: RendererRuntimeDiagnosticsData["dynamics_interaction_hooks"][number]): string {
@@ -51,8 +127,30 @@
 	}
 
 	function colliderLabel(collider: RendererRuntimeDiagnosticsData["dynamics_colliders"][number]): string {
-		const path = collider.node_path ?? `#${collider.node}`;
-		return `${path} (${collider.source_kind}, ${collider.shape}, r=${collider.radius})`;
+		const path = collider.collider_path || collider.node_path || `#${collider.node}`;
+		const node = collider.node_path && collider.node_path !== path ? `, node=${collider.node_path}` : "";
+		const source = collider.source_id ? `, source=${collider.source_id}` : "";
+		const inside = collider.inside_bounds ? ", inside" : "";
+		return `${path} (${collider.source_kind}, ${collider.shape}, r=${collider.radius}${inside}${source}${node})`;
+	}
+
+	function projectionLabel(status: RendererRuntimeDiagnosticsData): string {
+		const top =
+			status.dynamics_collision_projection_top_collider_path && status.dynamics_collision_projection_top_collider_count != null
+				? `top=${status.dynamics_collision_projection_top_collider_path}:${status.dynamics_collision_projection_top_collider_count}`
+				: "top=-";
+		const sources = status.dynamics_collision_projection_source_ids.length
+			? `sources=${status.dynamics_collision_projection_source_ids.join(",")}`
+			: "sources=-";
+		const paths = status.dynamics_collision_projection_collider_paths.length
+			? `paths=${status.dynamics_collision_projection_collider_paths.join(",")}`
+			: "paths=-";
+		const counts = status.dynamics_collision_projection_collider_path_counts.length
+			? `counts=${status.dynamics_collision_projection_collider_path_counts
+					.map((entry) => `${entry.key}:${entry.count}`)
+					.join(",")}`
+			: "counts=-";
+		return `projections=${status.dynamics_collision_projection_count} ${top} ${sources} ${paths} ${counts}`;
 	}
 
 	function contactDeclarationLabel(declaration: RendererRuntimeDiagnosticsData["contact_parameter_declarations"][number]): string {
@@ -198,6 +296,117 @@
 		if (!canSetDynamicsEnabled || !group.source_id) return;
 		void onSetDynamicsEnabled(renderer.id, group.source_id, !group.effective_enabled);
 	}
+
+	function normalizedGroupRestResponse(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): number | undefined {
+		const authoredRest = group.pull;
+		if (!Number.isFinite(authoredRest)) return undefined;
+		return Math.max(0, Math.min(1, authoredRest <= 1 ? authoredRest : authoredRest / 60));
+	}
+
+	function responseGroupForSource(sourceId: string): RendererRuntimeDiagnosticsData["dynamics_response_groups"][number] | undefined {
+		return dynamicsResponseGroups.find((response) => response.source_id === sourceId);
+	}
+
+	function inferredBounceScale(response: RendererRuntimeDiagnosticsData["dynamics_response_groups"][number]): number | undefined {
+		const sourceBounce = response.average_spring;
+		const finalBounce = response.average_bounce_response ?? sourceBounce;
+		if (!Number.isFinite(sourceBounce) || sourceBounce <= Number.EPSILON || !Number.isFinite(finalBounce)) return undefined;
+		return Math.max(0, Math.min(4, finalBounce / sourceBounce));
+	}
+
+	function dynamicsGroupOverrideSeed(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): DynamicsGroupOverrideSeed {
+		const response = group.source_id ? responseGroupForSource(group.source_id) : undefined;
+		if (response) {
+			return {
+				solver: response.solver,
+				damping_half_life_ms: response.average_damping_half_life_ms,
+				rest_response: response.average_rest_response ?? response.average_pull,
+				shape_preservation: response.average_shape_preservation,
+				bounce_scale: inferredBounceScale(response),
+				stretch_range_scale:
+					response.average_max_stretch_response == null && response.average_max_squish_response == null
+						? undefined
+						: Math.max(response.average_max_stretch_response ?? 0, response.average_max_squish_response ?? 0),
+				stretch_motion: response.average_stretch_motion_response,
+				motion_coupling: response.average_parent_motion_follow,
+				xpbd_compliance: response.solver === "xpbd" ? response.xpbd_compliance : undefined,
+			};
+		}
+		return {
+			rest_response: normalizedGroupRestResponse(group),
+		};
+	}
+
+	function addDynamicsGroupOverride(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): void {
+		if (group.visual_target === false) return;
+		if (!group.source_id) return;
+		void onAddDynamicsGroupOverride(renderer.id, group.source_id, dynamicsGroupOverrideSeed(group));
+	}
+
+	function normalizedMatchCandidate(value: string | undefined): string {
+		return (value ?? "")
+			.trim()
+			.toLowerCase()
+			.replace(/[\s-]+/g, "_");
+	}
+
+	function sourceLeaf(value: string | undefined): string {
+		return (value ?? "").split(/[/:]/).filter(Boolean).pop() ?? "";
+	}
+
+	function usefulMatchCandidate(value: string): boolean {
+		if (value.length < 3) return false;
+		if (/^bone(?:[._]\d+)?$/.test(value)) return false;
+		return !["root", "armature", "hips", "spine", "chest", "neck", "head"].includes(value);
+	}
+
+	function dynamicsMatchOverrideSeed(group: RendererRuntimeDiagnosticsData["dynamics_groups"][number]): DynamicsMatchOverrideSeed | null {
+		if (group.visual_target === false) return null;
+		const candidates = [
+			normalizedMatchCandidate(group.comment),
+			normalizedMatchCandidate(sourceLeaf(group.source_id)),
+			normalizedMatchCandidate(sourceLeaf(group.root_path)),
+		].filter((value, index, values) => usefulMatchCandidate(value) && values.indexOf(value) === index);
+		const base = dynamicsGroupOverrideSeed(group);
+		if (candidates.length === 0) {
+			if (!group.source_id) return null;
+			return {
+				...base,
+				name: sourceLeaf(group.source_id) || group.source_id,
+				source_id: group.source_id,
+				source_id_contains: [],
+			};
+		}
+		return {
+			...base,
+			name: candidates[0],
+			source_id_contains: [candidates[0]],
+		};
+	}
+
+	function addDynamicsMatchOverride(seed: DynamicsMatchOverrideSeed | null): void {
+		if (!seed) return;
+		void onAddDynamicsMatchOverride(renderer.id, seed);
+	}
+
+	function dynamicsMatchOverrideLabel(seed: DynamicsMatchOverrideSeed | null): string {
+		if (seed && seed.source_id && seed.source_id_contains.length === 0) {
+			return $_("renderers.details.dynamics_add_exact_match_override");
+		}
+		return $_("renderers.details.dynamics_add_match_override");
+	}
+
+	function dynamicsMatchOverrideTitle(
+		group: RendererRuntimeDiagnosticsData["dynamics_groups"][number],
+		seed: DynamicsMatchOverrideSeed | null
+	): string {
+		if (seed && seed.source_id && seed.source_id_contains.length === 0) {
+			return $_("renderers.details.dynamics_add_exact_match_override_hint", {
+				values: { source: seed.source_id },
+			});
+		}
+		return group.comment || group.source_id || group.root_path || `#${group.index}`;
+	}
 </script>
 
 <div class="renderer-pane-scroll">
@@ -225,6 +434,17 @@
 				<dt>{$_("renderers.details.diag_wardrobe_residency")}</dt>
 				<dd class="stderr-block">{wardrobeResidencyLabel(runtimeStatus.wardrobe_asset_upload)}</dd>
 			{/if}
+			<dt>{$_("renderers.details.diag_scene_constraints")}</dt>
+			<dd>
+				{$_("renderers.details.diag_scene_constraints_value", {
+					values: {
+						nodes: runtimeStatus.scene_node_constraint_count,
+						parents: runtimeStatus.scene_parent_constraint_count,
+						sources: runtimeStatus.scene_parent_constraint_source_count,
+						multiSource: runtimeStatus.scene_parent_constraint_multi_source_count,
+					},
+				})}
+			</dd>
 			<dt>{$_("renderers.details.diag_dynamics_summary")}</dt>
 			<dd>
 				{$_("renderers.details.diag_dynamics_summary_value", {
@@ -234,6 +454,7 @@
 						sourceEnabled: runtimeStatus.dynamics_source_enabled_group_count,
 						overrides: runtimeStatus.dynamics_enabled_override_count,
 						colliders: runtimeStatus.dynamics_collider_count,
+						surfaceConstraints: runtimeStatus.dynamics_surface_constraint_count,
 						contacts: runtimeStatus.dynamics_contact_count,
 						probes: runtimeStatus.dynamics_contact_probe_count,
 						wouldEmit: runtimeStatus.dynamics_contact_probe_would_emit_count,
@@ -251,10 +472,23 @@
 				<dt>{$_("renderers.details.diag_dynamics_warnings")}</dt>
 				<dd class="stderr-block">{sampledStrings(runtimeStatus.dynamics_warnings)}</dd>
 			{/if}
+			{#if runtimeStatus.dynamics_collision_projection_count > 0}
+				<dt>{$_("renderers.details.diag_dynamics_projections")}</dt>
+				<dd class="stderr-block">{projectionLabel(runtimeStatus)}</dd>
+			{/if}
+			{#if dynamicsResponseCategories.length}
+				<dt>{$_("renderers.details.diag_dynamics_response_categories")}</dt>
+				<dd class="stderr-block">{sampledLines(dynamicsResponseCategories, responseCategoryLabel)}</dd>
+			{/if}
+			{#if dynamicsResponseGroups.length}
+				<dt>{$_("renderers.details.diag_dynamics_response_groups")}</dt>
+				<dd class="stderr-block">{sampledLines(dynamicsResponseGroups, responseGroupLabel)}</dd>
+			{/if}
 			{#if runtimeStatus.dynamics_groups.length}
 				<dt>{$_("renderers.details.diag_dynamics_groups")}</dt>
 				<dd class="diagnostics-action-list">
 					{#each dynamicsGroups as group}
+						{@const matchOverrideSeed = dynamicsMatchOverrideSeed(group)}
 						<div class="diagnostics-action-row">
 							<code>{groupLabel(group)}</code>
 							<button
@@ -270,6 +504,24 @@
 										? $_("renderers.details.dynamics_disable")
 										: $_("renderers.details.dynamics_enable")}
 								</span>
+							</button>
+							<button
+								type="button"
+								disabled={busy || matchOverrideSeed == null}
+								title={dynamicsMatchOverrideTitle(group, matchOverrideSeed)}
+								onclick={() => addDynamicsMatchOverride(matchOverrideSeed)}
+							>
+								<SlidersHorizontal size={13} />
+								<span>{dynamicsMatchOverrideLabel(matchOverrideSeed)}</span>
+							</button>
+							<button
+								type="button"
+								disabled={busy || !group.source_id || group.visual_target === false}
+								title={group.source_id ?? group.root_path ?? `#${group.index}`}
+								onclick={() => addDynamicsGroupOverride(group)}
+							>
+								<SlidersHorizontal size={13} />
+								<span>{$_("renderers.details.dynamics_add_override")}</span>
 							</button>
 						</div>
 					{/each}
@@ -366,7 +618,9 @@
 			{/if}
 			{#if runtimeStatus.runtime_action_restore_apply_plan.length}
 				<dt>{$_("renderers.details.diag_runtime_action_restore_apply")}</dt>
-				<dd class="stderr-block">{sampledLines(runtimeStatus.runtime_action_restore_apply_plan, runtimeActionRestoreApplyLabel)}</dd>
+				<dd class="stderr-block">
+					{sampledLines(runtimeStatus.runtime_action_restore_apply_plan, runtimeActionRestoreApplyLabel)}
+				</dd>
 			{/if}
 		{/if}
 	</dl>

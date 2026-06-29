@@ -171,21 +171,102 @@ impl TextureUploadPayload {
 	}
 }
 
-pub(crate) fn source_texture_upload(image: &UnaImageRgba) -> Option<SourceTextureUpload> {
+pub(crate) fn source_texture_upload(
+	image: &UnaImageRgba,
+	source_metadata: Option<&UnaImageSourceMetadata>,
+	role: TextureRole,
+) -> Option<SourceTextureUpload> {
 	let width = image.width.max(1);
 	let height = image.height.max(1);
 	let pixels = image.pixels.as_slice();
 	match image.pixel_format {
-		UnaImagePixelFormat::R16 => rgba16_unorm_upload(pixels, width, height, 1),
-		UnaImagePixelFormat::R16G16 => rgba16_unorm_upload(pixels, width, height, 2),
-		UnaImagePixelFormat::R16G16B16 => rgba16_unorm_upload(pixels, width, height, 3),
-		UnaImagePixelFormat::R16G16B16A16 => rgba16_unorm_upload(pixels, width, height, 4),
+		UnaImagePixelFormat::R16 => rgba16_unorm_or_srgb_float_upload(pixels, width, height, 1, source_metadata, role),
+		UnaImagePixelFormat::R16G16 => rgba16_unorm_or_srgb_float_upload(pixels, width, height, 2, source_metadata, role),
+		UnaImagePixelFormat::R16G16B16 => rgba16_unorm_or_srgb_float_upload(pixels, width, height, 3, source_metadata, role),
+		UnaImagePixelFormat::R16G16B16A16 => rgba16_unorm_or_srgb_float_upload(pixels, width, height, 4, source_metadata, role),
 		UnaImagePixelFormat::R16G16B16Float => rgba16_float_upload_from_half(pixels, width, height, 3),
 		UnaImagePixelFormat::R16G16B16A16Float => rgba16_float_upload_from_half(pixels, width, height, 4),
 		UnaImagePixelFormat::R32G32B32Float => rgba16_float_upload(pixels, width, height, 3),
 		UnaImagePixelFormat::R32G32B32A32Float => rgba16_float_upload(pixels, width, height, 4),
 		UnaImagePixelFormat::R8 | UnaImagePixelFormat::R8G8 | UnaImagePixelFormat::R8G8B8 | UnaImagePixelFormat::R8G8B8A8 => None,
 	}
+}
+
+fn rgba16_unorm_or_srgb_float_upload(
+	pixels: &[u8],
+	width: u32,
+	height: u32,
+	channels: usize,
+	source_metadata: Option<&UnaImageSourceMetadata>,
+	role: TextureRole,
+) -> Option<SourceTextureUpload> {
+	if source_texture_upload_needs_srgb_to_linear(source_metadata, role) {
+		rgba16_unorm_srgb_to_float_upload(pixels, width, height, channels)
+	} else {
+		rgba16_unorm_upload(pixels, width, height, channels)
+	}
+}
+
+fn source_texture_upload_needs_srgb_to_linear(source: Option<&UnaImageSourceMetadata>, role: TextureRole) -> bool {
+	if matches!(role, TextureRole::Normal | TextureRole::Occlusion) {
+		return false;
+	}
+	if matches!(role, TextureRole::Data) && source.is_none() {
+		return false;
+	}
+	source.is_some_and(|source| match source.color_space.as_deref() {
+		Some(color_space) => color_space.eq_ignore_ascii_case("srgb"),
+		None => source.srgb.unwrap_or(false),
+	})
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+	if value <= 0.04045 {
+		value / 12.92
+	} else {
+		((value + 0.055) / 1.055).powf(2.4)
+	}
+}
+
+fn rgba16_unorm_srgb_to_float_upload(pixels: &[u8], width: u32, height: u32, channels: usize) -> Option<SourceTextureUpload> {
+	let stride = channels.checked_mul(2)?;
+	if stride == 0 || pixels.len() % stride != 0 {
+		return None;
+	}
+	let expected_pixels = width.checked_mul(height)? as usize;
+	if pixels.len() / stride != expected_pixels {
+		return None;
+	}
+	let mut data = Vec::with_capacity(expected_pixels * 8);
+	for pixel in pixels.chunks_exact(stride) {
+		let channel = |index: usize| -> f32 {
+			if index >= channels {
+				return if index == 3 { 1.0 } else { 0.0 };
+			}
+			let offset = index * 2;
+			u16::from_ne_bytes([pixel[offset], pixel[offset + 1]]) as f32 / u16::MAX as f32
+		};
+		let r = srgb_to_linear(channel(0));
+		let g = if channels == 1 { r } else { srgb_to_linear(channel(1)) };
+		let b = if channels == 1 {
+			r
+		} else if channels == 2 {
+			0.0
+		} else {
+			srgb_to_linear(channel(2))
+		};
+		let a = if channels >= 4 { channel(3) } else { 1.0 };
+		for value in [r, g, b, a] {
+			data.extend_from_slice(&half::f16::from_f32(value).to_bits().to_ne_bytes());
+		}
+	}
+	Some(SourceTextureUpload {
+		format: wgpu::TextureFormat::Rgba16Float,
+		width,
+		height,
+		bytes_per_row: width * 8,
+		data,
+	})
 }
 
 fn rgba16_unorm_upload(pixels: &[u8], width: u32, height: u32, channels: usize) -> Option<SourceTextureUpload> {
@@ -806,6 +887,7 @@ const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV64_PRIME: u64 = 0x100000001b3;
 const PARALLEL_TEXTURE_MIN_ROWS_PER_WORKER: u32 = 64;
 const TEXTURE_CACHE_READ_BUFFER_BYTES: usize = 1024 * 1024;
+const TEXTURE_CACHE_WRITE_BUFFER_BYTES: usize = 1024 * 1024;
 
 fn fnv1a64_update(mut hash: u64, bytes: &[u8]) -> u64 {
 	for byte in bytes {
@@ -856,6 +938,26 @@ pub(crate) fn texture_cache_key_from_source_metadata(
 	}
 	if let Some(uri) = &source.uri {
 		hash = fnv1a64_update(hash, uri.as_bytes());
+	}
+	for value in [
+		source.source_pixel_format.as_deref(),
+		source.channels.as_deref(),
+		source.color_space.as_deref(),
+		source.texture_type.as_deref(),
+		source.texture_shape.as_deref(),
+		source.source_layout.as_deref(),
+		source.unity_generate_cubemap.as_deref(),
+	] {
+		hash = fnv1a64_update(hash, &[0xff]);
+		if let Some(value) = value {
+			hash = fnv1a64_update(hash, value.as_bytes());
+		}
+	}
+	hash = fnv1a64_update(hash, &[source.srgb.map_or(2, u8::from)]);
+	if let Some(sampler) = source.sampler {
+		hash = fnv1a64_update(hash, &[0xfe]);
+		hash = fnv1a64_update(hash, &[sampler.mag_filter as u8, sampler.min_filter as u8]);
+		hash = fnv1a64_update(hash, &[sampler.wrap_s as u8, sampler.wrap_t as u8]);
 	}
 	hash
 }
@@ -913,6 +1015,12 @@ fn read_u64_le(reader: &mut impl Read) -> Option<u64> {
 	Some(u64::from_le_bytes(read_exact_array(reader)?))
 }
 
+fn read_exact_vec(reader: &mut impl Read, len: usize) -> Option<Vec<u8>> {
+	let mut data = Vec::with_capacity(len);
+	let read = reader.take(len as u64).read_to_end(&mut data).ok()?;
+	(read == len).then_some(data)
+}
+
 fn write_u32_le(writer: &mut impl Write, value: u32) -> std::io::Result<()> {
 	writer.write_all(&value.to_le_bytes())
 }
@@ -937,7 +1045,7 @@ fn write_cache_file(path: &Path, write_contents: impl FnOnce(&mut BufWriter<fs::
 	}
 	let temp_path = cache_temp_path(path);
 	let write_result = (|| -> std::io::Result<()> {
-		let mut writer = BufWriter::new(fs::File::create(&temp_path)?);
+		let mut writer = BufWriter::with_capacity(TEXTURE_CACHE_WRITE_BUFFER_BYTES, fs::File::create(&temp_path)?);
 		write_contents(&mut writer)?;
 		writer.flush()
 	})();
@@ -980,8 +1088,7 @@ fn read_processed_texture_cache(path: &Path, key: u64) -> Option<(ProcessedTextu
 		if len != expected {
 			return None;
 		}
-		let mut data = vec![0u8; len];
-		file.read_exact(&mut data).ok()?;
+		let data = read_exact_vec(&mut file, len)?;
 		read_bytes = read_bytes.saturating_add(len as u64);
 		mips.push((mip_width, mip_height, data));
 	}
@@ -1032,8 +1139,7 @@ pub(crate) fn read_compressed_texture_cache(path: &Path, key: u64, expected_kind
 		if len != expected {
 			return None;
 		}
-		let mut data = vec![0u8; len];
-		file.read_exact(&mut data).ok()?;
+		let data = read_exact_vec(&mut file, len)?;
 		mips.push(TextureUploadMip { width, height, data });
 	}
 	Some(TextureUploadPayload { kind, mips })
@@ -1069,9 +1175,12 @@ fn build_processed_texture(
 	let src_width = width.max(1);
 	let src_height = height.max(1);
 	let base = alpha_safe_rgba_base(rgba, src_width, src_height, role);
-	let (width, height, rgba) = max_dimension
-		.map(|max_dimension| resize_rgba_to_max_dimension(&base, src_width, src_height, max_dimension))
-		.unwrap_or((src_width, src_height, base));
+	let (width, height, rgba) = match max_dimension.map(|value| value.max(1)) {
+		Some(max_dimension) if src_width > max_dimension || src_height > max_dimension => {
+			resize_rgba_to_max_dimension(&base, src_width, src_height, max_dimension)
+		}
+		_ => (src_width, src_height, base),
+	};
 	let mips = if texture_role_uses_mips(role) {
 		let alpha_weighted_rgb = texture_role_needs_alpha_weighted_rgb_mips(role, &rgba);
 		let mut mips = build_rgba_mips_from_base(rgba, width, height, mipmap_filter, alpha_weighted_rgb);
@@ -1469,7 +1578,9 @@ fn download_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Bu
 		submission_index: None,
 		timeout: Some(Duration::from_secs(120)),
 	});
-	rx.recv().expect("BCn readback callback").expect("BCn readback map");
+	rx.recv_timeout(Duration::from_secs(1))
+		.expect("BCn readback callback")
+		.expect("BCn readback map");
 	let data = slice.get_mapped_range().to_vec();
 	staging.unmap();
 	data
@@ -1965,6 +2076,18 @@ mod tests {
 		let key_b =
 			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &changed_source);
 		assert_ne!(key_a, key_b);
+		let mut srgb_source = source.clone();
+		srgb_source.color_space = Some("srgb".to_string());
+		srgb_source.srgb = Some(true);
+		let key_srgb =
+			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &srgb_source);
+		assert_ne!(key_a, key_srgb);
+		let mut data_source = source.clone();
+		data_source.texture_type = Some("SingleChannel".to_string());
+		data_source.source_layout = Some("horizontal_strip".to_string());
+		let key_data =
+			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &data_source);
+		assert_ne!(key_a, key_data);
 	}
 
 	#[test]
@@ -1991,7 +2114,8 @@ mod tests {
 			pixel_format: UnaImagePixelFormat::R16G16B16,
 			pixels,
 		};
-		let upload = source_texture_upload(&image).expect("R16G16B16 should use precision-preserving source upload");
+		let upload =
+			source_texture_upload(&image, None, TextureRole::Data).expect("R16G16B16 should use precision-preserving source upload");
 
 		let mut expected = Vec::new();
 		for value in [r, g, b, u16::MAX] {
@@ -2000,6 +2124,115 @@ mod tests {
 		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Unorm);
 		assert_eq!(upload.bytes_per_row, 8);
 		assert_eq!(upload.data, expected);
+	}
+
+	#[test]
+	fn source_upload_linearizes_r16_srgb_color_as_rgba16_float() {
+		let mut pixels = Vec::new();
+		for value in [0u16, 32768u16, u16::MAX, 32768u16] {
+			pixels.extend_from_slice(&value.to_ne_bytes());
+		}
+		let image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R16G16B16A16,
+			pixels,
+		};
+		let source = UnaImageSourceMetadata {
+			color_space: Some("srgb".to_string()),
+			srgb: Some(true),
+			..UnaImageSourceMetadata::default()
+		};
+		let upload = source_texture_upload(&image, Some(&source), TextureRole::GenericColor)
+			.expect("R16G16B16A16 sRGB color should use source upload");
+
+		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Float);
+		assert_eq!(upload.bytes_per_row, 8);
+		let sample = upload
+			.data
+			.chunks_exact(2)
+			.map(|bytes| half::f16::from_bits(u16::from_ne_bytes([bytes[0], bytes[1]])).to_f32())
+			.collect::<Vec<_>>();
+		assert_eq!(sample[0], 0.0);
+		assert!((sample[1] - 0.214).abs() < 0.002);
+		assert_eq!(sample[2], 1.0);
+		assert!((sample[3] - 0.5).abs() < 0.001);
+	}
+
+	#[test]
+	fn source_upload_keeps_r16_srgb_normal_as_rgba16_unorm() {
+		let mut pixels = Vec::new();
+		for value in [0u16, 32768u16, u16::MAX] {
+			pixels.extend_from_slice(&value.to_ne_bytes());
+		}
+		let image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R16G16B16,
+			pixels,
+		};
+		let source = UnaImageSourceMetadata {
+			color_space: Some("srgb".to_string()),
+			srgb: Some(true),
+			..UnaImageSourceMetadata::default()
+		};
+		let upload =
+			source_texture_upload(&image, Some(&source), TextureRole::Normal).expect("normal source upload should remain supported");
+
+		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Unorm);
+	}
+
+	#[test]
+	fn source_upload_respects_r16_srgb_data_as_linearized_rgba16_float() {
+		let mut pixels = Vec::new();
+		for value in [32768u16, 0u16, 0u16] {
+			pixels.extend_from_slice(&value.to_ne_bytes());
+		}
+		let image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R16G16B16,
+			pixels,
+		};
+		let source = UnaImageSourceMetadata {
+			color_space: Some("srgb".to_string()),
+			srgb: Some(true),
+			..UnaImageSourceMetadata::default()
+		};
+		let upload = source_texture_upload(&image, Some(&source), TextureRole::Data)
+			.expect("R16G16B16 sRGB data should match existing sRGB texture sampling");
+
+		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Float);
+		let sample = upload
+			.data
+			.chunks_exact(2)
+			.map(|bytes| half::f16::from_bits(u16::from_ne_bytes([bytes[0], bytes[1]])).to_f32())
+			.collect::<Vec<_>>();
+		assert!((sample[0] - 0.214).abs() < 0.002);
+		assert_eq!(sample[3], 1.0);
+	}
+
+	#[test]
+	fn source_upload_keeps_r16_linear_data_as_rgba16_unorm() {
+		let mut pixels = Vec::new();
+		for value in [32768u16, 0u16, 0u16] {
+			pixels.extend_from_slice(&value.to_ne_bytes());
+		}
+		let image = UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: UnaImagePixelFormat::R16G16B16,
+			pixels,
+		};
+		let source = UnaImageSourceMetadata {
+			color_space: Some("linear".to_string()),
+			srgb: Some(false),
+			..UnaImageSourceMetadata::default()
+		};
+		let upload =
+			source_texture_upload(&image, Some(&source), TextureRole::Data).expect("R16G16B16 linear data should preserve unorm values");
+
+		assert_eq!(upload.format, wgpu::TextureFormat::Rgba16Unorm);
 	}
 
 	#[test]

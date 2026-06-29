@@ -84,9 +84,9 @@ export const MIPMAP_FILTER_OPTIONS = [
 ] as const;
 
 export const RENDER_BACKEND_OPTIONS = [
-	["vulkan", "Vulkan (default)"],
-	["dx12", "DX12"],
 	["auto", "Auto"],
+	["vulkan", "Vulkan"],
+	["dx12", "DX12"],
 ] as const;
 
 export const BCN_ENCODER_OPTIONS = [
@@ -94,7 +94,7 @@ export const BCN_ENCODER_OPTIONS = [
 	["cpu", "CPU"],
 ] as const;
 
-export const TEXTURE_SELECT_FIELDS = [
+export const TEXTURE_BASE_SELECT_FIELDS = [
 	{
 		key: "texture_resolution_limit",
 		labelKey: "profiles.editor.texture_limit",
@@ -103,18 +103,21 @@ export const TEXTURE_SELECT_FIELDS = [
 		options: TEXTURE_LIMIT_OPTIONS,
 	},
 	{
-		key: "texture_compression",
-		labelKey: "profiles.editor.compression",
-		hintKey: "profiles.editor.compression_hint",
-		field: "render_quality.texture_compression",
-		options: TEXTURE_COMPRESSION_OPTIONS,
-	},
-	{
 		key: "mipmap_filter",
 		labelKey: "profiles.editor.mipmap_filter",
 		hintKey: "profiles.hints.quality.mipmap_filter",
 		field: "render_quality.mipmap_filter",
 		options: MIPMAP_FILTER_OPTIONS,
+	},
+] as const;
+
+export const TEXTURE_COMPRESSION_SELECT_FIELDS = [
+	{
+		key: "texture_compression",
+		labelKey: "profiles.editor.compression",
+		hintKey: "profiles.editor.compression_hint",
+		field: "render_quality.texture_compression",
+		options: TEXTURE_COMPRESSION_OPTIONS,
 	},
 	{
 		key: "block_compression_encoder",

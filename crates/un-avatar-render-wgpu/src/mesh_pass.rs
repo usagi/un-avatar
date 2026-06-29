@@ -2,10 +2,11 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, BTreeSet},
+	collections::BTreeMap,
 	fs,
 	io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
 	path::{Path, PathBuf},
+	sync::Arc,
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,12 +14,18 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use half::f16;
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaBounds, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
-	UnaTextureWrapMode,
+	UnaAlphaMode, UnaColorFactorColorSpace, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata,
+	UnaLilToonLikeMaterial, UnaLilToonLikeStencilState, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonOutlineWidthMode, UnaSceneSnapshot,
+	UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
+};
+use un_avatar_skeleton::{
+	apply_dynamics_mesh_cloth_assist_to_vertices, dynamics_mesh_cloth_assist_joint_roles,
+	dynamics_mesh_cloth_assist_mesh_matches_with_categories as mesh_cloth_assist_mesh_matches_with_categories,
+	dynamics_token_filter_matches, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig, DynamicsMeshClothAssistJointRole,
+	DynamicsMeshClothAssistVertex,
 };
 
-use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
+use crate::avatar_material::texture_roles_for_scene;
 use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
 use crate::liltoon_features;
 use crate::scene_transform::{safe_inverse_mesh_world, scene_world_matrices};
@@ -46,7 +53,7 @@ pub enum AvatarOutlinePolicy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AvatarOutlineKind {
-	Mtoon,
+	Geometry,
 	Ink,
 	Brush,
 	Double,
@@ -66,7 +73,7 @@ impl Default for AvatarOutlineOptions {
 	fn default() -> Self {
 		Self {
 			policy: AvatarOutlinePolicy::Authored,
-			kind: AvatarOutlineKind::Mtoon,
+			kind: AvatarOutlineKind::Geometry,
 			width: None,
 			color: None,
 			lighting_mix: None,
@@ -89,14 +96,13 @@ pub struct SceneMeshLoadOpts {
 	pub relax_iris_alpha: bool,
 	/// spec 前の `joint * IBM` のみ（`inv(meshWorld)` なし。エクスポータ差の確認用）。
 	pub debug_skin_legacy_no_inv_mesh: bool,
-	/// MToon outline 描画を完全にスキップする診断 toggle。
-	/// 一部 VRM モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
-	pub disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle。
+	/// UNToon geometry outline 描画を完全にスキップする診断 toggle。
+	/// 一部モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
+	pub disable_geometry_outlines: bool,
+	/// UNToon / lilToon 互換 rim lighting 寄与を 0 にする診断 toggle。
 	/// 目周辺の肌色リング現象が rim light 由来か切り分けるための debug 用。
 	pub debug_disable_rim_lighting: bool,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与をともに 0 に固定する診断 toggle。
-	/// shadeColor への falloff 位置を素直に `dot(n, l)` だけにして影色テクスチャの寄与を切り分ける。
+	/// 旧 MToon shading shift 診断用の互換 no-op。v2-UNToon shader では使用しない。
 	pub debug_force_shading_shift_zero: bool,
 	/// matcap (sphere add) の寄与を 0 にする診断 toggle。
 	/// matcap で目周辺に擬似的なハイライト/シャドウが乗っているケースを切り分ける。
@@ -118,10 +124,17 @@ pub struct SceneMeshLoadOpts {
 	/// lilToon Fur 描画を完全にスキップする診断 toggle。
 	/// Compute Fur 実装の副作用が通常描画へ波及しているかを切り分ける。
 	pub disable_fur: bool,
-	/// アバター用途の outline override。既定は VRM / MToon authored outline を尊重する。
+	/// アバター用途の outline override。既定は UNToon / legacy source authored outline を尊重する。
 	pub avatar_outline: AvatarOutlineOptions,
 	/// 顔と体で別テクスチャの肌色差が首境界に出るモデル向けの実験的なロード時補正。
 	pub skin_tone_matching: bool,
+	/// Body bone dominated cloth vertices can borrow more influence from already-authored cloth dynamic joints.
+	pub mesh_cloth_assist: DynamicsMeshClothAssistConfig,
+	/// Normalized dynamics category definitions used when mesh cloth assist has no explicit mesh filter.
+	pub mesh_cloth_assist_categories: Vec<DynamicsCategoryDefinition>,
+	/// Scene node indices that are actual dynamics deformation targets.
+	/// When this is non-empty, mesh cloth assist uses it instead of name-only cloth joint classification.
+	pub dynamic_deforming_node_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +179,7 @@ struct MeshPipelineRenderState {
 	color_write_mask: wgpu::ColorWrites,
 	depth_write: bool,
 	depth_compare: wgpu::CompareFunction,
+	stencil: MaterialStencilState,
 	cull_mode: Option<wgpu::Face>,
 	alpha_coverage: MeshPipelineAlphaCoverage,
 	sample_count: u32,
@@ -178,6 +192,7 @@ impl MeshPipelineRenderState {
 			color_write_mask: wgpu::ColorWrites::ALL,
 			depth_write,
 			depth_compare: wgpu::CompareFunction::LessEqual,
+			stencil: MaterialStencilState::default(),
 			cull_mode: None,
 			alpha_coverage: MeshPipelineAlphaCoverage::Off,
 			sample_count,
@@ -190,6 +205,7 @@ impl MeshPipelineRenderState {
 			color_write_mask: wgpu::ColorWrites::ALL,
 			depth_write: false,
 			depth_compare: wgpu::CompareFunction::Less,
+			stencil: MaterialStencilState::default(),
 			cull_mode: Some(wgpu::Face::Front),
 			alpha_coverage: MeshPipelineAlphaCoverage::Off,
 			sample_count,
@@ -198,6 +214,18 @@ impl MeshPipelineRenderState {
 
 	fn with_alpha_coverage(mut self, alpha_coverage: MeshPipelineAlphaCoverage) -> Self {
 		self.alpha_coverage = alpha_coverage;
+		self
+	}
+
+	fn with_material_render_state(mut self, key: DrawPipelineKey) -> Self {
+		self.stencil = key.stencil;
+		self.color_write_mask = color_writes_from_unity_mask(key.color_mask);
+		self
+	}
+
+	fn with_material_render_state_key(mut self, key: MaterialRenderStateKey) -> Self {
+		self.stencil = key.stencil;
+		self.color_write_mask = color_writes_from_unity_mask(key.color_mask);
 		self
 	}
 }
@@ -392,6 +420,18 @@ fn baseline_fallback_mesh_shader_source() -> String {
 		"\t\t\tlet emission_mask = 1.0;\n",
 	);
 	shader = shader.replace(
+		"\t\tlet emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);\n\t\tlet emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;\n",
+		"\t\tlet emission_mask = 1.0;\n",
+	);
+	shader = shader.replace(
+		"textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb",
+		"vec3<f32>(1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
+		"textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb",
+		"vec3<f32>(1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
 		"\t\t\tlet rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;\n",
 		"\t\t\tlet rim_shade_mask = 1.0;\n",
 	);
@@ -499,6 +539,13 @@ struct MeshFrameGpu {
 	camera_pos: [f32; 4],
 	light_color: [f32; 4],
 	ambient_color: [f32; 4],
+	sh_ar: [f32; 4],
+	sh_ag: [f32; 4],
+	sh_ab: [f32; 4],
+	sh_br: [f32; 4],
+	sh_bg: [f32; 4],
+	sh_bb: [f32; 4],
+	sh_c: [f32; 4],
 	time_params: [f32; 4],
 	audio_link_params: [f32; 4],
 	_pad: [[f32; 4]; 2],
@@ -515,11 +562,10 @@ struct MeshDrawTransformGpu {
 /// `params.z` = `alpha_cutoff`（MASK 時）。
 /// `params.w` はビットパック `u32` を `f32` で渡す（`bitcast`）。
 /// bit0=bind pose rigid, bit1=単色プリミティブ, bit2=Rim Lighting OFF (debug),
-/// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
-/// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
-/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
-/// bit12=lilToon-like source material, bit13=lilToon Gem source material, bit14=lilToon Refraction source material,
-/// bit15=lilToon color blend is additive (`SrcBlend=One`, `DstBlend=One`)。
+/// bit3=reserved legacy shading-shift debug, bit4=matcap OFF (debug), bit5=emissive OFF (debug),
+/// bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug), bit8=normalTexture OFF (debug),
+/// bit9=double-sided material, bit10=occlusion texture available, bit11=cull front, bit12=lilToon-like source material,
+/// bit13=lilToon Gem source material, bit14=lilToon Refraction source material, bit15=lilToon color blend is additive (`SrcBlend=One`, `DstBlend=One`)。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -655,6 +701,7 @@ struct MeshDrawMaterialGpu {
 	rendering_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
 	material_ext_params: [f32; 4],
+	light_direction_override: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -742,9 +789,9 @@ struct SharedMorphDeltaResources {
 	target_count: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
+const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 368);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3120);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3136);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -760,6 +807,24 @@ struct Vertex {
 	joints: [u16; 4],
 	weights: [f32; 4],
 	color: [f32; 4],
+}
+
+impl DynamicsMeshClothAssistVertex for Vertex {
+	fn joints(&self) -> [u16; 4] {
+		self.joints
+	}
+
+	fn weights(&self) -> [f32; 4] {
+		self.weights
+	}
+
+	fn set_joints(&mut self, joints: [u16; 4]) {
+		self.joints = joints;
+	}
+
+	fn set_weights(&mut self, weights: [f32; 4]) {
+		self.weights = weights;
+	}
 }
 
 const _: () = assert!(std::mem::size_of::<Vertex>() == 112);
@@ -1100,6 +1165,7 @@ struct MeshPrepareSummary {
 	resident_index_bytes: u64,
 	deferred_vertex_bytes: u64,
 	deferred_index_bytes: u64,
+	mesh_cloth_assist_vertices: u64,
 	material_elapsed: Duration,
 	dynamic_morph_elapsed: Duration,
 	expand_elapsed: Duration,
@@ -1132,7 +1198,7 @@ impl MeshPrepareSummary {
 			return;
 		}
 		eprintln!(
-			"un-avatar-renderer: gpu scene mesh prepare summary: total={total_ms:.1}ms prepared={} resident={} deferred={} skipped_invisible={} skipped_empty={} vertices={} indices={} resident_bytes={} deferred_bytes={} cache_hits={} cache_misses={} uncacheable={} material={:.1}ms dynamic_morphs={:.1}ms expand={:.1}ms skinning={:.1}ms skin_palette={:.1}ms buffers={:.1}ms material_bind={:.1}ms morph_resources={:.1}ms fur_resources={:.1}ms draw_push={:.1}ms",
+			"un-avatar-renderer: gpu scene mesh prepare summary: total={total_ms:.1}ms prepared={} resident={} deferred={} skipped_invisible={} skipped_empty={} vertices={} indices={} resident_bytes={} deferred_bytes={} mesh_cloth_assist_vertices={} cache_hits={} cache_misses={} uncacheable={} material={:.1}ms dynamic_morphs={:.1}ms expand={:.1}ms skinning={:.1}ms skin_palette={:.1}ms buffers={:.1}ms material_bind={:.1}ms morph_resources={:.1}ms fur_resources={:.1}ms draw_push={:.1}ms",
 			self.prepared_primitives,
 			self.resident_primitives,
 			self.deferred_primitives,
@@ -1142,6 +1208,7 @@ impl MeshPrepareSummary {
 			self.indices,
 			self.resident_vertex_bytes + self.resident_index_bytes,
 			self.deferred_vertex_bytes + self.deferred_index_bytes,
+			self.mesh_cloth_assist_vertices,
 			self.expanded_cache_hits,
 			self.expanded_cache_misses,
 			self.expanded_uncacheable,
@@ -1186,14 +1253,14 @@ fn scene_texture_upload_step_count(
 	scene: &UnaSceneSnapshot,
 	texture_roles: &[TextureRole],
 	texture_max_dimension: Option<u32>,
-	active_texture_indices: Option<&BTreeSet<usize>>,
+	active_texture_indices: Option<&[usize]>,
 ) -> u32 {
 	scene
 		.images
 		.iter()
 		.enumerate()
 		.map(|(image_index, im)| {
-			if active_texture_indices.is_some_and(|indices| !indices.contains(&image_index)) {
+			if active_texture_indices.is_some_and(|indices| indices.binary_search(&image_index).is_err()) {
 				return 1;
 			}
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
@@ -1205,12 +1272,12 @@ fn scene_texture_upload_step_count(
 #[derive(Clone, Debug, Default)]
 struct SceneAssetResidencySets {
 	all_resident: bool,
-	owned_mesh_primitives: BTreeSet<(usize, usize)>,
-	resident_mesh_primitives: BTreeSet<(usize, usize)>,
-	owned_materials: BTreeSet<usize>,
-	resident_materials: BTreeSet<usize>,
-	owned_images: BTreeSet<usize>,
-	resident_images: BTreeSet<usize>,
+	owned_mesh_primitives: Vec<(usize, usize)>,
+	resident_mesh_primitives: Vec<(usize, usize)>,
+	owned_materials: Vec<usize>,
+	resident_materials: Vec<usize>,
+	owned_images: Vec<usize>,
+	resident_images: Vec<usize>,
 }
 
 impl SceneAssetResidencySets {
@@ -1241,21 +1308,31 @@ impl SceneAssetResidencySets {
 		);
 		sets.resident_materials.extend(selection.materials);
 		sets.resident_images.extend(selection.images);
+		sets.owned_mesh_primitives = sorted_unique(sets.owned_mesh_primitives);
+		sets.resident_mesh_primitives = sorted_unique(sets.resident_mesh_primitives);
+		sets.owned_materials = sorted_unique_indices(sets.owned_materials);
+		sets.resident_materials = sorted_unique_indices(sets.resident_materials);
+		sets.owned_images = sorted_unique_indices(sets.owned_images);
+		sets.resident_images = sorted_unique_indices(sets.resident_images);
 		sets
 	}
 
 	fn mesh_primitive_resident(&self, mesh_index: usize, primitive_index: usize) -> bool {
 		self.all_resident
-			|| !self.owned_mesh_primitives.contains(&(mesh_index, primitive_index))
-			|| self.resident_mesh_primitives.contains(&(mesh_index, primitive_index))
+			|| self.owned_mesh_primitives.binary_search(&(mesh_index, primitive_index)).is_err()
+			|| self.resident_mesh_primitives.binary_search(&(mesh_index, primitive_index)).is_ok()
 	}
 
 	fn material_resident(&self, material_index: usize) -> bool {
-		self.all_resident || !self.owned_materials.contains(&material_index) || self.resident_materials.contains(&material_index)
+		self.all_resident
+			|| self.owned_materials.binary_search(&material_index).is_err()
+			|| self.resident_materials.binary_search(&material_index).is_ok()
 	}
 
 	fn image_resident(&self, image_index: usize) -> bool {
-		self.all_resident || !self.owned_images.contains(&image_index) || self.resident_images.contains(&image_index)
+		self.all_resident
+			|| self.owned_images.binary_search(&image_index).is_err()
+			|| self.resident_images.binary_search(&image_index).is_ok()
 	}
 }
 
@@ -1270,17 +1347,26 @@ struct ExpandedPrimitive {
 }
 
 #[derive(Clone)]
-struct ExpandedMorphPayload {
+struct ExpandedPrimitivePayload {
+	verts: Vec<Vertex>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
 	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 }
 
+#[derive(Clone)]
+struct ExpandedMorphPayload {
+	morph_pos: Box<[Vec<[f32; 3]>]>,
+	morph_nrm: Option<Box<[Vec<[f32; 3]>]>>,
+	morph_source_indices: Box<[usize]>,
+	default_morph_weights: Box<[f32]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExpandedPrimitiveCacheKey {
 	vertex_payload_id: u64,
-	dynamic_morph_targets: Vec<usize>,
+	dynamic_morph_targets: Arc<[usize]>,
 }
 
 #[derive(Clone, Debug)]
@@ -1325,9 +1411,158 @@ impl DrawPipelineKind {
 	}
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct DrawPipelineKey {
+	kind: DrawPipelineKind,
+	stencil: MaterialStencilState,
+	color_mask: u8,
+}
+
+impl DrawPipelineKey {
+	fn new(kind: DrawPipelineKind, draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self {
+			kind,
+			stencil: draw.stencil_state,
+			color_mask: if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.color_mask
+			},
+		}
+	}
+
+	fn from_parts(kind: DrawPipelineKind, stencil: MaterialStencilState, color_mask: u8) -> Self {
+		Self {
+			kind,
+			stencil,
+			color_mask: color_mask & 0x0f,
+		}
+	}
+
+	fn label(self) -> &'static str {
+		self.kind.label()
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialRenderStateKey {
+	stencil: MaterialStencilState,
+	color_mask: u8,
+}
+
+impl MaterialRenderStateKey {
+	fn new(stencil: MaterialStencilState, color_mask: u8) -> Self {
+		Self {
+			stencil,
+			color_mask: color_mask & 0x0f,
+		}
+	}
+
+	fn from_draw_outline(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self::new(
+			draw.outline_stencil_state,
+			if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.outline_color_mask
+			},
+		)
+	}
+
+	fn from_draw_fur(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Self {
+		Self::new(
+			draw.fur_stencil_state,
+			if opts.force_simple_basecolor || opts.debug_primitive_colors {
+				15
+			} else {
+				draw.fur_color_mask
+			},
+		)
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct MaterialStencilState {
+	reference: u8,
+	read_mask: u8,
+	write_mask: u8,
+	compare: u8,
+	pass_op: u8,
+	fail_op: u8,
+	depth_fail_op: u8,
+}
+
+impl Default for MaterialStencilState {
+	fn default() -> Self {
+		Self {
+			reference: 0,
+			read_mask: 255,
+			write_mask: 255,
+			compare: 8,
+			pass_op: 0,
+			fail_op: 0,
+			depth_fail_op: 0,
+		}
+	}
+}
+
+impl MaterialStencilState {
+	fn from_untoon(state: &UnaLilToonLikeStencilState) -> Self {
+		Self {
+			reference: state.reference,
+			read_mask: state.read_mask,
+			write_mask: state.write_mask,
+			compare: state.compare,
+			pass_op: state.pass_op,
+			fail_op: state.fail_op,
+			depth_fail_op: state.depth_fail_op,
+		}
+	}
+
+	fn to_wgpu(self) -> wgpu::StencilState {
+		let face = wgpu::StencilFaceState {
+			compare: unity_compare_function(self.compare),
+			fail_op: unity_stencil_operation(self.fail_op),
+			depth_fail_op: unity_stencil_operation(self.depth_fail_op),
+			pass_op: unity_stencil_operation(self.pass_op),
+		};
+		wgpu::StencilState {
+			front: face,
+			back: face,
+			read_mask: self.read_mask as u32,
+			write_mask: self.write_mask as u32,
+		}
+	}
+}
+
+fn unity_compare_function(value: u8) -> wgpu::CompareFunction {
+	match value {
+		1 => wgpu::CompareFunction::Never,
+		2 => wgpu::CompareFunction::Less,
+		3 => wgpu::CompareFunction::Equal,
+		4 => wgpu::CompareFunction::LessEqual,
+		5 => wgpu::CompareFunction::Greater,
+		6 => wgpu::CompareFunction::NotEqual,
+		7 => wgpu::CompareFunction::GreaterEqual,
+		_ => wgpu::CompareFunction::Always,
+	}
+}
+
+fn unity_stencil_operation(value: u8) -> wgpu::StencilOperation {
+	match value {
+		1 => wgpu::StencilOperation::Zero,
+		2 => wgpu::StencilOperation::Replace,
+		3 => wgpu::StencilOperation::IncrementClamp,
+		4 => wgpu::StencilOperation::DecrementClamp,
+		5 => wgpu::StencilOperation::Invert,
+		6 => wgpu::StencilOperation::IncrementWrap,
+		7 => wgpu::StencilOperation::DecrementWrap,
+		_ => wgpu::StencilOperation::Keep,
+	}
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct UntoonShaderFeatures {
-	profile_extensions: bool,
 	main_layers: bool,
 	alpha_mask: bool,
 	dissolve: bool,
@@ -1356,16 +1591,15 @@ struct UntoonShaderFeatures {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum UntoonSourceProfile {
+enum UntoonSemanticProfile {
 	#[default]
 	Plain,
-	MToon,
-	LilToon,
+	UNToon,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct UntoonFeaturePlan {
-	source_profile: UntoonSourceProfile,
+	semantic_profile: UntoonSemanticProfile,
 	shader_features: UntoonShaderFeatures,
 }
 
@@ -1377,7 +1611,6 @@ impl UntoonFeaturePlan {
 
 impl UntoonShaderFeatures {
 	fn include(&mut self, other: Self) {
-		self.profile_extensions |= other.profile_extensions;
 		self.main_layers |= other.main_layers;
 		self.alpha_mask |= other.alpha_mask;
 		self.dissolve |= other.dissolve;
@@ -1405,9 +1638,8 @@ impl UntoonShaderFeatures {
 		self.normal_second |= other.normal_second;
 	}
 
-	fn shader_feature_values(self) -> [(&'static str, bool); 26] {
+	fn shader_feature_values(self) -> [(&'static str, bool); 25] {
 		[
-			("UNTOON_FEATURE_PROFILE_EXTENSIONS", self.profile_extensions),
 			("UNTOON_FEATURE_MAIN_LAYERS", self.main_layers),
 			("UNTOON_FEATURE_ALPHA_MASK", self.alpha_mask),
 			("UNTOON_FEATURE_DISSOLVE", self.dissolve),
@@ -1439,7 +1671,6 @@ impl UntoonShaderFeatures {
 
 fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
 	UntoonShaderFeatures {
-		profile_extensions: true,
 		main_layers: true,
 		alpha_mask: true,
 		dissolve: true,
@@ -1468,18 +1699,6 @@ fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
 	}
 }
 
-fn mtoon_prewarm_features() -> UntoonShaderFeatures {
-	UntoonShaderFeatures {
-		shadow_layers: true,
-		matcap: true,
-		reflection: true,
-		reflection_cube: true,
-		rim: true,
-		emission: true,
-		..Default::default()
-	}
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct MeshPipelinePrewarmSummary {
 	pub shader_modules: usize,
@@ -1489,18 +1708,18 @@ pub(crate) struct MeshPipelinePrewarmSummary {
 
 #[derive(Clone, Debug)]
 struct DrawBatch {
-	pipeline: DrawPipelineKind,
+	pipeline: DrawPipelineKey,
 	draw_indices: Vec<usize>,
 }
 
-fn draw_batch(pipeline: DrawPipelineKind, capacity: usize) -> DrawBatch {
+fn draw_batch(pipeline: DrawPipelineKey, capacity: usize) -> DrawBatch {
 	DrawBatch {
 		pipeline,
 		draw_indices: Vec::with_capacity(capacity),
 	}
 }
 
-fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelineKind, draw_index: usize, batch_capacity: usize) {
+fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelineKey, draw_index: usize, batch_capacity: usize) {
 	if let Some(last) = batches.last_mut() {
 		if last.pipeline == pipeline {
 			last.draw_indices.push(draw_index);
@@ -1512,11 +1731,16 @@ fn append_ordered_draw_batch(batches: &mut Vec<DrawBatch>, pipeline: DrawPipelin
 	batches.push(batch);
 }
 
+fn finalize_draw_batches(batches: &mut Vec<DrawBatch>) {
+	batches.retain(|batch| !batch.draw_indices.is_empty());
+	for batch in batches.iter_mut() {
+		batch.draw_indices.shrink_to_fit();
+	}
+	batches.shrink_to_fit();
+}
+
 fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
-	let zwrite = draw
-		.material
-		.liltoon_like_runtime()
-		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	if zwrite {
 		DrawPipelineKind::TransparentToonBackpass
 	} else {
@@ -1524,198 +1748,239 @@ fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	}
 }
 
-fn json_number_f32(value: &serde_json::Value) -> Option<f32> {
-	value
-		.as_f64()
-		.map(|value| value as f32)
-		.or_else(|| value.as_i64().map(|value| value as f32))
+fn material_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.stencil))
+		.unwrap_or_default()
 }
 
-fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<f32> {
-	let source = material.unavatar_material.as_ref()?;
-	source
-		.get("floatParams")
-		.and_then(|params| params.get(name))
-		.and_then(json_number_f32)
-		.or_else(|| {
-			source
-				.get("floatProperties")
-				.and_then(|params| params.get(name))
-				.and_then(json_number_f32)
-		})
+fn material_outline_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.outline_stencil))
+		.unwrap_or_default()
 }
 
-fn material_source_shader_name(material: &UnaMaterialPbr) -> Option<&str> {
-	material
-		.unavatar_material
-		.as_ref()
-		.and_then(|source| {
-			source
-				.get("sourceShader")
-				.or_else(|| source.get("shaderName"))
-				.or_else(|| source.get("shader"))
-		})
-		.and_then(|value| value.as_str())
+fn material_fur_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.fur_stencil))
+		.unwrap_or_default()
+}
+
+fn material_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.color_mask & 0x0f)
+		.unwrap_or(15)
+}
+
+fn material_outline_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.outline_color_mask & 0x0f)
+		.unwrap_or(15)
+}
+
+fn material_fur_color_mask(material: &UnaMaterialPbr) -> u8 {
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.fur_color_mask & 0x0f)
+		.unwrap_or(15)
+}
+
+fn color_writes_from_unity_mask(mask: u8) -> wgpu::ColorWrites {
+	let mut writes = wgpu::ColorWrites::empty();
+	if mask & 0x1 != 0 {
+		writes |= wgpu::ColorWrites::ALPHA;
+	}
+	if mask & 0x2 != 0 {
+		writes |= wgpu::ColorWrites::BLUE;
+	}
+	if mask & 0x4 != 0 {
+		writes |= wgpu::ColorWrites::GREEN;
+	}
+	if mask & 0x8 != 0 {
+		writes |= wgpu::ColorWrites::RED;
+	}
+	writes
 }
 
 fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
-	if material.liltoon_like_runtime().is_some() {
-		if let Some(value) =
-			material_source_float_param(material, "_ZWrite").or_else(|| material_source_float_param(material, "_ZWriteMode"))
-		{
-			return value > 0.5;
-		}
-		return material_source_shader_name(material).is_some_and(|shader| shader.to_ascii_lowercase().contains("twopass"));
-	}
-	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
+	material_untoon_profile(material).is_some_and(|liltoon_like| liltoon_like.blend_state.pre_zwrite_factor > 0.5)
 }
 
-fn push_texture_index(indices: &mut BTreeSet<usize>, index: Option<usize>) {
-	if let Some(index) = index {
-		indices.insert(index);
+fn push_unique_index(indices: &mut Vec<usize>, index: usize) {
+	if !indices.contains(&index) {
+		indices.push(index);
 	}
+}
+
+fn push_texture_index(indices: &mut Vec<usize>, index: Option<usize>) {
+	if let Some(index) = index {
+		push_unique_index(indices, index);
+	}
+}
+
+fn sorted_unique<T: Ord>(mut values: Vec<T>) -> Vec<T> {
+	values.sort_unstable();
+	values.dedup();
+	values
+}
+
+fn sorted_unique_indices(indices: Vec<usize>) -> Vec<usize> {
+	sorted_unique(indices)
 }
 
 fn lil_enabled(value: f32) -> bool {
 	liltoon_features::enabled(value)
 }
 
-fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
-	push_texture_index(&mut indices, material.base_color_texture_index);
-	push_texture_index(&mut indices, material.normal_texture_index);
-	push_texture_index(&mut indices, material.occlusion_texture_index);
-	push_texture_index(&mut indices, material.emissive_texture_index);
-	if let Some(mtoon) = material.mtoon_like_runtime() {
-		push_texture_index(&mut indices, mtoon.shade_multiply_texture_index);
-		push_texture_index(&mut indices, mtoon.shading_shift_texture_index);
-		push_texture_index(&mut indices, mtoon.matcap_texture_index);
-		push_texture_index(&mut indices, mtoon.rim_multiply_texture_index);
-		push_texture_index(&mut indices, mtoon.outline_width_multiply_texture_index);
-		push_texture_index(&mut indices, mtoon.uv_animation_mask_texture_index);
+fn material_untoon_profile(material: &UnaMaterialPbr) -> Option<&UnaLilToonLikeMaterial> {
+	material.liltoon_like_runtime()
+}
+
+fn renderer_toon_shading(shading: UnaShadingModel) -> bool {
+	matches!(shading, UnaShadingModel::LilToonLike)
+}
+
+fn mesh_draw_shading_for_material(material: &UnaMaterialPbr) -> UnaShadingModel {
+	match material.shading {
+		UnaShadingModel::MToonLike if material.liltoon_like_runtime().is_some() => UnaShadingModel::LilToonLike,
+		UnaShadingModel::MToonLike => UnaShadingModel::LitLambert,
+		other => other,
 	}
-	if let Some(liltoon) = material.liltoon_like_runtime() {
+}
+
+fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
+	let mut indices = Vec::new();
+	collect_material_texture_indices(material, &mut indices);
+	sorted_unique_indices(indices)
+}
+
+fn collect_material_texture_indices(material: &UnaMaterialPbr, indices: &mut Vec<usize>) {
+	push_texture_index(indices, material.base_color_texture_index);
+	push_texture_index(indices, material.normal_texture_index);
+	push_texture_index(indices, material.occlusion_texture_index);
+	push_texture_index(indices, material.emissive_texture_index);
+	if let Some(liltoon) = material_untoon_profile(material) {
 		if liltoon_features::uses_main_color_adjustment(&liltoon.main_color) {
-			push_texture_index(&mut indices, liltoon.main_color.main_color_adjust_mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.main_color_adjust_mask_texture_index);
 		}
 		if lil_enabled(liltoon.main_color.gradation_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.main_color.gradation_texture_index);
+			push_texture_index(indices, liltoon.main_color.gradation_texture_index);
 		}
 		if lil_enabled(liltoon.main_color.second_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.main_color.second_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.second_blend_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.second_dissolve.mask_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.second_dissolve.noise_mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.second_texture_index);
+			push_texture_index(indices, liltoon.main_color.second_blend_mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.second_dissolve.mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.second_dissolve.noise_mask_texture_index);
 		}
 		if lil_enabled(liltoon.main_color.third_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.main_color.third_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.third_blend_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.third_dissolve.mask_texture_index);
-			push_texture_index(&mut indices, liltoon.main_color.third_dissolve.noise_mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.third_texture_index);
+			push_texture_index(indices, liltoon.main_color.third_blend_mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.third_dissolve.mask_texture_index);
+			push_texture_index(indices, liltoon.main_color.third_dissolve.noise_mask_texture_index);
 		}
 		if lil_enabled(liltoon.shadow.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.shadow.color_texture_index);
-			push_texture_index(&mut indices, liltoon.shadow.strength_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.shadow.border_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.shadow.blur_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.shadow.second_color_texture_index);
-			push_texture_index(&mut indices, liltoon.shadow.third_color_texture_index);
+			push_texture_index(indices, liltoon.shadow.color_texture_index);
+			push_texture_index(indices, liltoon.shadow.strength_mask_texture_index);
+			push_texture_index(indices, liltoon.shadow.border_mask_texture_index);
+			push_texture_index(indices, liltoon.shadow.blur_mask_texture_index);
+			push_texture_index(indices, liltoon.shadow.second_color_texture_index);
+			push_texture_index(indices, liltoon.shadow.third_color_texture_index);
 		}
 		if lil_enabled(liltoon.normal.second_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.normal.second_texture_index);
-			push_texture_index(&mut indices, liltoon.normal.second_scale_mask_texture_index);
+			push_texture_index(indices, liltoon.normal.second_texture_index);
+			push_texture_index(indices, liltoon.normal.second_scale_mask_texture_index);
 		}
 		if lil_enabled(liltoon.matcap.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.matcap.texture_index);
-			push_texture_index(&mut indices, liltoon.matcap.blend_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.matcap.bump_texture_index);
+			push_texture_index(indices, liltoon.matcap.texture_index);
+			push_texture_index(indices, liltoon.matcap.blend_mask_texture_index);
+			push_texture_index(indices, liltoon.matcap.bump_texture_index);
 		}
 		if lil_enabled(liltoon.matcap.second_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.matcap.second_texture_index);
-			push_texture_index(&mut indices, liltoon.matcap.second_blend_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.matcap.second_bump_texture_index);
+			push_texture_index(indices, liltoon.matcap.second_texture_index);
+			push_texture_index(indices, liltoon.matcap.second_blend_mask_texture_index);
+			push_texture_index(indices, liltoon.matcap.second_bump_texture_index);
 		}
 		if lil_enabled(liltoon.reflection.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.reflection.metallic_texture_index);
-			push_texture_index(&mut indices, liltoon.reflection.color_texture_index);
-			push_texture_index(&mut indices, liltoon.reflection.smoothness_texture_index);
+			push_texture_index(indices, liltoon.reflection.metallic_texture_index);
+			push_texture_index(indices, liltoon.reflection.color_texture_index);
+			push_texture_index(indices, liltoon.reflection.smoothness_texture_index);
 		}
 		if lil_enabled(liltoon.reflection.anisotropy_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.reflection.anisotropy_tangent_texture_index);
-			push_texture_index(&mut indices, liltoon.reflection.anisotropy_scale_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.reflection.anisotropy_shift_noise_mask_texture_index);
+			push_texture_index(indices, liltoon.reflection.anisotropy_tangent_texture_index);
+			push_texture_index(indices, liltoon.reflection.anisotropy_scale_mask_texture_index);
+			push_texture_index(indices, liltoon.reflection.anisotropy_shift_noise_mask_texture_index);
 		}
 		if lil_enabled(liltoon.rim.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.rim.texture_index);
+			push_texture_index(indices, liltoon.rim.texture_index);
 		}
 		if lil_enabled(liltoon.rim.shade_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.rim.shade_mask_texture_index);
+			push_texture_index(indices, liltoon.rim.shade_mask_texture_index);
 		}
 		if lil_enabled(liltoon.emission.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.emission.texture_index);
-			push_texture_index(&mut indices, liltoon.emission.blend_mask_texture_index);
+			push_texture_index(indices, liltoon.emission.texture_index);
+			push_texture_index(indices, liltoon.emission.blend_mask_texture_index);
 			if lil_enabled(liltoon.emission.gradation_enabled_factor) {
-				push_texture_index(&mut indices, liltoon.emission.gradation_texture_index);
+				push_texture_index(indices, liltoon.emission.gradation_texture_index);
 			}
 		}
 		if lil_enabled(liltoon.emission.second_enabled_factor) {
-			push_texture_index(&mut indices, liltoon.emission.second_texture_index);
-			push_texture_index(&mut indices, liltoon.emission.second_blend_mask_texture_index);
+			push_texture_index(indices, liltoon.emission.second_texture_index);
+			push_texture_index(indices, liltoon.emission.second_blend_mask_texture_index);
 			if lil_enabled(liltoon.emission.second_gradation_enabled_factor) {
-				push_texture_index(&mut indices, liltoon.emission.second_gradation_texture_index);
+				push_texture_index(indices, liltoon.emission.second_gradation_texture_index);
 			}
 		}
 		if liltoon.alpha_mask.mode_factor > 0.5 {
-			push_texture_index(&mut indices, liltoon.alpha_mask.texture_index);
+			push_texture_index(indices, liltoon.alpha_mask.texture_index);
 		}
 		if lil_enabled(liltoon.audio_link.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.audio_link.mask_texture_index);
-			push_texture_index(&mut indices, liltoon.audio_link.local_map_texture_index);
+			push_texture_index(indices, liltoon.audio_link.mask_texture_index);
+			push_texture_index(indices, liltoon.audio_link.local_map_texture_index);
 		}
 		if lil_enabled(liltoon.outline.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.outline.texture_index);
-			push_texture_index(&mut indices, liltoon.outline.width_mask_texture_index);
+			push_texture_index(indices, liltoon.outline.texture_index);
+			push_texture_index(indices, liltoon.outline.width_mask_texture_index);
 		}
 		if lil_enabled(liltoon.backlight.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.backlight.texture_index);
+			push_texture_index(indices, liltoon.backlight.texture_index);
 		}
 		if lil_enabled(liltoon.glitter.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.glitter.color_texture_index);
-			push_texture_index(&mut indices, liltoon.glitter.shape_texture_index);
+			push_texture_index(indices, liltoon.glitter.color_texture_index);
+			push_texture_index(indices, liltoon.glitter.shape_texture_index);
 		}
 		if liltoon.dissolve.params_factor[0] > 0.5 {
-			push_texture_index(&mut indices, liltoon.dissolve.mask_texture_index);
-			push_texture_index(&mut indices, liltoon.dissolve.noise_mask_texture_index);
+			push_texture_index(indices, liltoon.dissolve.mask_texture_index);
+			push_texture_index(indices, liltoon.dissolve.noise_mask_texture_index);
 		}
 		if lil_enabled(liltoon.parallax.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.parallax.texture_index);
+			push_texture_index(indices, liltoon.parallax.texture_index);
 		}
 		if lil_enabled(liltoon.fur.enabled_factor) {
-			push_texture_index(&mut indices, liltoon.fur.vector_texture_index);
-			push_texture_index(&mut indices, liltoon.fur.length_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.fur.noise_mask_texture_index);
-			push_texture_index(&mut indices, liltoon.fur.mask_texture_index);
+			push_texture_index(indices, liltoon.fur.vector_texture_index);
+			push_texture_index(indices, liltoon.fur.length_mask_texture_index);
+			push_texture_index(indices, liltoon.fur.noise_mask_texture_index);
+			push_texture_index(indices, liltoon.fur.mask_texture_index);
 		}
 	}
-	indices.into_iter().collect()
 }
 
 fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
-	if let Some(mtoon) = material.mtoon_like_runtime() {
-		push_texture_index(&mut indices, mtoon.reflection_cube_texture_index);
-	}
-	if let Some(liltoon) = material.liltoon_like_runtime() {
-		push_texture_index(&mut indices, liltoon_reflection_texture_index(liltoon));
-	}
-	indices.into_iter().collect()
+	let mut indices = Vec::new();
+	collect_material_cube_texture_indices(material, &mut indices);
+	sorted_unique_indices(indices)
 }
 
+fn collect_material_cube_texture_indices(material: &UnaMaterialPbr, indices: &mut Vec<usize>) {
+	if let Some(liltoon) = material_untoon_profile(material) {
+		push_texture_index(indices, liltoon_reflection_texture_index(liltoon));
+	}
+}
+
+#[cfg(test)]
 fn material_resident_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
-	let mut indices = BTreeSet::new();
-	indices.extend(material_texture_indices(material));
-	indices.extend(material_cube_texture_indices(material));
-	indices.into_iter().collect()
+	let mut indices = Vec::new();
+	collect_material_texture_indices(material, &mut indices);
+	collect_material_cube_texture_indices(material, &mut indices);
+	sorted_unique_indices(indices)
 }
 
 fn initial_active_texture_indices_for_scene(
@@ -1723,9 +1988,9 @@ fn initial_active_texture_indices_for_scene(
 	effective_visibility: &[bool],
 	asset_residency: &SceneAssetResidencySets,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let default_material = UnaMaterialPbr::default();
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	for (node_index, node) in scene.nodes.iter().enumerate() {
 		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
 			continue;
@@ -1745,10 +2010,11 @@ fn initial_active_texture_indices_for_scene(
 			if material_is_fully_invisible_for_draw(material, opts) {
 				continue;
 			}
-			indices.extend(material_resident_texture_indices(material));
+			collect_material_texture_indices(material, &mut indices);
+			collect_material_cube_texture_indices(material, &mut indices);
 		}
 	}
-	indices
+	sorted_unique_indices(indices)
 }
 
 fn initial_active_2d_texture_indices_for_scene(
@@ -1756,9 +2022,9 @@ fn initial_active_2d_texture_indices_for_scene(
 	effective_visibility: &[bool],
 	asset_residency: &SceneAssetResidencySets,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeSet<usize> {
+) -> Vec<usize> {
 	let default_material = UnaMaterialPbr::default();
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::new();
 	for (node_index, node) in scene.nodes.iter().enumerate() {
 		if !effective_visibility.get(node_index).copied().unwrap_or(false) {
 			continue;
@@ -1778,10 +2044,10 @@ fn initial_active_2d_texture_indices_for_scene(
 			if material_is_fully_invisible_for_draw(material, opts) {
 				continue;
 			}
-			indices.extend(material_texture_indices(material));
+			collect_material_texture_indices(material, &mut indices);
 		}
 	}
-	indices
+	sorted_unique_indices(indices)
 }
 
 fn blended_pipeline_pass_order(pipeline: DrawPipelineKind) -> u8 {
@@ -1804,8 +2070,9 @@ struct SkinPalette {
 	bind_group: wgpu::BindGroup,
 	matrix_capacity: usize,
 	static_identity: bool,
+	inverse_bind_matrices: Box<[Mat4]>,
 	raw: Vec<f32>,
-	uploaded: Vec<f32>,
+	uploaded_matrices: Vec<Mat4>,
 	uploaded_changed: bool,
 }
 
@@ -1819,9 +2086,68 @@ pub(crate) struct DrawTransformUpdateTimings {
 	pub draw_transform_ms: f32,
 }
 
+enum SceneMeshIndexUpload {
+	U16(Box<[u16]>),
+	U32(Box<[u32]>),
+}
+
+impl SceneMeshIndexUpload {
+	fn from_u32_indices_compact(indices: Vec<u32>) -> Self {
+		if indices.iter().any(|&index| index > u16::MAX as u32) {
+			return Self::U32(indices.into_boxed_slice());
+		}
+		let mut compact = Vec::with_capacity(indices.len());
+		compact.extend(indices.into_iter().map(|index| index as u16));
+		Self::U16(compact.into_boxed_slice())
+	}
+
+	fn len(&self) -> usize {
+		match self {
+			Self::U16(indices) => indices.len(),
+			Self::U32(indices) => indices.len(),
+		}
+	}
+
+	fn index_format(&self) -> wgpu::IndexFormat {
+		match self {
+			Self::U16(_) => wgpu::IndexFormat::Uint16,
+			Self::U32(_) => wgpu::IndexFormat::Uint32,
+		}
+	}
+
+	fn buffer_bytes(&self) -> u64 {
+		match self {
+			Self::U16(indices) => (indices.len() * std::mem::size_of::<u16>()) as u64,
+			Self::U32(indices) => (indices.len() * std::mem::size_of::<u32>()) as u64,
+		}
+	}
+
+	fn create_buffer(&self, device: &wgpu::Device) -> wgpu::Buffer {
+		match self {
+			Self::U16(indices) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("mesh_i_u16"),
+				contents: bytemuck::cast_slice(indices),
+				usage: wgpu::BufferUsages::INDEX,
+			}),
+			Self::U32(indices) => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+				label: Some("mesh_i_u32"),
+				contents: bytemuck::cast_slice(indices),
+				usage: wgpu::BufferUsages::INDEX,
+			}),
+		}
+	}
+
+	fn source_triangles(&self, vertex_count: usize) -> Vec<ComputeFurCardsSourceTriangleGpu> {
+		match self {
+			Self::U16(indices) => compute_fur_cards_source_triangles_from_indices_u16(indices, vertex_count),
+			Self::U32(indices) => compute_fur_cards_source_triangles_from_indices(indices, vertex_count),
+		}
+	}
+}
+
 struct SceneMeshBufferUpload {
-	vertices: Vec<Vertex>,
-	indices: Vec<u32>,
+	vertices: Box<[Vertex]>,
+	indices: SceneMeshIndexUpload,
 }
 
 impl SceneMeshBufferUpload {
@@ -1829,14 +2155,11 @@ impl SceneMeshBufferUpload {
 		(self.vertices.len() * std::mem::size_of::<Vertex>()) as u64
 	}
 
-	fn index_buffer_bytes(&self, index_format: wgpu::IndexFormat) -> u64 {
-		match index_format {
-			wgpu::IndexFormat::Uint16 => (self.indices.len() * std::mem::size_of::<u16>()) as u64,
-			wgpu::IndexFormat::Uint32 => (self.indices.len() * std::mem::size_of::<u32>()) as u64,
-		}
+	fn index_buffer_bytes(&self) -> u64 {
+		self.indices.buffer_bytes()
 	}
 
-	fn create_buffers(&self, device: &wgpu::Device, queue: &wgpu::Queue, index_format: wgpu::IndexFormat) -> (wgpu::Buffer, wgpu::Buffer) {
+	fn create_buffers(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Buffer, wgpu::Buffer) {
 		let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 			label: Some("mesh_v"),
 			size: self.vertex_buffer_bytes(),
@@ -1844,21 +2167,7 @@ impl SceneMeshBufferUpload {
 			mapped_at_creation: false,
 		});
 		queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
-		let index_buffer = match index_format {
-			wgpu::IndexFormat::Uint16 => {
-				let indices16: Vec<u16> = self.indices.iter().map(|&index| index as u16).collect();
-				device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-					label: Some("mesh_i_u16"),
-					contents: bytemuck::cast_slice(&indices16),
-					usage: wgpu::BufferUsages::INDEX,
-				})
-			}
-			wgpu::IndexFormat::Uint32 => device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-				label: Some("mesh_i_u32"),
-				contents: bytemuck::cast_slice(&self.indices),
-				usage: wgpu::BufferUsages::INDEX,
-			}),
-		};
+		let index_buffer = self.indices.create_buffer(device);
 		(vertex_buffer, index_buffer)
 	}
 }
@@ -1885,23 +2194,30 @@ struct MeshDraw {
 	asset_resident: bool,
 	shading: UnaShadingModel,
 	morph_target_count: usize,
-	morph_source_indices: Vec<usize>,
+	morph_source_indices: Box<[usize]>,
+	morph_target_names: Box<[String]>,
+	morph_target_override_keys: Box<[String]>,
+	morph_target_override_suffix_keys: Box<[Option<String>]>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
 	default_morph_weights: Vec<f32>,
-	expression_bindings: Vec<ExpressionBinding>,
+	expression_bindings: Box<[ExpressionBinding]>,
 	morph_weights: Vec<f32>,
+	morph_weights_match_default: bool,
 	morph_weight_scratch: Vec<f32>,
 	alpha_mode: UnaAlphaMode,
 	material_slot_index: Option<usize>,
 	material: UnaMaterialPbr,
-	texture_indices: Vec<usize>,
-	cube_texture_indices: Vec<usize>,
+	stencil_state: MaterialStencilState,
+	color_mask: u8,
+	outline_stencil_state: MaterialStencilState,
+	outline_color_mask: u8,
+	fur_stencil_state: MaterialStencilState,
+	fur_color_mask: u8,
+	texture_indices: Box<[usize]>,
+	cube_texture_indices: Box<[usize]>,
 	mesh_index: usize,
 	primitive_index: usize,
-	probe_anchor_node: Option<usize>,
-	local_bounds: Option<UnaBounds>,
-	world_origin: Vec3,
 }
 
 struct SceneTextureViews {
@@ -1935,7 +2251,7 @@ impl MeshDraw {
 		if self.mesh_buffers_resident() {
 			return false;
 		}
-		let (vertex_buffer, index_buffer) = self.buffer_upload.create_buffers(device, queue, self.index_format);
+		let (vertex_buffer, index_buffer) = self.buffer_upload.create_buffers(device, queue);
 		self.vertex_buffer = Some(vertex_buffer);
 		self.index_buffer = Some(index_buffer);
 		true
@@ -1960,8 +2276,6 @@ struct ComputeFurCardsDrawResources {
 	card_count: u32,
 	generated_index_count: u32,
 	dispatch_workgroups: u32,
-	base_vertices: Vec<Vertex>,
-	source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 }
 
 #[derive(Default)]
@@ -1995,6 +2309,7 @@ struct SceneMeshDrawState {
 	transparent_backpass_draw_indices: Vec<usize>,
 	blended_batches: Vec<DrawBatch>,
 	active_draw_indices: Vec<usize>,
+	active_morph_draw_indices: Vec<usize>,
 	needs_screen_refraction: bool,
 	active_skin_palette_indices: Vec<usize>,
 	runtime_requirements: SceneMeshRuntimeRequirements,
@@ -2068,9 +2383,9 @@ fn active_residency_gaps_from_draws<'a>(
 	cube_texture_residency: &[bool],
 	material_slot_residency: &[bool],
 ) -> SceneMeshActiveResidencyGaps {
-	let mut inactive_image_texture_indices = BTreeSet::new();
-	let mut inactive_cube_texture_indices = BTreeSet::new();
-	let mut inactive_material_slot_indices = BTreeSet::new();
+	let mut inactive_image_texture_indices = Vec::new();
+	let mut inactive_cube_texture_indices = Vec::new();
+	let mut inactive_material_slot_indices = Vec::new();
 	let mut active_draws_using_inactive_image_texture_count = 0;
 	let mut active_draws_using_inactive_cube_texture_count = 0;
 	let mut active_draws_using_inactive_material_slot_count = 0;
@@ -2082,13 +2397,13 @@ fn active_residency_gaps_from_draws<'a>(
 		let mut draw_uses_inactive_cube_texture = false;
 		for texture_index in texture_indices {
 			if image_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				inactive_image_texture_indices.insert(*texture_index);
+				inactive_image_texture_indices.push(*texture_index);
 				draw_uses_inactive_image_texture = true;
 			}
 		}
 		for texture_index in cube_texture_indices {
 			if cube_texture_residency.get(*texture_index).is_some_and(|resident| !resident) {
-				inactive_cube_texture_indices.insert(*texture_index);
+				inactive_cube_texture_indices.push(*texture_index);
 				draw_uses_inactive_cube_texture = true;
 			}
 		}
@@ -2100,62 +2415,58 @@ fn active_residency_gaps_from_draws<'a>(
 		}
 		if let Some(material_slot_index) = material_slot_index {
 			if material_slot_residency.get(material_slot_index).is_some_and(|resident| !resident) {
-				inactive_material_slot_indices.insert(material_slot_index);
+				inactive_material_slot_indices.push(material_slot_index);
 				active_draws_using_inactive_material_slot_count += 1;
 			}
 		}
 	}
 	SceneMeshActiveResidencyGaps {
-		inactive_image_texture_indices: inactive_image_texture_indices.into_iter().collect(),
-		inactive_cube_texture_indices: inactive_cube_texture_indices.into_iter().collect(),
-		inactive_material_slot_indices: inactive_material_slot_indices.into_iter().collect(),
+		inactive_image_texture_indices: sorted_unique_indices(inactive_image_texture_indices),
+		inactive_cube_texture_indices: sorted_unique_indices(inactive_cube_texture_indices),
+		inactive_material_slot_indices: sorted_unique_indices(inactive_material_slot_indices),
 		active_draws_using_inactive_image_texture_count,
 		active_draws_using_inactive_cube_texture_count,
 		active_draws_using_inactive_material_slot_count,
 	}
 }
 
-fn residency_load_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+fn residency_load_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 	residency_transition_indices(old, next, false, true)
 }
 
-fn residency_unload_indices(old: impl IntoIterator<Item = bool>, next: impl IntoIterator<Item = bool>) -> Vec<usize> {
+fn residency_unload_indices(old: &[bool], next: &[bool]) -> Vec<usize> {
 	residency_transition_indices(old, next, true, false)
 }
 
-fn texture_residency_for_scene(
+fn texture_residency_for_active_draws<'a>(
 	scene: &UnaSceneSnapshot,
 	asset_residency: &SceneAssetResidencySets,
-	active_image_texture_indices: &BTreeSet<usize>,
-	active_cube_texture_indices: &BTreeSet<usize>,
+	active_draw_texture_indices: impl IntoIterator<Item = (&'a [usize], &'a [usize])>,
 ) -> (Vec<bool>, Vec<bool>) {
-	let image_residency = scene
-		.images
-		.iter()
-		.enumerate()
-		.map(|(image_index, _)| asset_residency.image_resident(image_index) && active_image_texture_indices.contains(&image_index))
-		.collect();
-	let cube_residency = scene
-		.images
-		.iter()
-		.enumerate()
-		.map(|(image_index, _)| {
-			asset_residency.image_resident(image_index)
-				&& active_cube_texture_indices.contains(&image_index)
+	let mut image_residency = vec![false; scene.images.len()];
+	let mut cube_residency = vec![false; scene.images.len()];
+	for (image_indices, cube_indices) in active_draw_texture_indices {
+		for &image_index in image_indices {
+			if asset_residency.image_resident(image_index) {
+				if let Some(resident) = image_residency.get_mut(image_index) {
+					*resident = true;
+				}
+			}
+		}
+		for &image_index in cube_indices {
+			if asset_residency.image_resident(image_index)
 				&& texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref))
-		})
-		.collect();
+			{
+				if let Some(resident) = cube_residency.get_mut(image_index) {
+					*resident = true;
+				}
+			}
+		}
+	}
 	(image_residency, cube_residency)
 }
 
-fn residency_transition_indices(
-	old: impl IntoIterator<Item = bool>,
-	next: impl IntoIterator<Item = bool>,
-	from: bool,
-	to: bool,
-) -> Vec<usize> {
-	let old = old.into_iter().collect::<Vec<_>>();
-	let next = next.into_iter().collect::<Vec<_>>();
+fn residency_transition_indices(old: &[bool], next: &[bool], from: bool, to: bool) -> Vec<usize> {
 	let mut indices = Vec::new();
 	for index in 0..old.len().max(next.len()) {
 		let old_value = old.get(index).copied().unwrap_or(false);
@@ -2198,7 +2509,8 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	match shading {
 		UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
 		UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
-		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::BlendToon,
+		UnaShadingModel::MToonLike => unreachable!("source MToonLike must not reach renderer draw pipeline selection"),
+		UnaShadingModel::LilToonLike => DrawPipelineKind::BlendToon,
 	}
 }
 
@@ -2206,12 +2518,13 @@ fn opaque_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	match shading {
 		UnaShadingModel::LitLambert => DrawPipelineKind::OpaqueLit,
 		UnaShadingModel::Unlit => DrawPipelineKind::OpaqueUnlit,
-		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::OpaqueToon,
+		UnaShadingModel::MToonLike => unreachable!("source MToonLike must not reach renderer draw pipeline selection"),
+		UnaShadingModel::LilToonLike => DrawPipelineKind::OpaqueToon,
 	}
 }
 
 fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
-	let Some(liltoon_like) = material.liltoon_like_runtime() else {
+	let Some(liltoon_like) = material_untoon_profile(material) else {
 		return false;
 	};
 	(liltoon_like.blend_state.source_factor - 1.0).abs() < 0.001
@@ -2220,13 +2533,13 @@ fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
 }
 
 fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bool) -> DrawPipelineKind {
-	if shading.is_toon_like() && liltoon_uses_additive_color_blend(&draw.material) {
+	if renderer_toon_shading(shading) && liltoon_uses_additive_color_blend(&draw.material) {
 		if zwrite {
 			DrawPipelineKind::BlendToonAddZWrite
 		} else {
 			DrawPipelineKind::BlendToonAdd
 		}
-	} else if zwrite && shading.is_toon_like() {
+	} else if zwrite && renderer_toon_shading(shading) {
 		DrawPipelineKind::BlendToonZWrite
 	} else {
 		blend_pipeline_for_shading(shading)
@@ -2234,10 +2547,7 @@ fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bo
 }
 
 fn material_render_queue_number(material: &UnaMaterialPbr, alpha_mode: UnaAlphaMode) -> i32 {
-	if let Some(render_queue) = material
-		.liltoon_like_runtime()
-		.and_then(|liltoon_like| liltoon_like.rendering.render_queue_number)
-	{
+	if let Some(render_queue) = material_untoon_profile(material).and_then(|liltoon_like| liltoon_like.rendering.render_queue_number) {
 		return render_queue;
 	}
 	match alpha_mode {
@@ -2260,9 +2570,7 @@ fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -
 }
 
 fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
-	material
-		.liltoon_like_runtime()
-		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::needs_screen_refraction)
+	material_untoon_profile(material).is_some_and(un_avatar_core::UnaLilToonLikeMaterial::needs_screen_refraction)
 }
 
 fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonLikeAudioLink) -> bool {
@@ -2280,19 +2588,19 @@ fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonL
 }
 
 fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShadingModel) -> bool {
-	if !shading.is_liltoon_like() {
+	if !renderer_toon_shading(shading) {
 		return false;
 	}
-	material.liltoon_like_runtime().is_some_and(|liltoon_like| {
+	material_untoon_profile(material).is_some_and(|liltoon_like| {
 		liltoon_like.audio_link.enabled_factor > 0.5 && liltoon_audio_link_has_active_target(&liltoon_like.audio_link)
 	})
 }
 
 fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonFeaturePlan {
-	if opts.force_simple_basecolor || !shading.is_toon_like() {
+	if opts.force_simple_basecolor || !renderer_toon_shading(shading) {
 		return UntoonFeaturePlan::none();
 	}
-	if let Some(liltoon_like) = material.liltoon_like_runtime() {
+	if let Some(liltoon_like) = material_untoon_profile(material) {
 		let has_main_layer_dissolve = liltoon_like.main_color.second_dissolve.mask_texture_index.is_some()
 			|| liltoon_like.main_color.second_dissolve.noise_mask_texture_index.is_some()
 			|| liltoon_like.main_color.third_dissolve.mask_texture_index.is_some()
@@ -2314,9 +2622,8 @@ fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingMo
 		let emission = lil_enabled(liltoon_like.emission.enabled_factor);
 		let emission_second = lil_enabled(liltoon_like.emission.second_enabled_factor);
 		UntoonFeaturePlan {
-			source_profile: UntoonSourceProfile::LilToon,
+			semantic_profile: UntoonSemanticProfile::UNToon,
 			shader_features: UntoonShaderFeatures {
-				profile_extensions: true,
 				main_layers,
 				alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
 				dissolve: has_dissolve,
@@ -2348,23 +2655,7 @@ fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingMo
 			},
 		}
 	} else {
-		let mtoon = material.mtoon_like_runtime();
-		UntoonFeaturePlan {
-			source_profile: UntoonSourceProfile::MToon,
-			shader_features: UntoonShaderFeatures {
-				profile_extensions: false,
-				shadow_layers: true,
-				matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
-				reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-				reflection_cube: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-				rim: mtoon.is_some_and(|mtoon| {
-					mtoon.rim_multiply_texture_index.is_some()
-						|| mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001)
-				}),
-				emission: material.emissive_texture_index.is_some() || material.emissive_factor.iter().any(|value| value.abs() > 0.00001),
-				..Default::default()
-			},
-		}
+		UntoonFeaturePlan::none()
 	}
 }
 
@@ -2390,9 +2681,7 @@ fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 }
 
 fn material_uses_liltoon_gem_prepass(material: &UnaMaterialPbr) -> bool {
-	material
-		.liltoon_like_runtime()
-		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile)
+	material_untoon_profile(material).is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile)
 }
 
 fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
@@ -2418,14 +2707,11 @@ fn transparent_backpass_enabled(
 	shading: UnaShadingModel,
 	liltoon_backpass_enabled: bool,
 ) -> bool {
-	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && liltoon_backpass_enabled && shading.is_toon_like()
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && liltoon_backpass_enabled && renderer_toon_shading(shading)
 }
 
 fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> bool {
-	let liltoon_backpass_enabled = draw
-		.material
-		.liltoon_like_runtime()
-		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	let liltoon_backpass_enabled = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	transparent_backpass_enabled(
 		draw.alpha_mode,
 		material_transparent_with_zwrite(&draw.material),
@@ -2435,7 +2721,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 }
 
 fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
-	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && shading.is_toon_like()
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && renderer_toon_shading(shading)
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
@@ -2454,21 +2740,13 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 		transparent_backpass_draw_indices: Vec::with_capacity(draws.len()),
 		blended_batches: Vec::new(),
 		active_draw_indices: Vec::with_capacity(draws.len()),
+		active_morph_draw_indices: Vec::new(),
 		needs_screen_refraction: false,
 		active_skin_palette_indices: Vec::with_capacity(draws.len()),
 		runtime_requirements: SceneMeshRuntimeRequirements::default(),
 	};
 	let batch_capacity = (draws.len() / 10).max(1);
-	let mut opaque_batches = vec![
-		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueLit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueUnlit, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-		draw_batch(DrawPipelineKind::OpaqueToon, batch_capacity),
-	];
+	let mut opaque_draws = Vec::with_capacity(draws.len());
 	let mut blended_draws = Vec::with_capacity(draws.len());
 	let mut blended_batches = Vec::with_capacity(batch_capacity);
 
@@ -2478,8 +2756,11 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 		}
 		if draw.active() {
 			state.active_draw_indices.push(draw_index);
+			if draw.morph_target_count > 0 {
+				state.active_morph_draw_indices.push(draw_index);
+			}
 			if !draw.skin_palette_static_identity {
-				state.active_skin_palette_indices.push(draw.skin_palette_index);
+				push_unique_index(&mut state.active_skin_palette_indices, draw.skin_palette_index);
 			}
 		}
 		let requirements = material_runtime_requirements(&draw.material, draw.shading, opts);
@@ -2488,7 +2769,7 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 			state.needs_screen_refraction = true;
 		}
 		let shading = effective_mesh_shading(draw, opts);
-		if !opts.disable_mtoon_outlines
+		if !opts.disable_geometry_outlines
 			&& draw_has_outline(draw, opts)
 			&& matches!(draw.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
 		{
@@ -2499,37 +2780,45 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 			state.fur_draw_indices.push(draw_index);
 		}
 
-		let shading_index = match shading {
-			UnaShadingModel::LitLambert => 0,
-			UnaShadingModel::Unlit => 1,
-			UnaShadingModel::MToonLike => 2,
-			UnaShadingModel::LilToonLike => 3,
-		};
 		match draw.alpha_mode {
 			UnaAlphaMode::Opaque | UnaAlphaMode::Mask
 				if draw_uses_screen_refraction_grab(draw)
 					|| draw_uses_late_non_blend_queue(draw.alpha_mode, draw_render_queue_number(draw)) =>
 			{
-				blended_draws.push((opaque_pipeline_for_shading(shading), draw_index));
+				blended_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
 			}
-			UnaAlphaMode::Opaque => opaque_batches[shading_index].draw_indices.push(draw_index),
-			UnaAlphaMode::Mask => opaque_batches[4 + shading_index].draw_indices.push(draw_index),
+			UnaAlphaMode::Opaque => {
+				opaque_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
+			}
+			UnaAlphaMode::Mask => {
+				opaque_draws.push((DrawPipelineKey::new(opaque_pipeline_for_shading(shading), draw, opts), draw_index));
+			}
 			UnaAlphaMode::Blend if draw_uses_transparent_backpass(draw, shading) => {
-				blended_draws.push((transparent_backpass_pipeline_for_draw(draw), draw_index));
+				blended_draws.push((
+					DrawPipelineKey::new(transparent_backpass_pipeline_for_draw(draw), draw, opts),
+					draw_index,
+				));
 				if draw_uses_liltoon_gem_prepass(draw) {
-					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+					blended_draws.push((DrawPipelineKey::new(DrawPipelineKind::LilToonGemPre, draw, opts), draw_index));
 				}
-				blended_draws.push((blend_pipeline_for_draw(draw, shading, true), draw_index));
+				blended_draws.push((
+					DrawPipelineKey::new(blend_pipeline_for_draw(draw, shading, true), draw, opts),
+					draw_index,
+				));
 			}
 			UnaAlphaMode::Blend => {
 				if draw_uses_liltoon_gem_prepass(draw) {
-					blended_draws.push((DrawPipelineKind::LilToonGemPre, draw_index));
+					blended_draws.push((DrawPipelineKey::new(DrawPipelineKind::LilToonGemPre, draw, opts), draw_index));
 				}
 				blended_draws.push((
-					blend_pipeline_for_draw(
+					DrawPipelineKey::new(
+						blend_pipeline_for_draw(
+							draw,
+							shading,
+							transparent_forward_zwrite_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading),
+						),
 						draw,
-						shading,
-						transparent_forward_zwrite_enabled(draw.alpha_mode, material_transparent_with_zwrite(&draw.material), shading),
+						opts,
 					),
 					draw_index,
 				));
@@ -2538,20 +2827,24 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 	}
 	blended_draws.sort_by_key(|&(pipeline, draw_index)| {
 		let (render_queue, draw_index) = draw_render_order_key(draws, draw_index);
-		(render_queue, draw_index, blended_pipeline_pass_order(pipeline))
+		(render_queue, draw_index, blended_pipeline_pass_order(pipeline.kind))
 	});
 	for (pipeline, draw_index) in blended_draws {
 		append_ordered_draw_batch(&mut blended_batches, pipeline, draw_index, batch_capacity);
 	}
 
+	let mut opaque_batches = Vec::with_capacity(opaque_draws.len());
+	opaque_draws.sort_by_key(|&(_, draw_index)| draw_render_order_key(draws, draw_index));
+	for (pipeline, draw_index) in opaque_draws {
+		append_ordered_draw_batch(&mut opaque_batches, pipeline, draw_index, batch_capacity);
+	}
+
 	group_draw_indices_by_skin_palette(draws, &mut state.outline_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut state.fur_draw_indices);
 	group_draw_indices_by_skin_palette(draws, &mut state.transparent_backpass_draw_indices);
-	for batch in &mut opaque_batches {
-		group_draw_indices_by_skin_palette(draws, &mut batch.draw_indices);
-	}
 
-	opaque_batches.retain(|batch| !batch.draw_indices.is_empty());
+	finalize_draw_batches(&mut opaque_batches);
+	finalize_draw_batches(&mut blended_batches);
 	state.opaque_batches = opaque_batches;
 	state.blended_batches = blended_batches;
 	state.active_skin_palette_indices.sort_unstable();
@@ -2564,8 +2857,8 @@ fn draw_untoon_shader_features(draw: &MeshDraw, opts: &SceneMeshLoadOpts) -> Unt
 }
 
 fn include_draw_features_for_pipeline(
-	pipeline_features: &mut BTreeMap<DrawPipelineKind, UntoonShaderFeatures>,
-	pipeline: DrawPipelineKind,
+	pipeline_features: &mut BTreeMap<DrawPipelineKey, UntoonShaderFeatures>,
+	pipeline: DrawPipelineKey,
 	draw: &MeshDraw,
 	opts: &SceneMeshLoadOpts,
 ) {
@@ -2579,7 +2872,7 @@ fn draw_pipeline_shader_features(
 	draws: &[MeshDraw],
 	draw_state: &SceneMeshDrawState,
 	opts: &SceneMeshLoadOpts,
-) -> BTreeMap<DrawPipelineKind, UntoonShaderFeatures> {
+) -> BTreeMap<DrawPipelineKey, UntoonShaderFeatures> {
 	let mut pipeline_features = BTreeMap::new();
 	for batch in draw_state.opaque_batches.iter().chain(draw_state.blended_batches.iter()) {
 		for &draw_index in &batch.draw_indices {
@@ -2592,17 +2885,18 @@ fn draw_pipeline_shader_features(
 		let Some(draw) = draws.get(draw_index) else {
 			continue;
 		};
-		let zwrite = draw
-			.material
-			.liltoon_like_runtime()
-			.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+		let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 		include_draw_features_for_pipeline(
 			&mut pipeline_features,
-			if zwrite {
-				DrawPipelineKind::TransparentToonBackpass
-			} else {
-				DrawPipelineKind::TransparentToonBackpassNoZWrite
-			},
+			DrawPipelineKey::new(
+				if zwrite {
+					DrawPipelineKind::TransparentToonBackpass
+				} else {
+					DrawPipelineKind::TransparentToonBackpassNoZWrite
+				},
+				draw,
+				opts,
+			),
 			draw,
 			opts,
 		);
@@ -2838,12 +3132,12 @@ impl SceneCubeTextureSlot {
 }
 
 pub(crate) struct SceneMeshes {
-	pipelines: BTreeMap<DrawPipelineKind, wgpu::RenderPipeline>,
-	pipeline_outline_toon: Option<wgpu::RenderPipeline>,
+	pipelines: BTreeMap<DrawPipelineKey, wgpu::RenderPipeline>,
+	pipelines_outline_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
 	compute_fur_cards_bind_group_layout: wgpu::BindGroupLayout,
 	compute_fur_cards_compute_pipeline: Option<ComputeFurCardsComputePipeline>,
-	pipeline_compute_fur_cards_pre_toon: Option<wgpu::RenderPipeline>,
-	pipeline_compute_fur_cards_toon: Option<wgpu::RenderPipeline>,
+	pipelines_compute_fur_cards_pre_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
+	pipelines_compute_fur_cards_toon: BTreeMap<MaterialRenderStateKey, wgpu::RenderPipeline>,
 	frame_buffer: wgpu::Buffer,
 	frame_uploaded: Option<MeshFrameGpu>,
 	frame_layout: wgpu::BindGroupLayout,
@@ -2863,22 +3157,23 @@ pub(crate) struct SceneMeshes {
 	image_texture_slots: Vec<SceneImageTextureSlot>,
 	cube_texture_slots: Vec<Option<SceneCubeTextureSlot>>,
 	#[allow(dead_code)]
-	_samplers: Vec<wgpu::Sampler>,
-	image_sampler_indices: Vec<usize>,
+	_samplers: Box<[wgpu::Sampler]>,
+	image_sampler_indices: Box<[usize]>,
 	#[allow(dead_code)]
 	_textures: Vec<wgpu::Texture>,
 	#[allow(dead_code)]
 	_cube_textures: Vec<wgpu::Texture>,
 	draws: Vec<MeshDraw>,
 	skin_palettes: Vec<SkinPalette>,
-	outline_draw_indices: Vec<usize>,
-	fur_draw_indices: Vec<usize>,
+	outline_draw_indices: Box<[usize]>,
+	fur_draw_indices: Box<[usize]>,
 	opaque_batches: Vec<DrawBatch>,
-	transparent_backpass_draw_indices: Vec<usize>,
+	transparent_backpass_draw_indices: Box<[usize]>,
 	blended_batches: Vec<DrawBatch>,
-	active_draw_indices: Vec<usize>,
+	active_draw_indices: Box<[usize]>,
+	active_morph_draw_indices: Box<[usize]>,
 	needs_screen_refraction: bool,
-	active_skin_palette_indices: Vec<usize>,
+	active_skin_palette_indices: Box<[usize]>,
 	image_texture_residency: Vec<bool>,
 	cube_texture_residency: Vec<bool>,
 	material_slot_residency: Vec<bool>,
@@ -2886,8 +3181,14 @@ pub(crate) struct SceneMeshes {
 	texture_summary: TextureUploadSummary,
 	runtime_requirements: SceneMeshRuntimeRequirements,
 	visibility_scratch: Vec<bool>,
-	expression_names: Vec<String>,
+	expression_names: Box<[String]>,
 	expression_value_scratch: Vec<f32>,
+	last_morph_expression_values: Vec<f32>,
+	last_morph_expression_values_valid: bool,
+	last_morph_name_overrides: BTreeMap<String, f32>,
+	last_morph_name_overrides_valid: bool,
+	last_morph_debug_zero_morphs: bool,
+	fur_source_vertex_scratch: Vec<ComputeFurCardsSourceVertexGpu>,
 	has_morph_draws: bool,
 	opts: SceneMeshLoadOpts,
 }
@@ -2983,13 +3284,13 @@ fn primitive_expand_cache_safe(buf: &UnaMeshBuffers) -> bool {
 }
 
 #[cfg(test)]
-fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&BTreeSet<usize>>) -> Option<ExpandedPrimitive> {
+fn expand_primitive(buf: &UnaMeshBuffers, dynamic_morph_targets: Option<&[usize]>) -> Option<ExpandedPrimitive> {
 	expand_primitive_with_cached_morph(buf, dynamic_morph_targets, None)
 }
 
 fn expand_primitive_with_cached_morph(
 	buf: &UnaMeshBuffers,
-	dynamic_morph_targets: Option<&BTreeSet<usize>>,
+	dynamic_morph_targets: Option<&[usize]>,
 	cached_morph_payload: Option<&ExpandedMorphPayload>,
 ) -> Option<ExpandedPrimitive> {
 	let default_n = [0.0_f32, 1.0, 0.0];
@@ -3011,13 +3312,15 @@ fn expand_primitive_with_cached_morph(
 
 	let num_morph = buf.morph_targets.len();
 	let cached_morph_payload = cached_morph_payload.filter(|payload| payload.morph_source_indices.iter().all(|&index| index < num_morph));
-	let morph_source_indices: Vec<usize> = cached_morph_payload.map_or_else(
+	let morph_source_indices: Cow<'_, [usize]> = cached_morph_payload.map_or_else(
 		|| {
-			dynamic_morph_targets
-				.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
-				.unwrap_or_else(|| (0..num_morph).collect())
+			Cow::Owned(
+				dynamic_morph_targets
+					.map(|indices| indices.iter().copied().filter(|&index| index < num_morph).collect())
+					.unwrap_or_else(|| (0..num_morph).collect()),
+			)
 		},
-		|payload| payload.morph_source_indices.clone(),
+		|payload| Cow::Borrowed(payload.morph_source_indices.as_ref()),
 	);
 	let vertex_capacity = positions.len();
 	let mut morph_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() {
@@ -3025,11 +3328,12 @@ fn expand_primitive_with_cached_morph(
 	} else {
 		None
 	};
-	let has_morph_normals = morph_source_indices.iter().any(|&target_index| {
-		buf.morph_targets
-			.get(target_index)
-			.is_some_and(|target| target.normal_deltas.is_some())
-	});
+	let has_morph_normals = cached_morph_payload.is_none()
+		&& morph_source_indices.iter().any(|&target_index| {
+			buf.morph_targets
+				.get(target_index)
+				.is_some_and(|target| target.normal_deltas.is_some())
+		});
 	let mut morph_nrm_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() && has_morph_normals {
 		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
 	} else {
@@ -3041,7 +3345,7 @@ fn expand_primitive_with_cached_morph(
 				.iter()
 				.enumerate()
 				.filter_map(|(target_index, target)| {
-					if dynamic_morph_targets.contains(&target_index) {
+					if dynamic_morph_targets.binary_search(&target_index).is_ok() {
 						return None;
 					}
 					let weight = default_morph_weight_for(buf, target_index);
@@ -3125,23 +3429,54 @@ fn expand_primitive_with_cached_morph(
 	fill_missing_tangents(&mut verts, &indices);
 
 	let morph_payload = cached_morph_payload.cloned().unwrap_or_else(|| ExpandedMorphPayload {
-		morph_pos: morph_push.unwrap_or_default(),
-		morph_nrm: morph_nrm_push,
+		morph_pos: morph_push.unwrap_or_default().into_boxed_slice(),
+		morph_nrm: morph_nrm_push.map(Vec::into_boxed_slice),
 		default_morph_weights: morph_source_indices
 			.iter()
 			.map(|&target_index| default_morph_weight_for(buf, target_index))
-			.collect(),
-		morph_source_indices,
+			.collect::<Vec<_>>()
+			.into_boxed_slice(),
+		morph_source_indices: morph_source_indices.into_owned().into_boxed_slice(),
 	});
 
 	Some(ExpandedPrimitive {
 		verts,
 		indices,
-		morph_pos: morph_payload.morph_pos,
-		morph_nrm: morph_payload.morph_nrm,
-		default_morph_weights: morph_payload.default_morph_weights,
-		morph_source_indices: morph_payload.morph_source_indices,
+		morph_pos: morph_payload.morph_pos.into_vec(),
+		morph_nrm: morph_payload.morph_nrm.map(|morph_nrm| morph_nrm.into_vec()),
+		default_morph_weights: morph_payload.default_morph_weights.into_vec(),
+		morph_source_indices: morph_payload.morph_source_indices.into_vec(),
 	})
+}
+
+fn expanded_morph_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedMorphPayload {
+	ExpandedMorphPayload {
+		morph_pos: exp.morph_pos.clone().into_boxed_slice(),
+		morph_nrm: exp.morph_nrm.clone().map(Vec::into_boxed_slice),
+		morph_source_indices: exp.morph_source_indices.clone().into_boxed_slice(),
+		default_morph_weights: exp.default_morph_weights.clone().into_boxed_slice(),
+	}
+}
+
+fn expanded_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedPrimitivePayload {
+	ExpandedPrimitivePayload {
+		verts: exp.verts.clone(),
+		morph_pos: exp.morph_pos.clone(),
+		morph_nrm: exp.morph_nrm.clone(),
+		morph_source_indices: exp.morph_source_indices.clone(),
+		default_morph_weights: exp.default_morph_weights.clone(),
+	}
+}
+
+fn expanded_primitive_from_cached_payload(payload: ExpandedPrimitivePayload, indices: Vec<u32>) -> ExpandedPrimitive {
+	ExpandedPrimitive {
+		verts: payload.verts,
+		indices,
+		morph_pos: payload.morph_pos,
+		morph_nrm: payload.morph_nrm,
+		morph_source_indices: payload.morph_source_indices,
+		default_morph_weights: payload.default_morph_weights,
+	}
 }
 
 fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<(usize, usize), Vec<ExpressionBinding>> {
@@ -3164,37 +3499,75 @@ fn expression_binding_index(catalog: Option<&UnaExpressionCatalog>) -> BTreeMap<
 	index
 }
 
-fn dynamic_morph_target_indices(buf: &UnaMeshBuffers, bindings: &[ExpressionBinding], include_all: bool) -> BTreeSet<usize> {
+fn dynamic_morph_target_indices(
+	buf: &UnaMeshBuffers,
+	bindings: &[ExpressionBinding],
+	dynamic_morph_target_names: &[String],
+	include_all: bool,
+) -> Vec<usize> {
+	if buf.morph_targets.is_empty() {
+		return Vec::new();
+	}
 	if include_all {
 		return (0..buf.morph_targets.len()).collect();
 	}
-	let mut indices = BTreeSet::new();
+	let mut indices = Vec::with_capacity(buf.default_morph_weights.len().min(buf.morph_targets.len()) + bindings.len());
 	for (index, &weight) in buf.default_morph_weights.iter().enumerate() {
 		if index < buf.morph_targets.len() && weight.abs() > 0.000001 {
-			indices.insert(index);
+			push_unique_index(&mut indices, index);
 		}
 	}
 	for binding in bindings {
 		if binding.morph_target_index < buf.morph_targets.len() {
-			indices.insert(binding.morph_target_index);
+			push_unique_index(&mut indices, binding.morph_target_index);
 		}
 	}
-	indices
+	if !dynamic_morph_target_names.is_empty() {
+		for (index, name) in buf.morph_target_names.iter().enumerate() {
+			if index < buf.morph_targets.len()
+				&& dynamic_morph_target_names
+					.binary_search_by(|candidate| candidate.as_str().cmp(name.as_str()))
+					.is_ok()
+			{
+				push_unique_index(&mut indices, index);
+			}
+		}
+	}
+	sorted_unique_indices(indices)
 }
 
 fn remap_expression_bindings(bindings: &[ExpressionBinding], morph_source_indices: &[usize]) -> Vec<ExpressionBinding> {
 	if bindings.is_empty() || morph_source_indices.is_empty() {
 		return Vec::new();
 	}
-	let compact_indices: BTreeMap<usize, usize> = morph_source_indices
-		.iter()
-		.enumerate()
-		.map(|(compact_index, &source_index)| (source_index, compact_index))
-		.collect();
+	let Some(&max_source_index) = morph_source_indices.last() else {
+		return Vec::new();
+	};
+	let dense_lookup_len = max_source_index.saturating_add(1);
+	if dense_lookup_len > 4096 && dense_lookup_len > morph_source_indices.len().saturating_mul(4).max(64) {
+		return bindings
+			.iter()
+			.filter_map(|binding| {
+				let morph_target_index = morph_source_indices.binary_search(&binding.morph_target_index).ok()?;
+				Some(ExpressionBinding {
+					preset_index: binding.preset_index,
+					morph_target_index,
+					weight_scale: binding.weight_scale,
+				})
+			})
+			.collect();
+	}
+	let mut compact_indices = vec![usize::MAX; dense_lookup_len];
+	for (compact_index, &source_index) in morph_source_indices.iter().enumerate() {
+		compact_indices[source_index] = compact_index;
+	}
 	bindings
 		.iter()
 		.filter_map(|binding| {
-			let &morph_target_index = compact_indices.get(&binding.morph_target_index)?;
+			let morph_target_index = *compact_indices.get(binding.morph_target_index)?;
+			if morph_target_index == usize::MAX {
+				return None;
+			}
 			Some(ExpressionBinding {
 				preset_index: binding.preset_index,
 				morph_target_index,
@@ -3282,6 +3655,126 @@ fn normalize_skinning_vertices(verts: &mut [Vertex], primitive_has_joints: bool,
 	}
 }
 
+fn apply_mesh_cloth_assist_to_vertices(
+	verts: &mut [Vertex],
+	indices: &[u32],
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[String],
+	mesh_path: &str,
+	config: &DynamicsMeshClothAssistConfig,
+	categories: &[DynamicsCategoryDefinition],
+	dynamic_deforming_node_indices: &[usize],
+) -> usize {
+	if !config.enabled || config.max_assist_weight <= 0.0 || verts.is_empty() || indices.is_empty() {
+		return 0;
+	}
+	let Some(skin) = skin else {
+		return 0;
+	};
+	if !mesh_cloth_assist_mesh_matches_with_categories(mesh_path, &config.mesh_path_contains, categories) {
+		return 0;
+	}
+	let joint_count = skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES);
+	if joint_count == 0 {
+		return 0;
+	}
+	let dynamic_nodes = (!dynamic_deforming_node_indices.is_empty()).then_some(dynamic_deforming_node_indices);
+	let joint_roles = dynamics_mesh_cloth_assist_joint_roles(skin, joint_count, dynamic_nodes, |joint_index| {
+		mesh_cloth_assist_joint_leaf(skin, node_paths, joint_index)
+	});
+	apply_dynamics_mesh_cloth_assist_to_vertices(verts, indices, joint_count, config, |joint_index| {
+		joint_roles
+			.get(joint_index)
+			.copied()
+			.unwrap_or(DynamicsMeshClothAssistJointRole::Other)
+	})
+}
+
+fn debug_dump_mesh_vertex_weights_if_requested(
+	mesh_i: usize,
+	prim_i: usize,
+	node_path: &str,
+	material_slot_index: Option<usize>,
+	material_name: Option<&str>,
+	verts: &[Vertex],
+	indices: &[u32],
+	skin: Option<&un_avatar_core::UnaSkin>,
+	node_paths: &[String],
+	dynamic_deforming_node_indices: &[usize],
+	mesh_cloth_assist_vertices: usize,
+) {
+	let Some(path) = std::env::var_os("UN_AVATAR_DEBUG_MESH_WEIGHTS_PATH") else {
+		return;
+	};
+	let filter = std::env::var("UN_AVATAR_DEBUG_MESH_WEIGHTS_FILTER").unwrap_or_default();
+	if !filter.is_empty() && !dynamics_token_filter_matches(node_path, &filter) {
+		return;
+	}
+	let joint_count = skin
+		.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
+		.unwrap_or(0);
+	let vertices = verts
+		.iter()
+		.enumerate()
+		.map(|(vertex_index, vert)| {
+			let influences = vert
+				.joints
+				.iter()
+				.zip(vert.weights.iter())
+				.map(|(&joint, &weight)| {
+					let joint_index = joint as usize;
+					let node_index = skin.and_then(|skin| skin.joint_nodes.get(joint_index)).copied();
+					let inverse_bind_matrix = skin.and_then(|skin| skin.inverse_bind_matrices.get(joint_index)).copied();
+					let node_path = node_index
+						.and_then(|node_index| node_paths.get(node_index))
+						.cloned()
+						.unwrap_or_default();
+					serde_json::json!({
+						"joint_index": joint_index,
+						"weight": weight,
+						"node_index": node_index,
+						"path": node_path,
+						"dynamic_deforming": node_index.is_some_and(|node_index| dynamic_deforming_node_indices.binary_search(&node_index).is_ok()),
+						"inverse_bind_matrix": inverse_bind_matrix,
+					})
+				})
+				.collect::<Vec<_>>();
+			serde_json::json!({
+				"vertex": vertex_index,
+				"pos": vert.pos,
+				"joints": vert.joints,
+				"weights": vert.weights,
+				"influences": influences,
+			})
+		})
+		.collect::<Vec<_>>();
+	let value = serde_json::json!({
+		"mesh_index": mesh_i,
+		"primitive_index": prim_i,
+		"node_path": node_path,
+		"material_slot_index": material_slot_index,
+		"material_name": material_name,
+		"vertex_count": verts.len(),
+		"joint_count": joint_count,
+		"mesh_cloth_assist_vertices": mesh_cloth_assist_vertices,
+		"indices": indices,
+		"vertices": vertices,
+	});
+	let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) else {
+		return;
+	};
+	let _ = serde_json::to_writer(&mut file, &value);
+	let _ = writeln!(file);
+}
+
+fn mesh_cloth_assist_joint_leaf<'a>(skin: &un_avatar_core::UnaSkin, node_paths: &'a [String], joint_index: usize) -> &'a str {
+	let Some(&node_index) = skin.joint_nodes.get(joint_index) else {
+		return "";
+	};
+	let path = node_paths.get(node_index).map(String::as_str).unwrap_or("");
+	path.rsplit('/').next().unwrap_or(path)
+}
+
 fn skin_palette_matrix_capacity(skin: Option<&un_avatar_core::UnaSkin>) -> usize {
 	skin.map(|skin| skin.joint_nodes.len().min(skin.inverse_bind_matrices.len()).min(MAX_BONES))
 		.unwrap_or(1)
@@ -3304,30 +3797,115 @@ fn expression_names(catalog: Option<&UnaExpressionCatalog>) -> Vec<String> {
 	names
 }
 
+fn scene_node_paths(scene: &UnaSceneSnapshot) -> Vec<String> {
+	let mut out = vec![String::new(); scene.nodes.len()];
+	let mut visited = vec![false; scene.nodes.len()];
+	fn visit(scene: &UnaSceneSnapshot, out: &mut [String], visited: &mut [bool], node_index: usize, parent_path: &str) {
+		let Some(node) = scene.nodes.get(node_index) else {
+			return;
+		};
+		if visited.get(node_index).copied().unwrap_or(true) {
+			return;
+		}
+		visited[node_index] = true;
+		let path = match node.name.as_deref().filter(|name| !name.is_empty()) {
+			Some(name) if parent_path.is_empty() => name.to_string(),
+			Some(name) => format!("{parent_path}/{name}"),
+			None => parent_path.to_string(),
+		};
+		out[node_index] = path.clone();
+		for &child in &node.children {
+			visit(scene, out, visited, child, &path);
+		}
+	}
+	let roots = if scene.roots.is_empty() {
+		scene.resolved_roots().to_vec()
+	} else {
+		scene.roots.clone()
+	};
+	for root in roots {
+		visit(scene, &mut out, &mut visited, root, "");
+	}
+	for node_index in 0..scene.nodes.len() {
+		if !visited[node_index] {
+			visit(scene, &mut out, &mut visited, node_index, "");
+		}
+	}
+	out
+}
+
+fn morph_override_key(node_path: &str, morph_name: &str) -> String {
+	if node_path.is_empty() {
+		morph_name.to_string()
+	} else {
+		format!("{node_path}\0{morph_name}")
+	}
+}
+
+fn morph_override_path_suffix_key(key: &str) -> Option<String> {
+	let (path, morph_name) = key.split_once('\0')?;
+	let (_, root_relative_path) = path.split_once('/')?;
+	Some(format!("{root_relative_path}\0{morph_name}"))
+}
+
+fn morph_override_value(overrides: &BTreeMap<String, f32>, key: Option<&String>, suffix_key: Option<&String>, name: &str) -> Option<f32> {
+	if let Some(key) = key {
+		if let Some(value) = overrides.get(key).copied() {
+			return Some(value);
+		}
+	}
+	if let Some(suffix_key) = suffix_key {
+		if let Some(value) = overrides.get(suffix_key).copied() {
+			return Some(value);
+		}
+	}
+	overrides.get(name).copied()
+}
+
 fn fill_morph_weights_for_draw(
 	default_morph_weights: &[f32],
 	target_count: usize,
 	bindings: &[ExpressionBinding],
 	expression_values: Option<&[f32]>,
+	morph_target_names: &[String],
+	morph_target_override_keys: &[String],
+	morph_target_override_suffix_keys: &[Option<String>],
+	morph_name_overrides: Option<&BTreeMap<String, f32>>,
 	out: &mut Vec<f32>,
 ) {
 	out.clear();
-	out.resize(target_count, 0.0);
 	if target_count == 0 {
 		return;
 	}
 	let copy_len = default_morph_weights.len().min(target_count);
-	out[..copy_len].copy_from_slice(&default_morph_weights[..copy_len]);
-	let Some(expression_values) = expression_values else { return };
-	for binding in bindings {
-		let pw = expression_values.get(binding.preset_index).copied().unwrap_or(0.0);
-		if pw == 0.0 {
-			continue;
+	out.extend_from_slice(&default_morph_weights[..copy_len]);
+	out.resize(target_count, 0.0);
+	if let Some(expression_values) = expression_values {
+		for binding in bindings {
+			let pw = expression_values.get(binding.preset_index).copied().unwrap_or(0.0);
+			if pw == 0.0 {
+				continue;
+			}
+			let Some(slot) = out.get_mut(binding.morph_target_index) else {
+				continue;
+			};
+			*slot = (*slot + pw * binding.weight_scale).clamp(0.0, 1.0);
 		}
-		let Some(slot) = out.get_mut(binding.morph_target_index) else {
-			continue;
-		};
-		*slot = (*slot + pw * binding.weight_scale).clamp(0.0, 1.0);
+	}
+	if let Some(overrides) = morph_name_overrides {
+		for (index, name) in morph_target_names.iter().enumerate().take(target_count) {
+			let Some(value) = morph_override_value(
+				overrides,
+				morph_target_override_keys.get(index),
+				morph_target_override_suffix_keys.get(index).and_then(Option::as_ref),
+				name,
+			) else {
+				continue;
+			};
+			if let Some(slot) = out.get_mut(index) {
+				*slot = value.clamp(0.0, 1.0);
+			}
+		}
 	}
 }
 
@@ -3340,6 +3918,27 @@ fn expression_bindings_have_active_weight(bindings: &[ExpressionBinding], expres
 		.any(|binding| expression_values.get(binding.preset_index).copied().unwrap_or(0.0) != 0.0)
 }
 
+fn morph_names_have_active_override(
+	morph_target_names: &[String],
+	morph_target_override_keys: &[String],
+	morph_target_override_suffix_keys: &[Option<String>],
+	morph_name_overrides: Option<&BTreeMap<String, f32>>,
+) -> bool {
+	let Some(overrides) = morph_name_overrides else {
+		return false;
+	};
+	morph_target_names.iter().enumerate().any(|(index, name)| {
+		morph_override_value(
+			overrides,
+			morph_target_override_keys.get(index),
+			morph_target_override_suffix_keys.get(index).and_then(Option::as_ref),
+			name,
+		)
+		.unwrap_or(0.0)
+			!= 0.0
+	})
+}
+
 fn morph_weights_match_default(uploaded: &[f32], default_morph_weights: &[f32], target_count: usize) -> bool {
 	if uploaded.len() != target_count {
 		return false;
@@ -3348,25 +3947,61 @@ fn morph_weights_match_default(uploaded: &[f32], default_morph_weights: &[f32], 
 	uploaded[..copy_len] == default_morph_weights[..copy_len] && uploaded[copy_len..].iter().all(|&weight| weight == 0.0)
 }
 
+fn update_cached_optional_f32_slice(cache: &mut Vec<f32>, valid: &mut bool, values: Option<&[f32]>) -> bool {
+	match values {
+		Some(values) if *valid && cache.as_slice() == values => false,
+		Some(values) => {
+			cache.clear();
+			cache.extend_from_slice(values);
+			*valid = true;
+			true
+		}
+		None if *valid => {
+			cache.clear();
+			*valid = false;
+			true
+		}
+		None => false,
+	}
+}
+
+fn update_cached_optional_f32_map(cache: &mut BTreeMap<String, f32>, valid: &mut bool, values: Option<&BTreeMap<String, f32>>) -> bool {
+	match values {
+		Some(values) if *valid && cache == values => false,
+		Some(values) => {
+			cache.clone_from(values);
+			*valid = true;
+			true
+		}
+		None if *valid => {
+			cache.clear();
+			*valid = false;
+			true
+		}
+		None => false,
+	}
+}
+
+#[cfg(test)]
 fn scene_default_morph_weights_for_draw(
 	scene: &UnaSceneSnapshot,
 	mesh_index: usize,
 	primitive_index: usize,
 	morph_source_indices: &[usize],
 ) -> Vec<f32> {
-	let mut out = vec![0.0; morph_source_indices.len()];
-	let Some(primitive) = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index)) else {
-		return out;
-	};
-	for (dst, &source_index) in out.iter_mut().zip(morph_source_indices) {
-		*dst = primitive
-			.default_morph_weights
-			.get(source_index)
-			.copied()
-			.unwrap_or(0.0)
-			.clamp(0.0, 1.0);
-	}
-	out
+	let primitive = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index));
+	morph_source_indices
+		.iter()
+		.map(|&source_index| scene_default_morph_weight_for_source(primitive, source_index))
+		.collect()
+}
+
+fn scene_default_morph_weight_for_source(primitive: Option<&UnaMeshBuffers>, source_index: usize) -> f32 {
+	primitive
+		.and_then(|primitive| primitive.default_morph_weights.get(source_index))
+		.copied()
+		.unwrap_or(0.0)
+		.clamp(0.0, 1.0)
 }
 
 fn refresh_morph_default_weights(
@@ -3377,17 +4012,33 @@ fn refresh_morph_default_weights(
 	primitive_index: usize,
 	morph_source_indices: &[usize],
 ) -> bool {
-	let next = scene_default_morph_weights_for_draw(scene, mesh_index, primitive_index, morph_source_indices);
-	if *default_morph_weights == next {
-		return false;
+	let primitive = scene.meshes.get(mesh_index).and_then(|mesh| mesh.get(primitive_index));
+	let mut changed = default_morph_weights.len() != morph_source_indices.len();
+	if changed {
+		default_morph_weights.resize(morph_source_indices.len(), 0.0);
 	}
-	*default_morph_weights = next;
-	uploaded_morph_weights.clear();
-	true
+	for (slot, &source_index) in default_morph_weights.iter_mut().zip(morph_source_indices) {
+		let next = scene_default_morph_weight_for_source(primitive, source_index);
+		if *slot != next {
+			*slot = next;
+			changed = true;
+		}
+	}
+	if changed {
+		uploaded_morph_weights.clear();
+	}
+	changed
 }
 
 fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize) -> Vec<[f32; 4]> {
 	let mut out = Vec::with_capacity(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2).max(1));
+	fill_morph_delta_data(morph_pos, morph_nrm, vertex_count, &mut out);
+	out
+}
+
+fn fill_morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize, out: &mut Vec<[f32; 4]>) {
+	out.clear();
+	out.reserve(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2));
 	for (target_index, target_pos) in morph_pos.iter().enumerate() {
 		let target_nrm = morph_nrm.and_then(|all| all.get(target_index));
 		for vertex_index in 0..vertex_count {
@@ -3400,7 +4051,6 @@ fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3
 	if out.is_empty() {
 		out.push([0.0; 4]);
 	}
-	out
 }
 
 fn create_morph_resources(
@@ -3536,16 +4186,42 @@ fn create_morph_resources_with_shared_deltas(
 	}
 }
 
-fn compact_index_format(indices: &[u32]) -> wgpu::IndexFormat {
-	if indices.iter().all(|&index| index <= u16::MAX as u32) {
-		wgpu::IndexFormat::Uint16
-	} else {
-		wgpu::IndexFormat::Uint32
+fn write_matrix_to_raw(raw: &mut Vec<f32>, matrix: Mat4) {
+	raw.extend_from_slice(&matrix.to_cols_array());
+}
+
+fn write_matrix_to_raw_slot(raw: &mut [f32], matrix_index: usize, matrix: Mat4) {
+	let start = matrix_index.saturating_mul(16);
+	let end = start.saturating_add(16);
+	if let Some(slot) = raw.get_mut(start..end) {
+		slot.copy_from_slice(&matrix.to_cols_array());
 	}
 }
 
-fn write_matrix_to_raw(raw: &mut Vec<f32>, matrix: Mat4) {
-	raw.extend_from_slice(&matrix.to_cols_array());
+fn write_palette_matrix_slot(raw: &mut [f32], uploaded_matrices: &mut Vec<Mat4>, matrix_index: usize, matrix: Mat4) -> bool {
+	write_matrix_to_raw_slot(raw, matrix_index, matrix);
+	if uploaded_matrices.get(matrix_index).copied() == Some(matrix) {
+		false
+	} else if let Some(slot) = uploaded_matrices.get_mut(matrix_index) {
+		*slot = matrix;
+		true
+	} else {
+		false
+	}
+}
+
+fn resize_f32_zeroed_if_needed(values: &mut Vec<f32>, len: usize) {
+	if values.len() != len {
+		values.resize(len, 0.0);
+	}
+}
+
+fn resize_mat4_identity_if_needed(values: &mut Vec<Mat4>, len: usize) -> bool {
+	if values.len() == len {
+		return false;
+	}
+	values.resize(len, Mat4::IDENTITY);
+	true
 }
 
 fn identity_matrix_raw() -> Vec<f32> {
@@ -3734,7 +4410,7 @@ fn build_scene_image_texture_upload(
 	gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
 ) -> Option<SceneImageTextureUpload> {
 	if lazy.texture_max_dimension.is_none() && lazy.texture_compression != TextureCompressionMode::Compat {
-		if let Some(source_upload) = source_texture_upload(im) {
+		if let Some(source_upload) = source_texture_upload(im, source_metadata, lazy.role) {
 			return Some(SceneImageTextureUpload::Source(source_upload));
 		}
 	}
@@ -3882,14 +4558,10 @@ fn create_mesh_material_bind_groups(
 	source: MeshMaterialBindingSource<'_>,
 ) -> (wgpu::BindGroup, wgpu::BindGroup) {
 	let mat = source.material;
-	let default_mtoon = UnaMtoonMaterial::default();
-	let mtoon = mat.mtoon_like_runtime().unwrap_or(&default_mtoon);
-	let liltoon_like = mat.liltoon_like_runtime();
+	let liltoon_like = material_untoon_profile(mat);
 	let tex_view = texture_view_or(&texture_views.images, mat.base_color_texture_index, &texture_views.white);
 	let tex_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.base_color_texture_index, 0);
-	let shade_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
-		.or(mtoon.shade_multiply_texture_index);
+	let shade_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index);
 	let shade_fallback_view = if liltoon_like.is_some() {
 		&texture_views.transparent_black
 	} else {
@@ -3901,8 +4573,7 @@ fn create_mesh_material_bind_groups(
 	let shadow2_color_view = texture_view_or(&texture_views.images, shadow2_color_texture_index, &texture_views.transparent_black);
 	let shadow3_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
 	let shadow3_color_view = texture_view_or(&texture_views.images, shadow3_color_texture_index, &texture_views.transparent_black);
-	let liltoon_strength_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
-	let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
+	let shading_shift_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
 	let shift_fallback_view = if liltoon_like.is_some() {
 		&texture_views.white
 	} else {
@@ -3916,9 +4587,7 @@ fn create_mesh_material_bind_groups(
 	let shadow_blur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
 	let shadow_blur_mask_view = texture_view_or(&texture_views.images, shadow_blur_mask_texture_index, &texture_views.white);
 	let shadow_blur_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, shadow_blur_mask_texture_index, 0);
-	let matcap_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
-		.or(mtoon.matcap_texture_index);
+	let matcap_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.texture_index);
 	let matcap_fallback_view = if liltoon_like.is_some() {
 		&texture_views.white
 	} else {
@@ -3973,9 +4642,7 @@ fn create_mesh_material_bind_groups(
 	let alpha_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
 	let alpha_mask_view = texture_view_or(&texture_views.images, alpha_mask_texture_index, &texture_views.white);
 	let alpha_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, alpha_mask_texture_index, 0);
-	let rim_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.rim.texture_index)
-		.or(mtoon.rim_multiply_texture_index);
+	let rim_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.texture_index);
 	let rim_view = texture_view_or(&texture_views.images, rim_texture_index, &texture_views.white);
 	let rim_sampler = texture_sampler_or(samplers, image_sampler_indices, rim_texture_index, 0);
 	let rim_shade_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
@@ -3995,7 +4662,7 @@ fn create_mesh_material_bind_groups(
 	let reflection_texture_index = if let Some(liltoon_like) = liltoon_like {
 		liltoon_reflection_texture_index(liltoon_like)
 	} else {
-		mtoon.reflection_cube_texture_index
+		None
 	};
 	let reflection_view = reflection_texture_index
 		.and_then(|index| texture_views.cubes.get(index).and_then(Option::as_ref))
@@ -4032,15 +4699,14 @@ fn create_mesh_material_bind_groups(
 	let emission2nd_gradation_view = texture_view_or(&texture_views.images, emission2nd_gradation_texture_index, &texture_views.white);
 	let occlusion_view = texture_view_or(&texture_views.images, mat.occlusion_texture_index, &texture_views.white);
 	let occlusion_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.occlusion_texture_index, 0);
-	let outline_width_mask_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index)
-		.or(mtoon.outline_width_multiply_texture_index);
+	let outline_width_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index);
 	let outline_view = texture_view_or(&texture_views.images, outline_width_mask_texture_index, &texture_views.white);
 	let outline_sampler = texture_sampler_or(samplers, image_sampler_indices, outline_width_mask_texture_index, 0);
 	let outline_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.texture_index);
 	let outline_color_view = texture_view_or(&texture_views.images, outline_texture_index, &texture_views.white);
-	let uv_mask_view = texture_view_or(&texture_views.images, mtoon.uv_animation_mask_texture_index, &texture_views.white);
-	let uv_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
+	let uv_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.uv_animation_mask_texture_index);
+	let uv_mask_view = texture_view_or(&texture_views.images, uv_mask_texture_index, &texture_views.white);
+	let uv_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, uv_mask_texture_index, 0);
 	let normal_view = texture_view_or(&texture_views.images, mat.normal_texture_index, &texture_views.neutral_normal);
 	let normal_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.normal_texture_index, 0);
 	let normal2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
@@ -5443,26 +6109,18 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 			if !matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask) {
 				return false;
 			}
-			if d.shading.is_liltoon_like() {
-				return d
-					.material
-					.liltoon_like_runtime()
-					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
-			}
-			d.shading.is_mtoon_like()
-				&& d.material
-					.mtoon_like_runtime()
-					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
+			material_untoon_profile(&d.material)
+				.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0)
 		}
 		AvatarOutlinePolicy::Off => false,
 	}
 }
 
 fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel) -> u32 {
-	if !shading.is_liltoon_like() {
+	if !renderer_toon_shading(shading) {
 		return 0;
 	}
-	let Some(liltoon_like) = material.liltoon_like_runtime() else {
+	let Some(liltoon_like) = material_untoon_profile(material) else {
 		return 0;
 	};
 	if liltoon_like.fur.enabled_factor <= 0.5 {
@@ -5749,7 +6407,7 @@ fn compute_fur_cards_buffer_requirements(card_count: u32) -> Option<ComputeFurCa
 }
 
 #[allow(dead_code)]
-fn compute_fur_cards_source_vertex_from_vertex(vertex: Vertex) -> ComputeFurCardsSourceVertexGpu {
+fn compute_fur_cards_source_vertex_from_vertex(vertex: &Vertex) -> ComputeFurCardsSourceVertexGpu {
 	ComputeFurCardsSourceVertexGpu {
 		position: [vertex.pos[0], vertex.pos[1], vertex.pos[2], 1.0],
 		normal: [vertex.norm[0], vertex.norm[1], vertex.norm[2], 0.0],
@@ -5768,32 +6426,68 @@ fn compute_fur_cards_source_vertex_from_vertex(vertex: Vertex) -> ComputeFurCard
 
 #[allow(dead_code)]
 fn compute_fur_cards_source_vertices_from_mesh(verts: &[Vertex]) -> Vec<ComputeFurCardsSourceVertexGpu> {
-	verts.iter().copied().map(compute_fur_cards_source_vertex_from_vertex).collect()
+	verts.iter().map(compute_fur_cards_source_vertex_from_vertex).collect()
 }
 
-fn compute_fur_cards_palette_matrix(raw: &[f32], joint_index: u16) -> Mat4 {
-	let matrix_count = raw.len() / 16;
-	if matrix_count == 0 {
-		return Mat4::IDENTITY;
+#[cfg(test)]
+fn compute_fur_cards_palette_matrices(raw: &[f32], out: &mut Vec<Mat4>) {
+	out.clear();
+	out.reserve(raw.len() / 16);
+	for matrix in raw.chunks_exact(16) {
+		out.push(Mat4::from_cols_array(matrix.try_into().expect("palette matrix slice length")));
 	}
-	let joint_index = (joint_index as usize).min(matrix_count - 1);
-	let base = joint_index * 16;
-	Mat4::from_cols_array(&raw[base..base + 16].try_into().expect("palette matrix slice length"))
 }
 
-fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_raw: &[f32]) -> ComputeFurCardsSourceVertexGpu {
+fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: &Vertex, palette_matrices: &[Mat4]) -> ComputeFurCardsSourceVertexGpu {
 	let position = Vec3::from_array(vertex.pos);
 	let normal = Vec3::from_array(vertex.norm);
 	let tangent = Vec3::new(vertex.tangent[0], vertex.tangent[1], vertex.tangent[2]);
+	if vertex.weights == [1.0, 0.0, 0.0, 0.0] {
+		let palette_matrix_count = palette_matrices.len();
+		let matrix = if palette_matrix_count == 0 {
+			Mat4::IDENTITY
+		} else {
+			palette_matrices[(vertex.joints[0] as usize).min(palette_matrix_count - 1)]
+		};
+		let mut skinned_normal = matrix.transform_vector3(normal);
+		let mut skinned_tangent = matrix.transform_vector3(tangent);
+		if skinned_normal.length_squared() <= 0.0000001 {
+			skinned_normal = normal;
+		}
+		if skinned_tangent.length_squared() <= 0.0000001 {
+			skinned_tangent = tangent;
+		}
+		let skinned_normal = skinned_normal.normalize_or_zero();
+		let skinned_tangent = skinned_tangent.normalize_or_zero();
+		return ComputeFurCardsSourceVertexGpu {
+			position: matrix.transform_point3(position).extend(1.0).to_array(),
+			normal: [skinned_normal.x, skinned_normal.y, skinned_normal.z, 0.0],
+			tangent: [skinned_tangent.x, skinned_tangent.y, skinned_tangent.z, vertex.tangent[3]],
+			uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
+			color: vertex.color,
+			joints: [
+				vertex.joints[0] as u32,
+				vertex.joints[1] as u32,
+				vertex.joints[2] as u32,
+				vertex.joints[3] as u32,
+			],
+			weights: vertex.weights,
+		};
+	}
 	let mut skinned_position = Vec3::ZERO;
 	let mut skinned_normal = Vec3::ZERO;
 	let mut skinned_tangent = Vec3::ZERO;
+	let palette_matrix_count = palette_matrices.len();
 	for i in 0..4 {
 		let weight = vertex.weights[i];
 		if weight.abs() <= 0.000001 {
 			continue;
 		}
-		let matrix = compute_fur_cards_palette_matrix(palette_raw, vertex.joints[i]);
+		let matrix = if palette_matrix_count == 0 {
+			Mat4::IDENTITY
+		} else {
+			palette_matrices[(vertex.joints[i] as usize).min(palette_matrix_count - 1)]
+		};
 		skinned_position += matrix.transform_point3(position) * weight;
 		skinned_normal += matrix.transform_vector3(normal) * weight;
 		skinned_tangent += matrix.transform_vector3(tangent) * weight;
@@ -5804,20 +6498,12 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_r
 	if skinned_tangent.length_squared() <= 0.0000001 {
 		skinned_tangent = tangent;
 	}
+	let skinned_normal = skinned_normal.normalize_or_zero();
+	let skinned_tangent = skinned_tangent.normalize_or_zero();
 	ComputeFurCardsSourceVertexGpu {
 		position: [skinned_position.x, skinned_position.y, skinned_position.z, 1.0],
-		normal: [
-			skinned_normal.normalize_or_zero().x,
-			skinned_normal.normalize_or_zero().y,
-			skinned_normal.normalize_or_zero().z,
-			0.0,
-		],
-		tangent: [
-			skinned_tangent.normalize_or_zero().x,
-			skinned_tangent.normalize_or_zero().y,
-			skinned_tangent.normalize_or_zero().z,
-			vertex.tangent[3],
-		],
+		normal: [skinned_normal.x, skinned_normal.y, skinned_normal.z, 0.0],
+		tangent: [skinned_tangent.x, skinned_tangent.y, skinned_tangent.z, vertex.tangent[3]],
 		uv: [vertex.uv[0], vertex.uv[1], 0.0, 0.0],
 		color: vertex.color,
 		joints: [
@@ -5830,9 +6516,9 @@ fn compute_fur_cards_skinned_source_vertex_from_vertex(vertex: Vertex, palette_r
 	}
 }
 
-fn compute_fur_cards_skinned_source_vertices_from_mesh(
+fn compute_fur_cards_skinned_source_vertices_from_matrices(
 	verts: &[Vertex],
-	palette_raw: &[f32],
+	palette_matrices: &[Mat4],
 	out: &mut Vec<ComputeFurCardsSourceVertexGpu>,
 ) {
 	out.clear();
@@ -5840,8 +6526,7 @@ fn compute_fur_cards_skinned_source_vertices_from_mesh(
 	out.extend(
 		verts
 			.iter()
-			.copied()
-			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_raw)),
+			.map(|vertex| compute_fur_cards_skinned_source_vertex_from_vertex(vertex, palette_matrices)),
 	);
 }
 
@@ -5864,7 +6549,20 @@ fn compute_fur_cards_source_triangles_from_indices(indices: &[u32], vertex_count
 		.collect()
 }
 
-#[allow(dead_code)]
+fn compute_fur_cards_source_triangles_from_indices_u16(indices: &[u16], vertex_count: usize) -> Vec<ComputeFurCardsSourceTriangleGpu> {
+	indices
+		.chunks_exact(3)
+		.filter_map(|tri| {
+			let i0 = tri[0] as usize;
+			let i1 = tri[1] as usize;
+			let i2 = tri[2] as usize;
+			(i0 < vertex_count && i1 < vertex_count && i2 < vertex_count).then_some(ComputeFurCardsSourceTriangleGpu {
+				indices: [i0 as u32, i1 as u32, i2 as u32, 0],
+			})
+		})
+		.collect()
+}
+
 #[allow(dead_code)]
 fn compute_fur_cards_cpu_map_red_at(map: Option<&UnaImageRgba>, uv: Vec2, fallback: f32) -> f32 {
 	map.map(|image| sample_image_bilinear(image, uv.x, uv.y, true, false)[0])
@@ -5927,7 +6625,7 @@ fn compute_fur_cards_card_sources_from_triangles(
 	triangles: &[ComputeFurCardsSourceTriangleGpu],
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 ) -> Option<Vec<ComputeFurCardsCardSourceGpu>> {
-	let liltoon_fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
+	let liltoon_fur = material_untoon_profile(material).map(|liltoon_like| &liltoon_like.fur);
 	let layer_num = liltoon_fur.map(|fur| fur.layer_count_factor).unwrap_or(1.0);
 	let fur_length = liltoon_fur.map(|fur| fur.vector_factor[3].max(0.0)).unwrap_or(0.0);
 	let segment_count = liltoon_fur_segment_count(layer_num);
@@ -6024,8 +6722,7 @@ fn create_compute_fur_cards_compute_pipeline(
 
 #[allow(dead_code)]
 fn compute_fur_cards_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
-	material
-		.liltoon_like_runtime()
+	material_untoon_profile(material)
 		.map(|liltoon_like| liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor))
 		.unwrap_or(1)
 		.max(1)
@@ -6038,7 +6735,7 @@ fn compute_fur_cards_generate_params_from_material(
 	_cards_per_triangle: u32,
 	generated: ComputeFurCardsBufferRequirements,
 ) -> ComputeFurCardsGenerateParamsGpu {
-	let fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
+	let fur = material_untoon_profile(material).map(|liltoon_like| &liltoon_like.fur);
 	let vector = fur.map(|f| f.vector_factor).unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let fur_length = vector[3].max(0.0);
 	let cards_per_triangle = fur.map(|f| liltoon_fur_segment_count(f.layer_count_factor)).unwrap_or(0);
@@ -6088,7 +6785,7 @@ fn create_compute_fur_cards_draw_resources(
 	compute_fur_cards_bind_group_layout: &wgpu::BindGroupLayout,
 	material: &UnaMaterialPbr,
 	verts: &[Vertex],
-	indices: &[u32],
+	indices: &SceneMeshIndexUpload,
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 	fur_vector_view: &wgpu::TextureView,
 	fur_length_mask_view: &wgpu::TextureView,
@@ -6097,7 +6794,7 @@ fn create_compute_fur_cards_draw_resources(
 	fur_sampler: &wgpu::Sampler,
 ) -> Option<ComputeFurCardsDrawResources> {
 	let source_vertices = compute_fur_cards_source_vertices_from_mesh(verts);
-	let source_triangles = compute_fur_cards_source_triangles_from_indices(indices, source_vertices.len());
+	let source_triangles = indices.source_triangles(source_vertices.len());
 	let triangle_count = u32::try_from(source_triangles.len()).ok()?;
 	if triangle_count == 0 {
 		return None;
@@ -6195,8 +6892,6 @@ fn create_compute_fur_cards_draw_resources(
 		card_count: generated_requirements.card_count,
 		generated_index_count: generated_requirements.index_count,
 		dispatch_workgroups: compute_fur_cards_dispatch_workgroups(card_count),
-		base_vertices: verts.to_vec(),
-		source_vertex_scratch: Vec::with_capacity(verts.len()),
 	})
 }
 
@@ -6218,9 +6913,48 @@ fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLo
 	mat.base_color_factor[3] <= 0.001 && matches!(mat.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
 }
 
+fn untoon_material_uses_srgb_color_factors(liltoon_like: Option<&UnaLilToonLikeMaterial>) -> bool {
+	liltoon_like
+		.map(|profile| profile.color_factor_color_space == UnaColorFactorColorSpace::Srgb)
+		.unwrap_or(false)
+}
+
+fn srgb_factor_to_linear(value: f32) -> f32 {
+	if !(0.0..=1.0).contains(&value) {
+		return value;
+	}
+	if value <= 0.04045 {
+		value / 12.92
+	} else {
+		((value + 0.055) / 1.055).powf(2.4)
+	}
+}
+
+fn source_rgb_to_linear(rgb: [f32; 3], enabled: bool) -> [f32; 3] {
+	if !enabled {
+		return rgb;
+	}
+	[
+		srgb_factor_to_linear(rgb[0]),
+		srgb_factor_to_linear(rgb[1]),
+		srgb_factor_to_linear(rgb[2]),
+	]
+}
+
+fn source_rgba_to_linear(rgba: [f32; 4], enabled: bool) -> [f32; 4] {
+	if !enabled {
+		return rgba;
+	}
+	[
+		srgb_factor_to_linear(rgba[0]),
+		srgb_factor_to_linear(rgba[1]),
+		srgb_factor_to_linear(rgba[2]),
+		rgba[3],
+	]
+}
+
 fn mesh_draw_material_gpu_with_profiles(
 	mat: &UnaMaterialPbr,
-	mtoon: &UnaMtoonMaterial,
 	liltoon_like: Option<&un_avatar_core::UnaLilToonLikeMaterial>,
 	opts: &SceneMeshLoadOpts,
 	mesh_index: usize,
@@ -6229,6 +6963,8 @@ fn mesh_draw_material_gpu_with_profiles(
 	let iris_relax = opts.relax_iris_alpha && iris_like_material_name(mat.name.as_deref()) && mat.base_color_factor[3] <= 0.001;
 	let mut eff_alpha = mat.alpha_mode;
 	let mut base_color = mat.base_color_factor;
+	let source_srgb_color_factors = untoon_material_uses_srgb_color_factors(liltoon_like);
+	base_color = source_rgba_to_linear(base_color, source_srgb_color_factors);
 	if opts.force_simple_basecolor || iris_relax {
 		eff_alpha = UnaAlphaMode::Opaque;
 		base_color[3] = 1.0;
@@ -6245,9 +6981,6 @@ fn mesh_draw_material_gpu_with_profiles(
 	}
 	if opts.debug_disable_rim_lighting {
 		flags |= 4;
-	}
-	if opts.debug_force_shading_shift_zero {
-		flags |= 8;
 	}
 	if opts.debug_disable_matcap {
 		flags |= 16;
@@ -6275,7 +7008,7 @@ fn mesh_draw_material_gpu_with_profiles(
 	if mat.occlusion_texture_index.is_some() {
 		flags |= 1024;
 	}
-	let (rim_color, rim_lighting_mix, rim_power, rim_lift) = effective_mtoon_rim(mat, mtoon, opts);
+	let (rim_color, rim_lighting_mix, rim_power, rim_lift) = ([0.0, 0.0, 0.0], 0.0, 5.0, 0.0);
 	let rim_texture_mix = 1.0;
 	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile) {
 		flags |= MAT_UNTOON_GEM_PROFILE;
@@ -6550,7 +7283,6 @@ fn mesh_draw_material_gpu_with_profiles(
 	let main3rd_dissolve_noise_uv_anim_params = liltoon_like
 		.map(|u| u.main_color.third_dissolve.noise_uv_scroll_rotate_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
-	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
 			if liltoon_like.outline.enabled_factor > 0.5 && liltoon_like.outline.width_factor > 0.0 {
@@ -6578,27 +7310,16 @@ fn mesh_draw_material_gpu_with_profiles(
 				)
 			}
 		} else {
-			outline
-				.map(|o| {
-					(
-						o.mode,
-						o.width,
-						[o.color[0], o.color[1], o.color[2], 1.0],
-						o.lighting_mix,
-						[0.0, 0.0, 0.0, 0.0],
-						[10.0, -8.0, 0.0, 0.0],
-					)
-				})
-				.unwrap_or((
-					UnaMtoonOutlineWidthMode::None,
-					0.0,
-					[0.0, 0.0, 0.0, 0.0],
-					0.0,
-					[0.0, 0.0, 0.0, 0.0],
-					[10.0, -8.0, 0.0, 0.0],
-				))
+			(
+				UnaMtoonOutlineWidthMode::None,
+				0.0,
+				[0.0, 0.0, 0.0, 0.0],
+				0.0,
+				[0.0, 0.0, 0.0, 0.0],
+				[10.0, -8.0, 0.0, 0.0],
+			)
 		};
-	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or(mtoon.shade_color_factor);
+	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or([0.0, 0.0, 0.0]);
 	let shadow_params = liltoon_like
 		.map(|u| {
 			[
@@ -6656,7 +7377,7 @@ fn mesh_draw_material_gpu_with_profiles(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 1.0, 0.0]);
-	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or(mtoon.matcap_factor);
+	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or([1.0, 1.0, 1.0]);
 	let matcap_params = liltoon_like
 		.map(|u| {
 			[
@@ -6894,7 +7615,7 @@ fn mesh_draw_material_gpu_with_profiles(
 				u.alpha_mask.mode_factor.clamp(0.0, 4.0),
 				u.alpha_mask.scale_factor,
 				u.alpha_mask.value_factor,
-				1.0,
+				u.blend_state.alpha_boost_factor.max(0.0),
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
@@ -6995,6 +7716,9 @@ fn mesh_draw_material_gpu_with_profiles(
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let material_ext_params = liltoon_like
 		.map(|u| [u.flip_backface_normal_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let light_direction_override = liltoon_like
+		.map(|u| u.rendering.light_direction_override_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
@@ -7451,58 +8175,68 @@ fn mesh_draw_material_gpu_with_profiles(
 	let audio_link_local_map_params = liltoon_like
 		.map(|u| u.audio_link.local_map_params_factor)
 		.unwrap_or([120.0, 1.0, 0.0, 0.0]);
+	let shade_color_rgb = source_rgb_to_linear([shade_color[0], shade_color[1], shade_color[2]], source_srgb_color_factors);
+	let matcap_color_rgb = source_rgb_to_linear([matcap_color[0], matcap_color[1], matcap_color[2]], source_srgb_color_factors);
+	let rim_color_gpu = source_rgba_to_linear(rim_color_gpu, source_srgb_color_factors);
+	let shading_params = [0.0, 1.0, 0.0, 0.0];
+	let transparent_with_z_write = material_transparent_with_zwrite(mat);
+	let uv_anim_params = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.main_uv_scroll_rotate_factor[0],
+				u.main_color.main_uv_scroll_rotate_factor[1],
+				u.main_color.main_uv_scroll_rotate_factor[2],
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
-		backface_color,
+		backface_color: source_rgba_to_linear(backface_color, source_srgb_color_factors),
 		params: [0.0, eff_alpha.as_shader_alpha_kind(), mat.alpha_cutoff, f32::from_bits(flags)],
 		shade_color: [
-			shade_color[0],
-			shade_color[1],
-			shade_color[2],
+			shade_color_rgb[0],
+			shade_color_rgb[1],
+			shade_color_rgb[2],
 			if mat.normal_texture_index.is_some() {
 				mat.normal_texture_scale
 			} else {
 				0.0
 			},
 		],
-		shading_params: [
-			mtoon.shading_shift_factor,
-			mtoon.shading_toony_factor,
-			mtoon.shading_shift_texture_scale,
-			mtoon.gi_equalization_factor,
-		],
+		shading_params,
 		shadow_params,
 		shadow_ext_params,
 		shadow_ao_params,
 		shadow_ao_shift,
 		shadow_ao_shift2,
-		shadow_border_color,
-		shadow2_color,
+		shadow_border_color: source_rgba_to_linear(shadow_border_color, source_srgb_color_factors),
+		shadow2_color: source_rgba_to_linear(shadow2_color, source_srgb_color_factors),
 		shadow2_params,
-		shadow3_color,
+		shadow3_color: source_rgba_to_linear(shadow3_color, source_srgb_color_factors),
 		shadow3_params,
-		matcap_factor: [matcap_color[0], matcap_color[1], matcap_color[2], 1.0],
+		matcap_factor: [matcap_color_rgb[0], matcap_color_rgb[1], matcap_color_rgb[2], 1.0],
 		matcap_params,
 		matcap_ext_params,
 		matcap_bump_params,
-		matcap2_factor,
+		matcap2_factor: source_rgba_to_linear(matcap2_factor, source_srgb_color_factors),
 		matcap2_params,
 		matcap2_ext_params,
 		matcap2_bump_params,
 		matcap_uv_params,
 		matcap_uv_ext_params,
-		reflection_color,
+		reflection_color: source_rgba_to_linear(reflection_color, source_srgb_color_factors),
 		reflection_control,
 		reflection_params,
 		reflection_ext_params,
-		reflection_cube_color,
+		reflection_cube_color: source_rgba_to_linear(reflection_cube_color, source_srgb_color_factors),
 		anisotropy_params,
 		anisotropy_ext_params,
 		anisotropy2_params,
 		anisotropy_width_params,
-		gem_env_color,
+		gem_env_color: source_rgba_to_linear(gem_env_color, source_srgb_color_factors),
 		gem_params,
-		gem_particle_color,
+		gem_particle_color: source_rgba_to_linear(gem_particle_color, source_srgb_color_factors),
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
@@ -7513,17 +8247,17 @@ fn mesh_draw_material_gpu_with_profiles(
 		rim_params,
 		rim_control,
 		rim_ext_params,
-		rim_indirect_color,
+		rim_indirect_color: source_rgba_to_linear(rim_indirect_color, source_srgb_color_factors),
 		rim_indirect_params,
 		rim_indirect_ext_params,
-		rim_shade_color,
+		rim_shade_color: source_rgba_to_linear(rim_shade_color, source_srgb_color_factors),
 		rim_shade_params,
-		backlight_color,
+		backlight_color: source_rgba_to_linear(backlight_color, source_srgb_color_factors),
 		backlight_params,
 		backlight_ext_params,
 		backlight_shadow_params,
 		backlight_color_uv_offset_scale,
-		glitter_color,
+		glitter_color: source_rgba_to_linear(glitter_color, source_srgb_color_factors),
 		glitter_params1,
 		glitter_params2,
 		glitter_control,
@@ -7534,10 +8268,10 @@ fn mesh_draw_material_gpu_with_profiles(
 		glitter_shape_uv_offset_scale,
 		glitter_atlas,
 		distance_fade,
-		distance_fade_color,
-		distance_fade_rim_color,
+		distance_fade_color: source_rgba_to_linear(distance_fade_color, source_srgb_color_factors),
+		distance_fade_rim_color: source_rgba_to_linear(distance_fade_rim_color, source_srgb_color_factors),
 		distance_fade_params,
-		dissolve_color,
+		dissolve_color: source_rgba_to_linear(dissolve_color, source_srgb_color_factors),
 		dissolve_params,
 		dissolve_pos,
 		dissolve_ext,
@@ -7558,11 +8292,11 @@ fn mesh_draw_material_gpu_with_profiles(
 		udim_discard_row1,
 		udim_discard_row2,
 		udim_discard_row3,
-		emission_color,
+		emission_color: source_rgba_to_linear(emission_color, source_srgb_color_factors),
 		emission_params,
 		emission_blink_params,
 		emission_grad_params,
-		emission2nd_color,
+		emission2nd_color: source_rgba_to_linear(emission2nd_color, source_srgb_color_factors),
 		emission2nd_params,
 		emission2nd_blink_params,
 		emission2nd_grad_params,
@@ -7586,14 +8320,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		audio_link_mask_uv_offset_scale,
 		audio_link_mask_uv_anim_params,
 		audio_link_local_map_params,
-		outline_color,
+		outline_color: source_rgba_to_linear(outline_color, source_srgb_color_factors),
 		outline_params: [
 			outline_mode_gpu(outline_mode),
 			outline_width,
 			outline_lighting_mix,
-			if mtoon.transparent_with_z_write { 1.0 } else { 0.0 },
+			if transparent_with_z_write { 1.0 } else { 0.0 },
 		],
-		outline_lit_color,
+		outline_lit_color: source_rgba_to_linear(outline_lit_color, source_srgb_color_factors),
 		outline_lit_params,
 		outline_ext_params,
 		alpha_mask_params,
@@ -7601,20 +8335,16 @@ fn mesh_draw_material_gpu_with_profiles(
 		fur_vector_params,
 		fur_noise_params,
 		fur_ext_params,
-		fur_rim_color,
+		fur_rim_color: source_rgba_to_linear(fur_rim_color, source_srgb_color_factors),
 		fur_rim_params,
 		alpha_ext_params,
 		lighting_ext_params,
 		rendering_ext_params,
 		transparency_params,
 		material_ext_params,
+		light_direction_override,
 		emissive_factor: [mat.emissive_factor[0], mat.emissive_factor[1], mat.emissive_factor[2], 24.0],
-		uv_anim_params: [
-			mtoon.uv_animation_scroll_x_speed_factor,
-			mtoon.uv_animation_scroll_y_speed_factor,
-			mtoon.uv_animation_rotation_speed_factor,
-			0.0,
-		],
+		uv_anim_params,
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
 		normal2nd_uv_offset_scale,
@@ -7642,7 +8372,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
 		main_gradation_params,
-		main2nd_color,
+		main2nd_color: source_rgba_to_linear(main2nd_color, source_srgb_color_factors),
 		main2nd_params,
 		main2nd_ext,
 		main2nd_distance_fade,
@@ -7652,14 +8382,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		main2nd_decal_sub_param,
 		main2nd_uv_offset_scale,
 		main2nd_blend_mask_uv_offset_scale,
-		main2nd_dissolve_color,
+		main2nd_dissolve_color: source_rgba_to_linear(main2nd_dissolve_color, source_srgb_color_factors),
 		main2nd_dissolve_params,
 		main2nd_dissolve_pos,
 		main2nd_dissolve_ext,
 		main2nd_dissolve_mask_uv_offset_scale,
 		main2nd_dissolve_noise_uv_offset_scale,
 		main2nd_dissolve_noise_uv_anim_params,
-		main3rd_color,
+		main3rd_color: source_rgba_to_linear(main3rd_color, source_srgb_color_factors),
 		main3rd_params,
 		main3rd_ext,
 		main3rd_distance_fade,
@@ -7669,7 +8399,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		main3rd_decal_sub_param,
 		main3rd_uv_offset_scale,
 		main3rd_blend_mask_uv_offset_scale,
-		main3rd_dissolve_color,
+		main3rd_dissolve_color: source_rgba_to_linear(main3rd_dissolve_color, source_srgb_color_factors),
 		main3rd_dissolve_params,
 		main3rd_dissolve_pos,
 		main3rd_dissolve_ext,
@@ -7680,25 +8410,17 @@ fn mesh_draw_material_gpu_with_profiles(
 }
 
 #[cfg(test)]
-fn mesh_draw_material_gpu(
-	mat: &UnaMaterialPbr,
-	mtoon: &UnaMtoonMaterial,
-	opts: &SceneMeshLoadOpts,
-	mesh_index: usize,
-	prim_index: usize,
-) -> MeshDrawMaterialGpu {
-	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_source_profile(), opts, mesh_index, prim_index)
+fn mesh_draw_material_gpu(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts, mesh_index: usize, prim_index: usize) -> MeshDrawMaterialGpu {
+	mesh_draw_material_gpu_with_profiles(mat, mat.liltoon_like_source_profile(), opts, mesh_index, prim_index)
 }
 
 fn mesh_draw_material_gpu_runtime(
 	mat: &UnaMaterialPbr,
-	default_mtoon: &UnaMtoonMaterial,
 	opts: &SceneMeshLoadOpts,
 	mesh_index: usize,
 	prim_index: usize,
 ) -> MeshDrawMaterialGpu {
-	let mtoon = mat.mtoon_like_runtime().unwrap_or(default_mtoon);
-	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_runtime(), opts, mesh_index, prim_index)
+	mesh_draw_material_gpu_with_profiles(mat, material_untoon_profile(mat), opts, mesh_index, prim_index)
 }
 
 fn liltoon_blend_mode_gpu(mode: un_avatar_core::UnaLilToonLikeBlendMode) -> f32 {
@@ -7715,6 +8437,76 @@ fn texture_slot_uv_offset_scale(liltoon_like: &un_avatar_core::UnaLilToonLikeMat
 }
 
 impl SceneMeshes {
+	pub(crate) fn diagnostic_morph_state(&self, scene: &UnaSceneSnapshot, filter: Option<&str>, max_draws: usize) -> serde_json::Value {
+		let mut paths: Vec<Option<String>> = vec![None; scene.nodes.len()];
+		fn walk(scene: &UnaSceneSnapshot, node: usize, prefix: String, paths: &mut [Option<String>]) {
+			let Some(scene_node) = scene.nodes.get(node) else {
+				return;
+			};
+			let name = scene_node.name.as_deref().unwrap_or("<unnamed>");
+			let path = if prefix.is_empty() {
+				name.to_string()
+			} else {
+				format!("{prefix}/{name}")
+			};
+			paths[node] = Some(path.clone());
+			for child in &scene_node.children {
+				walk(scene, *child, path.clone(), paths);
+			}
+		}
+		let child_nodes = sorted_unique_indices(scene.nodes.iter().flat_map(|node| node.children.iter().copied()).collect());
+		for index in 0..scene.nodes.len() {
+			if child_nodes.binary_search(&index).is_err() {
+				walk(scene, index, String::new(), &mut paths);
+			}
+		}
+		let mut matched_draw_count = 0usize;
+		let mut draws = Vec::new();
+		for (draw_index, draw) in self.draws.iter().enumerate() {
+			if draw.morph_target_count == 0 {
+				continue;
+			}
+			let node_path = paths.get(draw.world_node_index).cloned().flatten().unwrap_or_default();
+			if let Some(filter) = filter.as_deref() {
+				if !dynamics_token_filter_matches(&node_path, filter) {
+					continue;
+				}
+			}
+			matched_draw_count += 1;
+			if draws.len() >= max_draws {
+				continue;
+			}
+			let morphs: Vec<_> = draw
+				.morph_target_names
+				.iter()
+				.enumerate()
+				.map(|(index, name)| {
+					serde_json::json!({
+						"index": index,
+						"name": name,
+						"default_weight": draw.default_morph_weights.get(index).copied().unwrap_or(0.0),
+						"uploaded_weight": draw.morph_weights.get(index).copied().unwrap_or(0.0),
+					})
+				})
+				.collect();
+			draws.push(serde_json::json!({
+					"draw_index": draw_index,
+					"node_index": draw.world_node_index,
+					"node_path": node_path,
+					"visible": draw.visible,
+					"asset_resident": draw.asset_resident,
+					"morph_target_count": draw.morph_target_count,
+					"morphs": morphs,
+			}));
+		}
+		serde_json::json!({
+			"matched_draw_count": matched_draw_count,
+			"sample_limit": max_draws,
+			"truncated": matched_draw_count > draws.len(),
+			"draws": draws
+		})
+	}
+
 	#[allow(clippy::too_many_arguments)]
 	fn create_mesh_pipeline(
 		device: &wgpu::Device,
@@ -7755,10 +8547,10 @@ impl SceneMeshes {
 				..Default::default()
 			},
 			depth_stencil: Some(wgpu::DepthStencilState {
-				format: wgpu::TextureFormat::Depth24Plus,
+				format: wgpu::TextureFormat::Depth24PlusStencil8,
 				depth_write_enabled: Some(render_state.depth_write),
 				depth_compare: Some(render_state.depth_compare),
-				stencil: wgpu::StencilState::default(),
+				stencil: render_state.stencil.to_wgpu(),
 				bias: wgpu::DepthBiasState::default(),
 			}),
 			multisample: wgpu::MultisampleState {
@@ -7777,7 +8569,7 @@ impl SceneMeshes {
 		format: wgpu::TextureFormat,
 		vb_layout: &wgpu::VertexBufferLayout<'_>,
 		pipeline_cache: Option<&wgpu::PipelineCache>,
-		kind: DrawPipelineKind,
+		key: DrawPipelineKey,
 		sample_count: u32,
 	) -> wgpu::RenderPipeline {
 		let blend = Some(wgpu::BlendState::ALPHA_BLENDING);
@@ -7806,7 +8598,7 @@ impl SceneMeshes {
 				operation: wgpu::BlendOperation::Add,
 			},
 		});
-		let (label, vertex_entry, fragment_entry, render_state) = match kind {
+		let (label, vertex_entry, fragment_entry, render_state) = match key.kind {
 			DrawPipelineKind::OpaqueLit => (
 				"mesh_opaque_lit",
 				"vs_main",
@@ -7890,7 +8682,7 @@ impl SceneMeshes {
 			label,
 			vertex_entry,
 			fragment_entry,
-			render_state,
+			render_state.with_material_render_state(key),
 		)
 	}
 
@@ -8080,10 +8872,7 @@ impl SceneMeshes {
 			attributes: &COMPUTE_FUR_CARDS_VTX_ATTRS,
 		};
 
-		let feature_sets = [
-			("mesh_prewarm_liltoon_full", full_liltoon_prewarm_features()),
-			("mesh_prewarm_mtoon", mtoon_prewarm_features()),
-		];
+		let feature_sets = [("mesh_prewarm_liltoon_full", full_liltoon_prewarm_features())];
 		let pipeline_kinds = [
 			DrawPipelineKind::OpaqueToon,
 			DrawPipelineKind::BlendToon,
@@ -8101,6 +8890,7 @@ impl SceneMeshes {
 			summary.shader_modules += 1;
 			for kind in pipeline_kinds {
 				progress(kind.label());
+				let key = DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15);
 				let _pipeline = Self::create_draw_pipeline(
 					device,
 					&pipeline_layout,
@@ -8108,7 +8898,7 @@ impl SceneMeshes {
 					format,
 					&vb_layout,
 					pipeline_cache,
-					kind,
+					key,
 					sample_count,
 				);
 				summary.render_pipelines += 1;
@@ -8172,6 +8962,7 @@ impl SceneMeshes {
 		pipeline_cache: Option<&wgpu::PipelineCache>,
 		scene: &UnaSceneSnapshot,
 		catalog: Option<&UnaExpressionCatalog>,
+		dynamic_morph_target_names: &[String],
 		active_asset_groups: &[String],
 		opts: SceneMeshLoadOpts,
 		texture_max_dimension: Option<u32>,
@@ -8217,7 +9008,7 @@ impl SceneMeshes {
 				scene,
 				&texture_roles,
 				texture_max_dimension,
-				Some(&initial_active_2d_texture_indices),
+				Some(initial_active_2d_texture_indices.as_slice()),
 			))
 			.saturating_add(scene_primitive_count(scene))
 			.max(1);
@@ -8618,8 +9409,10 @@ impl SceneMeshes {
 			let image_prepare_start = Instant::now();
 			let mut image_prepare_timings = TextureImagePrepareTimings::default();
 			let role = texture_roles.get(image_index).copied().unwrap_or_default();
-			let image_resident = asset_residency.image_resident(image_index) && initial_active_2d_texture_indices.contains(&image_index);
-			let cube_resident = asset_residency.image_resident(image_index) && initial_active_texture_indices.contains(&image_index);
+			let image_resident =
+				asset_residency.image_resident(image_index) && initial_active_2d_texture_indices.binary_search(&image_index).is_ok();
+			let cube_resident =
+				asset_residency.image_resident(image_index) && initial_active_texture_indices.binary_search(&image_index).is_ok();
 			image_texture_residency.push(image_resident);
 			cube_texture_residency
 				.push(cube_resident && texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref)));
@@ -8707,7 +9500,7 @@ impl SceneMeshes {
 				&& texture_compression != TextureCompressionMode::Compat
 			{
 				let source_upload_start = Instant::now();
-				if let Some(source_upload) = source_texture_upload(im) {
+				if let Some(source_upload) = source_texture_upload(im, source_metadata, role) {
 					image_prepare_timings.source += source_upload_start.elapsed();
 					if image_resident {
 						report(
@@ -9424,8 +10217,8 @@ impl SceneMeshes {
 			blue: blue_view.clone(),
 			neutral_vector: neutral_vector_view.clone(),
 			black_cube: black_cube_view.clone(),
-			images: image_views.clone(),
-			cubes: cube_image_views.clone(),
+			images: image_views,
+			cubes: cube_image_views,
 		};
 
 		let scene_has_morph_targets = scene_has_morph_targets(scene);
@@ -9439,15 +10232,16 @@ impl SceneMeshes {
 		} else {
 			BTreeMap::new()
 		};
+		let node_paths = scene_node_paths(scene);
 		let mut draws = Vec::with_capacity(mesh_draw_capacity(scene));
 		let mut skin_palettes = Vec::with_capacity(skin_palette_capacity(scene));
 		let mut skin_palette_indices = BTreeMap::new();
 		let mut empty_morph_resources: Option<MorphGpuResources> = None;
-		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitive> = BTreeMap::new();
+		let mut expanded_primitive_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedPrimitivePayload> = BTreeMap::new();
 		let mut expanded_morph_payload_cache: BTreeMap<ExpandedPrimitiveCacheKey, ExpandedMorphPayload> = BTreeMap::new();
 		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
+		let mut morph_delta_scratch: Vec<[f32; 4]> = Vec::new();
 		let default_material = UnaMaterialPbr::default();
-		let default_mtoon = UnaMtoonMaterial::default();
 		let mesh_prepare_start = Instant::now();
 		let mut mesh_prepare_summary = MeshPrepareSummary::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
@@ -9479,25 +10273,29 @@ impl SceneMeshes {
 				}
 				let material_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let original_expression_bindings = expression_bindings.get(&(mesh_i, prim_i)).map(Vec::as_slice).unwrap_or(&[]);
-				let dynamic_morph_targets = dynamic_morph_target_indices(buf, original_expression_bindings, opts.debug_zero_morphs);
+				let dynamic_morph_targets = dynamic_morph_target_indices(
+					buf,
+					original_expression_bindings,
+					dynamic_morph_target_names,
+					opts.debug_zero_morphs,
+				);
 				let dynamic_morph_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
+				let dynamic_morph_target_list = Arc::<[usize]>::from(dynamic_morph_targets.as_slice());
 				let expanded_cache_key = buf
 					.vertex_payload_id
 					.filter(|_| primitive_expand_cache_safe(buf))
 					.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
 						vertex_payload_id,
-						dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+						dynamic_morph_targets: dynamic_morph_target_list.clone(),
 					});
 				let morph_delta_cache_key = buf.vertex_payload_id.map(|vertex_payload_id| ExpandedPrimitiveCacheKey {
 					vertex_payload_id,
-					dynamic_morph_targets: dynamic_morph_targets.iter().copied().collect(),
+					dynamic_morph_targets: dynamic_morph_target_list,
 				});
 				let exp = if let Some(cache_key) = expanded_cache_key.as_ref() {
-					if let Some(exp) = expanded_primitive_cache.get(cache_key).cloned() {
+					if let Some(payload) = expanded_primitive_cache.get(cache_key).cloned() {
 						mesh_prepare_summary.expanded_cache_hits += 1;
-						let mut exp = exp;
-						exp.indices = primitive_indices(buf);
-						Some(exp)
+						Some(expanded_primitive_from_cached_payload(payload, primitive_indices(buf)))
 					} else {
 						mesh_prepare_summary.expanded_cache_misses += 1;
 						let exp = expand_primitive_with_cached_morph(
@@ -9508,16 +10306,11 @@ impl SceneMeshes {
 								.and_then(|cache_key| expanded_morph_payload_cache.get(cache_key)),
 						);
 						if let Some(exp) = &exp {
-							expanded_primitive_cache.insert(cache_key.clone(), exp.clone());
+							expanded_primitive_cache.insert(cache_key.clone(), expanded_payload_from_primitive(exp));
 							if let Some(morph_cache_key) = morph_delta_cache_key.as_ref() {
 								expanded_morph_payload_cache
 									.entry(morph_cache_key.clone())
-									.or_insert_with(|| ExpandedMorphPayload {
-										morph_pos: exp.morph_pos.clone(),
-										morph_nrm: exp.morph_nrm.clone(),
-										morph_source_indices: exp.morph_source_indices.clone(),
-										default_morph_weights: exp.default_morph_weights.clone(),
-									});
+									.or_insert_with(|| expanded_morph_payload_from_primitive(exp));
 							}
 						}
 						exp
@@ -9534,12 +10327,7 @@ impl SceneMeshes {
 					if let (Some(cache_key), Some(exp)) = (morph_delta_cache_key.as_ref(), exp.as_ref()) {
 						expanded_morph_payload_cache
 							.entry(cache_key.clone())
-							.or_insert_with(|| ExpandedMorphPayload {
-								morph_pos: exp.morph_pos.clone(),
-								morph_nrm: exp.morph_nrm.clone(),
-								morph_source_indices: exp.morph_source_indices.clone(),
-								default_morph_weights: exp.default_morph_weights.clone(),
-							});
+							.or_insert_with(|| expanded_morph_payload_from_primitive(exp));
 					}
 					exp
 				};
@@ -9561,8 +10349,50 @@ impl SceneMeshes {
 					default_morph_weights,
 				} = exp;
 				let compact_expression_bindings = remap_expression_bindings(original_expression_bindings, &morph_source_indices);
+				let node_path = node_paths.get(ni).map(String::as_str).unwrap_or("");
+				let mut morph_target_names = Vec::with_capacity(morph_source_indices.len());
+				let mut morph_target_override_keys = Vec::with_capacity(morph_source_indices.len());
+				let mut morph_target_override_suffix_keys = Vec::with_capacity(morph_source_indices.len());
+				for &source_index in &morph_source_indices {
+					let name = buf.morph_target_names.get(source_index).cloned().unwrap_or_default();
+					let key = morph_override_key(node_path, &name);
+					let suffix_key = morph_override_path_suffix_key(&key);
+					morph_target_names.push(name);
+					morph_target_override_keys.push(key);
+					morph_target_override_suffix_keys.push(suffix_key);
+				}
 				let skin = node.skin.and_then(|skin_index| scene.skins.get(skin_index));
+				let mesh_cloth_assist_vertices = apply_mesh_cloth_assist_to_vertices(
+					&mut verts,
+					&indices,
+					skin,
+					&node_paths,
+					node_path,
+					&opts.mesh_cloth_assist,
+					&opts.mesh_cloth_assist_categories,
+					&opts.dynamic_deforming_node_indices,
+				);
+				mesh_prepare_summary.mesh_cloth_assist_vertices += mesh_cloth_assist_vertices as u64;
+				if mesh_cloth_assist_vertices > 0 {
+					log_slow_gpu_scene_step(
+						format!("primitive mesh={mesh_i} primitive={prim_i} mesh cloth assist vertices={mesh_cloth_assist_vertices}"),
+						primitive_start.elapsed(),
+					);
+				}
 				normalize_skinning_vertices(&mut verts, buf.joints.is_some(), skin);
+				debug_dump_mesh_vertex_weights_if_requested(
+					mesh_i,
+					prim_i,
+					node_path,
+					material_slot_index,
+					mat.name.as_deref(),
+					&verts,
+					&indices,
+					skin,
+					&node_paths,
+					&opts.dynamic_deforming_node_indices,
+					mesh_cloth_assist_vertices,
+				);
 				let skinning_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				let skin_palette_key = skin_palette_key_for_node(ni, node.skin);
 				let skin_palette_index = Self::skin_palette_index(
@@ -9575,11 +10405,15 @@ impl SceneMeshes {
 					skin,
 				);
 				let skin_palette_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let index_format = compact_index_format(&indices);
-				let buffer_upload = SceneMeshBufferUpload { vertices: verts, indices };
+				let index_upload = SceneMeshIndexUpload::from_u32_indices_compact(indices);
+				let index_format = index_upload.index_format();
+				let index_count = index_upload.len() as u32;
+				let buffer_upload = SceneMeshBufferUpload {
+					vertices: verts.into_boxed_slice(),
+					indices: index_upload,
+				};
 				let vertex_buffer_bytes = buffer_upload.vertex_buffer_bytes();
-				let index_buffer_bytes = buffer_upload.index_buffer_bytes(index_format);
-				let index_count = buffer_upload.indices.len() as u32;
+				let index_buffer_bytes = buffer_upload.index_buffer_bytes();
 				let asset_resident = asset_residency.mesh_primitive_resident(mesh_i, prim_i);
 				mesh_prepare_summary.prepared_primitives += 1;
 				mesh_prepare_summary.vertices += buffer_upload.vertices.len() as u64;
@@ -9594,14 +10428,14 @@ impl SceneMeshes {
 					mesh_prepare_summary.deferred_index_bytes += index_buffer_bytes;
 				}
 				let (vertex_buffer, index_buffer) = if asset_resident {
-					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue, index_format);
+					let (vertex_buffer, index_buffer) = buffer_upload.create_buffers(device, queue);
 					(Some(vertex_buffer), Some(index_buffer))
 				} else {
 					(None, None)
 				};
 				let buffer_upload_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 
-				let liltoon_like = mat.liltoon_like_runtime();
+				let liltoon_like = material_untoon_profile(mat);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let fur_vector_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
 				let fur_vector_view = texture_view_or(&texture_views.images, fur_vector_texture_index, &texture_views.neutral_vector);
@@ -9622,7 +10456,7 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
-				let draw_material = mesh_draw_material_gpu_runtime(mat, &default_mtoon, &opts, mesh_i, prim_i);
+				let draw_material = mesh_draw_material_gpu_runtime(mat, &opts, mesh_i, prim_i);
 				let draw_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 					label: Some("mesh_draw_material"),
 					contents: bytemuck::bytes_of(&draw_material),
@@ -9657,27 +10491,37 @@ impl SceneMeshes {
 							if let Some(shared) = shared_morph_delta_cache.get(cache_key) {
 								create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, shared)
 							} else {
-								let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+								fill_morph_delta_data(
+									&morph_pos,
+									morph_nrm.as_deref(),
+									buffer_upload.vertices.len(),
+									&mut morph_delta_scratch,
+								);
 								let shared = create_shared_morph_delta_resources(
 									device,
 									queue,
 									morph_target_count as u32,
 									buffer_upload.vertices.len() as u32,
-									&morph_deltas,
+									&morph_delta_scratch,
 								);
 								let resources = create_morph_resources_with_shared_deltas(device, &morph_bind_group_layout, &shared);
 								shared_morph_delta_cache.insert(cache_key.clone(), shared);
 								resources
 							}
 						} else {
-							let morph_deltas = morph_delta_data(&morph_pos, morph_nrm.as_deref(), buffer_upload.vertices.len());
+							fill_morph_delta_data(
+								&morph_pos,
+								morph_nrm.as_deref(),
+								buffer_upload.vertices.len(),
+								&mut morph_delta_scratch,
+							);
 							create_morph_resources(
 								device,
 								queue,
 								&morph_bind_group_layout,
 								morph_target_count as u32,
 								buffer_upload.vertices.len() as u32,
-								&morph_deltas,
+								&morph_delta_scratch,
 							)
 						}
 					} else {
@@ -9694,7 +10538,8 @@ impl SceneMeshes {
 					None
 				};
 				let morph_resource_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let compute_fur_cards = if asset_resident && material_has_fur(mat, mat.shading, &opts) {
+				let draw_shading = mesh_draw_shading_for_material(mat);
+				let compute_fur_cards = if asset_resident && material_has_fur(mat, draw_shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
 						&compute_fur_cards_bind_group_layout,
@@ -9733,25 +10578,32 @@ impl SceneMeshes {
 					world_node_index: ni,
 					visible: active,
 					asset_resident,
-					shading: mat.shading,
+					shading: draw_shading,
 					morph_target_count,
-					morph_source_indices,
+					morph_source_indices: morph_source_indices.into_boxed_slice(),
+					morph_target_names: morph_target_names.into_boxed_slice(),
+					morph_target_override_keys: morph_target_override_keys.into_boxed_slice(),
+					morph_target_override_suffix_keys: morph_target_override_suffix_keys.into_boxed_slice(),
 					morph_pos,
 					morph_nrm,
-					expression_bindings: compact_expression_bindings,
+					expression_bindings: compact_expression_bindings.into_boxed_slice(),
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_target_count),
+					morph_weights_match_default: false,
 					morph_weight_scratch: Vec::with_capacity(morph_target_count),
 					alpha_mode: mat.alpha_mode,
 					material_slot_index,
 					material: mat.clone(),
-					texture_indices: material_texture_indices(mat),
-					cube_texture_indices: material_cube_texture_indices(mat),
+					stencil_state: material_stencil_state(mat),
+					color_mask: material_color_mask(mat),
+					outline_stencil_state: material_outline_stencil_state(mat),
+					outline_color_mask: material_outline_color_mask(mat),
+					fur_stencil_state: material_fur_stencil_state(mat),
+					fur_color_mask: material_fur_color_mask(mat),
+					texture_indices: material_texture_indices(mat).into_boxed_slice(),
+					cube_texture_indices: material_cube_texture_indices(mat).into_boxed_slice(),
 					mesh_index: mesh_i,
 					primitive_index: prim_i,
-					probe_anchor_node: node.probe_anchor_node,
-					local_bounds: node.local_bounds,
-					world_origin: Vec3::ZERO,
 				});
 				let draw_push_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 				mesh_prepare_summary.record_timings(MeshPrepareTimings {
@@ -9793,30 +10645,63 @@ impl SceneMeshes {
 
 		let draw_state = build_draw_order(&draws, &opts);
 		let pipeline_draw_state = build_potential_draw_order(&draws, &opts);
-		let mut required_pipeline_kinds = BTreeSet::new();
+		let mut required_pipeline_keys = Vec::new();
 		for batch in pipeline_draw_state
 			.opaque_batches
 			.iter()
 			.chain(pipeline_draw_state.blended_batches.iter())
 		{
-			required_pipeline_kinds.insert(batch.pipeline);
+			required_pipeline_keys.push(batch.pipeline);
 		}
 		for &draw_index in &pipeline_draw_state.transparent_backpass_draw_indices {
-			let zwrite = draws
-				.get(draw_index)
-				.and_then(|draw| draw.material.liltoon_like_runtime())
-				.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-			required_pipeline_kinds.insert(if zwrite {
-				DrawPipelineKind::TransparentToonBackpass
-			} else {
-				DrawPipelineKind::TransparentToonBackpassNoZWrite
-			});
+			if let Some(draw) = draws.get(draw_index) {
+				let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				required_pipeline_keys.push(DrawPipelineKey::new(
+					if zwrite {
+						DrawPipelineKind::TransparentToonBackpass
+					} else {
+						DrawPipelineKind::TransparentToonBackpassNoZWrite
+					},
+					draw,
+					&opts,
+				));
+			}
 		}
+		required_pipeline_keys.sort_unstable();
+		required_pipeline_keys.dedup();
 		let needs_outline_pipeline = !pipeline_draw_state.outline_draw_indices.is_empty()
 			&& !opts.force_simple_basecolor
 			&& !opts.debug_bind_pose
 			&& !opts.debug_primitive_colors;
 		let needs_fur_pipelines = !pipeline_draw_state.fur_draw_indices.is_empty();
+		let outline_pipeline_keys = if needs_outline_pipeline {
+			let mut keys = pipeline_draw_state
+				.outline_draw_indices
+				.iter()
+				.filter_map(|&draw_index| {
+					draws
+						.get(draw_index)
+						.map(|draw| MaterialRenderStateKey::from_draw_outline(draw, &opts))
+				})
+				.collect::<Vec<_>>();
+			keys.sort_unstable();
+			keys.dedup();
+			keys
+		} else {
+			Vec::new()
+		};
+		let fur_pipeline_keys = if needs_fur_pipelines {
+			let mut keys = pipeline_draw_state
+				.fur_draw_indices
+				.iter()
+				.filter_map(|&draw_index| draws.get(draw_index).map(|draw| MaterialRenderStateKey::from_draw_fur(draw, &opts)))
+				.collect::<Vec<_>>();
+			keys.sort_unstable();
+			keys.dedup();
+			keys
+		} else {
+			Vec::new()
+		};
 		let pipeline_shader_features = draw_pipeline_shader_features(&draws, &pipeline_draw_state, &opts);
 		let mut outline_shader_features = UntoonShaderFeatures::default();
 		for &draw_index in &pipeline_draw_state.outline_draw_indices {
@@ -9826,10 +10711,11 @@ impl SceneMeshes {
 		}
 		let mut fur_shader_features = pipeline_draw_state.runtime_requirements.toon_shader_features;
 		fur_shader_features.fur = needs_fur_pipelines;
-		let pipeline_count = required_pipeline_kinds
+		let pipeline_count = required_pipeline_keys
 			.len()
-			.saturating_add(usize::from(needs_outline_pipeline))
-			.saturating_add(if needs_fur_pipelines { 3 } else { 0 });
+			.saturating_add(outline_pipeline_keys.len())
+			.saturating_add(usize::from(needs_fur_pipelines))
+			.saturating_add(fur_pipeline_keys.len().saturating_mul(2));
 		total_steps = total_steps.saturating_add(pipeline_count as u32).saturating_add(4);
 		report("gpu-upload", total_steps, format!("Creating {pipeline_count} mesh pipeline(s)"));
 		let shader_module_start = Instant::now();
@@ -9837,11 +10723,11 @@ impl SceneMeshes {
 			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, outline_shader_features, "mesh_outline_shader"));
 		let fur_shader_module = needs_fur_pipelines
 			.then(|| create_mesh_shader_module_for_features(device, shader_variant_tier, fur_shader_features, "mesh_fur_shader"));
-		let mut pipeline_shader_features_by_kind = BTreeMap::new();
+		let mut pipeline_shader_features_by_key = BTreeMap::new();
 		let mut draw_shader_modules = BTreeMap::new();
-		for kind in &required_pipeline_kinds {
-			let shader_features = pipeline_shader_features.get(kind).copied().unwrap_or_default();
-			pipeline_shader_features_by_kind.insert(*kind, shader_features);
+		for key in &required_pipeline_keys {
+			let shader_features = pipeline_shader_features.get(key).copied().unwrap_or_default();
+			pipeline_shader_features_by_key.insert(*key, shader_features);
 			draw_shader_modules.entry(shader_features).or_insert_with(|| {
 				create_mesh_shader_module_for_features(device, shader_variant_tier, shader_features, "mesh_draw_shader")
 			});
@@ -9858,36 +10744,42 @@ impl SceneMeshes {
 		let pipeline_start = Instant::now();
 		let render_pipeline_start = Instant::now();
 		let (
-			pipeline_outline_toon,
+			pipelines_outline_toon,
 			compute_fur_cards_compute_pipeline,
-			pipeline_compute_fur_cards_pre_toon,
-			pipeline_compute_fur_cards_toon,
+			pipelines_compute_fur_cards_pre_toon,
+			pipelines_compute_fur_cards_toon,
 			pipelines,
 		) = std::thread::scope(|scope| {
-			let pipeline_outline_toon_handle = needs_outline_pipeline.then(|| {
+			let mut pipeline_outline_toon_handles = Vec::new();
+			if needs_outline_pipeline {
 				let label = "mesh_outline_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let outline_pipeline_layout = outline_pipeline_layout.clone();
-				let vb_layout = vb_layout.clone();
-				let shader = outline_shader_module.as_ref().expect("outline shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&outline_pipeline_layout,
-						&shader,
-						format,
-						&vb_layout,
-						pipeline_cache,
-						label,
-						"vs_outline",
-						"fs_outline",
-						MeshPipelineRenderState::outline(sample_count),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
+				for key in outline_pipeline_keys {
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let outline_pipeline_layout = outline_pipeline_layout.clone();
+					let vb_layout = vb_layout.clone();
+					let shader = outline_shader_module.as_ref().expect("outline shader module missing");
+					pipeline_outline_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&outline_pipeline_layout,
+								&shader,
+								format,
+								&vb_layout,
+								pipeline_cache,
+								label,
+								"vs_outline",
+								"fs_outline",
+								MeshPipelineRenderState::outline(sample_count).with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+				}
+			}
 			let compute_fur_cards_compute_pipeline_handle = needs_fur_pipelines.then(|| {
 				let label = "compute_fur_cards";
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
@@ -9899,64 +10791,75 @@ impl SceneMeshes {
 					pipeline
 				})
 			});
-			let pipeline_compute_fur_cards_pre_toon_handle = needs_fur_pipelines.then(|| {
-				let label = "mesh_compute_fur_cards_pre_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let pipeline_layout = pipeline_layout.clone();
-				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
-				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&pipeline_layout,
-						&shader,
-						format,
-						&compute_fur_cards_vb_layout,
-						pipeline_cache,
-						label,
-						"vs_compute_fur_cards_pre",
-						"fs_fur_toon_pre",
-						MeshPipelineRenderState::mesh_main(None, true, sample_count).with_alpha_coverage(MeshPipelineAlphaCoverage::On),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
-			let pipeline_compute_fur_cards_toon_handle = needs_fur_pipelines.then(|| {
-				let label = "mesh_compute_fur_cards_toon";
-				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let pipeline_layout = pipeline_layout.clone();
-				let compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
-				let shader = fur_shader_module.as_ref().expect("fur shader module missing");
-				scope.spawn(move || {
-					let start = Instant::now();
-					let pipeline = Self::create_mesh_pipeline(
-						device,
-						&pipeline_layout,
-						&shader,
-						format,
-						&compute_fur_cards_vb_layout,
-						pipeline_cache,
-						label,
-						"vs_compute_fur_cards",
-						"fs_fur_toon",
-						MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count),
-					);
-					log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
-					pipeline
-				})
-			});
+			let mut pipeline_compute_fur_cards_pre_toon_handles = Vec::new();
+			let mut pipeline_compute_fur_cards_toon_handles = Vec::new();
+			if needs_fur_pipelines {
+				for key in fur_pipeline_keys {
+					let label = "mesh_compute_fur_cards_pre_toon";
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let pre_pipeline_layout = pipeline_layout.clone();
+					let pre_compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+					let shader = fur_shader_module.as_ref().expect("fur shader module missing");
+					pipeline_compute_fur_cards_pre_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&pre_pipeline_layout,
+								&shader,
+								format,
+								&pre_compute_fur_cards_vb_layout,
+								pipeline_cache,
+								label,
+								"vs_compute_fur_cards_pre",
+								"fs_fur_toon_pre",
+								MeshPipelineRenderState::mesh_main(None, true, sample_count)
+									.with_alpha_coverage(MeshPipelineAlphaCoverage::On)
+									.with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+					let label = "mesh_compute_fur_cards_toon";
+					report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
+					let toon_pipeline_layout = pipeline_layout.clone();
+					let toon_compute_fur_cards_vb_layout = compute_fur_cards_vb_layout.clone();
+					let shader = fur_shader_module.as_ref().expect("fur shader module missing");
+					pipeline_compute_fur_cards_toon_handles.push((
+						key,
+						scope.spawn(move || {
+							let start = Instant::now();
+							let pipeline = Self::create_mesh_pipeline(
+								device,
+								&toon_pipeline_layout,
+								&shader,
+								format,
+								&toon_compute_fur_cards_vb_layout,
+								pipeline_cache,
+								label,
+								"vs_compute_fur_cards",
+								"fs_fur_toon",
+								MeshPipelineRenderState::mesh_main(Some(wgpu::BlendState::ALPHA_BLENDING), false, sample_count)
+									.with_material_render_state_key(key),
+							);
+							log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
+							pipeline
+						}),
+					));
+				}
+			}
 			let mut pipeline_handles = Vec::new();
-			for kind in required_pipeline_kinds {
-				let label = kind.label();
+			for key in required_pipeline_keys {
+				let label = key.label();
 				report("gpu-upload", total_steps, format!("Creating mesh pipeline {label}"));
-				let shader_features = pipeline_shader_features_by_kind.get(&kind).copied().unwrap_or_default();
+				let shader_features = pipeline_shader_features_by_key.get(&key).copied().unwrap_or_default();
 				let shader = draw_shader_modules.get(&shader_features).expect("draw shader module missing");
 				let pipeline_layout = pipeline_layout.clone();
 				let vb_layout = vb_layout.clone();
 				pipeline_handles.push((
-					kind,
+					key,
 					scope.spawn(move || {
 						let start = Instant::now();
 						let pipeline = Self::create_draw_pipeline(
@@ -9966,7 +10869,7 @@ impl SceneMeshes {
 							format,
 							&vb_layout,
 							pipeline_cache,
-							kind,
+							key,
 							sample_count,
 						);
 						log_slow_gpu_scene_step(format!("render pipeline {label}"), start.elapsed());
@@ -9974,23 +10877,29 @@ impl SceneMeshes {
 					}),
 				));
 			}
-			let pipeline_outline_toon =
-				pipeline_outline_toon_handle.map(|handle| handle.join().expect("mesh outline pipeline worker panicked"));
+			let mut pipelines_outline_toon = BTreeMap::new();
+			for (key, handle) in pipeline_outline_toon_handles {
+				pipelines_outline_toon.insert(key, handle.join().expect("mesh outline pipeline worker panicked"));
+			}
 			let compute_fur_cards_compute_pipeline =
 				compute_fur_cards_compute_pipeline_handle.map(|handle| handle.join().expect("compute fur pipeline worker panicked"));
-			let pipeline_compute_fur_cards_pre_toon =
-				pipeline_compute_fur_cards_pre_toon_handle.map(|handle| handle.join().expect("compute fur pre pipeline worker panicked"));
-			let pipeline_compute_fur_cards_toon =
-				pipeline_compute_fur_cards_toon_handle.map(|handle| handle.join().expect("compute fur draw pipeline worker panicked"));
+			let mut pipelines_compute_fur_cards_pre_toon = BTreeMap::new();
+			for (key, handle) in pipeline_compute_fur_cards_pre_toon_handles {
+				pipelines_compute_fur_cards_pre_toon.insert(key, handle.join().expect("compute fur pre pipeline worker panicked"));
+			}
+			let mut pipelines_compute_fur_cards_toon = BTreeMap::new();
+			for (key, handle) in pipeline_compute_fur_cards_toon_handles {
+				pipelines_compute_fur_cards_toon.insert(key, handle.join().expect("compute fur draw pipeline worker panicked"));
+			}
 			let mut pipelines = BTreeMap::new();
 			for (kind, handle) in pipeline_handles {
 				pipelines.insert(kind, handle.join().expect("mesh draw pipeline worker panicked"));
 			}
 			(
-				pipeline_outline_toon,
+				pipelines_outline_toon,
 				compute_fur_cards_compute_pipeline,
-				pipeline_compute_fur_cards_pre_toon,
-				pipeline_compute_fur_cards_toon,
+				pipelines_compute_fur_cards_pre_toon,
+				pipelines_compute_fur_cards_toon,
 				pipelines,
 			)
 		});
@@ -10007,11 +10916,11 @@ impl SceneMeshes {
 
 		let mut scene_meshes = Self {
 			pipelines,
-			pipeline_outline_toon,
+			pipelines_outline_toon,
 			compute_fur_cards_bind_group_layout,
 			compute_fur_cards_compute_pipeline,
-			pipeline_compute_fur_cards_pre_toon,
-			pipeline_compute_fur_cards_toon,
+			pipelines_compute_fur_cards_pre_toon,
+			pipelines_compute_fur_cards_toon,
 			frame_buffer,
 			frame_uploaded: None,
 			frame_layout,
@@ -10030,20 +10939,21 @@ impl SceneMeshes {
 			texture_views,
 			image_texture_slots,
 			cube_texture_slots,
-			_samplers: samplers,
-			image_sampler_indices,
+			_samplers: samplers.into_boxed_slice(),
+			image_sampler_indices: image_sampler_indices.into_boxed_slice(),
 			_textures: textures,
 			_cube_textures: cube_textures,
 			draws,
 			skin_palettes,
-			outline_draw_indices: draw_state.outline_draw_indices,
-			fur_draw_indices: draw_state.fur_draw_indices,
+			outline_draw_indices: draw_state.outline_draw_indices.into_boxed_slice(),
+			fur_draw_indices: draw_state.fur_draw_indices.into_boxed_slice(),
 			opaque_batches: draw_state.opaque_batches,
-			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices,
+			transparent_backpass_draw_indices: draw_state.transparent_backpass_draw_indices.into_boxed_slice(),
 			blended_batches: draw_state.blended_batches,
-			active_draw_indices: draw_state.active_draw_indices,
+			active_draw_indices: draw_state.active_draw_indices.into_boxed_slice(),
+			active_morph_draw_indices: draw_state.active_morph_draw_indices.into_boxed_slice(),
 			needs_screen_refraction: draw_state.needs_screen_refraction,
-			active_skin_palette_indices: draw_state.active_skin_palette_indices,
+			active_skin_palette_indices: draw_state.active_skin_palette_indices.into_boxed_slice(),
 			image_texture_residency,
 			cube_texture_residency,
 			material_slot_residency,
@@ -10051,8 +10961,14 @@ impl SceneMeshes {
 			texture_summary,
 			runtime_requirements: draw_state.runtime_requirements,
 			visibility_scratch: Vec::new(),
-			expression_names,
+			expression_names: expression_names.into_boxed_slice(),
 			expression_value_scratch: Vec::with_capacity(expression_value_capacity),
+			last_morph_expression_values: Vec::with_capacity(expression_value_capacity),
+			last_morph_expression_values_valid: false,
+			last_morph_name_overrides: BTreeMap::new(),
+			last_morph_name_overrides_valid: false,
+			last_morph_debug_zero_morphs: false,
+			fur_source_vertex_scratch: Vec::new(),
 			has_morph_draws,
 			opts,
 		};
@@ -10118,28 +11034,32 @@ impl SceneMeshes {
 		if palette.static_identity {
 			return;
 		}
-		palette.raw.clear();
+		let mut changed = false;
 		if let Some(skin) = skin {
 			let mesh_world = world.get(palette.key.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
 			let inv_mesh = safe_inverse_mesh_world(mesh_world);
 			let joint_count = skin.joint_nodes.len().min(palette.matrix_capacity).min(MAX_BONES);
-			palette.raw.reserve(joint_count * 16);
+			if joint_count == 0 {
+				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
+				changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, 1);
+				changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, 0, Mat4::IDENTITY);
+			} else {
+				resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(joint_count));
+				changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, joint_count);
+			}
 			for (j, &n) in skin.joint_nodes.iter().take(joint_count).enumerate() {
 				let wj = world.get(n).copied().unwrap_or(Mat4::IDENTITY);
-				let ibm = Mat4::from_cols_array(&skin.inverse_bind_matrices[j]);
+				let ibm = palette.inverse_bind_matrices.get(j).copied().unwrap_or(Mat4::IDENTITY);
 				let matrix = if legacy_no_inv_mesh { wj * ibm } else { inv_mesh * wj * ibm };
-				write_matrix_to_raw(&mut palette.raw, matrix);
+				changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, j, matrix);
 			}
 		} else {
-			write_matrix_to_raw(&mut palette.raw, Mat4::IDENTITY);
+			resize_f32_zeroed_if_needed(&mut palette.raw, matrix_raw_capacity(1));
+			changed |= resize_mat4_identity_if_needed(&mut palette.uploaded_matrices, 1);
+			changed |= write_palette_matrix_slot(&mut palette.raw, &mut palette.uploaded_matrices, 0, Mat4::IDENTITY);
 		}
-		if palette.raw.is_empty() {
-			write_matrix_to_raw(&mut palette.raw, Mat4::IDENTITY);
-		}
-		if palette.uploaded != palette.raw {
+		if changed {
 			queue.write_buffer(&palette.buffer, 0, bytemuck::cast_slice(&palette.raw));
-			palette.uploaded.clear();
-			palette.uploaded.extend_from_slice(&palette.raw);
 			palette.uploaded_changed = true;
 		}
 	}
@@ -10173,22 +11093,33 @@ impl SceneMeshes {
 		});
 		let index = skin_palettes.len();
 		let static_identity = key.skin_index.is_none();
-		let (raw, uploaded) = if static_identity {
+		let (raw, uploaded_matrices) = if static_identity {
 			let raw = identity_matrix_raw();
 			queue.write_buffer(&bone_buffer, 0, bytemuck::cast_slice(&raw));
 			(Vec::new(), Vec::new())
 		} else {
 			let raw_capacity = matrix_raw_capacity(matrix_capacity);
-			(Vec::with_capacity(raw_capacity), Vec::with_capacity(raw_capacity))
+			(Vec::with_capacity(raw_capacity), Vec::with_capacity(matrix_capacity))
 		};
+		let inverse_bind_matrices = skin
+			.map(|skin| {
+				skin.inverse_bind_matrices
+					.iter()
+					.take(matrix_capacity)
+					.map(Mat4::from_cols_array)
+					.collect::<Vec<_>>()
+					.into_boxed_slice()
+			})
+			.unwrap_or_default();
 		skin_palettes.push(SkinPalette {
 			key,
 			buffer: bone_buffer,
 			bind_group: bone_bind_group,
 			matrix_capacity,
 			static_identity,
+			inverse_bind_matrices,
 			raw,
-			uploaded,
+			uploaded_matrices,
 			uploaded_changed: false,
 		});
 		skin_palette_indices.insert(key, index);
@@ -10204,9 +11135,11 @@ impl SceneMeshes {
 		camera_pos: Vec4,
 		light_color: Vec4,
 		ambient_color: Vec4,
+		spherical_harmonics: Option<&un_avatar_core::UnaSceneSphericalHarmonics>,
 		time_secs: f32,
 		audio_link_params: [f32; 4],
 	) {
+		let sh = spherical_harmonics;
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
 			view: view.to_cols_array_2d(),
@@ -10214,6 +11147,13 @@ impl SceneMeshes {
 			camera_pos: camera_pos.to_array(),
 			light_color: light_color.to_array(),
 			ambient_color: ambient_color.to_array(),
+			sh_ar: sh.map_or([0.0; 4], |sh| sh.ar),
+			sh_ag: sh.map_or([0.0; 4], |sh| sh.ag),
+			sh_ab: sh.map_or([0.0; 4], |sh| sh.ab),
+			sh_br: sh.map_or([0.0; 4], |sh| sh.br),
+			sh_bg: sh.map_or([0.0; 4], |sh| sh.bg),
+			sh_bb: sh.map_or([0.0; 4], |sh| sh.bb),
+			sh_c: sh.map_or([0.0; 4], |sh| sh.c),
 			time_params: [time_secs, 0.0, 0.0, 0.0],
 			audio_link_params,
 			_pad: [[0.0; 4]; 2],
@@ -10314,15 +11254,22 @@ impl SceneMeshes {
 		{
 			return;
 		}
-		let Some(pipeline_outline_toon) = self.pipeline_outline_toon.as_ref() else {
-			return;
-		};
-		pass.set_pipeline(pipeline_outline_toon);
 		let mut state = DrawBindState::default();
+		let mut current_key = None;
 		for &draw_index in &self.outline_draw_indices {
+			let key = MaterialRenderStateKey::from_draw_outline(&self.draws[draw_index], &self.opts);
+			if current_key != Some(key) {
+				let Some(pipeline_outline_toon) = self.pipelines_outline_toon.get(&key) else {
+					continue;
+				};
+				pass.set_pipeline(pipeline_outline_toon);
+				current_key = Some(key);
+				state = DrawBindState::default();
+			}
 			let Some(bind_material) = self.draws[draw_index].bind_outline_material.as_ref() else {
 				continue;
 			};
+			pass.set_stencil_reference(self.draws[draw_index].outline_stencil_state.reference as u32);
 			self.draw_inner_with_material(pass, &mut state, draw_index, bind_material);
 		}
 	}
@@ -10354,6 +11301,9 @@ impl SceneMeshes {
 	fn update_compute_fur_cards_source_vertices(&mut self, queue: &wgpu::Queue) {
 		let draws = &mut self.draws;
 		let skin_palettes = &self.skin_palettes;
+		let source_vertex_scratch = &mut self.fur_source_vertex_scratch;
+		let mut palette_matrix_scratch_index = None;
+		let mut palette_matrices: &[Mat4] = &[];
 		for &draw_index in &self.fur_draw_indices {
 			let Some(draw) = draws.get_mut(draw_index) else {
 				continue;
@@ -10370,18 +11320,19 @@ impl SceneMeshes {
 			if !palette.uploaded_changed {
 				continue;
 			}
-			compute_fur_cards_skinned_source_vertices_from_mesh(
-				&compute_fur_cards.base_vertices,
-				&palette.uploaded,
-				&mut compute_fur_cards.source_vertex_scratch,
-			);
-			if compute_fur_cards.source_vertex_scratch.len() != compute_fur_cards.base_vertices.len() {
+			if palette_matrix_scratch_index != Some(draw.skin_palette_index) {
+				palette_matrices = &palette.uploaded_matrices;
+				palette_matrix_scratch_index = Some(draw.skin_palette_index);
+			}
+			let base_vertices = &draw.buffer_upload.vertices;
+			compute_fur_cards_skinned_source_vertices_from_matrices(base_vertices, palette_matrices, source_vertex_scratch);
+			if source_vertex_scratch.len() != base_vertices.len() {
 				continue;
 			}
 			queue.write_buffer(
 				&compute_fur_cards.source_vertex_buffer,
 				0,
-				bytemuck::cast_slice(&compute_fur_cards.source_vertex_scratch),
+				bytemuck::cast_slice(source_vertex_scratch),
 			);
 		}
 	}
@@ -10397,22 +11348,27 @@ impl SceneMeshes {
 
 	fn rebuild_draw_order(&mut self) {
 		let draw_state = build_draw_order(&self.draws, &self.opts);
-		self.outline_draw_indices = draw_state.outline_draw_indices;
-		self.fur_draw_indices = draw_state.fur_draw_indices;
+		self.outline_draw_indices = draw_state.outline_draw_indices.into_boxed_slice();
+		self.fur_draw_indices = draw_state.fur_draw_indices.into_boxed_slice();
 		self.opaque_batches = draw_state.opaque_batches;
-		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices;
+		self.transparent_backpass_draw_indices = draw_state.transparent_backpass_draw_indices.into_boxed_slice();
 		self.blended_batches = draw_state.blended_batches;
-		self.active_draw_indices = draw_state.active_draw_indices;
+		self.active_draw_indices = draw_state.active_draw_indices.into_boxed_slice();
+		self.active_morph_draw_indices = draw_state.active_morph_draw_indices.into_boxed_slice();
 		self.needs_screen_refraction = draw_state.needs_screen_refraction;
-		self.active_skin_palette_indices = draw_state.active_skin_palette_indices;
+		self.active_skin_palette_indices = draw_state.active_skin_palette_indices.into_boxed_slice();
 		self.runtime_requirements = draw_state.runtime_requirements;
+		self.invalidate_morph_input_cache();
+	}
+
+	fn invalidate_morph_input_cache(&mut self) {
+		self.last_morph_expression_values_valid = false;
+		self.last_morph_name_overrides_valid = false;
 	}
 
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
-		let default_mtoon = UnaMtoonMaterial::default();
 		for draw in &self.draws {
-			let material =
-				mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+			let material = mesh_draw_material_gpu_runtime(&draw.material, &self.opts, draw.mesh_index, draw.primitive_index);
 			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material));
 		}
 	}
@@ -10450,7 +11406,6 @@ impl SceneMeshes {
 
 	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
 		let default_material = UnaMaterialPbr::default();
-		let default_mtoon = UnaMtoonMaterial::default();
 		let mut changed = 0;
 		for draw_index in 0..self.draws.len() {
 			let draw_mesh_index = self.draws[draw_index].mesh_index;
@@ -10471,13 +11426,18 @@ impl SceneMeshes {
 				let draw = &mut self.draws[draw_index];
 				draw.material_slot_index = material_slot_index;
 				draw.material = material.clone();
-				draw.texture_indices = material_texture_indices(&draw.material);
-				draw.cube_texture_indices = material_cube_texture_indices(&draw.material);
-				draw.shading = material.shading;
+				draw.stencil_state = material_stencil_state(&draw.material);
+				draw.color_mask = material_color_mask(&draw.material);
+				draw.outline_stencil_state = material_outline_stencil_state(&draw.material);
+				draw.outline_color_mask = material_outline_color_mask(&draw.material);
+				draw.fur_stencil_state = material_fur_stencil_state(&draw.material);
+				draw.fur_color_mask = material_fur_color_mask(&draw.material);
+				draw.texture_indices = material_texture_indices(&draw.material).into_boxed_slice();
+				draw.cube_texture_indices = material_cube_texture_indices(&draw.material).into_boxed_slice();
+				draw.shading = mesh_draw_shading_for_material(material);
 				draw.alpha_mode = material.alpha_mode;
 				draw._compute_fur_cards = None;
-				let material_gpu =
-					mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+				let material_gpu = mesh_draw_material_gpu_runtime(&draw.material, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			}
 			if self.draws[draw_index].active() {
@@ -10500,9 +11460,9 @@ impl SceneMeshes {
 		queue: &wgpu::Queue,
 		scene: &UnaSceneSnapshot,
 	) -> usize {
-		let active_draw_indices = self.active_draw_indices.clone();
 		let mut ensured = 0;
-		for draw_index in active_draw_indices {
+		for active_index in 0..self.active_draw_indices.len() {
+			let draw_index = self.active_draw_indices[active_index];
 			if self.ensure_draw_gpu_resources(device, queue, scene, draw_index) {
 				ensured += 1;
 			}
@@ -10511,8 +11471,16 @@ impl SceneMeshes {
 	}
 
 	#[inline]
-	fn pipeline_for_kind(&self, kind: DrawPipelineKind) -> &wgpu::RenderPipeline {
-		self.pipelines.get(&kind).expect("draw pipeline was requested but not created")
+	fn pipeline_for_key(&self, key: DrawPipelineKey) -> &wgpu::RenderPipeline {
+		self.pipelines.get(&key).expect("draw pipeline was requested but not created")
+	}
+
+	fn set_draw_stencil_reference(pass: &mut wgpu::RenderPass<'_>, draw: &MeshDraw) {
+		pass.set_stencil_reference(draw.stencil_state.reference as u32);
+	}
+
+	fn set_fur_stencil_reference(pass: &mut wgpu::RenderPass<'_>, draw: &MeshDraw) {
+		pass.set_stencil_reference(draw.fur_stencil_state.reference as u32);
 	}
 
 	pub fn draw_opaque(&self, pass: &mut wgpu::RenderPass<'_>) {
@@ -10521,8 +11489,9 @@ impl SceneMeshes {
 		}
 		let mut state = DrawBindState::default();
 		for batch in &self.opaque_batches {
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			for &draw_index in &batch.draw_indices {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, &mut state, draw_index);
 			}
 		}
@@ -10543,21 +11512,25 @@ impl SceneMeshes {
 
 	fn draw_transparent_backpass(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.transparent_backpass_draw_indices.is_empty() {
-			let mut backpass_zwrite = None;
+			let mut backpass_key = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
-				let zwrite = self.draws[draw_index]
-					.material
-					.liltoon_like_runtime()
-					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
-				if backpass_zwrite != Some(zwrite) {
-					pass.set_pipeline(if zwrite {
-						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpass)
+				let zwrite =
+					material_untoon_profile(&self.draws[draw_index].material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				let key = DrawPipelineKey::new(
+					if zwrite {
+						DrawPipelineKind::TransparentToonBackpass
 					} else {
-						self.pipeline_for_kind(DrawPipelineKind::TransparentToonBackpassNoZWrite)
-					});
-					backpass_zwrite = Some(zwrite);
+						DrawPipelineKind::TransparentToonBackpassNoZWrite
+					},
+					&self.draws[draw_index],
+					&self.opts,
+				);
+				if backpass_key != Some(key) {
+					pass.set_pipeline(self.pipeline_for_key(key));
+					backpass_key = Some(key);
 					*state = DrawBindState::default();
 				}
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10583,13 +11556,14 @@ impl SceneMeshes {
 			if batch_index > end_batch {
 				break;
 			}
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			let len = if batch_index == end_batch {
 				end_pos
 			} else {
 				batch.draw_indices.len()
 			};
 			for &draw_index in batch.draw_indices.iter().take(len) {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10598,9 +11572,10 @@ impl SceneMeshes {
 	fn draw_blended_batches_from(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState, start: Option<(usize, usize)>) {
 		let (start_batch, start_pos) = start.unwrap_or((0, 0));
 		for (batch_index, batch) in self.blended_batches.iter().enumerate().skip(start_batch) {
-			pass.set_pipeline(self.pipeline_for_kind(batch.pipeline));
+			pass.set_pipeline(self.pipeline_for_key(batch.pipeline));
 			let skip = if batch_index == start_batch { start_pos } else { 0 };
 			for &draw_index in batch.draw_indices.iter().skip(skip) {
+				Self::set_draw_stencil_reference(pass, &self.draws[draw_index]);
 				self.draw_inner(pass, state, draw_index);
 			}
 		}
@@ -10608,20 +11583,34 @@ impl SceneMeshes {
 
 	fn draw_fur_blended(&self, pass: &mut wgpu::RenderPass<'_>, state: &mut DrawBindState) {
 		if !self.fur_draw_indices.is_empty() {
-			let (Some(pre_toon), Some(toon)) = (
-				self.pipeline_compute_fur_cards_pre_toon.as_ref(),
-				self.pipeline_compute_fur_cards_toon.as_ref(),
-			) else {
-				return;
-			};
 			*state = DrawBindState::default();
-			pass.set_pipeline(pre_toon);
+			let mut current_key = None;
 			for &draw_index in &self.fur_draw_indices {
+				let key = MaterialRenderStateKey::from_draw_fur(&self.draws[draw_index], &self.opts);
+				if current_key != Some(key) {
+					let Some(pre_toon) = self.pipelines_compute_fur_cards_pre_toon.get(&key) else {
+						continue;
+					};
+					pass.set_pipeline(pre_toon);
+					current_key = Some(key);
+					*state = DrawBindState::default();
+				}
+				Self::set_fur_stencil_reference(pass, &self.draws[draw_index]);
 				let _ = self.draw_compute_fur_cards_inner(pass, state, draw_index);
 			}
 			*state = DrawBindState::default();
-			pass.set_pipeline(toon);
+			let mut current_key = None;
 			for &draw_index in &self.fur_draw_indices {
+				let key = MaterialRenderStateKey::from_draw_fur(&self.draws[draw_index], &self.opts);
+				if current_key != Some(key) {
+					let Some(toon) = self.pipelines_compute_fur_cards_toon.get(&key) else {
+						continue;
+					};
+					pass.set_pipeline(toon);
+					current_key = Some(key);
+					*state = DrawBindState::default();
+				}
+				Self::set_fur_stencil_reference(pass, &self.draws[draw_index]);
 				if self.draw_compute_fur_cards_inner(pass, state, draw_index) {
 					continue;
 				}
@@ -10648,6 +11637,7 @@ impl SceneMeshes {
 		world: &[Mat4],
 		expr_weights: Option<&UnaExpressionWeights>,
 		expression_overrides: Option<&BTreeMap<String, f32>>,
+		morph_name_overrides: Option<&BTreeMap<String, f32>>,
 		refresh_scene_morph_defaults: bool,
 	) -> DrawTransformUpdateTimings {
 		let mut timings = DrawTransformUpdateTimings::default();
@@ -10659,19 +11649,24 @@ impl SceneMeshes {
 		}
 		let t_expression0 = Instant::now();
 		self.expression_value_scratch.clear();
-		if self.has_morph_draws && (expr_weights.is_some() || expression_overrides.is_some()) {
-			self.expression_value_scratch.resize(self.expression_names.len(), 0.0);
-			for (index, name) in self.expression_names.iter().enumerate() {
+		let mut expression_values_active = false;
+		if !self.active_morph_draw_indices.is_empty() && (expr_weights.is_some() || expression_overrides.is_some()) {
+			self.expression_value_scratch.extend(self.expression_names.iter().map(|name| {
 				let value = expression_overrides
 					.and_then(|overrides| overrides.get(name).copied())
 					.or_else(|| expr_weights.and_then(|weights| weights.preset_weights.get(name).copied()))
 					.unwrap_or(0.0);
-				self.expression_value_scratch[index] = value;
+				expression_values_active |= value != 0.0;
+				value
+			}));
+			if !expression_values_active {
+				self.expression_value_scratch.clear();
 			}
 		}
 		timings.expression_values_ms = t_expression0.elapsed().as_secs_f32() * 1000.0;
 		let t_skin0 = Instant::now();
 		let mut skin_palette_write_ms = 0.0;
+		let mut skin_palette_uploaded_changed = false;
 		if !self.active_skin_palette_indices.is_empty() {
 			for &palette_index in &self.active_skin_palette_indices {
 				let Some(palette) = self.skin_palettes.get_mut(palette_index) else {
@@ -10681,12 +11676,13 @@ impl SceneMeshes {
 				let t_write0 = Instant::now();
 				Self::write_skin_palette(queue, palette, skin, world, debug_skin_legacy_no_inv_mesh);
 				if palette.uploaded_changed {
+					skin_palette_uploaded_changed = true;
 					skin_palette_write_ms += t_write0.elapsed().as_secs_f32() * 1000.0;
 				}
 			}
 			timings.skin_palette_ms = t_skin0.elapsed().as_secs_f32() * 1000.0;
 			timings.skin_palette_write_ms = skin_palette_write_ms;
-			if !self.fur_draw_indices.is_empty() {
+			if skin_palette_uploaded_changed && !self.fur_draw_indices.is_empty() {
 				let t_fur0 = Instant::now();
 				self.update_compute_fur_cards_source_vertices(queue);
 				timings.fur_source_vertices_ms = t_fur0.elapsed().as_secs_f32() * 1000.0;
@@ -10696,71 +11692,103 @@ impl SceneMeshes {
 
 		let t_draw0 = Instant::now();
 		let mut morph_weights_ms = 0.0;
+		if !self.active_morph_draw_indices.is_empty() {
+			let t_morph0 = Instant::now();
+			let expression_values_changed = update_cached_optional_f32_slice(
+				&mut self.last_morph_expression_values,
+				&mut self.last_morph_expression_values_valid,
+				expression_values,
+			);
+			let morph_name_overrides_changed = update_cached_optional_f32_map(
+				&mut self.last_morph_name_overrides,
+				&mut self.last_morph_name_overrides_valid,
+				morph_name_overrides,
+			);
+			let debug_zero_morphs_changed = self.last_morph_debug_zero_morphs != debug_zero_morphs;
+			self.last_morph_debug_zero_morphs = debug_zero_morphs;
+			if refresh_scene_morph_defaults || expression_values_changed || morph_name_overrides_changed || debug_zero_morphs_changed {
+				let static_default_morph_frame = expression_values.is_none() && morph_name_overrides.is_none() && !debug_zero_morphs;
+				for &draw_index in &self.active_morph_draw_indices {
+					let Some(d) = self.draws.get_mut(draw_index) else {
+						continue;
+					};
+					let Some(morph_resources) = d.morph_resources.as_ref() else {
+						continue;
+					};
+					let skip_static_default_morph = if static_default_morph_frame {
+						d.morph_weights_match_default
+					} else {
+						let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
+						let draw_has_active_morph_name_override = morph_names_have_active_override(
+							&d.morph_target_names,
+							&d.morph_target_override_keys,
+							&d.morph_target_override_suffix_keys,
+							morph_name_overrides,
+						);
+						!draw_has_active_expression
+							&& !draw_has_active_morph_name_override
+							&& !debug_zero_morphs && d.morph_weights_match_default
+					};
+					if !skip_static_default_morph {
+						d.morph_weight_scratch.clear();
+						if debug_zero_morphs {
+							d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
+						} else {
+							fill_morph_weights_for_draw(
+								&d.default_morph_weights,
+								d.morph_target_count,
+								&d.expression_bindings,
+								expression_values,
+								&d.morph_target_names,
+								&d.morph_target_override_keys,
+								&d.morph_target_override_suffix_keys,
+								morph_name_overrides,
+								&mut d.morph_weight_scratch,
+							);
+						}
+
+						if d.morph_weight_scratch.len() == d.morph_target_count {
+							if d.morph_weights != d.morph_weight_scratch {
+								queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
+								d.morph_weights.clear();
+								d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
+							}
+							d.morph_weights_match_default =
+								morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
+						} else if !d.morph_weights.is_empty() {
+							d.morph_weight_scratch.clear();
+							d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
+							queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
+							d.morph_weights.clear();
+							d.morph_weights_match_default = false;
+						}
+					}
+				}
+			}
+			morph_weights_ms = t_morph0.elapsed().as_secs_f32() * 1000.0;
+		}
+
 		for &draw_index in &self.active_draw_indices {
 			let Some(d) = self.draws.get_mut(draw_index) else {
 				continue;
 			};
 			let mesh_world = world.get(d.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
-			d.world_origin = if let Some(bounds) = d.local_bounds {
-				let reference_world = d.probe_anchor_node.and_then(|node| world.get(node)).copied().unwrap_or(mesh_world);
-				reference_world.transform_point3(Vec3::from(bounds.center))
-			} else {
-				mesh_world.transform_point3(Vec3::ZERO)
-			};
 
-			if d.morph_target_count > 0 {
-				let t_morph0 = Instant::now();
-				let Some(morph_resources) = d.morph_resources.as_ref() else {
-					continue;
-				};
-				let draw_has_active_expression = expression_bindings_have_active_weight(&d.expression_bindings, expression_values);
-				let skip_static_default_morph = !draw_has_active_expression
-					&& !debug_zero_morphs
-					&& morph_weights_match_default(&d.morph_weights, &d.default_morph_weights, d.morph_target_count);
-				if !skip_static_default_morph {
-					d.morph_weight_scratch.clear();
-					if debug_zero_morphs {
-						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
-					} else {
-						fill_morph_weights_for_draw(
-							&d.default_morph_weights,
-							d.morph_target_count,
-							&d.expression_bindings,
-							expression_values,
-							&mut d.morph_weight_scratch,
-						);
-					}
-
-					if d.morph_weight_scratch.len() == d.morph_target_count {
-						if d.morph_weights != d.morph_weight_scratch {
-							queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
-							d.morph_weights.clear();
-							d.morph_weights.extend_from_slice(&d.morph_weight_scratch);
-						}
-					} else if !d.morph_weights.is_empty() {
-						d.morph_weight_scratch.clear();
-						d.morph_weight_scratch.resize(d.morph_target_count, 0.0);
-						queue.write_buffer(&morph_resources.weight_buffer, 0, bytemuck::cast_slice(&d.morph_weight_scratch));
-						d.morph_weights.clear();
-					}
-				}
-				morph_weights_ms += t_morph0.elapsed().as_secs_f32() * 1000.0;
-			}
-
-			let transform = MeshDrawTransformGpu {
-				model: mesh_world.to_cols_array_2d(),
-			};
-			if d.draw_transform_uploaded != Some(transform) {
+			let model = mesh_world.to_cols_array_2d();
+			let transform = MeshDrawTransformGpu { model };
+			let transform_changed = d.draw_transform_uploaded != Some(transform);
+			if transform_changed {
 				queue.write_buffer(&d.draw_transform, 0, bytemuck::bytes_of(&transform));
 				d.draw_transform_uploaded = Some(transform);
 			}
-			if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
-				let model = mesh_world.to_cols_array_2d();
-				let inv_model = mesh_world.inverse().to_cols_array_2d();
-				if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
-					compute_fur_cards.params.model = model;
-					compute_fur_cards.params.inv_model = inv_model;
-					queue.write_buffer(&compute_fur_cards.params_buffer, 0, bytemuck::bytes_of(&compute_fur_cards.params));
+			if transform_changed {
+				if let Some(compute_fur_cards) = d._compute_fur_cards.as_mut() {
+					let inv_model = mesh_world.inverse().to_cols_array_2d();
+					if compute_fur_cards.params.model != model || compute_fur_cards.params.inv_model != inv_model {
+						compute_fur_cards.params.model = model;
+						compute_fur_cards.params.inv_model = inv_model;
+						queue.write_buffer(&compute_fur_cards.params_buffer, 0, bytemuck::bytes_of(&compute_fur_cards.params));
+					}
 				}
 			}
 		}
@@ -10787,6 +11815,7 @@ impl SceneMeshes {
 				draw.primitive_index,
 				&draw.morph_source_indices,
 			) {
+				draw.morph_weights_match_default = false;
 				changed += 1;
 			}
 		}
@@ -10826,19 +11855,6 @@ impl SceneMeshes {
 		promoted
 	}
 
-	fn active_draw_texture_indices(&self) -> (BTreeSet<usize>, BTreeSet<usize>) {
-		let mut image_indices = BTreeSet::new();
-		let mut cube_indices = BTreeSet::new();
-		for draw in &self.draws {
-			if !draw.active() {
-				continue;
-			}
-			image_indices.extend(draw.texture_indices.iter().copied());
-			cube_indices.extend(draw.cube_texture_indices.iter().copied());
-		}
-		(image_indices, cube_indices)
-	}
-
 	pub fn refresh_asset_group_residency(&mut self, scene: &UnaSceneSnapshot, active_asset_groups: &[String]) -> usize {
 		self.refresh_asset_group_residency_with_changes(scene, active_asset_groups)
 			.active_draw_state_changed_count
@@ -10866,49 +11882,28 @@ impl SceneMeshes {
 				refresh.active_draw_state_changed_count += 1;
 			}
 		}
-		let (active_image_texture_indices, active_cube_texture_indices) = self.active_draw_texture_indices();
+		let active_draw_texture_indices = self.active_draw_indices.iter().filter_map(|&draw_index| {
+			self.draws
+				.get(draw_index)
+				.map(|draw| (draw.texture_indices.as_ref(), draw.cube_texture_indices.as_ref()))
+		});
 		let (next_image_texture_residency, next_cube_texture_residency) =
-			texture_residency_for_scene(scene, &asset_residency, &active_image_texture_indices, &active_cube_texture_indices);
-		refresh.image_texture_load_indices = residency_load_indices(
-			self.image_texture_residency.iter().copied(),
-			next_image_texture_residency.iter().copied(),
-		);
-		refresh.image_texture_unload_indices = residency_unload_indices(
-			self.image_texture_residency.iter().copied(),
-			next_image_texture_residency.iter().copied(),
-		);
-		refresh.cube_texture_load_indices = residency_load_indices(
-			self.cube_texture_residency.iter().copied(),
-			next_cube_texture_residency.iter().copied(),
-		);
-		refresh.cube_texture_unload_indices = residency_unload_indices(
-			self.cube_texture_residency.iter().copied(),
-			next_cube_texture_residency.iter().copied(),
-		);
+			texture_residency_for_active_draws(scene, &asset_residency, active_draw_texture_indices);
+		refresh.image_texture_load_indices = residency_load_indices(&self.image_texture_residency, &next_image_texture_residency);
+		refresh.image_texture_unload_indices = residency_unload_indices(&self.image_texture_residency, &next_image_texture_residency);
+		refresh.cube_texture_load_indices = residency_load_indices(&self.cube_texture_residency, &next_cube_texture_residency);
+		refresh.cube_texture_unload_indices = residency_unload_indices(&self.cube_texture_residency, &next_cube_texture_residency);
 		self.image_texture_residency = next_image_texture_residency;
 		self.cube_texture_residency = next_cube_texture_residency;
-		refresh.material_slot_load_indices = residency_load_indices(
-			self.material_slot_residency.iter().copied(),
-			scene
-				.materials
-				.iter()
-				.enumerate()
-				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
-		);
-		refresh.material_slot_unload_indices = residency_unload_indices(
-			self.material_slot_residency.iter().copied(),
-			scene
-				.materials
-				.iter()
-				.enumerate()
-				.map(|(material_index, _)| asset_residency.material_resident(material_index)),
-		);
-		self.material_slot_residency = scene
+		let next_material_slot_residency: Vec<bool> = scene
 			.materials
 			.iter()
 			.enumerate()
 			.map(|(material_index, _)| asset_residency.material_resident(material_index))
 			.collect();
+		refresh.material_slot_load_indices = residency_load_indices(&self.material_slot_residency, &next_material_slot_residency);
+		refresh.material_slot_unload_indices = residency_unload_indices(&self.material_slot_residency, &next_material_slot_residency);
+		self.material_slot_residency = next_material_slot_residency;
 		if refresh.active_draw_state_changed_count > 0 {
 			self.rebuild_draw_order();
 		}
@@ -10974,7 +11969,7 @@ impl SceneMeshes {
 		}
 		if needs_fur {
 			let draw = &self.draws[draw_index];
-			let Some(liltoon_like) = draw.material.liltoon_like_runtime() else {
+			let Some(liltoon_like) = material_untoon_profile(&draw.material) else {
 				return true;
 			};
 			let tex_sampler = texture_sampler_or(
@@ -11077,8 +12072,8 @@ impl SceneMeshes {
 			self.draws.iter().map(|draw| {
 				(
 					draw.active(),
-					draw.texture_indices.as_slice(),
-					draw.cube_texture_indices.as_slice(),
+					&*draw.texture_indices,
+					&*draw.cube_texture_indices,
 					draw.material_slot_index,
 				)
 			}),
@@ -11255,7 +12250,7 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
+	use un_avatar_core::{UnaMorphTargetDeltas, UnaMtoonMaterial, UnaSceneNode};
 
 	fn empty_source_metadata() -> UnaImageSourceMetadata {
 		UnaImageSourceMetadata {
@@ -11292,6 +12287,172 @@ mod tests {
 		assert_eq!(wgpu_address_mode(UnaTextureWrapMode::Repeat), wgpu::AddressMode::Repeat);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Nearest), wgpu::FilterMode::Nearest);
 		assert_eq!(wgpu_filter_mode(UnaTextureFilterMode::Linear), wgpu::FilterMode::Linear);
+	}
+
+	#[test]
+	fn unity_source_toon_color_factors_are_linearized_for_gpu_uniforms() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.color_factor_color_space = UnaColorFactorColorSpace::Srgb;
+		liltoon_like.shadow.color_factor = [0.8196, 0.8471, 0.9216];
+		liltoon_like.matcap.color_factor = [0.25, 0.5, 0.75];
+		liltoon_like.rim.color_factor = [0.1, 0.2, 0.3, 0.4];
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, Some(&liltoon_like), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert!((draw.base_color[0] - srgb_factor_to_linear(0.196)).abs() < 0.000001);
+		assert!((draw.base_color[1] - srgb_factor_to_linear(0.784)).abs() < 0.000001);
+		assert_eq!(draw.base_color[2], 1.0);
+		assert_eq!(draw.base_color[3], 0.5);
+		assert!((draw.shade_color[0] - srgb_factor_to_linear(0.8196)).abs() < 0.000001);
+		assert!((draw.matcap_factor[1] - srgb_factor_to_linear(0.5)).abs() < 0.000001);
+		assert!((draw.rim_color[2] - srgb_factor_to_linear(0.3)).abs() < 0.000001);
+		assert_eq!(draw.rim_color[3], material.occlusion_texture_strength.clamp(0.0, 2.0));
+	}
+
+	#[test]
+	fn preview_unity_liltoon_linear_marker_is_treated_as_serialized_srgb() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+		let liltoon_like = un_avatar_core::UnaLilToonLikeMaterial {
+			color_factor_color_space: UnaColorFactorColorSpace::Srgb,
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, Some(&liltoon_like), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert!((draw.base_color[0] - srgb_factor_to_linear(0.196)).abs() < 0.000001);
+		assert!((draw.base_color[1] - srgb_factor_to_linear(0.784)).abs() < 0.000001);
+		assert_eq!(draw.base_color[2], 1.0);
+		assert_eq!(draw.base_color[3], 0.5);
+	}
+
+	#[test]
+	fn plain_gltf_color_factors_stay_linear_for_gpu_uniforms() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, None, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.base_color, [0.196, 0.784, 1.0, 0.5]);
+	}
+
+	#[test]
+	fn unity_source_toon_color_factors_without_marker_stay_linear_for_gpu_uniforms() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			unavatar_material: Some(serde_json::json!({
+				"family": "liltoon",
+				"sourceShader": "lilToon"
+			})),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(
+			&material,
+			Some(&un_avatar_core::UnaLilToonLikeMaterial::default()),
+			&SceneMeshLoadOpts::default(),
+			0,
+			0,
+		);
+
+		assert_eq!(draw.base_color, [0.196, 0.784, 1.0, 0.5]);
+	}
+
+	#[test]
+	fn liltoon_stencil_writer_maps_from_normalized_pipeline_state() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.stencil.reference = 12;
+		liltoon_like.rendering.pipeline_state.stencil.compare = 8;
+		liltoon_like.rendering.pipeline_state.stencil.pass_op = 2;
+		liltoon_like.rendering.pipeline_state.stencil.read_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.write_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.fail_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.depth_fail_op = 0;
+		liltoon_like.rendering.pipeline_state.color_mask = 0;
+		let material = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let stencil = material_stencil_state(&material);
+
+		assert_eq!(stencil.reference, 12);
+		assert_eq!(unity_compare_function(stencil.compare), wgpu::CompareFunction::Always);
+		assert_eq!(unity_stencil_operation(stencil.pass_op), wgpu::StencilOperation::Replace);
+		assert_eq!(material_color_mask(&material), 0);
+		assert_eq!(
+			color_writes_from_unity_mask(material_color_mask(&material)),
+			wgpu::ColorWrites::empty()
+		);
+	}
+
+	#[test]
+	fn liltoon_stencil_consumer_maps_not_equal_test() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.stencil.reference = 12;
+		liltoon_like.rendering.pipeline_state.stencil.compare = 6;
+		liltoon_like.rendering.pipeline_state.stencil.pass_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.read_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.write_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.fail_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.depth_fail_op = 0;
+		liltoon_like.rendering.pipeline_state.color_mask = 15;
+		let material = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let stencil = material_stencil_state(&material);
+		let wgpu_stencil = stencil.to_wgpu();
+
+		assert_eq!(stencil.reference, 12);
+		assert_eq!(wgpu_stencil.front.compare, wgpu::CompareFunction::NotEqual);
+		assert_eq!(wgpu_stencil.front.pass_op, wgpu::StencilOperation::Keep);
+		assert_eq!(wgpu_stencil.read_mask, 255);
+		assert_eq!(wgpu_stencil.write_mask, 255);
+		assert_eq!(color_writes_from_unity_mask(material_color_mask(&material)), wgpu::ColorWrites::ALL);
+	}
+
+	#[test]
+	fn liltoon_outline_and_fur_stencil_use_dedicated_prefixes() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.outline_stencil.reference = 1;
+		liltoon_like.rendering.pipeline_state.outline_stencil.compare = 6;
+		liltoon_like.rendering.pipeline_state.outline_stencil.pass_op = 0;
+		liltoon_like.rendering.pipeline_state.outline_color_mask = 15;
+		liltoon_like.rendering.pipeline_state.fur_stencil.reference = 7;
+		liltoon_like.rendering.pipeline_state.fur_stencil.compare = 3;
+		liltoon_like.rendering.pipeline_state.fur_stencil.pass_op = 2;
+		liltoon_like.rendering.pipeline_state.fur_color_mask = 8;
+		let material = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let outline = material_outline_stencil_state(&material);
+		let fur = material_fur_stencil_state(&material);
+
+		assert_eq!(outline.reference, 1);
+		assert_eq!(unity_compare_function(outline.compare), wgpu::CompareFunction::NotEqual);
+		assert_eq!(material_outline_color_mask(&material), 15);
+		assert_eq!(fur.reference, 7);
+		assert_eq!(unity_compare_function(fur.compare), wgpu::CompareFunction::Equal);
+		assert_eq!(unity_stencil_operation(fur.pass_op), wgpu::StencilOperation::Replace);
+		assert_eq!(
+			color_writes_from_unity_mask(material_fur_color_mask(&material)),
+			wgpu::ColorWrites::RED
+		);
 	}
 
 	#[test]
@@ -11378,15 +12539,15 @@ mod tests {
 	#[test]
 	fn residency_transition_indices_report_loads_and_unloads() {
 		assert_eq!(
-			residency_load_indices([true, false, false, true], [false, true, false, true]),
+			residency_load_indices(&[true, false, false, true], &[false, true, false, true]),
 			vec![1]
 		);
 		assert_eq!(
-			residency_unload_indices([true, false, false, true], [false, true, false, true]),
+			residency_unload_indices(&[true, false, false, true], &[false, true, false, true]),
 			vec![0]
 		);
-		assert_eq!(residency_load_indices([], [true, false, true]), vec![0, 2]);
-		assert_eq!(residency_unload_indices([true, false, true], []), vec![0, 2]);
+		assert_eq!(residency_load_indices(&[], &[true, false, true]), vec![0, 2]);
+		assert_eq!(residency_unload_indices(&[true, false, true], &[]), vec![0, 2]);
 	}
 
 	#[test]
@@ -11477,13 +12638,19 @@ mod tests {
 
 	#[test]
 	fn material_texture_indices_keep_reflection_cube_separate() {
-		let mat = UnaMaterialPbr {
-			shading: UnaShadingModel::MToonLike,
-			base_color_texture_index: Some(3),
-			mtoon: Some(UnaMtoonMaterial {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+			&UnaMtoonMaterial {
 				reflection_cube_texture_index: Some(9),
 				..Default::default()
-			}),
+			},
+			[0.0, 0.0, 0.0],
+			None,
+		);
+		liltoon_like.reflection.enabled_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			base_color_texture_index: Some(3),
+			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
@@ -11715,7 +12882,7 @@ mod tests {
 
 		assert_eq!(
 			initial_active_texture_indices_for_scene(&scene, &effective_visibility, &residency, &SceneMeshLoadOpts::default()),
-			BTreeSet::from([0])
+			vec![0]
 		);
 	}
 
@@ -11740,19 +12907,18 @@ mod tests {
 			..Default::default()
 		};
 		let asset_residency = SceneAssetResidencySets::for_scene(&scene, &["outfit:coat".to_string()]);
-		let active_image_texture_indices = BTreeSet::from([0]);
-		let active_cube_texture_indices = BTreeSet::from([2]);
+		let active_image_texture_indices = [0usize];
+		let active_cube_texture_indices = [2usize];
 
-		let (image_residency, cube_residency) = texture_residency_for_scene(
+		let (image_residency, cube_residency) = texture_residency_for_active_draws(
 			&scene,
 			&asset_residency,
-			&active_image_texture_indices,
-			&active_cube_texture_indices,
+			std::iter::once((active_image_texture_indices.as_slice(), active_cube_texture_indices.as_slice())),
 		);
 
 		assert_eq!(image_residency, vec![true, false, false]);
 		assert_eq!(cube_residency, vec![false, false, true]);
-		assert_eq!(residency_load_indices([false, false, false], image_residency), vec![0]);
+		assert_eq!(residency_load_indices(&[false, false, false], &image_residency), vec![0]);
 	}
 
 	#[test]
@@ -12074,7 +13240,6 @@ mod tests {
 			MeshPipelineRenderState::outline(1),
 		);
 		let mut toon_features = UntoonShaderFeatures::default();
-		toon_features.profile_extensions = true;
 		toon_features.shadow_layers = true;
 		toon_features.fur = true;
 		let toon_shader = create_mesh_shader_module_for_features(&device, shader_variant_tier, toon_features, "mesh_toon_shader_test");
@@ -12342,7 +13507,7 @@ mod tests {
 	}
 
 	#[test]
-	fn skin_tone_matching_disables_mtoon_shade_color_on_skin_materials() {
+	fn skin_tone_matching_disables_untoon_shadow_color_on_skin_materials() {
 		let mat = UnaMaterialPbr {
 			name: Some("N00_000_00_Body_00_SKIN".to_string()),
 			..Default::default()
@@ -12351,7 +13516,7 @@ mod tests {
 			skin_tone_matching: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 		assert_eq!(draw.params[3].to_bits() & 64, 64);
 	}
 
@@ -12360,6 +13525,32 @@ mod tests {
 		assert!(morph_weights_match_default(&[0.25, 0.0, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.1, 0.0], &[0.25], 3));
 		assert!(!morph_weights_match_default(&[0.25, 0.0], &[0.25], 3));
+	}
+
+	#[test]
+	fn cached_optional_morph_inputs_report_only_real_changes() {
+		let mut values = Vec::new();
+		let mut values_valid = false;
+		assert!(!update_cached_optional_f32_slice(&mut values, &mut values_valid, None));
+		assert!(update_cached_optional_f32_slice(&mut values, &mut values_valid, Some(&[0.25, 0.5])));
+		assert!(!update_cached_optional_f32_slice(
+			&mut values,
+			&mut values_valid,
+			Some(&[0.25, 0.5])
+		));
+		assert!(update_cached_optional_f32_slice(
+			&mut values,
+			&mut values_valid,
+			Some(&[0.25, 0.75])
+		));
+		assert!(update_cached_optional_f32_slice(&mut values, &mut values_valid, None));
+
+		let mut map = BTreeMap::new();
+		let mut map_valid = false;
+		let overrides = BTreeMap::from([("Smile".to_string(), 1.0)]);
+		assert!(update_cached_optional_f32_map(&mut map, &mut map_valid, Some(&overrides)));
+		assert!(!update_cached_optional_f32_map(&mut map, &mut map_valid, Some(&overrides)));
+		assert!(update_cached_optional_f32_map(&mut map, &mut map_valid, None));
 	}
 
 	#[test]
@@ -12435,6 +13626,10 @@ mod tests {
 		uploaded.push(0.75);
 		assert!(!refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0]));
 		assert_eq!(uploaded, vec![0.75]);
+
+		assert!(refresh_morph_default_weights(&mut defaults, &mut uploaded, &scene, 0, 0, &[0, 1]));
+		assert_eq!(defaults, vec![0.75, 0.0]);
+		assert!(uploaded.is_empty());
 	}
 
 	#[test]
@@ -12445,8 +13640,83 @@ mod tests {
 			weight_scale: 0.5,
 		}];
 		let mut out = Vec::new();
-		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &mut out);
+		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &[], &[], &[], None, &mut out);
 		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_zero_fills_missing_defaults() {
+		let mut out = Vec::new();
+		fill_morph_weights_for_draw(&[0.2], 3, &[], None, &[], &[], &[], None, &mut out);
+		assert_eq!(out, vec![0.2, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_applies_morph_name_overrides() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([("(Do not Modify)ArmPit_Fix_L".to_string(), 0.75)]);
+		fill_morph_weights_for_draw(
+			&[0.0, 0.2],
+			2,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string(), "Other".to_string()],
+			&[],
+			&[],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.75, 0.2]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_prefers_target_specific_morph_override_key() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([
+			("(Do not Modify)ArmPit_Fix_L".to_string(), 0.25),
+			(
+				morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L"),
+				0.8,
+			),
+		]);
+		fill_morph_weights_for_draw(
+			&[0.0],
+			1,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string()],
+			&[morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L")],
+			&[],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.8]);
+	}
+
+	#[test]
+	fn fill_morph_weights_for_draw_matches_avatar_root_relative_override_key() {
+		let mut out = Vec::new();
+		let overrides = BTreeMap::from([(
+			morph_override_key("AvatarRoot/Cloth_Panel_Mesh", "(Do not Modify)ArmPit_Fix_L"),
+			0.9,
+		)]);
+		let draw_key = morph_override_key(
+			"GenericAvatar (UNAvatar Export)/AvatarRoot/Cloth_Panel_Mesh",
+			"(Do not Modify)ArmPit_Fix_L",
+		);
+		let draw_suffix_key = morph_override_path_suffix_key(&draw_key);
+		fill_morph_weights_for_draw(
+			&[0.0],
+			1,
+			&[],
+			None,
+			&["(Do not Modify)ArmPit_Fix_L".to_string()],
+			&[draw_key],
+			&[draw_suffix_key],
+			Some(&overrides),
+			&mut out,
+		);
+		assert_eq!(out, vec![0.9]);
 	}
 
 	#[test]
@@ -12500,9 +13770,132 @@ mod tests {
 			},
 		];
 
-		let indices = dynamic_morph_target_indices(&buf, &bindings, false);
+		let indices = dynamic_morph_target_indices(&buf, &bindings, &[], false);
 
-		assert_eq!(indices, BTreeSet::from([0, 1, 2]));
+		assert_eq!(indices, vec![0, 1, 2]);
+	}
+
+	#[test]
+	fn dynamic_morph_targets_include_animator_morph_names() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: vec![
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+				UnaMorphTargetDeltas {
+					position_deltas: vec![[0.0; 3]],
+					normal_deltas: None,
+				},
+			],
+			morph_target_names: vec!["Unused".to_string(), "(Do not Modify)ArmPit_Fix_L".to_string()],
+			default_morph_weights: vec![0.0, 0.0],
+		};
+		let names = vec!["(Do not Modify)ArmPit_Fix_L".to_string()];
+
+		let indices = dynamic_morph_target_indices(&buf, &[], &names, false);
+
+		assert_eq!(indices, vec![1]);
+	}
+
+	#[test]
+	fn dynamic_morph_targets_return_empty_without_morph_payload() {
+		let buf = UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: None,
+			positions: vec![[0.0; 3]],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: None,
+			weights: None,
+			indices: None,
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: vec!["Ignored".to_string()],
+			default_morph_weights: vec![1.0],
+		};
+		let bindings = [ExpressionBinding {
+			preset_index: 0,
+			morph_target_index: 0,
+			weight_scale: 1.0,
+		}];
+		let names = vec!["Ignored".to_string()];
+
+		let indices = dynamic_morph_target_indices(&buf, &bindings, &names, true);
+
+		assert!(indices.is_empty());
+	}
+
+	#[test]
+	fn remap_expression_bindings_uses_compact_morph_indices() {
+		let bindings = [
+			ExpressionBinding {
+				preset_index: 0,
+				morph_target_index: 4,
+				weight_scale: 0.25,
+			},
+			ExpressionBinding {
+				preset_index: 1,
+				morph_target_index: 99,
+				weight_scale: 1.0,
+			},
+			ExpressionBinding {
+				preset_index: 2,
+				morph_target_index: 42,
+				weight_scale: 0.5,
+			},
+		];
+
+		let remapped = remap_expression_bindings(&bindings, &[4, 42]);
+
+		assert_eq!(remapped.len(), 2);
+		assert_eq!(remapped[0].preset_index, 0);
+		assert_eq!(remapped[0].morph_target_index, 0);
+		assert_eq!(remapped[0].weight_scale, 0.25);
+		assert_eq!(remapped[1].preset_index, 2);
+		assert_eq!(remapped[1].morph_target_index, 1);
+		assert_eq!(remapped[1].weight_scale, 0.5);
+	}
+
+	#[test]
+	fn remap_expression_bindings_uses_dense_lookup_for_compact_indices() {
+		let bindings = [
+			ExpressionBinding {
+				preset_index: 0,
+				morph_target_index: 1,
+				weight_scale: 0.25,
+			},
+			ExpressionBinding {
+				preset_index: 1,
+				morph_target_index: 3,
+				weight_scale: 0.5,
+			},
+		];
+
+		let remapped = remap_expression_bindings(&bindings, &[1, 2, 3]);
+
+		assert_eq!(remapped.len(), 2);
+		assert_eq!(remapped[0].morph_target_index, 0);
+		assert_eq!(remapped[1].morph_target_index, 2);
 	}
 
 	fn test_vertex(joints: [u16; 4], weights: [f32; 4]) -> Vertex {
@@ -12558,6 +13951,398 @@ mod tests {
 	}
 
 	#[test]
+	fn mesh_cloth_assist_empty_filter_matches_profile_cloth_category() {
+		let filters = Vec::new();
+		let categories = un_avatar_skeleton::DynamicsPhysicsConfig::default().normalized().categories;
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/LongCoat",
+			&filters,
+			&categories
+		));
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/DressHem",
+			&filters,
+			&categories
+		));
+		assert!(mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/SleeveFrill",
+			&filters,
+			&categories
+		));
+		assert!(!mesh_cloth_assist_mesh_matches_with_categories(
+			"Avatar/Body",
+			&filters,
+			&categories
+		));
+	}
+
+	#[test]
+	fn mesh_cloth_assist_runtime_membership_overrides_cloth_alias_fallback() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Alias_Not_Runtime".to_string(),
+			"Root/Actual_Dynamic".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 2, 0, 0], [0.58, 0.42, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[2usize],
+		);
+
+		assert_eq!(changed, 2);
+		assert!(verts[0].joints.contains(&2));
+		let static_alias_weight = verts[0]
+			.joints
+			.iter()
+			.zip(verts[0].weights.iter())
+			.filter_map(|(&joint, &weight)| (joint == 1).then_some(weight))
+			.sum::<f32>();
+		assert!((static_alias_weight - 0.22).abs() < 0.0001);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_transfers_to_existing_dynamic_lane() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.8, 0.2, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.5, 0.5, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[],
+		);
+
+		assert_eq!(changed, 1);
+		assert!(verts[0].weights[0] < 0.8);
+		assert!(verts[0].weights[1] > 0.2);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_repairs_connected_dynamic_weight_gap() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.56, 0.44, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.56, 0.44, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.5,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[],
+		);
+
+		assert_eq!(changed, 1);
+		assert!((verts[0].weights[0] - 0.56).abs() < 0.001);
+		assert!((verts[0].weights[1] - 0.44).abs() < 0.001);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_relaxes_connected_dynamic_weight_chain() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.9, 0.1, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 0, 0], [0.32, 0.68, 0.0, 0.0]),
+			test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 3, 1, 2, 3],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[],
+		);
+
+		assert_eq!(changed, 2);
+		assert!(
+			verts[0].weights[1] > 0.39,
+			"first row should inherit dynamic weight across the connected cloth strip"
+		);
+		assert!(
+			verts[1].weights[1] > 0.51,
+			"middle row should first inherit from the stronger dynamic neighbor"
+		);
+		assert_eq!(
+			verts[3].weights,
+			[1.0, 0.0, 0.0, 0.0],
+			"vertices without an authored dynamic lane are not seeded"
+		);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_does_not_seed_missing_dynamic_lane() {
+		let left_bind = Mat4::from_translation(Vec3::new(-1.0, 0.0, 0.0)).inverse().to_cols_array();
+		let right_bind = Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).inverse().to_cols_array();
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), left_bind, right_bind],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+			"Root/Cloth_Dyn_R".to_string(),
+		];
+		let mut verts = vec![
+			Vertex {
+				pos: [-1.0, 0.0, 0.0],
+				..test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+			},
+			Vertex {
+				pos: [1.0, 0.0, 0.0],
+				..test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])
+			},
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[],
+		);
+
+		assert_eq!(changed, 0);
+		assert_eq!(verts[0].joints, [0, 0, 0, 0]);
+		assert_eq!(verts[1].joints, [0, 0, 0, 0]);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_seeds_missing_dynamic_lane_from_connected_static_cloth_anchor() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Static_L".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([2, 1, 0, 0], [0.62, 0.38, 0.0, 0.0]),
+			test_vertex([2, 1, 0, 0], [0.62, 0.38, 0.0, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.6,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+		let dynamic_nodes = vec![2usize];
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&dynamic_nodes,
+		);
+
+		assert_eq!(changed, 1);
+		assert!(verts[0].joints.contains(&2));
+		let seeded_lane = verts[0].joints.iter().position(|&joint| joint == 2).expect("seeded lane");
+		assert!(verts[0].weights[seeded_lane] > 0.25);
+		assert!(verts[0].weights[0] < 0.78);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_propagates_tiny_dynamic_bridge_across_static_cloth_strip() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1, 2],
+			inverse_bind_matrices: vec![
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+				Mat4::IDENTITY.to_cols_array(),
+			],
+			skeleton_node: None,
+		};
+		let node_paths = vec![
+			"Root/Chest".to_string(),
+			"Root/Cloth_Static_L".to_string(),
+			"Root/Cloth_Dyn_L".to_string(),
+		];
+		let mut verts = vec![
+			test_vertex([0, 1, 0, 0], [0.78, 0.22, 0.0, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.58, 0.418, 0.002, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.30, 0.684, 0.016, 0.0]),
+			test_vertex([0, 1, 2, 0], [0.16, 0.768, 0.072, 0.0]),
+		];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.04,
+			seed_missing_dynamic_influence: true,
+			max_assist_weight: 0.3,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+		let dynamic_nodes = vec![2usize];
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2, 1, 2, 3],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&dynamic_nodes,
+		);
+
+		assert!(changed >= 2);
+		let head_dynamic = verts[0]
+			.joints
+			.iter()
+			.zip(verts[0].weights.iter())
+			.filter_map(|(&joint, &weight)| (joint == 2).then_some(weight))
+			.sum::<f32>();
+		assert!(
+			head_dynamic >= 0.04,
+			"tiny authored dynamic weights should propagate across the connected static cloth strip, got {head_dynamic}"
+		);
+	}
+
+	#[test]
+	fn mesh_cloth_assist_does_not_seed_when_disabled_by_config() {
+		let skin = un_avatar_core::UnaSkin {
+			joint_nodes: vec![0, 1],
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(), Mat4::IDENTITY.to_cols_array()],
+			skeleton_node: None,
+		};
+		let node_paths = vec!["Root/Chest".to_string(), "Root/Cloth_Dyn_L".to_string()];
+		let mut verts = vec![test_vertex([0, 0, 0, 0], [1.0, 0.0, 0.0, 0.0])];
+		let config = un_avatar_skeleton::DynamicsMeshClothAssistConfig {
+			enabled: true,
+			body_dominance_threshold: 0.55,
+			min_existing_dynamic_weight: 0.05,
+			seed_missing_dynamic_influence: false,
+			max_assist_weight: 0.25,
+			mesh_path_contains: vec!["cloth".to_string()],
+		};
+
+		let changed = apply_mesh_cloth_assist_to_vertices(
+			&mut verts,
+			&[0, 1, 2],
+			Some(&skin),
+			&node_paths,
+			"Avatar/Cloth_Panel_Mesh",
+			&config,
+			&[],
+			&[],
+		);
+
+		assert_eq!(changed, 0);
+		assert_eq!(verts[0].joints, [0, 0, 0, 0]);
+		assert_eq!(verts[0].weights, [1.0, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
 	fn expand_primitive_bakes_static_default_morphs() {
 		let buf = UnaMeshBuffers {
 			name: None,
@@ -12582,7 +14367,7 @@ mod tests {
 			default_morph_weights: vec![0.5],
 		};
 
-		let static_morph_targets = BTreeSet::new();
+		let static_morph_targets = Vec::new();
 		let baked = expand_primitive(&buf, Some(&static_morph_targets)).expect("expanded primitive");
 		assert_eq!(baked.verts[0].pos, [2.0, 2.0, 2.5]);
 		assert!(baked.default_morph_weights.is_empty());
@@ -12693,40 +14478,121 @@ mod tests {
 	}
 
 	#[test]
+	fn scene_node_paths_follow_roots_and_parentless_nodes() {
+		let identity = Mat4::IDENTITY.to_cols_array();
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("root".to_string()),
+					visible: true,
+					transform: identity,
+					children: vec![1],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: None,
+					visible: true,
+					transform: identity,
+					children: vec![2],
+					mesh: None,
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("leaf".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(0),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+				UnaSceneNode {
+					source_node_id: None,
+					resolved_node_id: None,
+					name: Some("loose".to_string()),
+					visible: true,
+					transform: identity,
+					children: Vec::new(),
+					mesh: Some(1),
+					skin: None,
+					probe_anchor_node: None,
+					local_bounds: None,
+				},
+			],
+			roots: Vec::new(),
+			..Default::default()
+		};
+
+		assert_eq!(scene_node_paths(&scene), vec!["root", "root", "root/leaf", "loose"]);
+	}
+
+	#[test]
+	fn scene_mesh_index_upload_compacts_only_when_all_indices_fit_u16() {
+		match SceneMeshIndexUpload::from_u32_indices_compact(vec![0, 7, u16::MAX as u32]) {
+			SceneMeshIndexUpload::U16(indices) => assert_eq!(&*indices, &[0, 7, u16::MAX]),
+			SceneMeshIndexUpload::U32(_) => panic!("expected u16 compact index payload"),
+		}
+		match SceneMeshIndexUpload::from_u32_indices_compact(vec![1, u16::MAX as u32 + 1, 3]) {
+			SceneMeshIndexUpload::U16(_) => panic!("expected u32 index payload"),
+			SceneMeshIndexUpload::U32(indices) => assert_eq!(&*indices, &[1, u16::MAX as u32 + 1, 3]),
+		}
+	}
+
+	#[test]
 	fn ordered_draw_batches_preserve_transparent_sequence() {
+		fn key(kind: DrawPipelineKind) -> DrawPipelineKey {
+			DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15)
+		}
+
 		let mut batches = Vec::new();
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonZWrite, 1, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendLit, 2, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 3, 1);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 4, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 0, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToonZWrite), 1, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendLit), 2, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 3, 1);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 4, 1);
 
 		assert_eq!(batches.len(), 4);
-		assert_eq!(batches[0].pipeline, DrawPipelineKind::BlendToon);
+		assert_eq!(batches[0].pipeline, key(DrawPipelineKind::BlendToon));
 		assert_eq!(batches[0].draw_indices, vec![0]);
-		assert_eq!(batches[1].pipeline, DrawPipelineKind::BlendToonZWrite);
+		assert_eq!(batches[1].pipeline, key(DrawPipelineKind::BlendToonZWrite));
 		assert_eq!(batches[1].draw_indices, vec![1]);
-		assert_eq!(batches[2].pipeline, DrawPipelineKind::BlendLit);
+		assert_eq!(batches[2].pipeline, key(DrawPipelineKind::BlendLit));
 		assert_eq!(batches[2].draw_indices, vec![2]);
-		assert_eq!(batches[3].pipeline, DrawPipelineKind::BlendToon);
+		assert_eq!(batches[3].pipeline, key(DrawPipelineKind::BlendToon));
 		assert_eq!(batches[3].draw_indices, vec![3, 4]);
 	}
 
 	#[test]
 	fn ordered_draw_batches_keep_gem_prepass_adjacent_to_forward() {
+		fn key(kind: DrawPipelineKind) -> DrawPipelineKey {
+			DrawPipelineKey::from_parts(kind, MaterialStencilState::default(), 15)
+		}
+
 		let mut batches = Vec::new();
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 0, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::LilToonGemPre, 1, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToonAdd, 1, 4);
-		append_ordered_draw_batch(&mut batches, DrawPipelineKind::BlendToon, 2, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 0, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::LilToonGemPre), 1, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToonAdd), 1, 4);
+		append_ordered_draw_batch(&mut batches, key(DrawPipelineKind::BlendToon), 2, 4);
 
 		assert_eq!(
 			batches.iter().map(|batch| batch.pipeline).collect::<Vec<_>>(),
 			vec![
-				DrawPipelineKind::BlendToon,
-				DrawPipelineKind::LilToonGemPre,
-				DrawPipelineKind::BlendToonAdd,
-				DrawPipelineKind::BlendToon
+				key(DrawPipelineKind::BlendToon),
+				key(DrawPipelineKind::LilToonGemPre),
+				key(DrawPipelineKind::BlendToonAdd),
+				key(DrawPipelineKind::BlendToon)
 			]
 		);
 		assert_eq!(batches[1].draw_indices, vec![1]);
@@ -12767,7 +14633,7 @@ mod tests {
 			UnaShadingModel::LilToonLike,
 			true
 		));
-		assert!(transparent_backpass_enabled(
+		assert!(!transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			true,
 			UnaShadingModel::MToonLike,
@@ -12802,7 +14668,7 @@ mod tests {
 			true,
 			UnaShadingModel::LilToonLike
 		));
-		assert!(transparent_forward_zwrite_enabled(
+		assert!(!transparent_forward_zwrite_enabled(
 			UnaAlphaMode::Blend,
 			true,
 			UnaShadingModel::MToonLike
@@ -12820,26 +14686,21 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_source_zwrite_controls_transparent_zwrite() {
-		let base_liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+	fn liltoon_blend_state_controls_transparent_zwrite() {
+		let mut enabled_liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		enabled_liltoon.blend_state.pre_zwrite_factor = 1.0;
+		let mut disabled_liltoon = enabled_liltoon.clone();
+		disabled_liltoon.blend_state.pre_zwrite_factor = 0.0;
 		let enabled = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Blend,
-			liltoon_like: Some(base_liltoon.clone()),
-			unavatar_material: Some(serde_json::json!({
-				"sourceShader": "Hidden/lilToonTransparent",
-				"floatParams": { "_ZWrite": 1.0 }
-			})),
+			liltoon_like: Some(enabled_liltoon),
 			..Default::default()
 		};
 		let disabled = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Blend,
-			liltoon_like: Some(base_liltoon),
-			unavatar_material: Some(serde_json::json!({
-				"sourceShader": "Hidden/lilToonTransparent",
-				"floatParams": { "_ZWrite": 0.0 }
-			})),
+			liltoon_like: Some(disabled_liltoon),
 			..Default::default()
 		};
 
@@ -12862,7 +14723,7 @@ mod tests {
 	#[test]
 	fn liltoon_refraction_material_needs_screen_refraction_grab_before_late_pass() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
 		liltoon_like.rendering.render_queue_number = Some(2900);
 		let mat = UnaMaterialPbr {
@@ -12882,7 +14743,7 @@ mod tests {
 	#[test]
 	fn material_runtime_requirements_collects_toon_feature_bits() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
 		liltoon_like.audio_link.enabled_factor = 1.0;
 		liltoon_like.audio_link.to_emission_factor = 1.0;
@@ -12899,7 +14760,7 @@ mod tests {
 		assert!(requirements.screen_refraction);
 		assert!(requirements.fur);
 		let liltoon_plan = material_untoon_feature_plan(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
-		assert_eq!(liltoon_plan.source_profile, UntoonSourceProfile::LilToon);
+		assert_eq!(liltoon_plan.semantic_profile, UntoonSemanticProfile::UNToon);
 		assert!(liltoon_plan.shader_features.audio_link);
 		assert!(liltoon_plan.shader_features.refraction);
 
@@ -12915,12 +14776,19 @@ mod tests {
 		assert!(disabled_fur.screen_refraction);
 		assert!(!disabled_fur.fur);
 
-		let mtoon_requirements = material_runtime_requirements(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
-		assert!(!mtoon_requirements.audio_link_texture);
-		assert!(mtoon_requirements.screen_refraction);
-		assert!(!mtoon_requirements.fur);
+		let source_marker_requirements =
+			material_runtime_requirements(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert!(source_marker_requirements.audio_link_texture);
+		assert!(source_marker_requirements.screen_refraction);
+		assert!(source_marker_requirements.fur);
 
-		let mut merged = mtoon_requirements;
+		let mesh_runtime_requirements =
+			material_runtime_requirements(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert!(mesh_runtime_requirements.audio_link_texture);
+		assert!(mesh_runtime_requirements.screen_refraction);
+		assert!(mesh_runtime_requirements.fur);
+
+		let mut merged = mesh_runtime_requirements;
 		merged.include(requirements);
 		assert!(merged.audio_link_texture);
 		assert!(merged.screen_refraction);
@@ -12928,7 +14796,32 @@ mod tests {
 	}
 
 	#[test]
-	fn mtoon_compatibility_maps_to_untoon_features_without_profile_extensions() {
+	fn mtoon_source_marker_with_untoon_profile_is_promoted_inside_mesh_draw_runtime() {
+		let mtoon = UnaMtoonMaterial {
+			matcap_texture_index: Some(1),
+			..Default::default()
+		};
+		let converted = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+				&mtoon,
+				[0.0, 0.0, 0.0],
+				None,
+			)),
+			..Default::default()
+		};
+		let source_only = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			mtoon: Some(mtoon),
+			..Default::default()
+		};
+
+		assert_eq!(mesh_draw_shading_for_material(&converted), UnaShadingModel::LilToonLike);
+		assert_eq!(mesh_draw_shading_for_material(&source_only), UnaShadingModel::LitLambert);
+	}
+
+	#[test]
+	fn mtoon_source_profile_without_importer_untoon_compat_profile_has_no_runtime_features() {
 		let mat = UnaMaterialPbr {
 			shading: UnaShadingModel::MToonLike,
 			emissive_texture_index: Some(4),
@@ -12941,19 +14834,117 @@ mod tests {
 			..Default::default()
 		};
 
-		let plan = material_untoon_feature_plan(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
 		let features = plan.shader_features;
 
-		assert_eq!(plan.source_profile, UntoonSourceProfile::MToon);
-		assert!(!features.profile_extensions);
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::Plain);
+		assert!(
+			mat.liltoon_like.is_none(),
+			"VRM/.unavatar importers must convert MToon source profiles to UNToon semantic material before renderer runtime"
+		);
+		assert!(!features.shadow_layers);
+		assert!(!features.matcap);
+		assert!(!features.reflection);
+		assert!(!features.reflection_cube);
+		assert!(!features.rim);
+		assert!(!features.emission);
+		assert!(!features.main_layers);
+		assert!(!features.audio_link);
+	}
+
+	#[test]
+	fn non_toon_shading_does_not_run_stale_untoon_profile_payload() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.matcap.enabled_factor = 1.0;
+		liltoon_like.matcap.texture_index = Some(1);
+		liltoon_like.rim.enabled_factor = 1.0;
+		liltoon_like.rim.texture_index = Some(2);
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LitLambert,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::Plain);
+		assert!(!plan.shader_features.shadow_layers);
+		assert!(!plan.shader_features.matcap);
+		assert!(!plan.shader_features.rim);
+		assert!(
+			material_untoon_profile(&mat).is_none(),
+			"UNToon runtime must be gated by the normalized shading model, not merely by a retained source payload"
+		);
+	}
+
+	#[test]
+	fn mtoon_compat_profile_runs_as_untoon_extensions() {
+		let mtoon = UnaMtoonMaterial {
+			matcap_texture_index: Some(1),
+			reflection_cube_texture_index: Some(2),
+			rim_multiply_texture_index: Some(3),
+			parametric_rim_color_factor: [0.25, 0.5, 0.75],
+			..Default::default()
+		};
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			emissive_texture_index: Some(4),
+			mtoon: Some(mtoon.clone()),
+			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+				&mtoon,
+				[0.1, 0.2, 0.3],
+				Some(4),
+			)),
+			..Default::default()
+		};
+
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		let features = plan.shader_features;
+
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::UNToon);
 		assert!(features.shadow_layers);
 		assert!(features.matcap);
 		assert!(features.reflection);
 		assert!(features.reflection_cube);
 		assert!(features.rim);
 		assert!(features.emission);
-		assert!(!features.main_layers);
-		assert!(!features.audio_link);
+	}
+
+	#[test]
+	fn mtoon_source_marker_runtime_uniforms_use_untoon_profile() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.shadow.border_factor = 0.25;
+		liltoon_like.matcap.enabled_factor = 1.0;
+		liltoon_like.matcap.blend_factor = 1.0;
+		liltoon_like.matcap.texture_index = Some(1);
+		liltoon_like.rim.enabled_factor = 1.0;
+		liltoon_like.rim.color_factor = [0.2, 0.3, 0.4, 1.0];
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			liltoon_like: Some(liltoon_like),
+			mtoon: Some(UnaMtoonMaterial {
+				shading_shift_factor: -0.9,
+				shading_toony_factor: 0.9,
+				matcap_texture_index: None,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(mesh_draw_shading_for_material(&mat), UnaShadingModel::LilToonLike);
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::UNToon);
+		assert!(plan.shader_features.shadow_layers);
+		assert!(plan.shader_features.matcap);
+		assert!(plan.shader_features.rim);
+
+		let draw = mesh_draw_material_gpu_runtime(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+		assert_eq!(draw.shadow_params[0], 1.0);
+		assert_eq!(draw.shadow_params[2], 0.25);
+		assert_eq!(draw.matcap_params[0], 1.0);
+		assert_eq!(draw.rim_params[3], 1.0);
+		assert_eq!(draw.rim_color, [0.2, 0.3, 0.4, 1.0]);
 	}
 
 	#[test]
@@ -12994,7 +14985,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
 		assert_eq!(draw.normal2nd_uv_offset_scale, [0.3, 0.4, 1.25, 1.75]);
@@ -13012,7 +15003,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main_color_adjust_params, [0.25, 0.8, 1.2, 0.9]);
 	}
@@ -13027,7 +15018,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
 	}
@@ -13045,7 +15036,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rim_indirect_params[0], 0.5);
 		assert_eq!(draw.rim_indirect_params[1], -0.75);
@@ -13064,7 +15055,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_params[0], 0.2);
 	}
@@ -13076,7 +15067,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_eq!(flags & MAT_UNTOON_GEM_PROFILE, 0);
@@ -13086,7 +15077,7 @@ mod tests {
 	#[test]
 	fn gem_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.45;
 		liltoon_like.reflection.gem_chromatic_aberration_factor = 0.03;
 		liltoon_like.reflection.gem_particle_loop_factor = 6.0;
@@ -13099,7 +15090,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & MAT_UNTOON_GEM_PROFILE, 0);
@@ -13112,6 +15103,7 @@ mod tests {
 	fn liltoon_gem_prepass_requires_gem_source() {
 		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
 			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			runtime_variant: un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem,
 			..Default::default()
 		};
 		let gem_material = UnaMaterialPbr {
@@ -13143,6 +15135,7 @@ mod tests {
 	fn liltoon_gem_uses_exported_cube_without_override() {
 		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
 			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			runtime_variant: un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem,
 			..Default::default()
 		};
 		gem.reflection.cube_texture_index = Some(42);
@@ -13151,6 +15144,7 @@ mod tests {
 
 		let mut normal = gem.clone();
 		normal.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::Liltoon;
+		normal.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::UNToon;
 		assert_eq!(liltoon_reflection_texture_index(&normal), None);
 
 		normal.reflection.cube_override_factor = 1.0;
@@ -13163,7 +15157,7 @@ mod tests {
 	#[test]
 	fn refraction_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = -0.25;
 		liltoon_like.reflection.refraction_color_from_main_factor = 1.0;
 		liltoon_like.reflection.refraction_color_factor = [0.8, 0.9, 1.0, 0.6];
@@ -13172,7 +15166,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & MAT_UNTOON_REFRACTION_PROFILE, 0);
@@ -13191,14 +15185,13 @@ mod tests {
 			..Default::default()
 		};
 
-		let normal = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let normal = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(normal.reflection_control[0], 1.0);
 		assert_eq!(normal.reflection_control[1], 0.8);
 		assert_eq!(normal.reflection_control[2], 0.6);
 
 		let disabled = mesh_draw_material_gpu(
 			&mat,
-			&UnaMtoonMaterial::default(),
 			&SceneMeshLoadOpts {
 				debug_disable_reflection: true,
 				..Default::default()
@@ -13406,6 +15399,8 @@ mod tests {
 				ComputeFurCardsSourceTriangleGpu { indices: [2, 1, 0, 0] },
 			]
 		);
+		let source_triangles_u16 = compute_fur_cards_source_triangles_from_indices_u16(&[0, 1, 2, 0, 2, 9, 2, 1, 0], verts.len());
+		assert_eq!(source_triangles_u16, source_triangles);
 
 		let source_req = compute_fur_cards_source_buffer_requirements(source_vertices.len() as u32, source_triangles.len() as u32)
 			.expect("source requirements");
@@ -13437,7 +15432,9 @@ mod tests {
 		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
 		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
 		let mut source_vertices = Vec::new();
-		compute_fur_cards_skinned_source_vertices_from_mesh(&verts, &palette, &mut source_vertices);
+		let mut palette_matrices = Vec::new();
+		compute_fur_cards_palette_matrices(&palette, &mut palette_matrices);
+		compute_fur_cards_skinned_source_vertices_from_matrices(&verts, &palette_matrices, &mut source_vertices);
 
 		assert_eq!(source_vertices.len(), 1);
 		assert!((source_vertices[0].position[0] - 4.0).abs() < 0.00001);
@@ -13446,6 +15443,36 @@ mod tests {
 		assert_eq!(source_vertices[0].normal, [0.0, 1.0, 0.0, 0.0]);
 		assert_eq!(source_vertices[0].tangent, [1.0, 0.0, 0.0, -1.0]);
 		assert_eq!(source_vertices[0].color, [0.25, 0.5, 0.75, 1.0]);
+	}
+
+	#[test]
+	fn compute_fur_cards_single_weight_skinning_uses_same_palette_clamp() {
+		let verts = vec![Vertex {
+			pos: [1.0, 2.0, 3.0],
+			norm: [0.0, 1.0, 0.0],
+			tangent: [1.0, 0.0, 0.0, 1.0],
+			uv: [0.25, 0.5],
+			uv1: [0.25, 0.5],
+			uv2: [0.25, 0.5],
+			uv3: [0.25, 0.5],
+			joints: [9, 0, 0, 0],
+			weights: [1.0, 0.0, 0.0, 0.0],
+			color: [1.0, 1.0, 1.0, 1.0],
+		}];
+		let mut palette = Vec::new();
+		write_matrix_to_raw(&mut palette, Mat4::IDENTITY);
+		write_matrix_to_raw(&mut palette, Mat4::from_translation(Vec3::new(4.0, 0.0, 0.0)));
+		let mut source_vertices = Vec::new();
+		let mut palette_matrices = Vec::new();
+		compute_fur_cards_palette_matrices(&palette, &mut palette_matrices);
+		compute_fur_cards_skinned_source_vertices_from_matrices(&verts, &palette_matrices, &mut source_vertices);
+
+		assert_eq!(source_vertices.len(), 1);
+		assert_eq!(source_vertices[0].position, [5.0, 2.0, 3.0, 1.0]);
+		assert_eq!(source_vertices[0].normal, [0.0, 1.0, 0.0, 0.0]);
+		assert_eq!(source_vertices[0].tangent, [1.0, 0.0, 0.0, 1.0]);
+		assert_eq!(source_vertices[0].joints, [9, 0, 0, 0]);
+		assert_eq!(source_vertices[0].weights, [1.0, 0.0, 0.0, 0.0]);
 	}
 
 	#[test]
@@ -13695,7 +15722,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.fur_params, [1.0, 13.0, 0.35, 0.45]);
 		assert_eq!(draw.fur_vector_params, [0.1, 0.2, 0.3, 0.4]);
@@ -13718,7 +15745,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.fur_noise_params, [50.0, 50.0, 0.0, -49.0]);
 	}
@@ -13767,7 +15794,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.backlight_color, [0.2, 0.3, 0.4, 0.5]);
 		assert_eq!(draw.backlight_params, [1.0, 0.6, 0.7, 8.0]);
@@ -13790,7 +15817,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.backface_color, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(draw.distance_fade, [0.2, 5.0, 0.75, 1.0]);
@@ -13820,7 +15847,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.dissolve_color, [1.2, 1.1, 1.0, 0.9]);
 		assert_eq!(draw.dissolve_params, [1.0, 0.0, 0.45, 0.12]);
@@ -13847,7 +15874,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.parallax_params, [1.0, 1.0, 0.07, 0.35]);
 		assert_eq!(draw.parallax_uv_offset_scale, [0.12, 0.23, 1.2, 1.3]);
@@ -13901,7 +15928,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main2nd_ext, [2.0, 1.0, 0.0, 0.0]);
 		assert_eq!(draw.main2nd_distance_fade, [1.0, 6.0, 0.4, 0.0]);
@@ -13951,7 +15978,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.id_mask_params, [1.0, 8.0, 1.0, 1.0]);
 		assert_eq!(draw.id_mask_flags0, [1.0, 0.0, 1.0, 0.0]);
@@ -13998,7 +16025,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.glitter_color, [0.2, 0.3, 0.4, 0.5]);
 		assert_eq!(draw.glitter_params1, [512.0, 513.0, 0.08, 2.0]);
@@ -14032,7 +16059,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_uv_params, [0.1, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.matcap_uv_ext_params, [0.5, 0.6, 0.7, 0.8]);
@@ -14060,7 +16087,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_bump_params, [1.0, 0.7, 0.0, 0.0]);
 		assert_eq!(draw.matcap2_bump_params, [1.0, 0.8, 0.0, 0.0]);
@@ -14078,7 +16105,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_bump_params[0], 0.0);
 		assert_eq!(draw.matcap2_bump_params[0], 0.0);
@@ -14096,7 +16123,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
 	}
@@ -14110,7 +16137,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params, [0.7, 0.0, 0.0, 0.0]);
 	}
@@ -14148,7 +16175,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.audio_link_params, [1.0, 2.0, 1.0, 0.75]);
 		assert_eq!(draw.audio_link_default, [0.4, 0.5, 3.0, 0.2]);
@@ -14177,6 +16204,7 @@ mod tests {
 		};
 		assert!(material_needs_audio_link_texture(&mat, UnaShadingModel::LilToonLike));
 		assert!(!material_needs_audio_link_texture(&mat, UnaShadingModel::MToonLike));
+		assert!(material_needs_audio_link_texture(&mat, mesh_draw_shading_for_material(&mat)));
 
 		liltoon_like.audio_link.enabled_factor = 0.0;
 		let disabled = UnaMaterialPbr {
@@ -14211,7 +16239,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params[2], 0.4);
 	}
@@ -14225,7 +16253,7 @@ mod tests {
 			liltoon_like: Some(liltoon_like.clone()),
 			..Default::default()
 		};
-		let without_override = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let without_override = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(without_override.rendering_ext_params[1], 0.0);
 
 		liltoon_like.reflection.cube_override_factor = 1.0;
@@ -14233,7 +16261,7 @@ mod tests {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
-		let with_override = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let with_override = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(with_override.rendering_ext_params[1], 1.0);
 	}
 
@@ -14246,9 +16274,60 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.material_ext_params, [1.0, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_light_direction_override_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.light_direction_override_factor = [0.0, 0.001, 0.0, 0.0];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.light_direction_override, [0.0, 0.001, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_runtime_draw_uniforms_do_not_leak_mtoon_profile_values() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.main_color.main_uv_scroll_rotate_factor = [0.01, 0.02, 0.03, 0.0];
+		liltoon_like.blend_state.pre_zwrite_factor = 0.0;
+		let hostile_mtoon = UnaMtoonMaterial {
+			shading_shift_factor: 0.37,
+			shading_toony_factor: 0.42,
+			shading_shift_texture_scale: 0.91,
+			gi_equalization_factor: 0.73,
+			transparent_with_z_write: true,
+			uv_animation_scroll_x_speed_factor: 9.0,
+			uv_animation_scroll_y_speed_factor: 8.0,
+			uv_animation_rotation_speed_factor: 7.0,
+			..Default::default()
+		};
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			mtoon: Some(hostile_mtoon),
+			unavatar_material: Some(serde_json::json!({
+				"family": "liltoon",
+				"sourceShader": "lilToon",
+				"floatParams": {
+					"_ZWrite": 0.0
+				}
+			})),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_runtime(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.shading_params, [0.0, 1.0, 0.0, 0.0]);
+		assert_eq!(draw.outline_params[3], 0.0);
+		assert_eq!(draw.uv_anim_params, [0.01, 0.02, 0.03, 0.0]);
 	}
 
 	#[test]
@@ -14264,7 +16343,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.shadow_params[0], 0.0);
 		assert_eq!(draw.shadow_params[1], 0.0);
@@ -14284,7 +16363,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_ext_params, [0.4, 1.0, 0.3, 1.0]);
 	}
@@ -14338,7 +16417,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.shade_uv_offset_scale, [0.01, 0.02, 1.01, 1.02]);
 		assert_eq!(draw.rim_uv_offset_scale, [0.03, 0.04, 1.03, 1.04]);
@@ -14369,9 +16448,24 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_mask_params, [1.0, 1.0, 0.13, 1.0]);
+	}
+
+	#[test]
+	fn liltoon_alpha_boost_reaches_premultiply_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.blend_state.alpha_boost_factor = 10.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			alpha_mode: UnaAlphaMode::Blend,
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.alpha_mask_params[3], 10.0);
 	}
 
 	#[test]
@@ -14386,7 +16480,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_mask_params[0], 2.0);
 	}
@@ -14421,7 +16515,7 @@ mod tests {
 			relax_iris_alpha: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 
 		assert_eq!(draw.params[1], UnaAlphaMode::Mask.as_shader_alpha_kind());
 		assert_eq!(draw.base_color[3], 1.0);
@@ -14439,7 +16533,7 @@ mod tests {
 			relax_iris_alpha: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 
 		assert_eq!(draw.params[1], UnaAlphaMode::Opaque.as_shader_alpha_kind());
 		assert_eq!(draw.base_color[3], 1.0);
@@ -14448,14 +16542,12 @@ mod tests {
 	#[test]
 	fn cull_mode_sets_shader_flags() {
 		let opts = SceneMeshLoadOpts::default();
-		let mtoon = UnaMtoonMaterial::default();
 
 		let off = mesh_draw_material_gpu(
 			&UnaMaterialPbr {
 				cull_mode: UnaCullMode::Off,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,
@@ -14468,7 +16560,6 @@ mod tests {
 				cull_mode: UnaCullMode::Front,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,
@@ -14481,7 +16572,6 @@ mod tests {
 				cull_mode: UnaCullMode::Back,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,
