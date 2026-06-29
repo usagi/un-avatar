@@ -139,11 +139,11 @@ Variant planner は model load 時に実行する。
 
 `audio_link_texture_needed` は AudioLink 入力 source が有効な場合だけ実際の worker / texture upload を起動する実行時判定である。`runtime_requires_audio_link_texture` は material set が AudioLink texture を要求しているかを表す variant planning 用の事実であり、入力 source の ON/OFF とは分けて扱う。
 
-現実装では `material_untoon_feature_plan()` が `UntoonSourceProfile` と `UntoonShaderFeatures` を分けて返し、`material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出する。draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
+現実装では `material_untoon_feature_plan()` が `UntoonSemanticProfile` と `UntoonShaderFeatures` を分けて返し、`material_runtime_requirements()` が material / shading / diagnostic option から feature bits を抽出する。draw order rebuild 時に `SceneMeshRuntimeRequirements::include()` でモデル単位へ集約する。後続の dynamic variant planner は、この抽出点を shader module / resource planning 入力へ拡張する。
 
-`UntoonSourceProfile` は `Plain` / `MToon` / `LilToon` の provenance / import policy を表し、shader 内 runtime branch の条件ではない。MToon input と lilToon input は UNToon semantic / feature plan へ正規化され、必要 feature だけが shader variant planning に渡る。
+`UntoonSemanticProfile` は `Plain` / `UNToon` の semantic material availability を表し、shader 内 runtime branch の条件ではない。MToon input は compat load layer で UNToon semantic material へ正規化され、runtime variant planning へは MToon 専用 profile ではなく必要 feature だけが渡る。
 
-Renderer の通常経路は `liltoon_like_runtime()` / `mtoon_like_runtime()` を使う。`*_source_profile()` は import provenance と source-to-semantic 変換、または互換テスト用の低レベル helper に閉じる。これにより、MToon / lilToon / 将来の native UNToon input の差は runtime shader path ではなく model/material compile boundary で吸収する。
+Renderer の通常経路は `UnaRuntimeToonModel::UNToon` と `liltoon_like_runtime()` を使う。MToon / lilToon / 将来の native UNToon input の差は `*_source_profile()` から UNToon semantic material へ正規化する互換ロード境界で吸収し、runtime shader path の分岐条件にしない。
 
 ## Resource Budget
 
@@ -220,8 +220,8 @@ Baseline でも守るべき候補。
 概念上の型。
 
 ```text
-UntoonSourceProfile =
-  MToon | LilToon | Native
+UntoonSemanticProfile =
+  Plain | UNToon
 
 UntoonFeatureSet {
   material_features

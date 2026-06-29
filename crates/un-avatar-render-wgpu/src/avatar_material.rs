@@ -1,12 +1,16 @@
-//! アバター材料名・MToon パラメーターからレンダー用の役割と有効値を決める純計算。
+//! アバター材料名と UNToon 互換プロファイルからレンダー用の役割を決める純計算。
 
-use un_avatar_core::{UnaAlphaMode, UnaMaterialPbr, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot};
+#[cfg(test)]
+use un_avatar_core::{UnaAlphaMode, UnaMtoonMaterial, UnaMtoonOutlineWidthMode};
+use un_avatar_core::{UnaMaterialPbr, UnaSceneSnapshot};
 
 use crate::debug_dump::eye_area_material_name;
 use crate::liltoon_features;
+#[cfg(test)]
 use crate::mesh_pass::{AvatarOutlinePolicy, SceneMeshLoadOpts};
 use crate::texture_pipeline::TextureRole;
 
+#[cfg(test)]
 pub(crate) const DEFAULT_AVATAR_OUTLINE_WIDTH_METERS: f32 = 0.003;
 
 fn texture_role_priority(role: TextureRole) -> u8 {
@@ -73,6 +77,7 @@ pub(crate) fn material_name_is_face_skin_or_mouth(name: &str) -> bool {
 		|| name.contains("舌")
 }
 
+#[cfg(test)]
 pub(crate) fn material_rim_strength_multiplier(mat: &UnaMaterialPbr) -> f32 {
 	let name = mat.name.as_deref().unwrap_or("").to_ascii_lowercase();
 	if eye_area_material_name(mat.name.as_deref()) || material_name_is_face_skin_or_mouth(&name) {
@@ -83,24 +88,6 @@ pub(crate) fn material_rim_strength_multiplier(mat: &UnaMaterialPbr) -> f32 {
 		UnaAlphaMode::Mask => 0.35,
 		UnaAlphaMode::Blend => 0.0,
 	}
-}
-
-pub(crate) fn effective_mtoon_rim(mat: &UnaMaterialPbr, mtoon: &UnaMtoonMaterial, opts: &SceneMeshLoadOpts) -> ([f32; 3], f32, f32, f32) {
-	let strength = if opts.debug_disable_rim_lighting {
-		0.0
-	} else {
-		material_rim_strength_multiplier(mat)
-	};
-	(
-		[
-			mtoon.parametric_rim_color_factor[0] * strength,
-			mtoon.parametric_rim_color_factor[1] * strength,
-			mtoon.parametric_rim_color_factor[2] * strength,
-		],
-		mtoon.rim_lighting_mix_factor,
-		mtoon.parametric_rim_fresnel_power_factor,
-		mtoon.parametric_rim_lift_factor,
-	)
 }
 
 fn mark_texture_role(roles: &mut [TextureRole], index: Option<usize>, role: TextureRole) {
@@ -142,15 +129,6 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 		mark_texture_role(&mut roles, mat.normal_texture_index, TextureRole::Normal);
 		mark_texture_role(&mut roles, mat.occlusion_texture_index, TextureRole::Occlusion);
 		mark_texture_role(&mut roles, mat.emissive_texture_index, TextureRole::Emissive);
-		if let Some(mtoon) = mat.mtoon_like_runtime() {
-			mark_texture_role(&mut roles, mtoon.shade_multiply_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, mtoon.shading_shift_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, mtoon.matcap_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, mtoon.rim_multiply_texture_index, TextureRole::GenericColor);
-			mark_texture_role(&mut roles, mtoon.reflection_cube_texture_index, TextureRole::Emissive);
-			mark_texture_role(&mut roles, mtoon.outline_width_multiply_texture_index, TextureRole::Data);
-			mark_texture_role(&mut roles, mtoon.uv_animation_mask_texture_index, TextureRole::Data);
-		}
 		if let Some(liltoon_like) = mat.liltoon_like_runtime() {
 			if liltoon_features::uses_main_color_adjustment(&liltoon_like.main_color) {
 				mark_texture_role(
@@ -308,6 +286,7 @@ pub(crate) fn texture_roles_for_scene(scene: &UnaSceneSnapshot) -> Vec<TextureRo
 	roles
 }
 
+#[cfg(test)]
 pub(crate) struct EffectiveOutline {
 	pub(crate) mode: UnaMtoonOutlineWidthMode,
 	pub(crate) width: f32,
@@ -315,17 +294,19 @@ pub(crate) struct EffectiveOutline {
 	pub(crate) lighting_mix: f32,
 }
 
+#[cfg(test)]
 const MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS: f32 = 0.00025;
 
-pub(crate) fn effective_mtoon_outline(mtoon: &UnaMtoonMaterial, opts: &SceneMeshLoadOpts) -> Option<EffectiveOutline> {
+#[cfg(test)]
+pub(crate) fn effective_legacy_geometry_outline(source: &UnaMtoonMaterial, opts: &SceneMeshLoadOpts) -> Option<EffectiveOutline> {
 	if opts.avatar_outline.policy == AvatarOutlinePolicy::Off {
 		return None;
 	}
 	let mut width = match opts.avatar_outline.policy {
-		AvatarOutlinePolicy::Authored => mtoon.outline_width_factor,
+		AvatarOutlinePolicy::Authored => source.outline_width_factor,
 		AvatarOutlinePolicy::Off => 0.0,
-		AvatarOutlinePolicy::Override => opts.avatar_outline.width.unwrap_or(if mtoon.outline_width_factor > 0.0 {
-			mtoon.outline_width_factor
+		AvatarOutlinePolicy::Override => opts.avatar_outline.width.unwrap_or(if source.outline_width_factor > 0.0 {
+			source.outline_width_factor
 		} else {
 			DEFAULT_AVATAR_OUTLINE_WIDTH_METERS
 		}),
@@ -338,13 +319,13 @@ pub(crate) fn effective_mtoon_outline(mtoon: &UnaMtoonMaterial, opts: &SceneMesh
 		return None;
 	}
 	let mode = match opts.avatar_outline.policy {
-		AvatarOutlinePolicy::Authored => mtoon.outline_width_mode,
+		AvatarOutlinePolicy::Authored => source.outline_width_mode,
 		AvatarOutlinePolicy::Off => UnaMtoonOutlineWidthMode::None,
 		AvatarOutlinePolicy::Override => {
-			if mtoon.outline_width_mode == UnaMtoonOutlineWidthMode::None {
+			if source.outline_width_mode == UnaMtoonOutlineWidthMode::None {
 				UnaMtoonOutlineWidthMode::WorldCoordinates
 			} else {
-				mtoon.outline_width_mode
+				source.outline_width_mode
 			}
 		}
 	};
@@ -352,12 +333,12 @@ pub(crate) fn effective_mtoon_outline(mtoon: &UnaMtoonMaterial, opts: &SceneMesh
 		return None;
 	}
 	let color = match opts.avatar_outline.policy {
-		AvatarOutlinePolicy::Override => opts.avatar_outline.color.unwrap_or(mtoon.outline_color_factor),
-		AvatarOutlinePolicy::Authored | AvatarOutlinePolicy::Off => mtoon.outline_color_factor,
+		AvatarOutlinePolicy::Override => opts.avatar_outline.color.unwrap_or(source.outline_color_factor),
+		AvatarOutlinePolicy::Authored | AvatarOutlinePolicy::Off => source.outline_color_factor,
 	};
 	let lighting_mix = match opts.avatar_outline.policy {
-		AvatarOutlinePolicy::Override => opts.avatar_outline.lighting_mix.unwrap_or(mtoon.outline_lighting_mix_factor),
-		AvatarOutlinePolicy::Authored | AvatarOutlinePolicy::Off => mtoon.outline_lighting_mix_factor,
+		AvatarOutlinePolicy::Override => opts.avatar_outline.lighting_mix.unwrap_or(source.outline_lighting_mix_factor),
+		AvatarOutlinePolicy::Authored | AvatarOutlinePolicy::Off => source.outline_lighting_mix_factor,
 	}
 	.clamp(0.0, 1.0);
 	Some(EffectiveOutline {
@@ -418,7 +399,7 @@ mod tests {
 	}
 
 	#[test]
-	fn avatar_outline_override_can_create_mtoon_outline() {
+	fn avatar_outline_override_can_create_geometry_outline() {
 		let mtoon = UnaMtoonMaterial {
 			outline_width_mode: UnaMtoonOutlineWidthMode::None,
 			outline_width_factor: 0.0,
@@ -429,7 +410,7 @@ mod tests {
 		let opts = SceneMeshLoadOpts {
 			avatar_outline: AvatarOutlineOptions {
 				policy: AvatarOutlinePolicy::Override,
-				kind: AvatarOutlineKind::Mtoon,
+				kind: AvatarOutlineKind::Geometry,
 				width: Some(0.004),
 				color: Some([0.02, 0.01, 0.03]),
 				lighting_mix: Some(0.25),
@@ -438,7 +419,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let outline = effective_mtoon_outline(&mtoon, &opts).expect("override should create outline");
+		let outline = effective_legacy_geometry_outline(&mtoon, &opts).expect("override should create outline");
 		assert_eq!(outline.mode, UnaMtoonOutlineWidthMode::WorldCoordinates);
 		assert_eq!(outline.width, 0.004);
 		assert_eq!(outline.color, [0.02, 0.01, 0.03]);
@@ -461,7 +442,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let outline = effective_mtoon_outline(&mtoon, &opts).expect("override default should create outline");
+		let outline = effective_legacy_geometry_outline(&mtoon, &opts).expect("override default should create outline");
 		assert_eq!(outline.mode, UnaMtoonOutlineWidthMode::WorldCoordinates);
 		assert_eq!(outline.width, DEFAULT_AVATAR_OUTLINE_WIDTH_METERS);
 		assert_eq!(outline.color, [1.0, 1.0, 1.0]);
@@ -481,7 +462,7 @@ mod tests {
 			},
 			..Default::default()
 		};
-		assert!(effective_mtoon_outline(&mtoon, &opts).is_none());
+		assert!(effective_legacy_geometry_outline(&mtoon, &opts).is_none());
 	}
 
 	#[test]
@@ -494,13 +475,13 @@ mod tests {
 		let opts = SceneMeshLoadOpts {
 			avatar_outline: AvatarOutlineOptions {
 				policy: AvatarOutlinePolicy::Authored,
-				kind: AvatarOutlineKind::Mtoon,
+				kind: AvatarOutlineKind::Geometry,
 				..Default::default()
 			},
 			..Default::default()
 		};
 
-		let outline = effective_mtoon_outline(&mtoon, &opts).expect("authored outline should exist");
+		let outline = effective_legacy_geometry_outline(&mtoon, &opts).expect("authored outline should exist");
 		assert_eq!(outline.width, MAX_AUTHORED_GEOMETRY_OUTLINE_WIDTH_METERS);
 	}
 
@@ -623,6 +604,56 @@ mod tests {
 				TextureRole::GenericColor
 			]
 		);
+	}
+
+	#[test]
+	fn texture_roles_use_mtoon_marker_untoon_runtime_payload() {
+		let image = || un_avatar_core::UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.shadow.strength_mask_texture_index = Some(0);
+		let scene = UnaSceneSnapshot {
+			images: vec![image()],
+			image_sources: vec![None],
+			materials: vec![UnaMaterialPbr {
+				shading: un_avatar_core::UnaShadingModel::MToonLike,
+				liltoon_like: Some(liltoon_like),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(texture_roles_for_scene(&scene), vec![TextureRole::Data]);
+	}
+
+	#[test]
+	fn texture_roles_ignore_non_toon_stale_untoon_payload() {
+		let image = || un_avatar_core::UnaImageRgba {
+			width: 1,
+			height: 1,
+			pixel_format: un_avatar_core::UnaImagePixelFormat::R8G8B8A8,
+			pixels: vec![255, 255, 255, 255],
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.shadow.strength_mask_texture_index = Some(0);
+		let scene = UnaSceneSnapshot {
+			images: vec![image()],
+			image_sources: vec![None],
+			materials: vec![UnaMaterialPbr {
+				shading: un_avatar_core::UnaShadingModel::LitLambert,
+				liltoon_like: Some(liltoon_like),
+				..Default::default()
+			}],
+			..Default::default()
+		};
+
+		assert_eq!(texture_roles_for_scene(&scene), vec![TextureRole::GenericColor]);
 	}
 
 	#[test]

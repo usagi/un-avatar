@@ -939,6 +939,26 @@ pub(crate) fn texture_cache_key_from_source_metadata(
 	if let Some(uri) = &source.uri {
 		hash = fnv1a64_update(hash, uri.as_bytes());
 	}
+	for value in [
+		source.source_pixel_format.as_deref(),
+		source.channels.as_deref(),
+		source.color_space.as_deref(),
+		source.texture_type.as_deref(),
+		source.texture_shape.as_deref(),
+		source.source_layout.as_deref(),
+		source.unity_generate_cubemap.as_deref(),
+	] {
+		hash = fnv1a64_update(hash, &[0xff]);
+		if let Some(value) = value {
+			hash = fnv1a64_update(hash, value.as_bytes());
+		}
+	}
+	hash = fnv1a64_update(hash, &[source.srgb.map_or(2, u8::from)]);
+	if let Some(sampler) = source.sampler {
+		hash = fnv1a64_update(hash, &[0xfe]);
+		hash = fnv1a64_update(hash, &[sampler.mag_filter as u8, sampler.min_filter as u8]);
+		hash = fnv1a64_update(hash, &[sampler.wrap_s as u8, sampler.wrap_t as u8]);
+	}
 	hash
 }
 
@@ -2056,6 +2076,18 @@ mod tests {
 		let key_b =
 			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &changed_source);
 		assert_ne!(key_a, key_b);
+		let mut srgb_source = source.clone();
+		srgb_source.color_space = Some("srgb".to_string());
+		srgb_source.srgb = Some(true);
+		let key_srgb =
+			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &srgb_source);
+		assert_ne!(key_a, key_srgb);
+		let mut data_source = source.clone();
+		data_source.texture_type = Some("SingleChannel".to_string());
+		data_source.source_layout = Some("horizontal_strip".to_string());
+		let key_data =
+			texture_cache_key_from_source_metadata(4, 4, None, TextureRole::GenericColor, TextureMipmapFilter::Box2x2, &data_source);
+		assert_ne!(key_a, key_data);
 	}
 
 	#[test]

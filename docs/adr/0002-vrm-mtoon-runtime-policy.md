@@ -14,8 +14,8 @@ v1 implemented this as an MToon-like renderer. v2 extends the same runtime asset
 
 VRM materials default to toon rendering in UN Avatar. In v2, the internal target is UNToon/lilToon-compatible, not a strict MToon-shaped model.
 
-- VRM0 `materialProperties` and VRM1 `VRMC_materials_mtoon` are parsed into runtime MToon parameters.
-- MToon parameters may still be stored in legacy `UnaMtoonMaterial` fields while the implementation migrates, but those fields are source-normalized inputs to UNToon v2.
+- VRM0 `materialProperties` and VRM1 `VRMC_materials_mtoon` are parsed as MToon source profile data.
+- MToon source profile data may still be stored in legacy `UnaMtoonMaterial` fields while the implementation migrates, but runtime rendering uses the v2-UNToon semantic material converted from that source profile.
 - lilToon source material state takes priority for `.unavatar` imports. MToon-like behavior must not constrain lilToon-compatible UNToon features.
 - MToon / VRM input should be converted into equivalent UNToon v2 coefficients where possible. Temporary v1 MToon rendering regressions are acceptable during the migration when they unblock correct lilToon-compatible behavior.
 - Toon materials use dedicated shader entries and pipelines, not a Simple shader fallback.

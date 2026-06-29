@@ -105,6 +105,8 @@ struct InspectDocumentSummary {
 	has_scene: bool,
 	has_vrm: bool,
 	has_unavatar: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	scene_lighting: Option<InspectSceneLightingSummary>,
 	node_count: usize,
 	root_count: usize,
 	mesh_count: usize,
@@ -113,6 +115,24 @@ struct InspectDocumentSummary {
 	image_count: usize,
 	skin_count: usize,
 	morph_target_count: usize,
+}
+
+#[derive(Serialize)]
+struct InspectSceneLightingSummary {
+	has_environment: bool,
+	has_directional: bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	environment_color: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	environment_intensity: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_color: Option<[f32; 3]>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_intensity: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_azimuth_deg: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	directional_elevation_deg: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -2454,6 +2474,7 @@ fn inspect_document_summary(document: &UnaDocument) -> InspectDocumentSummary {
 			has_scene: false,
 			has_vrm: document.vrm.is_some(),
 			has_unavatar: document.unavatar.is_some(),
+			scene_lighting: None,
 			node_count: 0,
 			root_count: 0,
 			mesh_count: 0,
@@ -2466,10 +2487,21 @@ fn inspect_document_summary(document: &UnaDocument) -> InspectDocumentSummary {
 	};
 	let mesh_primitive_count = scene.meshes.iter().map(Vec::len).sum();
 	let morph_target_count = scene.meshes.iter().flatten().map(|primitive| primitive.morph_targets.len()).sum();
+	let scene_lighting = scene.lighting.as_ref().map(|lighting| InspectSceneLightingSummary {
+		has_environment: lighting.environment.is_some(),
+		has_directional: lighting.directional.is_some(),
+		environment_color: lighting.environment.as_ref().map(|light| light.color),
+		environment_intensity: lighting.environment.as_ref().map(|light| light.intensity),
+		directional_color: lighting.directional.as_ref().map(|light| light.color),
+		directional_intensity: lighting.directional.as_ref().map(|light| light.intensity),
+		directional_azimuth_deg: lighting.directional.as_ref().map(|light| light.azimuth_deg),
+		directional_elevation_deg: lighting.directional.as_ref().map(|light| light.elevation_deg),
+	});
 	InspectDocumentSummary {
 		has_scene: true,
 		has_vrm: document.vrm.is_some(),
 		has_unavatar: document.unavatar.is_some(),
+		scene_lighting,
 		node_count: scene.nodes.len(),
 		root_count: scene.roots.len(),
 		mesh_count: scene.meshes.len(),
@@ -2528,6 +2560,19 @@ fn run_inspect(plugin_dirs: &[PathBuf], path: PathBuf, json: bool) -> Result<(),
 		summary.skin_count,
 		summary.morph_target_count
 	);
+	if let Some(lighting) = &summary.scene_lighting {
+		println!(
+			"scene_lighting: environment={} directional={} env_intensity={:?} dir_intensity={:?} dir_azimuth_deg={:?} dir_elevation_deg={:?}",
+			lighting.has_environment,
+			lighting.has_directional,
+			lighting.environment_intensity,
+			lighting.directional_intensity,
+			lighting.directional_azimuth_deg,
+			lighting.directional_elevation_deg
+		);
+	} else {
+		println!("scene_lighting: none");
+	}
 	Ok(())
 }
 
@@ -6653,7 +6698,7 @@ fn material_transparent_with_z_write(material: &UnaMaterialPbr) -> bool {
 		}
 		return material_source_shader_lower(material).contains("twopass");
 	}
-	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
+	material.mtoon_source_profile().is_some_and(|mtoon| mtoon.transparent_with_z_write)
 }
 
 fn material_render_float_params(material: &UnaMaterialPbr) -> BTreeMap<String, f32> {
@@ -6707,7 +6752,7 @@ fn material_summary(
 		.and_then(|v| v.as_i64())
 		.map(|v| v as i32);
 	let liltoon_features = material_liltoon_features(material);
-	let mtoon = material.mtoon_like_runtime().map(|m| DiagnoseMToonSummary {
+	let mtoon = material.mtoon_source_profile().map(|m| DiagnoseMToonSummary {
 		transparent_with_z_write: m.transparent_with_z_write,
 		shade_color_factor: m.shade_color_factor,
 		shade_multiply_texture_index: m.shade_multiply_texture_index,
@@ -9213,9 +9258,9 @@ fn build_diagnose_report(
 			&& !sc
 				.materials
 				.iter()
-				.any(|m| m.runtime_toon_model() == Some(UnaRuntimeToonModel::MToonLike))
+				.any(|m| m.runtime_toon_model() == Some(UnaRuntimeToonModel::UNToon))
 		{
-			warnings.push("VRM document has no MToonLike materials after import".to_string());
+			warnings.push("VRM document has no UNToon runtime materials after import".to_string());
 		}
 		let mut image_source_mime_counts = BTreeMap::new();
 		let mut image_source_color_space_counts = BTreeMap::new();
@@ -9946,6 +9991,7 @@ fn expression_probe_document(doc: &UnaDocument) -> UnaDocument {
 		meshes: scene.meshes.clone(),
 		materials: scene.materials.clone(),
 		images: Vec::new(),
+		lighting: scene.lighting.clone(),
 		image_sources: Vec::new(),
 		skins: scene.skins.clone(),
 		nodes: scene.nodes.clone(),
@@ -12297,7 +12343,7 @@ mod tests {
 		assert_eq!(report.source_params_count, 2);
 		assert_eq!(report.group_count, 2);
 		assert_eq!(report.enabled_group_count, 2);
-		assert_eq!(report.chain_joint_count, 2);
+		assert_eq!(report.chain_joint_count, 4);
 		assert_eq!(report.response_group_count, 2);
 		assert_eq!(report.source_angle_limit_group_count, 2);
 		assert_eq!(report.active_angle_limit_group_count, 2);
@@ -12310,8 +12356,8 @@ mod tests {
 		assert!(report.missing_runtime_evidence.is_empty());
 		assert_eq!(report.runtime_ranges["pull"].min, 0.25);
 		assert!((report.runtime_ranges["spring"].max - 0.35).abs() < 1e-6);
-		assert_eq!(report.sample_counts["pullSamples"], 1);
-		assert_eq!(report.sample_counts["stiffnessSamples"], 1);
+		assert_eq!(report.sample_counts["pullSamples"], 2);
+		assert_eq!(report.sample_counts["stiffnessSamples"], 2);
 	}
 
 	#[test]
@@ -13171,7 +13217,7 @@ mod tests {
 		assert_eq!(report.recovery_frame_count, 18);
 		assert_eq!(report.tuning, "authored");
 		assert_eq!(report.group_count, 1);
-		assert_eq!(report.joint_count, 2);
+		assert_eq!(report.joint_count, 3);
 		assert!(report.missing_motion_evidence.is_empty());
 		let category = report.categories.iter().find(|category| category.category == "hair").unwrap();
 		assert_eq!(category.visual_target_group_count, 0);
@@ -13625,13 +13671,13 @@ mod tests {
 				materials: vec![
 					un_avatar_core::UnaMaterialPbr {
 						name: Some("Eye_Iris".into()),
-						shading: UnaShadingModel::MToonLike,
+						shading: UnaShadingModel::LilToonLike,
 						alpha_mode: UnaAlphaMode::Mask,
 						..Default::default()
 					},
 					un_avatar_core::UnaMaterialPbr {
 						name: Some("Body".into()),
-						shading: UnaShadingModel::MToonLike,
+						shading: UnaShadingModel::LilToonLike,
 						alpha_mode: UnaAlphaMode::Opaque,
 						..Default::default()
 					},
@@ -13666,7 +13712,7 @@ mod tests {
 
 		assert_eq!(report.scene.material_count, 2);
 		assert_eq!(report.scene.node_constraint_count, 0);
-		assert_eq!(report.scene.shading_counts.get("MToonLike"), Some(&2));
+		assert_eq!(report.scene.shading_counts.get("LilToonLike"), Some(&2));
 		assert!(report.scene.visible_shading_counts.is_empty());
 		assert!(report.scene.visible_alpha_counts.is_empty());
 		assert!(report.scene.visible_material_indices.is_empty());

@@ -224,19 +224,21 @@ glTF material には `extras.UN_avatar_material` を付与できる。これは 
 }
 ```
 
-`floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `mtoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `mtoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。
+`floatParams` / `colorParams` は source shader property の保存領域であり、glTF viewer 互換表示には不要。Renderer はまず `untoon` / UNToon 正規化値を使い、未対応機能や挙動差の解消に raw params を参照する。texture property はファイルサイズ膨張を避けるため、v0.1 では必要な slot だけ `untoon.*TextureIndex` または `*TextureIndexAsset` として明示的に保持する。旧 exporter の `mtoon` payload は importer 側の legacy fallback として読むが、新規 `.unavatar` では MToon source profile ではなく UNToon semantic payload を `untoon` に保存する。`sourceProfile` は入力元の provenance に限り、実行時 shader 分岐には使わない。lilToonGem / lilToonRefraction などの特殊形は loader が `runtimeVariant` (`untoon` / `gem` / `refraction`) へ正規化し、Renderer はこの UNToon runtime variant だけを見る。Unity material color property の保存色空間は loader が UNToon material の color-factor color space へ正規化し、Renderer は `sourceShader` / `family` ではなく正規化済み値だけを使う。
 
 lilToon source では `_Cutoff` property の存在だけで `MASK` と判定しない。通常 Opaque shader にも `_Cutoff` があるためである。Runtime importer は raw `_SrcBlend` / `_DstBlend` / `_AlphaToMask` を source blend state として最優先し、これが取れない場合に Cutout / Transparent / Refraction / Fur などの source shader hint、glTF alphaMode、render queue hint、必要なら極小 cutoff を組み合わせて UNToon alpha mode を決める。raw alpha params の `Mask` / `Blend` は明示値として優先するが、`Opaque` 相当値は shader variant hint を潰さない。`renderQueue >= 3000` は transparent、`2450 <= renderQueue < 3000` は source blend state が無い場合の cutout hint として扱う。
 
 lilToon source の `_UseEmission`、`_EmissionColor`、`_EmissionMainStrength` は UNToon emission の source hint として読む。`_UseEmission = 0` は texture / color が残っていても emission 寄与を 0 とし、feature toggle を優先する。
 
+MatCap / Rim は UNToon 正規化 payload では enable、color、main strength を分離して保持する。`untoon.matcapEnabledFactor` / `untoon.rimEnabledFactor` は feature toggle、`untoon.matcapFactor` / `untoon.parametricRimColorFactor` は Unity material color property、`untoon.matcapMainStrengthFactor` / `untoon.rimMainStrengthFactor` は strength である。Importer は `untoon` payload を優先し、raw `floatParams` / `colorParams` は legacy fallback としてだけ参照する。Exporter は色へ strength を事前乗算しない。
+
 Cull mode は material 共通値として Cull Off / Front / Back を保持する。glTF `doubleSided` は Cull Off / Back しか直接表現できないため、`.unavatar` では `UN_avatar_material.floatParams` の `_Cull` / `_CullMode` を読み、Unity/lilToon の `0=Off`、`1=Front`、`2=Back` を Runtime の `cull_mode` へ正規化する。
 
-UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `mtoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
+UV transform は material 共通値 `uvOffsetScale = [offset_x, offset_y, scale_x, scale_y]` と、UNToon 正規化値 `untoon.uvOffsetScale` に保持する。Unity Exporter は main texture property の Tiling / Offset を読み、baseColorTexture には glTF 標準の `KHR_texture_transform` も出す。Renderer は shader 内で `uv * scale + offset` として適用する。
 
-Unity の Mesh UV と glTF の texture coordinate convention は V 方向の扱いが異なるため、Unity Exporter は `.unavatar` 出力時に `TEXCOORD_0.y = 1 - unityUv.y` へ変換する。Unity material の Tiling / Offset も同じ座標系へ変換し、`offset_y = 1 - scale_y - unity_offset_y` として `KHR_texture_transform` / `mtoon.uvOffsetScale` に書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
+Unity の Mesh UV と glTF の texture coordinate convention は V 方向の扱いが異なるため、Unity Exporter は `.unavatar` 出力時に `TEXCOORD_0.y = 1 - unityUv.y` へ変換する。Unity material の Tiling / Offset も同じ座標系へ変換し、`offset_y = 1 - scale_y - unity_offset_y` として `KHR_texture_transform` / `untoon.uvOffsetScale` に書く。`UN_avatar.textureCoordinateConvention = "gltf"` はこの変換済みを示す。preview 中の古い `.unavatar` は互換維持対象にせず、必要なら current exporter で再出力する。
 
-UV animation は `mtoon.uvAnimationScrollXSpeedFactor`、`mtoon.uvAnimationScrollYSpeedFactor`、`mtoon.uvAnimationRotationSpeedFactor`、`mtoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
+UV animation は `untoon.uvAnimationScrollXSpeedFactor`、`untoon.uvAnimationScrollYSpeedFactor`、`untoon.uvAnimationRotationSpeedFactor`、`untoon.uvAnimationMaskTextureIndex` に保持できる。Unity Exporter は MToon の `_UvAnimScrollX/Y/Rotation` と lilToon の `_MainTex_ScrollRotate` を初期対応として読み、Renderer は frame time と mask texture を使って base / shade / normal / occlusion / rim / emissive / outline mask の UV を同じ規則で動かす。
 
 ### Texture Storage
 

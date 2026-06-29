@@ -17,7 +17,8 @@ use serde_json::Value;
 use un_avatar_core::{
 	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
 	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionQuery,
-	UnaRuntimeActionTrigger, UnaRuntimeDynamics, UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneNode, UnaSceneSnapshot,
+	UnaRuntimeActionTrigger, UnaRuntimeDynamics, UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneLighting, UnaSceneNode,
+	UnaSceneSnapshot, UnaSceneSphericalHarmonics,
 };
 use un_avatar_skeleton::{
 	annotate_dynamics_response_group_visibility, build_dynamics_bone_colliders_with_sources, classify_dynamics_group_category,
@@ -40,7 +41,7 @@ use crate::{
 	model_loader,
 	options::{
 		AudioLinkOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, ColorGradingLook, ContactShadowOptions,
-		EnvironmentColorOptions, LightingOptions, SyntheticHeadMotionOptions,
+		DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions, LightingOptions, SyntheticHeadMotionOptions,
 	},
 	pipeline_cache::PersistentPipelineCache,
 	post_process::PostProcess,
@@ -5363,6 +5364,14 @@ fn surface_present_mode(present_modes: &[wgpu::PresentMode]) -> wgpu::PresentMod
 		.unwrap_or(wgpu::PresentMode::Fifo)
 }
 
+fn surface_color_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
+	formats
+		.iter()
+		.copied()
+		.find(wgpu::TextureFormat::is_srgb)
+		.or_else(|| formats.first().copied())
+}
+
 fn gpu_backend_label(backend: wgpu::Backend) -> &'static str {
 	match backend {
 		wgpu::Backend::Noop => "noop",
@@ -5459,7 +5468,7 @@ fn resolve_adapter(
 pub(crate) fn scene_mesh_load_opts_for_window_options(opts: &AvatarWindowOptions) -> SceneMeshLoadOpts {
 	let mut mesh_diagnostics = opts.mesh_diagnostics.clone();
 	mesh_diagnostics.force_simple_basecolor |= opts.simple_basecolor_only;
-	mesh_diagnostics.disable_mtoon_outlines |= opts.disable_mtoon_outlines;
+	mesh_diagnostics.disable_geometry_outlines |= opts.disable_geometry_outlines;
 	mesh_diagnostics.debug_disable_rim_lighting |= opts.debug_disable_rim_lighting;
 	mesh_diagnostics.debug_force_shading_shift_zero |= opts.debug_force_shading_shift_zero;
 	mesh_diagnostics.debug_disable_matcap |= opts.debug_disable_matcap;
@@ -7311,6 +7320,46 @@ struct ContactShadowResources {
 	bind_group: wgpu::BindGroup,
 }
 
+fn merge_scene_lighting_defaults(current: LightingOptions, scene_lighting: Option<&UnaSceneLighting>) -> Option<LightingOptions> {
+	let scene_lighting = scene_lighting?;
+	let defaults = LightingOptions::default();
+	let mut lighting = current;
+	let mut changed = false;
+	if lighting.environment == defaults.environment {
+		if let Some(environment) = &scene_lighting.environment {
+			lighting.environment = EnvironmentLightOptions {
+				enabled: environment.intensity > 0.0,
+				color: [
+					environment.color[0].clamp(0.0, 1.0),
+					environment.color[1].clamp(0.0, 1.0),
+					environment.color[2].clamp(0.0, 1.0),
+				],
+				intensity: environment.intensity.clamp(0.0, 2.0),
+			};
+			changed = true;
+		}
+	}
+	if lighting.directional == defaults.directional {
+		if let Some(directional) = &scene_lighting.directional {
+			lighting.directional = DirectionalLightOptions {
+				enabled: directional.intensity > 0.0,
+				color: [
+					directional.color[0].clamp(0.0, 1.0),
+					directional.color[1].clamp(0.0, 1.0),
+					directional.color[2].clamp(0.0, 1.0),
+				],
+				intensity: directional.intensity.clamp(0.0, 4.0),
+				azimuth_deg: directional.azimuth_deg.clamp(-360.0, 360.0),
+				elevation_deg: directional.elevation_deg.clamp(-89.0, 89.0),
+				follow_camera_yaw: false,
+				follow_camera_pitch: false,
+			};
+			changed = true;
+		}
+	}
+	changed.then_some(lighting)
+}
+
 pub(crate) struct GpuState {
 	pub(crate) surface: wgpu::Surface<'static>,
 	pub(crate) device: wgpu::Device,
@@ -7351,6 +7400,7 @@ pub(crate) struct GpuState {
 	avatar_outline: AvatarOutlineOptions,
 	environment_color: EnvironmentColorOptions,
 	lighting: LightingOptions,
+	scene_spherical_harmonics: Option<UnaSceneSphericalHarmonics>,
 	bloom: BloomOptions,
 	ssao: crate::SsaoOptions,
 	contact_shadow: ContactShadowOptions,
@@ -7537,10 +7587,7 @@ impl GpuState {
 		let pipeline_cache = PersistentPipelineCache::load(&device, &adapter.get_info());
 
 		let caps = surface.get_capabilities(&adapter);
-		let format = *caps
-			.formats
-			.first()
-			.ok_or_else(|| "get_capabilities: スワップチェーン形式がありません".to_owned())?;
+		let format = surface_color_format(&caps.formats).ok_or_else(|| "get_capabilities: スワップチェーン形式がありません".to_owned())?;
 
 		let alpha_mode = if transparent {
 			transparent_alpha_mode(&caps.alpha_modes)
@@ -7553,7 +7600,7 @@ impl GpuState {
 		let present_mode = surface_present_mode(&caps.present_modes);
 		let desired_maximum_frame_latency = surface_frame_latency_from_env().unwrap_or(1);
 		eprintln!(
-			"un-avatar-renderer: surface config present_mode={present_mode:?} target_fps={target_fps:.1} desired_maximum_frame_latency={desired_maximum_frame_latency}"
+			"un-avatar-renderer: surface config format={format:?} present_mode={present_mode:?} target_fps={target_fps:.1} desired_maximum_frame_latency={desired_maximum_frame_latency}"
 		);
 
 		let config = wgpu::SurfaceConfiguration {
@@ -7739,6 +7786,7 @@ impl GpuState {
 			avatar_outline,
 			environment_color,
 			lighting,
+			scene_spherical_harmonics: None,
 			bloom,
 			ssao,
 			contact_shadow,
@@ -8305,6 +8353,16 @@ impl GpuState {
 			},
 		};
 		self.globals_uploaded = None;
+	}
+
+	fn apply_scene_lighting_defaults(&mut self, scene_lighting: Option<&UnaSceneLighting>) {
+		self.scene_spherical_harmonics = scene_lighting
+			.and_then(|lighting| lighting.environment.as_ref())
+			.and_then(|environment| environment.spherical_harmonics.clone());
+		let Some(lighting) = merge_scene_lighting_defaults(self.lighting, scene_lighting) else {
+			return;
+		};
+		self.set_lighting(lighting);
 	}
 
 	pub fn set_bloom(&mut self, bloom: BloomOptions) {
@@ -10243,13 +10301,14 @@ impl GpuState {
 			.runtime_model_mut()
 			.apply_runtime_parameter_initial_values();
 		log_slow_gpu_scene_context_step("attach initial runtime parameters", apply_initial_values_start.elapsed());
-		let (motion_runtime_parameter_names, runtime_scene_node_paths_by_index, runtime_center_peak_angle_parameters) = {
+		let (motion_runtime_parameter_names, runtime_scene_node_paths_by_index, runtime_center_peak_angle_parameters, scene_lighting) = {
 			let doc = prepared.document.read().map_err(|_| "document: RwLock poisoned".to_string())?;
 			let runtime_model = doc.runtime_model();
 			(
 				motion_signal_runtime_parameter_names(&doc),
 				runtime_model.scene().map(scene_node_paths_by_index).unwrap_or_default(),
 				animator_center_peak_angle_parameters(&doc),
+				runtime_model.scene().and_then(|scene| scene.lighting.clone()),
 			)
 		};
 		let state_assign_start = Instant::now();
@@ -10265,6 +10324,7 @@ impl GpuState {
 		self.bone_collider_count = prepared.bone_collider_count;
 		self.bone_collider_source = prepared.bone_collider_source;
 		self.apply_runtime_requirements(prepared.runtime_requirements, audio_link);
+		self.apply_scene_lighting_defaults(scene_lighting.as_ref());
 		log_slow_gpu_scene_context_step("attach prepared state assignment", state_assign_start.elapsed());
 		let motion_receiver_start = Instant::now();
 		self.reconfigure_motion_receivers(vmc_address, unmotion_zenoh, debug_vmc)?;
@@ -10808,6 +10868,7 @@ impl GpuState {
 				Vec4::from((cam_pos, 1.0)),
 				directional_light_color,
 				environment_light_color,
+				self.scene_spherical_harmonics.as_ref(),
 				self.animation_time_secs,
 				if self.audio_link_texture_needed {
 					sm.audio_link_frame_params()
@@ -12140,13 +12201,13 @@ mod tests {
 		dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
 		dynamics_collider_path_runtime_summary_statuses, dynamics_collider_shape_kind, dynamics_group_statuses_with_limit,
 		dynamics_interaction_angle_normalizer, dynamics_interaction_parameter_values, effective_window_backend,
-		menu_action_candidates_from_runtime, menu_graph_node_path, mesh_shader_resource_plan_for_adapter,
+		menu_action_candidates_from_runtime, menu_graph_node_path, merge_scene_lighting_defaults, mesh_shader_resource_plan_for_adapter,
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
 		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
 		runtime_action_parameter_values, runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference,
-		sorted_unique_index_union, transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind,
-		RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
+		sorted_unique_index_union, surface_color_format, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
 		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
 		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
 		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
@@ -12158,12 +12219,61 @@ mod tests {
 	use crate::RenderBackend;
 	use glam::{Mat4, Vec3};
 	use serde_json::json;
-	use un_avatar_core::{UnaDocument, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaSceneNode, UnaSceneSnapshot};
+	use un_avatar_core::{
+		UnaDocument, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaSceneDirectionalLight, UnaSceneEnvironmentLight,
+		UnaSceneLighting, UnaSceneNode, UnaSceneSnapshot,
+	};
 	use un_avatar_skeleton::{
 		BoneColliderPrimitive, DynamicsColliderAugmentOverride, DynamicsPhysicsConfig, DynamicsTailSample, HumanoidProfile,
 		RuntimeBoneColliderPrimitive,
 	};
 	use wgpu::CompositeAlphaMode::{Auto, Opaque, PostMultiplied, PreMultiplied};
+
+	fn test_scene_lighting() -> UnaSceneLighting {
+		UnaSceneLighting {
+			environment: Some(UnaSceneEnvironmentLight {
+				color: [0.8, 0.9, 1.0],
+				intensity: 0.155,
+				sky_color: Some([0.212, 0.227, 0.259]),
+				equator_color: Some([0.114, 0.125, 0.133]),
+				ground_color: Some([0.047, 0.043, 0.035]),
+				spherical_harmonics: None,
+			}),
+			directional: Some(UnaSceneDirectionalLight {
+				color: [1.0, 0.95686275, 0.8392157],
+				intensity: 1.0,
+				direction: [0.32139377, 0.7660444, -0.55667046],
+				azimuth_deg: 150.0,
+				elevation_deg: 50.0,
+			}),
+		}
+	}
+
+	#[test]
+	fn scene_lighting_replaces_generated_profile_defaults() {
+		let merged = merge_scene_lighting_defaults(crate::options::LightingOptions::default(), Some(&test_scene_lighting()))
+			.expect("scene lighting should override defaults");
+
+		assert_eq!(merged.environment.color, [0.8, 0.9, 1.0]);
+		assert_eq!(merged.environment.intensity, 0.155);
+		assert_eq!(merged.directional.color, [1.0, 0.95686275, 0.8392157]);
+		assert_eq!(merged.directional.azimuth_deg, 150.0);
+		assert_eq!(merged.directional.elevation_deg, 50.0);
+		assert!(!merged.directional.follow_camera_yaw);
+	}
+
+	#[test]
+	fn scene_lighting_preserves_explicit_profile_lighting() {
+		let mut current = crate::options::LightingOptions::default();
+		current.directional.color = [0.25, 0.5, 0.75];
+		current.directional.azimuth_deg = 42.0;
+
+		let merged = merge_scene_lighting_defaults(current, Some(&test_scene_lighting())).expect("environment remains default");
+
+		assert_eq!(merged.environment.color, [0.8, 0.9, 1.0]);
+		assert_eq!(merged.directional.color, [0.25, 0.5, 0.75]);
+		assert_eq!(merged.directional.azimuth_deg, 42.0);
+	}
 
 	#[test]
 	fn surface_constraints_use_topology_not_cape_names() {
@@ -14260,6 +14370,27 @@ mod tests {
 	fn effective_window_backend_uses_dx12_only_for_transparent_vulkan_window() {
 		assert_eq!(effective_window_backend(RenderBackend::Vulkan, true), RenderBackend::Dx12);
 		assert_eq!(effective_window_backend(RenderBackend::Dx12, true), RenderBackend::Dx12);
+	}
+
+	#[test]
+	fn surface_color_format_prefers_srgb_for_linear_shader_output() {
+		assert_eq!(
+			surface_color_format(&[
+				wgpu::TextureFormat::Bgra8Unorm,
+				wgpu::TextureFormat::Rgba8UnormSrgb,
+				wgpu::TextureFormat::Bgra8UnormSrgb,
+			]),
+			Some(wgpu::TextureFormat::Rgba8UnormSrgb)
+		);
+	}
+
+	#[test]
+	fn surface_color_format_falls_back_to_first_supported_format() {
+		assert_eq!(
+			surface_color_format(&[wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba8Unorm]),
+			Some(wgpu::TextureFormat::Bgra8Unorm)
+		);
+		assert_eq!(surface_color_format(&[]), None);
 	}
 
 	#[test]

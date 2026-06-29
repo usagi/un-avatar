@@ -14,9 +14,9 @@ use glam::{Mat4, Vec2, Vec3, Vec4};
 use half::f16;
 use serde::Serialize;
 use un_avatar_core::{
-	UnaAlphaMode, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata, UnaMaterialPbr,
-	UnaMeshBuffers, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaSceneSnapshot, UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler,
-	UnaTextureWrapMode,
+	UnaAlphaMode, UnaColorFactorColorSpace, UnaCullMode, UnaExpressionCatalog, UnaExpressionWeights, UnaImageRgba, UnaImageSourceMetadata,
+	UnaLilToonLikeMaterial, UnaLilToonLikeStencilState, UnaMaterialPbr, UnaMeshBuffers, UnaMtoonOutlineWidthMode, UnaSceneSnapshot,
+	UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
 };
 use un_avatar_skeleton::{
 	apply_dynamics_mesh_cloth_assist_to_vertices, dynamics_mesh_cloth_assist_joint_roles,
@@ -25,7 +25,7 @@ use un_avatar_skeleton::{
 	DynamicsMeshClothAssistVertex,
 };
 
-use crate::avatar_material::{effective_mtoon_outline, effective_mtoon_rim, texture_roles_for_scene};
+use crate::avatar_material::texture_roles_for_scene;
 use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
 use crate::liltoon_features;
 use crate::scene_transform::{safe_inverse_mesh_world, scene_world_matrices};
@@ -53,7 +53,7 @@ pub enum AvatarOutlinePolicy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AvatarOutlineKind {
-	Mtoon,
+	Geometry,
 	Ink,
 	Brush,
 	Double,
@@ -73,7 +73,7 @@ impl Default for AvatarOutlineOptions {
 	fn default() -> Self {
 		Self {
 			policy: AvatarOutlinePolicy::Authored,
-			kind: AvatarOutlineKind::Mtoon,
+			kind: AvatarOutlineKind::Geometry,
 			width: None,
 			color: None,
 			lighting_mix: None,
@@ -96,14 +96,13 @@ pub struct SceneMeshLoadOpts {
 	pub relax_iris_alpha: bool,
 	/// spec 前の `joint * IBM` のみ（`inv(meshWorld)` なし。エクスポータ差の確認用）。
 	pub debug_skin_legacy_no_inv_mesh: bool,
-	/// MToon outline 描画を完全にスキップする診断 toggle。
-	/// 一部 VRM モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
-	pub disable_mtoon_outlines: bool,
-	/// MToon の parametric Rim Lighting 寄与を 0 にする診断 toggle。
+	/// UNToon geometry outline 描画を完全にスキップする診断 toggle。
+	/// 一部モデルで目周辺に肌色寄りの太い outline が出る現象の切り分け用。
+	pub disable_geometry_outlines: bool,
+	/// UNToon / lilToon 互換 rim lighting 寄与を 0 にする診断 toggle。
 	/// 目周辺の肌色リング現象が rim light 由来か切り分けるための debug 用。
 	pub debug_disable_rim_lighting: bool,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与をともに 0 に固定する診断 toggle。
-	/// shadeColor への falloff 位置を素直に `dot(n, l)` だけにして影色テクスチャの寄与を切り分ける。
+	/// 旧 MToon shading shift 診断用の互換 no-op。v2-UNToon shader では使用しない。
 	pub debug_force_shading_shift_zero: bool,
 	/// matcap (sphere add) の寄与を 0 にする診断 toggle。
 	/// matcap で目周辺に擬似的なハイライト/シャドウが乗っているケースを切り分ける。
@@ -125,7 +124,7 @@ pub struct SceneMeshLoadOpts {
 	/// lilToon Fur 描画を完全にスキップする診断 toggle。
 	/// Compute Fur 実装の副作用が通常描画へ波及しているかを切り分ける。
 	pub disable_fur: bool,
-	/// アバター用途の outline override。既定は VRM / MToon authored outline を尊重する。
+	/// アバター用途の outline override。既定は UNToon / legacy source authored outline を尊重する。
 	pub avatar_outline: AvatarOutlineOptions,
 	/// 顔と体で別テクスチャの肌色差が首境界に出るモデル向けの実験的なロード時補正。
 	pub skin_tone_matching: bool,
@@ -421,6 +420,18 @@ fn baseline_fallback_mesh_shader_source() -> String {
 		"\t\t\tlet emission_mask = 1.0;\n",
 	);
 	shader = shader.replace(
+		"\t\tlet emission_mask_uv = lil_calc_uv_scroll_rotate(uv, drawu.emission_blend_mask_uv_offset_scale, drawu.emission_blend_mask_uv_anim_params);\n\t\tlet emission_mask = textureSample(emission_blend_mask_tex, emissive_samp, emission_mask_uv).r;\n",
+		"\t\tlet emission_mask = 1.0;\n",
+	);
+	shader = shader.replace(
+		"textureSample(emission_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb",
+		"vec3<f32>(1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
+		"textureSample(emission2nd_gradation_tex, emissive_samp, vec2<f32>(grad_u, 0.5)).rgb",
+		"vec3<f32>(1.0, 1.0, 1.0)",
+	);
+	shader = shader.replace(
 		"\t\t\tlet rim_shade_mask = textureSample(rim_shade_mask_tex, rim_samp, uv).r;\n",
 		"\t\t\tlet rim_shade_mask = 1.0;\n",
 	);
@@ -528,6 +539,13 @@ struct MeshFrameGpu {
 	camera_pos: [f32; 4],
 	light_color: [f32; 4],
 	ambient_color: [f32; 4],
+	sh_ar: [f32; 4],
+	sh_ag: [f32; 4],
+	sh_ab: [f32; 4],
+	sh_br: [f32; 4],
+	sh_bg: [f32; 4],
+	sh_bb: [f32; 4],
+	sh_c: [f32; 4],
 	time_params: [f32; 4],
 	audio_link_params: [f32; 4],
 	_pad: [[f32; 4]; 2],
@@ -544,11 +562,10 @@ struct MeshDrawTransformGpu {
 /// `params.z` = `alpha_cutoff`（MASK 時）。
 /// `params.w` はビットパック `u32` を `f32` で渡す（`bitcast`）。
 /// bit0=bind pose rigid, bit1=単色プリミティブ, bit2=Rim Lighting OFF (debug),
-/// bit3=shading_shift_factor/shadingShiftTexture を 0 固定 (debug), bit4=matcap OFF (debug),
-/// bit5=emissive OFF (debug), bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug),
-/// bit8=normalTexture OFF (debug), bit9=double-sided material, bit10=occlusion texture available, bit11=cull front,
-/// bit12=lilToon-like source material, bit13=lilToon Gem source material, bit14=lilToon Refraction source material,
-/// bit15=lilToon color blend is additive (`SrcBlend=One`, `DstBlend=One`)。
+/// bit3=reserved legacy shading-shift debug, bit4=matcap OFF (debug), bit5=emissive OFF (debug),
+/// bit6=shade_term を base 置換 (debug), bit7=toon path を base のみで早期 return (debug), bit8=normalTexture OFF (debug),
+/// bit9=double-sided material, bit10=occlusion texture available, bit11=cull front, bit12=lilToon-like source material,
+/// bit13=lilToon Gem source material, bit14=lilToon Refraction source material, bit15=lilToon color blend is additive (`SrcBlend=One`, `DstBlend=One`)。
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct MeshDrawMaterialGpu {
@@ -684,6 +701,7 @@ struct MeshDrawMaterialGpu {
 	rendering_ext_params: [f32; 4],
 	transparency_params: [f32; 4],
 	material_ext_params: [f32; 4],
+	light_direction_override: [f32; 4],
 	emissive_factor: [f32; 4],
 	uv_anim_params: [f32; 4],
 	uv_offset_scale: [f32; 4],
@@ -771,9 +789,9 @@ struct SharedMorphDeltaResources {
 	target_count: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 256);
+const _: () = assert!(std::mem::size_of::<MeshFrameGpu>() == 368);
 const _: () = assert!(std::mem::size_of::<MeshDrawTransformGpu>() == 64);
-const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3120);
+const _: () = assert!(std::mem::size_of::<MeshDrawMaterialGpu>() == 3136);
 const _: () = assert!(std::mem::size_of::<MorphMetaGpu>() == 16);
 
 #[repr(C)]
@@ -1489,6 +1507,18 @@ impl Default for MaterialStencilState {
 }
 
 impl MaterialStencilState {
+	fn from_untoon(state: &UnaLilToonLikeStencilState) -> Self {
+		Self {
+			reference: state.reference,
+			read_mask: state.read_mask,
+			write_mask: state.write_mask,
+			compare: state.compare,
+			pass_op: state.pass_op,
+			fail_op: state.fail_op,
+			depth_fail_op: state.depth_fail_op,
+		}
+	}
+
 	fn to_wgpu(self) -> wgpu::StencilState {
 		let face = wgpu::StencilFaceState {
 			compare: unity_compare_function(self.compare),
@@ -1533,7 +1563,6 @@ fn unity_stencil_operation(value: u8) -> wgpu::StencilOperation {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct UntoonShaderFeatures {
-	profile_extensions: bool,
 	main_layers: bool,
 	alpha_mask: bool,
 	dissolve: bool,
@@ -1562,16 +1591,15 @@ struct UntoonShaderFeatures {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum UntoonSourceProfile {
+enum UntoonSemanticProfile {
 	#[default]
 	Plain,
-	MToon,
-	LilToon,
+	UNToon,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct UntoonFeaturePlan {
-	source_profile: UntoonSourceProfile,
+	semantic_profile: UntoonSemanticProfile,
 	shader_features: UntoonShaderFeatures,
 }
 
@@ -1583,7 +1611,6 @@ impl UntoonFeaturePlan {
 
 impl UntoonShaderFeatures {
 	fn include(&mut self, other: Self) {
-		self.profile_extensions |= other.profile_extensions;
 		self.main_layers |= other.main_layers;
 		self.alpha_mask |= other.alpha_mask;
 		self.dissolve |= other.dissolve;
@@ -1611,9 +1638,8 @@ impl UntoonShaderFeatures {
 		self.normal_second |= other.normal_second;
 	}
 
-	fn shader_feature_values(self) -> [(&'static str, bool); 26] {
+	fn shader_feature_values(self) -> [(&'static str, bool); 25] {
 		[
-			("UNTOON_FEATURE_PROFILE_EXTENSIONS", self.profile_extensions),
 			("UNTOON_FEATURE_MAIN_LAYERS", self.main_layers),
 			("UNTOON_FEATURE_ALPHA_MASK", self.alpha_mask),
 			("UNTOON_FEATURE_DISSOLVE", self.dissolve),
@@ -1645,7 +1671,6 @@ impl UntoonShaderFeatures {
 
 fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
 	UntoonShaderFeatures {
-		profile_extensions: true,
 		main_layers: true,
 		alpha_mask: true,
 		dissolve: true,
@@ -1671,18 +1696,6 @@ fn full_liltoon_prewarm_features() -> UntoonShaderFeatures {
 		gem: true,
 		refraction: true,
 		normal_second: true,
-	}
-}
-
-fn mtoon_prewarm_features() -> UntoonShaderFeatures {
-	UntoonShaderFeatures {
-		shadow_layers: true,
-		matcap: true,
-		reflection: true,
-		reflection_cube: true,
-		rim: true,
-		emission: true,
-		..Default::default()
 	}
 }
 
@@ -1727,10 +1740,7 @@ fn finalize_draw_batches(batches: &mut Vec<DrawBatch>) {
 }
 
 fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
-	let zwrite = draw
-		.material
-		.liltoon_like_runtime()
-		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	if zwrite {
 		DrawPipelineKind::TransparentToonBackpass
 	} else {
@@ -1738,83 +1748,40 @@ fn transparent_backpass_pipeline_for_draw(draw: &MeshDraw) -> DrawPipelineKind {
 	}
 }
 
-fn json_number_f32(value: &serde_json::Value) -> Option<f32> {
-	value
-		.as_f64()
-		.map(|value| value as f32)
-		.or_else(|| value.as_i64().map(|value| value as f32))
-}
-
-fn material_source_float_param(material: &UnaMaterialPbr, name: &str) -> Option<f32> {
-	let source = material.unavatar_material.as_ref()?;
-	source
-		.get("floatParams")
-		.and_then(|params| params.get(name))
-		.and_then(json_number_f32)
-		.or_else(|| {
-			source
-				.get("floatProperties")
-				.and_then(|params| params.get(name))
-				.and_then(json_number_f32)
-		})
-}
-
-fn material_source_u8_param(material: &UnaMaterialPbr, name: &str, default_value: u8) -> u8 {
-	material_source_float_param(material, name)
-		.map(|value| value.round().clamp(0.0, 255.0) as u8)
-		.unwrap_or(default_value)
-}
-
-fn prefixed_material_name(prefix: &str, suffix: &str) -> String {
-	if prefix.is_empty() {
-		format!("_{suffix}")
-	} else {
-		format!("_{prefix}{suffix}")
-	}
-}
-
-fn material_source_u8_param_prefixed(material: &UnaMaterialPbr, prefix: &str, suffix: &str, default_value: u8) -> u8 {
-	material_source_u8_param(material, &prefixed_material_name(prefix, suffix), default_value)
-}
-
-fn material_stencil_state_prefixed(material: &UnaMaterialPbr, prefix: &str) -> MaterialStencilState {
-	MaterialStencilState {
-		reference: material_source_u8_param_prefixed(material, prefix, "StencilRef", 0),
-		read_mask: material_source_u8_param_prefixed(material, prefix, "StencilReadMask", 255),
-		write_mask: material_source_u8_param_prefixed(material, prefix, "StencilWriteMask", 255),
-		compare: material_source_u8_param_prefixed(material, prefix, "StencilComp", 8),
-		pass_op: material_source_u8_param_prefixed(material, prefix, "StencilPass", 0),
-		fail_op: material_source_u8_param_prefixed(material, prefix, "StencilFail", 0),
-		depth_fail_op: material_source_u8_param_prefixed(material, prefix, "StencilZFail", 0),
-	}
-}
-
 fn material_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
-	material_stencil_state_prefixed(material, "")
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.stencil))
+		.unwrap_or_default()
 }
 
 fn material_outline_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
-	material_stencil_state_prefixed(material, "Outline")
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.outline_stencil))
+		.unwrap_or_default()
 }
 
 fn material_fur_stencil_state(material: &UnaMaterialPbr) -> MaterialStencilState {
-	material_stencil_state_prefixed(material, "Fur")
+	material_untoon_profile(material)
+		.map(|untoon| MaterialStencilState::from_untoon(&untoon.rendering.pipeline_state.fur_stencil))
+		.unwrap_or_default()
 }
 
 fn material_color_mask(material: &UnaMaterialPbr) -> u8 {
-	material_source_u8_param(material, "_ColorMask", 15) & 0x0f
-}
-
-fn material_color_mask_prefixed(material: &UnaMaterialPbr, prefix: &str) -> u8 {
-	material_source_u8_param_prefixed(material, prefix, "ColorMask", 15) & 0x0f
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.color_mask & 0x0f)
+		.unwrap_or(15)
 }
 
 fn material_outline_color_mask(material: &UnaMaterialPbr) -> u8 {
-	material_color_mask_prefixed(material, "Outline")
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.outline_color_mask & 0x0f)
+		.unwrap_or(15)
 }
 
 fn material_fur_color_mask(material: &UnaMaterialPbr) -> u8 {
-	material_color_mask_prefixed(material, "Fur")
+	material_untoon_profile(material)
+		.map(|untoon| untoon.rendering.pipeline_state.fur_color_mask & 0x0f)
+		.unwrap_or(15)
 }
 
 fn color_writes_from_unity_mask(mask: u8) -> wgpu::ColorWrites {
@@ -1834,29 +1801,8 @@ fn color_writes_from_unity_mask(mask: u8) -> wgpu::ColorWrites {
 	writes
 }
 
-fn material_source_shader_name(material: &UnaMaterialPbr) -> Option<&str> {
-	material
-		.unavatar_material
-		.as_ref()
-		.and_then(|source| {
-			source
-				.get("sourceShader")
-				.or_else(|| source.get("shaderName"))
-				.or_else(|| source.get("shader"))
-		})
-		.and_then(|value| value.as_str())
-}
-
 fn material_transparent_with_zwrite(material: &UnaMaterialPbr) -> bool {
-	if material.liltoon_like_runtime().is_some() {
-		if let Some(value) =
-			material_source_float_param(material, "_ZWrite").or_else(|| material_source_float_param(material, "_ZWriteMode"))
-		{
-			return value > 0.5;
-		}
-		return material_source_shader_name(material).is_some_and(|shader| shader.to_ascii_lowercase().contains("twopass"));
-	}
-	material.mtoon_like_runtime().is_some_and(|mtoon| mtoon.transparent_with_z_write)
+	material_untoon_profile(material).is_some_and(|liltoon_like| liltoon_like.blend_state.pre_zwrite_factor > 0.5)
 }
 
 fn push_unique_index(indices: &mut Vec<usize>, index: usize) {
@@ -1885,6 +1831,22 @@ fn lil_enabled(value: f32) -> bool {
 	liltoon_features::enabled(value)
 }
 
+fn material_untoon_profile(material: &UnaMaterialPbr) -> Option<&UnaLilToonLikeMaterial> {
+	material.liltoon_like_runtime()
+}
+
+fn renderer_toon_shading(shading: UnaShadingModel) -> bool {
+	matches!(shading, UnaShadingModel::LilToonLike)
+}
+
+fn mesh_draw_shading_for_material(material: &UnaMaterialPbr) -> UnaShadingModel {
+	match material.shading {
+		UnaShadingModel::MToonLike if material.liltoon_like_runtime().is_some() => UnaShadingModel::LilToonLike,
+		UnaShadingModel::MToonLike => UnaShadingModel::LitLambert,
+		other => other,
+	}
+}
+
 fn material_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 	let mut indices = Vec::new();
 	collect_material_texture_indices(material, &mut indices);
@@ -1896,15 +1858,7 @@ fn collect_material_texture_indices(material: &UnaMaterialPbr, indices: &mut Vec
 	push_texture_index(indices, material.normal_texture_index);
 	push_texture_index(indices, material.occlusion_texture_index);
 	push_texture_index(indices, material.emissive_texture_index);
-	if let Some(mtoon) = material.mtoon_like_runtime() {
-		push_texture_index(indices, mtoon.shade_multiply_texture_index);
-		push_texture_index(indices, mtoon.shading_shift_texture_index);
-		push_texture_index(indices, mtoon.matcap_texture_index);
-		push_texture_index(indices, mtoon.rim_multiply_texture_index);
-		push_texture_index(indices, mtoon.outline_width_multiply_texture_index);
-		push_texture_index(indices, mtoon.uv_animation_mask_texture_index);
-	}
-	if let Some(liltoon) = material.liltoon_like_runtime() {
+	if let Some(liltoon) = material_untoon_profile(material) {
 		if liltoon_features::uses_main_color_adjustment(&liltoon.main_color) {
 			push_texture_index(indices, liltoon.main_color.main_color_adjust_mask_texture_index);
 		}
@@ -2016,10 +1970,7 @@ fn material_cube_texture_indices(material: &UnaMaterialPbr) -> Vec<usize> {
 }
 
 fn collect_material_cube_texture_indices(material: &UnaMaterialPbr, indices: &mut Vec<usize>) {
-	if let Some(mtoon) = material.mtoon_like_runtime() {
-		push_texture_index(indices, mtoon.reflection_cube_texture_index);
-	}
-	if let Some(liltoon) = material.liltoon_like_runtime() {
+	if let Some(liltoon) = material_untoon_profile(material) {
 		push_texture_index(indices, liltoon_reflection_texture_index(liltoon));
 	}
 }
@@ -2558,7 +2509,8 @@ fn blend_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	match shading {
 		UnaShadingModel::LitLambert => DrawPipelineKind::BlendLit,
 		UnaShadingModel::Unlit => DrawPipelineKind::BlendUnlit,
-		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::BlendToon,
+		UnaShadingModel::MToonLike => unreachable!("source MToonLike must not reach renderer draw pipeline selection"),
+		UnaShadingModel::LilToonLike => DrawPipelineKind::BlendToon,
 	}
 }
 
@@ -2566,12 +2518,13 @@ fn opaque_pipeline_for_shading(shading: UnaShadingModel) -> DrawPipelineKind {
 	match shading {
 		UnaShadingModel::LitLambert => DrawPipelineKind::OpaqueLit,
 		UnaShadingModel::Unlit => DrawPipelineKind::OpaqueUnlit,
-		UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike => DrawPipelineKind::OpaqueToon,
+		UnaShadingModel::MToonLike => unreachable!("source MToonLike must not reach renderer draw pipeline selection"),
+		UnaShadingModel::LilToonLike => DrawPipelineKind::OpaqueToon,
 	}
 }
 
 fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
-	let Some(liltoon_like) = material.liltoon_like_runtime() else {
+	let Some(liltoon_like) = material_untoon_profile(material) else {
 		return false;
 	};
 	(liltoon_like.blend_state.source_factor - 1.0).abs() < 0.001
@@ -2580,13 +2533,13 @@ fn liltoon_uses_additive_color_blend(material: &UnaMaterialPbr) -> bool {
 }
 
 fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bool) -> DrawPipelineKind {
-	if shading.is_toon_like() && liltoon_uses_additive_color_blend(&draw.material) {
+	if renderer_toon_shading(shading) && liltoon_uses_additive_color_blend(&draw.material) {
 		if zwrite {
 			DrawPipelineKind::BlendToonAddZWrite
 		} else {
 			DrawPipelineKind::BlendToonAdd
 		}
-	} else if zwrite && shading.is_toon_like() {
+	} else if zwrite && renderer_toon_shading(shading) {
 		DrawPipelineKind::BlendToonZWrite
 	} else {
 		blend_pipeline_for_shading(shading)
@@ -2594,10 +2547,7 @@ fn blend_pipeline_for_draw(draw: &MeshDraw, shading: UnaShadingModel, zwrite: bo
 }
 
 fn material_render_queue_number(material: &UnaMaterialPbr, alpha_mode: UnaAlphaMode) -> i32 {
-	if let Some(render_queue) = material
-		.liltoon_like_runtime()
-		.and_then(|liltoon_like| liltoon_like.rendering.render_queue_number)
-	{
+	if let Some(render_queue) = material_untoon_profile(material).and_then(|liltoon_like| liltoon_like.rendering.render_queue_number) {
 		return render_queue;
 	}
 	match alpha_mode {
@@ -2620,9 +2570,7 @@ fn draw_uses_late_non_blend_queue(alpha_mode: UnaAlphaMode, render_queue: i32) -
 }
 
 fn material_needs_screen_refraction(material: &UnaMaterialPbr) -> bool {
-	material
-		.liltoon_like_runtime()
-		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::needs_screen_refraction)
+	material_untoon_profile(material).is_some_and(un_avatar_core::UnaLilToonLikeMaterial::needs_screen_refraction)
 }
 
 fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonLikeAudioLink) -> bool {
@@ -2640,19 +2588,19 @@ fn liltoon_audio_link_has_active_target(audio_link: &un_avatar_core::UnaLilToonL
 }
 
 fn material_needs_audio_link_texture(material: &UnaMaterialPbr, shading: UnaShadingModel) -> bool {
-	if !shading.is_liltoon_like() {
+	if !renderer_toon_shading(shading) {
 		return false;
 	}
-	material.liltoon_like_runtime().is_some_and(|liltoon_like| {
+	material_untoon_profile(material).is_some_and(|liltoon_like| {
 		liltoon_like.audio_link.enabled_factor > 0.5 && liltoon_audio_link_has_active_target(&liltoon_like.audio_link)
 	})
 }
 
 fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingModel, opts: &SceneMeshLoadOpts) -> UntoonFeaturePlan {
-	if opts.force_simple_basecolor || !shading.is_toon_like() {
+	if opts.force_simple_basecolor || !renderer_toon_shading(shading) {
 		return UntoonFeaturePlan::none();
 	}
-	if let Some(liltoon_like) = material.liltoon_like_runtime() {
+	if let Some(liltoon_like) = material_untoon_profile(material) {
 		let has_main_layer_dissolve = liltoon_like.main_color.second_dissolve.mask_texture_index.is_some()
 			|| liltoon_like.main_color.second_dissolve.noise_mask_texture_index.is_some()
 			|| liltoon_like.main_color.third_dissolve.mask_texture_index.is_some()
@@ -2674,9 +2622,8 @@ fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingMo
 		let emission = lil_enabled(liltoon_like.emission.enabled_factor);
 		let emission_second = lil_enabled(liltoon_like.emission.second_enabled_factor);
 		UntoonFeaturePlan {
-			source_profile: UntoonSourceProfile::LilToon,
+			semantic_profile: UntoonSemanticProfile::UNToon,
 			shader_features: UntoonShaderFeatures {
-				profile_extensions: true,
 				main_layers,
 				alpha_mask: liltoon_like.alpha_mask.texture_index.is_some() || liltoon_like.alpha_mask.mode_factor.abs() > 0.00001,
 				dissolve: has_dissolve,
@@ -2708,23 +2655,7 @@ fn material_untoon_feature_plan(material: &UnaMaterialPbr, shading: UnaShadingMo
 			},
 		}
 	} else {
-		let mtoon = material.mtoon_like_runtime();
-		UntoonFeaturePlan {
-			source_profile: UntoonSourceProfile::MToon,
-			shader_features: UntoonShaderFeatures {
-				profile_extensions: false,
-				shadow_layers: true,
-				matcap: mtoon.is_some_and(|mtoon| mtoon.matcap_texture_index.is_some()),
-				reflection: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-				reflection_cube: mtoon.is_some_and(|mtoon| mtoon.reflection_cube_texture_index.is_some()),
-				rim: mtoon.is_some_and(|mtoon| {
-					mtoon.rim_multiply_texture_index.is_some()
-						|| mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001)
-				}),
-				emission: material.emissive_texture_index.is_some() || material.emissive_factor.iter().any(|value| value.abs() > 0.00001),
-				..Default::default()
-			},
-		}
+		UntoonFeaturePlan::none()
 	}
 }
 
@@ -2750,9 +2681,7 @@ fn draw_uses_screen_refraction_grab(draw: &MeshDraw) -> bool {
 }
 
 fn material_uses_liltoon_gem_prepass(material: &UnaMaterialPbr) -> bool {
-	material
-		.liltoon_like_runtime()
-		.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile)
+	material_untoon_profile(material).is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile)
 }
 
 fn draw_uses_liltoon_gem_prepass(draw: &MeshDraw) -> bool {
@@ -2778,14 +2707,11 @@ fn transparent_backpass_enabled(
 	shading: UnaShadingModel,
 	liltoon_backpass_enabled: bool,
 ) -> bool {
-	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && liltoon_backpass_enabled && shading.is_toon_like()
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && liltoon_backpass_enabled && renderer_toon_shading(shading)
 }
 
 fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> bool {
-	let liltoon_backpass_enabled = draw
-		.material
-		.liltoon_like_runtime()
-		.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+	let liltoon_backpass_enabled = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 	transparent_backpass_enabled(
 		draw.alpha_mode,
 		material_transparent_with_zwrite(&draw.material),
@@ -2795,7 +2721,7 @@ fn draw_uses_transparent_backpass(draw: &MeshDraw, shading: UnaShadingModel) -> 
 }
 
 fn transparent_forward_zwrite_enabled(alpha_mode: UnaAlphaMode, transparent_with_z_write: bool, shading: UnaShadingModel) -> bool {
-	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && shading.is_toon_like()
+	alpha_mode == UnaAlphaMode::Blend && transparent_with_z_write && renderer_toon_shading(shading)
 }
 
 fn build_draw_order(draws: &[MeshDraw], opts: &SceneMeshLoadOpts) -> SceneMeshDrawState {
@@ -2843,7 +2769,7 @@ fn build_draw_order_for_scope(draws: &[MeshDraw], opts: &SceneMeshLoadOpts, incl
 			state.needs_screen_refraction = true;
 		}
 		let shading = effective_mesh_shading(draw, opts);
-		if !opts.disable_mtoon_outlines
+		if !opts.disable_geometry_outlines
 			&& draw_has_outline(draw, opts)
 			&& matches!(draw.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask)
 		{
@@ -2959,10 +2885,7 @@ fn draw_pipeline_shader_features(
 		let Some(draw) = draws.get(draw_index) else {
 			continue;
 		};
-		let zwrite = draw
-			.material
-			.liltoon_like_runtime()
-			.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+		let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 		include_draw_features_for_pipeline(
 			&mut pipeline_features,
 			DrawPipelineKey::new(
@@ -4635,14 +4558,10 @@ fn create_mesh_material_bind_groups(
 	source: MeshMaterialBindingSource<'_>,
 ) -> (wgpu::BindGroup, wgpu::BindGroup) {
 	let mat = source.material;
-	let default_mtoon = UnaMtoonMaterial::default();
-	let mtoon = mat.mtoon_like_runtime().unwrap_or(&default_mtoon);
-	let liltoon_like = mat.liltoon_like_runtime();
+	let liltoon_like = material_untoon_profile(mat);
 	let tex_view = texture_view_or(&texture_views.images, mat.base_color_texture_index, &texture_views.white);
 	let tex_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.base_color_texture_index, 0);
-	let shade_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index)
-		.or(mtoon.shade_multiply_texture_index);
+	let shade_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.color_texture_index);
 	let shade_fallback_view = if liltoon_like.is_some() {
 		&texture_views.transparent_black
 	} else {
@@ -4654,8 +4573,7 @@ fn create_mesh_material_bind_groups(
 	let shadow2_color_view = texture_view_or(&texture_views.images, shadow2_color_texture_index, &texture_views.transparent_black);
 	let shadow3_color_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.third_color_texture_index);
 	let shadow3_color_view = texture_view_or(&texture_views.images, shadow3_color_texture_index, &texture_views.transparent_black);
-	let liltoon_strength_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
-	let shading_shift_texture_index = liltoon_strength_mask_texture_index.or(mtoon.shading_shift_texture_index);
+	let shading_shift_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.strength_mask_texture_index);
 	let shift_fallback_view = if liltoon_like.is_some() {
 		&texture_views.white
 	} else {
@@ -4669,9 +4587,7 @@ fn create_mesh_material_bind_groups(
 	let shadow_blur_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.shadow.blur_mask_texture_index);
 	let shadow_blur_mask_view = texture_view_or(&texture_views.images, shadow_blur_mask_texture_index, &texture_views.white);
 	let shadow_blur_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, shadow_blur_mask_texture_index, 0);
-	let matcap_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.matcap.texture_index)
-		.or(mtoon.matcap_texture_index);
+	let matcap_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.matcap.texture_index);
 	let matcap_fallback_view = if liltoon_like.is_some() {
 		&texture_views.white
 	} else {
@@ -4726,9 +4642,7 @@ fn create_mesh_material_bind_groups(
 	let alpha_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.alpha_mask.texture_index);
 	let alpha_mask_view = texture_view_or(&texture_views.images, alpha_mask_texture_index, &texture_views.white);
 	let alpha_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, alpha_mask_texture_index, 0);
-	let rim_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.rim.texture_index)
-		.or(mtoon.rim_multiply_texture_index);
+	let rim_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.texture_index);
 	let rim_view = texture_view_or(&texture_views.images, rim_texture_index, &texture_views.white);
 	let rim_sampler = texture_sampler_or(samplers, image_sampler_indices, rim_texture_index, 0);
 	let rim_shade_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.rim.shade_mask_texture_index);
@@ -4748,7 +4662,7 @@ fn create_mesh_material_bind_groups(
 	let reflection_texture_index = if let Some(liltoon_like) = liltoon_like {
 		liltoon_reflection_texture_index(liltoon_like)
 	} else {
-		mtoon.reflection_cube_texture_index
+		None
 	};
 	let reflection_view = reflection_texture_index
 		.and_then(|index| texture_views.cubes.get(index).and_then(Option::as_ref))
@@ -4785,15 +4699,14 @@ fn create_mesh_material_bind_groups(
 	let emission2nd_gradation_view = texture_view_or(&texture_views.images, emission2nd_gradation_texture_index, &texture_views.white);
 	let occlusion_view = texture_view_or(&texture_views.images, mat.occlusion_texture_index, &texture_views.white);
 	let occlusion_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.occlusion_texture_index, 0);
-	let outline_width_mask_texture_index = liltoon_like
-		.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index)
-		.or(mtoon.outline_width_multiply_texture_index);
+	let outline_width_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.width_mask_texture_index);
 	let outline_view = texture_view_or(&texture_views.images, outline_width_mask_texture_index, &texture_views.white);
 	let outline_sampler = texture_sampler_or(samplers, image_sampler_indices, outline_width_mask_texture_index, 0);
 	let outline_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.outline.texture_index);
 	let outline_color_view = texture_view_or(&texture_views.images, outline_texture_index, &texture_views.white);
-	let uv_mask_view = texture_view_or(&texture_views.images, mtoon.uv_animation_mask_texture_index, &texture_views.white);
-	let uv_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, mtoon.uv_animation_mask_texture_index, 0);
+	let uv_mask_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.main_color.uv_animation_mask_texture_index);
+	let uv_mask_view = texture_view_or(&texture_views.images, uv_mask_texture_index, &texture_views.white);
+	let uv_mask_sampler = texture_sampler_or(samplers, image_sampler_indices, uv_mask_texture_index, 0);
 	let normal_view = texture_view_or(&texture_views.images, mat.normal_texture_index, &texture_views.neutral_normal);
 	let normal_sampler = texture_sampler_or(samplers, image_sampler_indices, mat.normal_texture_index, 0);
 	let normal2nd_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.normal.second_texture_index);
@@ -6196,26 +6109,18 @@ fn draw_has_outline(d: &MeshDraw, opts: &SceneMeshLoadOpts) -> bool {
 			if !matches!(d.alpha_mode, UnaAlphaMode::Opaque | UnaAlphaMode::Mask) {
 				return false;
 			}
-			if d.shading.is_liltoon_like() {
-				return d
-					.material
-					.liltoon_like_runtime()
-					.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0);
-			}
-			d.shading.is_mtoon_like()
-				&& d.material
-					.mtoon_like_runtime()
-					.is_some_and(|mtoon| effective_mtoon_outline(mtoon, opts).is_some())
+			material_untoon_profile(&d.material)
+				.is_some_and(|material| material.outline.enabled_factor > 0.5 && material.outline.width_factor > 0.0)
 		}
 		AvatarOutlinePolicy::Off => false,
 	}
 }
 
 fn material_fur_layer_count(material: &UnaMaterialPbr, shading: UnaShadingModel) -> u32 {
-	if !shading.is_liltoon_like() {
+	if !renderer_toon_shading(shading) {
 		return 0;
 	}
-	let Some(liltoon_like) = material.liltoon_like_runtime() else {
+	let Some(liltoon_like) = material_untoon_profile(material) else {
 		return 0;
 	};
 	if liltoon_like.fur.enabled_factor <= 0.5 {
@@ -6720,7 +6625,7 @@ fn compute_fur_cards_card_sources_from_triangles(
 	triangles: &[ComputeFurCardsSourceTriangleGpu],
 	cpu_maps: ComputeFurCardsCpuFurMaps<'_>,
 ) -> Option<Vec<ComputeFurCardsCardSourceGpu>> {
-	let liltoon_fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
+	let liltoon_fur = material_untoon_profile(material).map(|liltoon_like| &liltoon_like.fur);
 	let layer_num = liltoon_fur.map(|fur| fur.layer_count_factor).unwrap_or(1.0);
 	let fur_length = liltoon_fur.map(|fur| fur.vector_factor[3].max(0.0)).unwrap_or(0.0);
 	let segment_count = liltoon_fur_segment_count(layer_num);
@@ -6817,8 +6722,7 @@ fn create_compute_fur_cards_compute_pipeline(
 
 #[allow(dead_code)]
 fn compute_fur_cards_cards_per_triangle_for_material(material: &UnaMaterialPbr) -> u32 {
-	material
-		.liltoon_like_runtime()
+	material_untoon_profile(material)
 		.map(|liltoon_like| liltoon_fur_sample_count_for_layer_num(liltoon_like.fur.layer_count_factor))
 		.unwrap_or(1)
 		.max(1)
@@ -6831,7 +6735,7 @@ fn compute_fur_cards_generate_params_from_material(
 	_cards_per_triangle: u32,
 	generated: ComputeFurCardsBufferRequirements,
 ) -> ComputeFurCardsGenerateParamsGpu {
-	let fur = material.liltoon_like_runtime().map(|liltoon_like| &liltoon_like.fur);
+	let fur = material_untoon_profile(material).map(|liltoon_like| &liltoon_like.fur);
 	let vector = fur.map(|f| f.vector_factor).unwrap_or([0.0, 0.0, 1.0, 0.0]);
 	let fur_length = vector[3].max(0.0);
 	let cards_per_triangle = fur.map(|f| liltoon_fur_segment_count(f.layer_count_factor)).unwrap_or(0);
@@ -7009,9 +6913,48 @@ fn material_is_fully_invisible_for_draw(mat: &UnaMaterialPbr, opts: &SceneMeshLo
 	mat.base_color_factor[3] <= 0.001 && matches!(mat.alpha_mode, UnaAlphaMode::Mask | UnaAlphaMode::Blend)
 }
 
+fn untoon_material_uses_srgb_color_factors(liltoon_like: Option<&UnaLilToonLikeMaterial>) -> bool {
+	liltoon_like
+		.map(|profile| profile.color_factor_color_space == UnaColorFactorColorSpace::Srgb)
+		.unwrap_or(false)
+}
+
+fn srgb_factor_to_linear(value: f32) -> f32 {
+	if !(0.0..=1.0).contains(&value) {
+		return value;
+	}
+	if value <= 0.04045 {
+		value / 12.92
+	} else {
+		((value + 0.055) / 1.055).powf(2.4)
+	}
+}
+
+fn source_rgb_to_linear(rgb: [f32; 3], enabled: bool) -> [f32; 3] {
+	if !enabled {
+		return rgb;
+	}
+	[
+		srgb_factor_to_linear(rgb[0]),
+		srgb_factor_to_linear(rgb[1]),
+		srgb_factor_to_linear(rgb[2]),
+	]
+}
+
+fn source_rgba_to_linear(rgba: [f32; 4], enabled: bool) -> [f32; 4] {
+	if !enabled {
+		return rgba;
+	}
+	[
+		srgb_factor_to_linear(rgba[0]),
+		srgb_factor_to_linear(rgba[1]),
+		srgb_factor_to_linear(rgba[2]),
+		rgba[3],
+	]
+}
+
 fn mesh_draw_material_gpu_with_profiles(
 	mat: &UnaMaterialPbr,
-	mtoon: &UnaMtoonMaterial,
 	liltoon_like: Option<&un_avatar_core::UnaLilToonLikeMaterial>,
 	opts: &SceneMeshLoadOpts,
 	mesh_index: usize,
@@ -7020,6 +6963,8 @@ fn mesh_draw_material_gpu_with_profiles(
 	let iris_relax = opts.relax_iris_alpha && iris_like_material_name(mat.name.as_deref()) && mat.base_color_factor[3] <= 0.001;
 	let mut eff_alpha = mat.alpha_mode;
 	let mut base_color = mat.base_color_factor;
+	let source_srgb_color_factors = untoon_material_uses_srgb_color_factors(liltoon_like);
+	base_color = source_rgba_to_linear(base_color, source_srgb_color_factors);
 	if opts.force_simple_basecolor || iris_relax {
 		eff_alpha = UnaAlphaMode::Opaque;
 		base_color[3] = 1.0;
@@ -7036,9 +6981,6 @@ fn mesh_draw_material_gpu_with_profiles(
 	}
 	if opts.debug_disable_rim_lighting {
 		flags |= 4;
-	}
-	if opts.debug_force_shading_shift_zero {
-		flags |= 8;
 	}
 	if opts.debug_disable_matcap {
 		flags |= 16;
@@ -7066,7 +7008,7 @@ fn mesh_draw_material_gpu_with_profiles(
 	if mat.occlusion_texture_index.is_some() {
 		flags |= 1024;
 	}
-	let (rim_color, rim_lighting_mix, rim_power, rim_lift) = effective_mtoon_rim(mat, mtoon, opts);
+	let (rim_color, rim_lighting_mix, rim_power, rim_lift) = ([0.0, 0.0, 0.0], 0.0, 5.0, 0.0);
 	let rim_texture_mix = 1.0;
 	if liltoon_like.is_some_and(un_avatar_core::UnaLilToonLikeMaterial::is_gem_profile) {
 		flags |= MAT_UNTOON_GEM_PROFILE;
@@ -7341,7 +7283,6 @@ fn mesh_draw_material_gpu_with_profiles(
 	let main3rd_dissolve_noise_uv_anim_params = liltoon_like
 		.map(|u| u.main_color.third_dissolve.noise_uv_scroll_rotate_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
-	let outline = effective_mtoon_outline(mtoon, opts);
 	let (outline_mode, outline_width, outline_color, outline_lighting_mix, outline_lit_color, outline_lit_params) =
 		if let Some(liltoon_like) = liltoon_like {
 			if liltoon_like.outline.enabled_factor > 0.5 && liltoon_like.outline.width_factor > 0.0 {
@@ -7369,27 +7310,16 @@ fn mesh_draw_material_gpu_with_profiles(
 				)
 			}
 		} else {
-			outline
-				.map(|o| {
-					(
-						o.mode,
-						o.width,
-						[o.color[0], o.color[1], o.color[2], 1.0],
-						o.lighting_mix,
-						[0.0, 0.0, 0.0, 0.0],
-						[10.0, -8.0, 0.0, 0.0],
-					)
-				})
-				.unwrap_or((
-					UnaMtoonOutlineWidthMode::None,
-					0.0,
-					[0.0, 0.0, 0.0, 0.0],
-					0.0,
-					[0.0, 0.0, 0.0, 0.0],
-					[10.0, -8.0, 0.0, 0.0],
-				))
+			(
+				UnaMtoonOutlineWidthMode::None,
+				0.0,
+				[0.0, 0.0, 0.0, 0.0],
+				0.0,
+				[0.0, 0.0, 0.0, 0.0],
+				[10.0, -8.0, 0.0, 0.0],
+			)
 		};
-	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or(mtoon.shade_color_factor);
+	let shade_color = liltoon_like.map(|u| u.shadow.color_factor).unwrap_or([0.0, 0.0, 0.0]);
 	let shadow_params = liltoon_like
 		.map(|u| {
 			[
@@ -7447,7 +7377,7 @@ fn mesh_draw_material_gpu_with_profiles(
 			]
 		})
 		.unwrap_or([0.0, 0.0, 1.0, 0.0]);
-	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or(mtoon.matcap_factor);
+	let matcap_color = liltoon_like.map(|u| u.matcap.color_factor).unwrap_or([1.0, 1.0, 1.0]);
 	let matcap_params = liltoon_like
 		.map(|u| {
 			[
@@ -7685,7 +7615,7 @@ fn mesh_draw_material_gpu_with_profiles(
 				u.alpha_mask.mode_factor.clamp(0.0, 4.0),
 				u.alpha_mask.scale_factor,
 				u.alpha_mask.value_factor,
-				1.0,
+				u.blend_state.alpha_boost_factor.max(0.0),
 			]
 		})
 		.unwrap_or([0.0, 1.0, 0.0, 1.0]);
@@ -7786,6 +7716,9 @@ fn mesh_draw_material_gpu_with_profiles(
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let material_ext_params = liltoon_like
 		.map(|u| [u.flip_backface_normal_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
+	let light_direction_override = liltoon_like
+		.map(|u| u.rendering.light_direction_override_factor)
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let outline_ext_params = liltoon_like
 		.map(|u| [u.outline.fix_width_factor.clamp(0.0, 1.0), u.outline.z_bias_factor, 0.0, 0.0])
@@ -8242,58 +8175,68 @@ fn mesh_draw_material_gpu_with_profiles(
 	let audio_link_local_map_params = liltoon_like
 		.map(|u| u.audio_link.local_map_params_factor)
 		.unwrap_or([120.0, 1.0, 0.0, 0.0]);
+	let shade_color_rgb = source_rgb_to_linear([shade_color[0], shade_color[1], shade_color[2]], source_srgb_color_factors);
+	let matcap_color_rgb = source_rgb_to_linear([matcap_color[0], matcap_color[1], matcap_color[2]], source_srgb_color_factors);
+	let rim_color_gpu = source_rgba_to_linear(rim_color_gpu, source_srgb_color_factors);
+	let shading_params = [0.0, 1.0, 0.0, 0.0];
+	let transparent_with_z_write = material_transparent_with_zwrite(mat);
+	let uv_anim_params = liltoon_like
+		.map(|u| {
+			[
+				u.main_color.main_uv_scroll_rotate_factor[0],
+				u.main_color.main_uv_scroll_rotate_factor[1],
+				u.main_color.main_uv_scroll_rotate_factor[2],
+				0.0,
+			]
+		})
+		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	MeshDrawMaterialGpu {
 		base_color,
-		backface_color,
+		backface_color: source_rgba_to_linear(backface_color, source_srgb_color_factors),
 		params: [0.0, eff_alpha.as_shader_alpha_kind(), mat.alpha_cutoff, f32::from_bits(flags)],
 		shade_color: [
-			shade_color[0],
-			shade_color[1],
-			shade_color[2],
+			shade_color_rgb[0],
+			shade_color_rgb[1],
+			shade_color_rgb[2],
 			if mat.normal_texture_index.is_some() {
 				mat.normal_texture_scale
 			} else {
 				0.0
 			},
 		],
-		shading_params: [
-			mtoon.shading_shift_factor,
-			mtoon.shading_toony_factor,
-			mtoon.shading_shift_texture_scale,
-			mtoon.gi_equalization_factor,
-		],
+		shading_params,
 		shadow_params,
 		shadow_ext_params,
 		shadow_ao_params,
 		shadow_ao_shift,
 		shadow_ao_shift2,
-		shadow_border_color,
-		shadow2_color,
+		shadow_border_color: source_rgba_to_linear(shadow_border_color, source_srgb_color_factors),
+		shadow2_color: source_rgba_to_linear(shadow2_color, source_srgb_color_factors),
 		shadow2_params,
-		shadow3_color,
+		shadow3_color: source_rgba_to_linear(shadow3_color, source_srgb_color_factors),
 		shadow3_params,
-		matcap_factor: [matcap_color[0], matcap_color[1], matcap_color[2], 1.0],
+		matcap_factor: [matcap_color_rgb[0], matcap_color_rgb[1], matcap_color_rgb[2], 1.0],
 		matcap_params,
 		matcap_ext_params,
 		matcap_bump_params,
-		matcap2_factor,
+		matcap2_factor: source_rgba_to_linear(matcap2_factor, source_srgb_color_factors),
 		matcap2_params,
 		matcap2_ext_params,
 		matcap2_bump_params,
 		matcap_uv_params,
 		matcap_uv_ext_params,
-		reflection_color,
+		reflection_color: source_rgba_to_linear(reflection_color, source_srgb_color_factors),
 		reflection_control,
 		reflection_params,
 		reflection_ext_params,
-		reflection_cube_color,
+		reflection_cube_color: source_rgba_to_linear(reflection_cube_color, source_srgb_color_factors),
 		anisotropy_params,
 		anisotropy_ext_params,
 		anisotropy2_params,
 		anisotropy_width_params,
-		gem_env_color,
+		gem_env_color: source_rgba_to_linear(gem_env_color, source_srgb_color_factors),
 		gem_params,
-		gem_particle_color,
+		gem_particle_color: source_rgba_to_linear(gem_particle_color, source_srgb_color_factors),
 		specular_toon_params,
 		rim_color: [
 			rim_color_gpu[0],
@@ -8304,17 +8247,17 @@ fn mesh_draw_material_gpu_with_profiles(
 		rim_params,
 		rim_control,
 		rim_ext_params,
-		rim_indirect_color,
+		rim_indirect_color: source_rgba_to_linear(rim_indirect_color, source_srgb_color_factors),
 		rim_indirect_params,
 		rim_indirect_ext_params,
-		rim_shade_color,
+		rim_shade_color: source_rgba_to_linear(rim_shade_color, source_srgb_color_factors),
 		rim_shade_params,
-		backlight_color,
+		backlight_color: source_rgba_to_linear(backlight_color, source_srgb_color_factors),
 		backlight_params,
 		backlight_ext_params,
 		backlight_shadow_params,
 		backlight_color_uv_offset_scale,
-		glitter_color,
+		glitter_color: source_rgba_to_linear(glitter_color, source_srgb_color_factors),
 		glitter_params1,
 		glitter_params2,
 		glitter_control,
@@ -8325,10 +8268,10 @@ fn mesh_draw_material_gpu_with_profiles(
 		glitter_shape_uv_offset_scale,
 		glitter_atlas,
 		distance_fade,
-		distance_fade_color,
-		distance_fade_rim_color,
+		distance_fade_color: source_rgba_to_linear(distance_fade_color, source_srgb_color_factors),
+		distance_fade_rim_color: source_rgba_to_linear(distance_fade_rim_color, source_srgb_color_factors),
 		distance_fade_params,
-		dissolve_color,
+		dissolve_color: source_rgba_to_linear(dissolve_color, source_srgb_color_factors),
 		dissolve_params,
 		dissolve_pos,
 		dissolve_ext,
@@ -8349,11 +8292,11 @@ fn mesh_draw_material_gpu_with_profiles(
 		udim_discard_row1,
 		udim_discard_row2,
 		udim_discard_row3,
-		emission_color,
+		emission_color: source_rgba_to_linear(emission_color, source_srgb_color_factors),
 		emission_params,
 		emission_blink_params,
 		emission_grad_params,
-		emission2nd_color,
+		emission2nd_color: source_rgba_to_linear(emission2nd_color, source_srgb_color_factors),
 		emission2nd_params,
 		emission2nd_blink_params,
 		emission2nd_grad_params,
@@ -8377,14 +8320,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		audio_link_mask_uv_offset_scale,
 		audio_link_mask_uv_anim_params,
 		audio_link_local_map_params,
-		outline_color,
+		outline_color: source_rgba_to_linear(outline_color, source_srgb_color_factors),
 		outline_params: [
 			outline_mode_gpu(outline_mode),
 			outline_width,
 			outline_lighting_mix,
-			if mtoon.transparent_with_z_write { 1.0 } else { 0.0 },
+			if transparent_with_z_write { 1.0 } else { 0.0 },
 		],
-		outline_lit_color,
+		outline_lit_color: source_rgba_to_linear(outline_lit_color, source_srgb_color_factors),
 		outline_lit_params,
 		outline_ext_params,
 		alpha_mask_params,
@@ -8392,20 +8335,16 @@ fn mesh_draw_material_gpu_with_profiles(
 		fur_vector_params,
 		fur_noise_params,
 		fur_ext_params,
-		fur_rim_color,
+		fur_rim_color: source_rgba_to_linear(fur_rim_color, source_srgb_color_factors),
 		fur_rim_params,
 		alpha_ext_params,
 		lighting_ext_params,
 		rendering_ext_params,
 		transparency_params,
 		material_ext_params,
+		light_direction_override,
 		emissive_factor: [mat.emissive_factor[0], mat.emissive_factor[1], mat.emissive_factor[2], 24.0],
-		uv_anim_params: [
-			mtoon.uv_animation_scroll_x_speed_factor,
-			mtoon.uv_animation_scroll_y_speed_factor,
-			mtoon.uv_animation_rotation_speed_factor,
-			0.0,
-		],
+		uv_anim_params,
 		uv_offset_scale: mat.uv_offset_scale,
 		normal_uv_offset_scale,
 		normal2nd_uv_offset_scale,
@@ -8433,7 +8372,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		alpha_mask_uv_offset_scale,
 		main_color_adjust_params,
 		main_gradation_params,
-		main2nd_color,
+		main2nd_color: source_rgba_to_linear(main2nd_color, source_srgb_color_factors),
 		main2nd_params,
 		main2nd_ext,
 		main2nd_distance_fade,
@@ -8443,14 +8382,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		main2nd_decal_sub_param,
 		main2nd_uv_offset_scale,
 		main2nd_blend_mask_uv_offset_scale,
-		main2nd_dissolve_color,
+		main2nd_dissolve_color: source_rgba_to_linear(main2nd_dissolve_color, source_srgb_color_factors),
 		main2nd_dissolve_params,
 		main2nd_dissolve_pos,
 		main2nd_dissolve_ext,
 		main2nd_dissolve_mask_uv_offset_scale,
 		main2nd_dissolve_noise_uv_offset_scale,
 		main2nd_dissolve_noise_uv_anim_params,
-		main3rd_color,
+		main3rd_color: source_rgba_to_linear(main3rd_color, source_srgb_color_factors),
 		main3rd_params,
 		main3rd_ext,
 		main3rd_distance_fade,
@@ -8460,7 +8399,7 @@ fn mesh_draw_material_gpu_with_profiles(
 		main3rd_decal_sub_param,
 		main3rd_uv_offset_scale,
 		main3rd_blend_mask_uv_offset_scale,
-		main3rd_dissolve_color,
+		main3rd_dissolve_color: source_rgba_to_linear(main3rd_dissolve_color, source_srgb_color_factors),
 		main3rd_dissolve_params,
 		main3rd_dissolve_pos,
 		main3rd_dissolve_ext,
@@ -8471,25 +8410,17 @@ fn mesh_draw_material_gpu_with_profiles(
 }
 
 #[cfg(test)]
-fn mesh_draw_material_gpu(
-	mat: &UnaMaterialPbr,
-	mtoon: &UnaMtoonMaterial,
-	opts: &SceneMeshLoadOpts,
-	mesh_index: usize,
-	prim_index: usize,
-) -> MeshDrawMaterialGpu {
-	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_source_profile(), opts, mesh_index, prim_index)
+fn mesh_draw_material_gpu(mat: &UnaMaterialPbr, opts: &SceneMeshLoadOpts, mesh_index: usize, prim_index: usize) -> MeshDrawMaterialGpu {
+	mesh_draw_material_gpu_with_profiles(mat, mat.liltoon_like_source_profile(), opts, mesh_index, prim_index)
 }
 
 fn mesh_draw_material_gpu_runtime(
 	mat: &UnaMaterialPbr,
-	default_mtoon: &UnaMtoonMaterial,
 	opts: &SceneMeshLoadOpts,
 	mesh_index: usize,
 	prim_index: usize,
 ) -> MeshDrawMaterialGpu {
-	let mtoon = mat.mtoon_like_runtime().unwrap_or(default_mtoon);
-	mesh_draw_material_gpu_with_profiles(mat, mtoon, mat.liltoon_like_runtime(), opts, mesh_index, prim_index)
+	mesh_draw_material_gpu_with_profiles(mat, material_untoon_profile(mat), opts, mesh_index, prim_index)
 }
 
 fn liltoon_blend_mode_gpu(mode: un_avatar_core::UnaLilToonLikeBlendMode) -> f32 {
@@ -8941,10 +8872,7 @@ impl SceneMeshes {
 			attributes: &COMPUTE_FUR_CARDS_VTX_ATTRS,
 		};
 
-		let feature_sets = [
-			("mesh_prewarm_liltoon_full", full_liltoon_prewarm_features()),
-			("mesh_prewarm_mtoon", mtoon_prewarm_features()),
-		];
+		let feature_sets = [("mesh_prewarm_liltoon_full", full_liltoon_prewarm_features())];
 		let pipeline_kinds = [
 			DrawPipelineKind::OpaqueToon,
 			DrawPipelineKind::BlendToon,
@@ -10314,7 +10242,6 @@ impl SceneMeshes {
 		let mut shared_morph_delta_cache: BTreeMap<ExpandedPrimitiveCacheKey, SharedMorphDeltaResources> = BTreeMap::new();
 		let mut morph_delta_scratch: Vec<[f32; 4]> = Vec::new();
 		let default_material = UnaMaterialPbr::default();
-		let default_mtoon = UnaMtoonMaterial::default();
 		let mesh_prepare_start = Instant::now();
 		let mut mesh_prepare_summary = MeshPrepareSummary::default();
 		for (ni, node) in scene.nodes.iter().enumerate() {
@@ -10508,7 +10435,7 @@ impl SceneMeshes {
 				};
 				let buffer_upload_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
 
-				let liltoon_like = mat.liltoon_like_runtime();
+				let liltoon_like = material_untoon_profile(mat);
 				let tex_sampler = texture_sampler_or(&samplers, &image_sampler_indices, mat.base_color_texture_index, 0);
 				let fur_vector_texture_index = liltoon_like.and_then(|liltoon_like| liltoon_like.fur.vector_texture_index);
 				let fur_vector_view = texture_view_or(&texture_views.images, fur_vector_texture_index, &texture_views.neutral_vector);
@@ -10529,7 +10456,7 @@ impl SceneMeshes {
 					usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
 					mapped_at_creation: false,
 				});
-				let draw_material = mesh_draw_material_gpu_runtime(mat, &default_mtoon, &opts, mesh_i, prim_i);
+				let draw_material = mesh_draw_material_gpu_runtime(mat, &opts, mesh_i, prim_i);
 				let draw_material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
 					label: Some("mesh_draw_material"),
 					contents: bytemuck::bytes_of(&draw_material),
@@ -10611,7 +10538,8 @@ impl SceneMeshes {
 					None
 				};
 				let morph_resource_elapsed = take_gpu_scene_step_elapsed(&mut step_start);
-				let compute_fur_cards = if asset_resident && material_has_fur(mat, mat.shading, &opts) {
+				let draw_shading = mesh_draw_shading_for_material(mat);
+				let compute_fur_cards = if asset_resident && material_has_fur(mat, draw_shading, &opts) {
 					create_compute_fur_cards_draw_resources(
 						device,
 						&compute_fur_cards_bind_group_layout,
@@ -10650,7 +10578,7 @@ impl SceneMeshes {
 					world_node_index: ni,
 					visible: active,
 					asset_resident,
-					shading: mat.shading,
+					shading: draw_shading,
 					morph_target_count,
 					morph_source_indices: morph_source_indices.into_boxed_slice(),
 					morph_target_names: morph_target_names.into_boxed_slice(),
@@ -10727,10 +10655,7 @@ impl SceneMeshes {
 		}
 		for &draw_index in &pipeline_draw_state.transparent_backpass_draw_indices {
 			if let Some(draw) = draws.get(draw_index) {
-				let zwrite = draw
-					.material
-					.liltoon_like_runtime()
-					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				let zwrite = material_untoon_profile(&draw.material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 				required_pipeline_keys.push(DrawPipelineKey::new(
 					if zwrite {
 						DrawPipelineKind::TransparentToonBackpass
@@ -11210,9 +11135,11 @@ impl SceneMeshes {
 		camera_pos: Vec4,
 		light_color: Vec4,
 		ambient_color: Vec4,
+		spherical_harmonics: Option<&un_avatar_core::UnaSceneSphericalHarmonics>,
 		time_secs: f32,
 		audio_link_params: [f32; 4],
 	) {
+		let sh = spherical_harmonics;
 		let f = MeshFrameGpu {
 			view_proj: view_proj.to_cols_array_2d(),
 			view: view.to_cols_array_2d(),
@@ -11220,6 +11147,13 @@ impl SceneMeshes {
 			camera_pos: camera_pos.to_array(),
 			light_color: light_color.to_array(),
 			ambient_color: ambient_color.to_array(),
+			sh_ar: sh.map_or([0.0; 4], |sh| sh.ar),
+			sh_ag: sh.map_or([0.0; 4], |sh| sh.ag),
+			sh_ab: sh.map_or([0.0; 4], |sh| sh.ab),
+			sh_br: sh.map_or([0.0; 4], |sh| sh.br),
+			sh_bg: sh.map_or([0.0; 4], |sh| sh.bg),
+			sh_bb: sh.map_or([0.0; 4], |sh| sh.bb),
+			sh_c: sh.map_or([0.0; 4], |sh| sh.c),
 			time_params: [time_secs, 0.0, 0.0, 0.0],
 			audio_link_params,
 			_pad: [[0.0; 4]; 2],
@@ -11433,10 +11367,8 @@ impl SceneMeshes {
 	}
 
 	fn rewrite_avatar_materials(&self, queue: &wgpu::Queue) {
-		let default_mtoon = UnaMtoonMaterial::default();
 		for draw in &self.draws {
-			let material =
-				mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+			let material = mesh_draw_material_gpu_runtime(&draw.material, &self.opts, draw.mesh_index, draw.primitive_index);
 			queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material));
 		}
 	}
@@ -11474,7 +11406,6 @@ impl SceneMeshes {
 
 	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
 		let default_material = UnaMaterialPbr::default();
-		let default_mtoon = UnaMtoonMaterial::default();
 		let mut changed = 0;
 		for draw_index in 0..self.draws.len() {
 			let draw_mesh_index = self.draws[draw_index].mesh_index;
@@ -11503,11 +11434,10 @@ impl SceneMeshes {
 				draw.fur_color_mask = material_fur_color_mask(&draw.material);
 				draw.texture_indices = material_texture_indices(&draw.material).into_boxed_slice();
 				draw.cube_texture_indices = material_cube_texture_indices(&draw.material).into_boxed_slice();
-				draw.shading = material.shading;
+				draw.shading = mesh_draw_shading_for_material(material);
 				draw.alpha_mode = material.alpha_mode;
 				draw._compute_fur_cards = None;
-				let material_gpu =
-					mesh_draw_material_gpu_runtime(&draw.material, &default_mtoon, &self.opts, draw.mesh_index, draw.primitive_index);
+				let material_gpu = mesh_draw_material_gpu_runtime(&draw.material, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			}
 			if self.draws[draw_index].active() {
@@ -11584,10 +11514,8 @@ impl SceneMeshes {
 		if !self.transparent_backpass_draw_indices.is_empty() {
 			let mut backpass_key = None;
 			for &draw_index in &self.transparent_backpass_draw_indices {
-				let zwrite = self.draws[draw_index]
-					.material
-					.liltoon_like_runtime()
-					.is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
+				let zwrite =
+					material_untoon_profile(&self.draws[draw_index].material).is_none_or(|u| u.blend_state.pre_zwrite_factor > 0.5);
 				let key = DrawPipelineKey::new(
 					if zwrite {
 						DrawPipelineKind::TransparentToonBackpass
@@ -12041,7 +11969,7 @@ impl SceneMeshes {
 		}
 		if needs_fur {
 			let draw = &self.draws[draw_index];
-			let Some(liltoon_like) = draw.material.liltoon_like_runtime() else {
+			let Some(liltoon_like) = material_untoon_profile(&draw.material) else {
 				return true;
 			};
 			let tex_sampler = texture_sampler_or(
@@ -12322,7 +12250,7 @@ pub(crate) fn skin_tone_matching_debug_for_scene(scene: &UnaSceneSnapshot) -> Sk
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use un_avatar_core::{UnaMorphTargetDeltas, UnaSceneNode};
+	use un_avatar_core::{UnaMorphTargetDeltas, UnaMtoonMaterial, UnaSceneNode};
 
 	fn empty_source_metadata() -> UnaImageSourceMetadata {
 		UnaImageSourceMetadata {
@@ -12362,20 +12290,96 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_stencil_writer_maps_from_exported_float_params() {
+	fn unity_source_toon_color_factors_are_linearized_for_gpu_uniforms() {
 		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.color_factor_color_space = UnaColorFactorColorSpace::Srgb;
+		liltoon_like.shadow.color_factor = [0.8196, 0.8471, 0.9216];
+		liltoon_like.matcap.color_factor = [0.25, 0.5, 0.75];
+		liltoon_like.rim.color_factor = [0.1, 0.2, 0.3, 0.4];
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, Some(&liltoon_like), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert!((draw.base_color[0] - srgb_factor_to_linear(0.196)).abs() < 0.000001);
+		assert!((draw.base_color[1] - srgb_factor_to_linear(0.784)).abs() < 0.000001);
+		assert_eq!(draw.base_color[2], 1.0);
+		assert_eq!(draw.base_color[3], 0.5);
+		assert!((draw.shade_color[0] - srgb_factor_to_linear(0.8196)).abs() < 0.000001);
+		assert!((draw.matcap_factor[1] - srgb_factor_to_linear(0.5)).abs() < 0.000001);
+		assert!((draw.rim_color[2] - srgb_factor_to_linear(0.3)).abs() < 0.000001);
+		assert_eq!(draw.rim_color[3], material.occlusion_texture_strength.clamp(0.0, 2.0));
+	}
+
+	#[test]
+	fn preview_unity_liltoon_linear_marker_is_treated_as_serialized_srgb() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+		let liltoon_like = un_avatar_core::UnaLilToonLikeMaterial {
+			color_factor_color_space: UnaColorFactorColorSpace::Srgb,
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, Some(&liltoon_like), &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert!((draw.base_color[0] - srgb_factor_to_linear(0.196)).abs() < 0.000001);
+		assert!((draw.base_color[1] - srgb_factor_to_linear(0.784)).abs() < 0.000001);
+		assert_eq!(draw.base_color[2], 1.0);
+		assert_eq!(draw.base_color[3], 0.5);
+	}
+
+	#[test]
+	fn plain_gltf_color_factors_stay_linear_for_gpu_uniforms() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(&material, None, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.base_color, [0.196, 0.784, 1.0, 0.5]);
+	}
+
+	#[test]
+	fn unity_source_toon_color_factors_without_marker_stay_linear_for_gpu_uniforms() {
+		let material = UnaMaterialPbr {
+			base_color_factor: [0.196, 0.784, 1.0, 0.5],
 			unavatar_material: Some(serde_json::json!({
-				"floatParams": {
-					"_StencilComp": 8,
-					"_StencilPass": 2,
-					"_StencilReadMask": 255,
-					"_StencilRef": 12,
-					"_StencilWriteMask": 255,
-					"_StencilFail": 0,
-					"_StencilZFail": 0,
-					"_ColorMask": 0
-				}
+				"family": "liltoon",
+				"sourceShader": "lilToon"
 			})),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_with_profiles(
+			&material,
+			Some(&un_avatar_core::UnaLilToonLikeMaterial::default()),
+			&SceneMeshLoadOpts::default(),
+			0,
+			0,
+		);
+
+		assert_eq!(draw.base_color, [0.196, 0.784, 1.0, 0.5]);
+	}
+
+	#[test]
+	fn liltoon_stencil_writer_maps_from_normalized_pipeline_state() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.stencil.reference = 12;
+		liltoon_like.rendering.pipeline_state.stencil.compare = 8;
+		liltoon_like.rendering.pipeline_state.stencil.pass_op = 2;
+		liltoon_like.rendering.pipeline_state.stencil.read_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.write_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.fail_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.depth_fail_op = 0;
+		liltoon_like.rendering.pipeline_state.color_mask = 0;
+		let material = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
@@ -12393,19 +12397,18 @@ mod tests {
 
 	#[test]
 	fn liltoon_stencil_consumer_maps_not_equal_test() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.stencil.reference = 12;
+		liltoon_like.rendering.pipeline_state.stencil.compare = 6;
+		liltoon_like.rendering.pipeline_state.stencil.pass_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.read_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.write_mask = 255;
+		liltoon_like.rendering.pipeline_state.stencil.fail_op = 0;
+		liltoon_like.rendering.pipeline_state.stencil.depth_fail_op = 0;
+		liltoon_like.rendering.pipeline_state.color_mask = 15;
 		let material = UnaMaterialPbr {
-			unavatar_material: Some(serde_json::json!({
-				"floatParams": {
-					"_StencilComp": 6,
-					"_StencilPass": 0,
-					"_StencilReadMask": 255,
-					"_StencilRef": 12,
-					"_StencilWriteMask": 255,
-					"_StencilFail": 0,
-					"_StencilZFail": 0,
-					"_ColorMask": 15
-				}
-			})),
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
@@ -12422,19 +12425,18 @@ mod tests {
 
 	#[test]
 	fn liltoon_outline_and_fur_stencil_use_dedicated_prefixes() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.pipeline_state.outline_stencil.reference = 1;
+		liltoon_like.rendering.pipeline_state.outline_stencil.compare = 6;
+		liltoon_like.rendering.pipeline_state.outline_stencil.pass_op = 0;
+		liltoon_like.rendering.pipeline_state.outline_color_mask = 15;
+		liltoon_like.rendering.pipeline_state.fur_stencil.reference = 7;
+		liltoon_like.rendering.pipeline_state.fur_stencil.compare = 3;
+		liltoon_like.rendering.pipeline_state.fur_stencil.pass_op = 2;
+		liltoon_like.rendering.pipeline_state.fur_color_mask = 8;
 		let material = UnaMaterialPbr {
-			unavatar_material: Some(serde_json::json!({
-				"floatParams": {
-					"_OutlineStencilComp": 6,
-					"_OutlineStencilRef": 1,
-					"_OutlineStencilPass": 0,
-					"_OutlineColorMask": 15,
-					"_FurStencilComp": 3,
-					"_FurStencilRef": 7,
-					"_FurStencilPass": 2,
-					"_FurColorMask": 8
-				}
-			})),
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
@@ -12636,13 +12638,19 @@ mod tests {
 
 	#[test]
 	fn material_texture_indices_keep_reflection_cube_separate() {
-		let mat = UnaMaterialPbr {
-			shading: UnaShadingModel::MToonLike,
-			base_color_texture_index: Some(3),
-			mtoon: Some(UnaMtoonMaterial {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+			&UnaMtoonMaterial {
 				reflection_cube_texture_index: Some(9),
 				..Default::default()
-			}),
+			},
+			[0.0, 0.0, 0.0],
+			None,
+		);
+		liltoon_like.reflection.enabled_factor = 1.0;
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			base_color_texture_index: Some(3),
+			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
 
@@ -13232,7 +13240,6 @@ mod tests {
 			MeshPipelineRenderState::outline(1),
 		);
 		let mut toon_features = UntoonShaderFeatures::default();
-		toon_features.profile_extensions = true;
 		toon_features.shadow_layers = true;
 		toon_features.fur = true;
 		let toon_shader = create_mesh_shader_module_for_features(&device, shader_variant_tier, toon_features, "mesh_toon_shader_test");
@@ -13500,7 +13507,7 @@ mod tests {
 	}
 
 	#[test]
-	fn skin_tone_matching_disables_mtoon_shade_color_on_skin_materials() {
+	fn skin_tone_matching_disables_untoon_shadow_color_on_skin_materials() {
 		let mat = UnaMaterialPbr {
 			name: Some("N00_000_00_Body_00_SKIN".to_string()),
 			..Default::default()
@@ -13509,7 +13516,7 @@ mod tests {
 			skin_tone_matching: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 		assert_eq!(draw.params[3].to_bits() & 64, 64);
 	}
 
@@ -14626,7 +14633,7 @@ mod tests {
 			UnaShadingModel::LilToonLike,
 			true
 		));
-		assert!(transparent_backpass_enabled(
+		assert!(!transparent_backpass_enabled(
 			UnaAlphaMode::Blend,
 			true,
 			UnaShadingModel::MToonLike,
@@ -14661,7 +14668,7 @@ mod tests {
 			true,
 			UnaShadingModel::LilToonLike
 		));
-		assert!(transparent_forward_zwrite_enabled(
+		assert!(!transparent_forward_zwrite_enabled(
 			UnaAlphaMode::Blend,
 			true,
 			UnaShadingModel::MToonLike
@@ -14679,26 +14686,21 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_source_zwrite_controls_transparent_zwrite() {
-		let base_liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+	fn liltoon_blend_state_controls_transparent_zwrite() {
+		let mut enabled_liltoon = un_avatar_core::UnaLilToonLikeMaterial::default();
+		enabled_liltoon.blend_state.pre_zwrite_factor = 1.0;
+		let mut disabled_liltoon = enabled_liltoon.clone();
+		disabled_liltoon.blend_state.pre_zwrite_factor = 0.0;
 		let enabled = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Blend,
-			liltoon_like: Some(base_liltoon.clone()),
-			unavatar_material: Some(serde_json::json!({
-				"sourceShader": "Hidden/lilToonTransparent",
-				"floatParams": { "_ZWrite": 1.0 }
-			})),
+			liltoon_like: Some(enabled_liltoon),
 			..Default::default()
 		};
 		let disabled = UnaMaterialPbr {
 			shading: UnaShadingModel::LilToonLike,
 			alpha_mode: UnaAlphaMode::Blend,
-			liltoon_like: Some(base_liltoon),
-			unavatar_material: Some(serde_json::json!({
-				"sourceShader": "Hidden/lilToonTransparent",
-				"floatParams": { "_ZWrite": 0.0 }
-			})),
+			liltoon_like: Some(disabled_liltoon),
 			..Default::default()
 		};
 
@@ -14721,7 +14723,7 @@ mod tests {
 	#[test]
 	fn liltoon_refraction_material_needs_screen_refraction_grab_before_late_pass() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
 		liltoon_like.rendering.render_queue_number = Some(2900);
 		let mat = UnaMaterialPbr {
@@ -14741,7 +14743,7 @@ mod tests {
 	#[test]
 	fn material_runtime_requirements_collects_toon_feature_bits() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.1;
 		liltoon_like.audio_link.enabled_factor = 1.0;
 		liltoon_like.audio_link.to_emission_factor = 1.0;
@@ -14758,7 +14760,7 @@ mod tests {
 		assert!(requirements.screen_refraction);
 		assert!(requirements.fur);
 		let liltoon_plan = material_untoon_feature_plan(&mat, UnaShadingModel::LilToonLike, &SceneMeshLoadOpts::default());
-		assert_eq!(liltoon_plan.source_profile, UntoonSourceProfile::LilToon);
+		assert_eq!(liltoon_plan.semantic_profile, UntoonSemanticProfile::UNToon);
 		assert!(liltoon_plan.shader_features.audio_link);
 		assert!(liltoon_plan.shader_features.refraction);
 
@@ -14774,12 +14776,19 @@ mod tests {
 		assert!(disabled_fur.screen_refraction);
 		assert!(!disabled_fur.fur);
 
-		let mtoon_requirements = material_runtime_requirements(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
-		assert!(!mtoon_requirements.audio_link_texture);
-		assert!(mtoon_requirements.screen_refraction);
-		assert!(!mtoon_requirements.fur);
+		let source_marker_requirements =
+			material_runtime_requirements(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert!(source_marker_requirements.audio_link_texture);
+		assert!(source_marker_requirements.screen_refraction);
+		assert!(source_marker_requirements.fur);
 
-		let mut merged = mtoon_requirements;
+		let mesh_runtime_requirements =
+			material_runtime_requirements(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert!(mesh_runtime_requirements.audio_link_texture);
+		assert!(mesh_runtime_requirements.screen_refraction);
+		assert!(mesh_runtime_requirements.fur);
+
+		let mut merged = mesh_runtime_requirements;
 		merged.include(requirements);
 		assert!(merged.audio_link_texture);
 		assert!(merged.screen_refraction);
@@ -14787,7 +14796,32 @@ mod tests {
 	}
 
 	#[test]
-	fn mtoon_compatibility_maps_to_untoon_features_without_profile_extensions() {
+	fn mtoon_source_marker_with_untoon_profile_is_promoted_inside_mesh_draw_runtime() {
+		let mtoon = UnaMtoonMaterial {
+			matcap_texture_index: Some(1),
+			..Default::default()
+		};
+		let converted = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+				&mtoon,
+				[0.0, 0.0, 0.0],
+				None,
+			)),
+			..Default::default()
+		};
+		let source_only = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			mtoon: Some(mtoon),
+			..Default::default()
+		};
+
+		assert_eq!(mesh_draw_shading_for_material(&converted), UnaShadingModel::LilToonLike);
+		assert_eq!(mesh_draw_shading_for_material(&source_only), UnaShadingModel::LitLambert);
+	}
+
+	#[test]
+	fn mtoon_source_profile_without_importer_untoon_compat_profile_has_no_runtime_features() {
 		let mat = UnaMaterialPbr {
 			shading: UnaShadingModel::MToonLike,
 			emissive_texture_index: Some(4),
@@ -14800,19 +14834,117 @@ mod tests {
 			..Default::default()
 		};
 
-		let plan = material_untoon_feature_plan(&mat, UnaShadingModel::MToonLike, &SceneMeshLoadOpts::default());
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
 		let features = plan.shader_features;
 
-		assert_eq!(plan.source_profile, UntoonSourceProfile::MToon);
-		assert!(!features.profile_extensions);
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::Plain);
+		assert!(
+			mat.liltoon_like.is_none(),
+			"VRM/.unavatar importers must convert MToon source profiles to UNToon semantic material before renderer runtime"
+		);
+		assert!(!features.shadow_layers);
+		assert!(!features.matcap);
+		assert!(!features.reflection);
+		assert!(!features.reflection_cube);
+		assert!(!features.rim);
+		assert!(!features.emission);
+		assert!(!features.main_layers);
+		assert!(!features.audio_link);
+	}
+
+	#[test]
+	fn non_toon_shading_does_not_run_stale_untoon_profile_payload() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.matcap.enabled_factor = 1.0;
+		liltoon_like.matcap.texture_index = Some(1);
+		liltoon_like.rim.enabled_factor = 1.0;
+		liltoon_like.rim.texture_index = Some(2);
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LitLambert,
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::Plain);
+		assert!(!plan.shader_features.shadow_layers);
+		assert!(!plan.shader_features.matcap);
+		assert!(!plan.shader_features.rim);
+		assert!(
+			material_untoon_profile(&mat).is_none(),
+			"UNToon runtime must be gated by the normalized shading model, not merely by a retained source payload"
+		);
+	}
+
+	#[test]
+	fn mtoon_compat_profile_runs_as_untoon_extensions() {
+		let mtoon = UnaMtoonMaterial {
+			matcap_texture_index: Some(1),
+			reflection_cube_texture_index: Some(2),
+			rim_multiply_texture_index: Some(3),
+			parametric_rim_color_factor: [0.25, 0.5, 0.75],
+			..Default::default()
+		};
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			emissive_texture_index: Some(4),
+			mtoon: Some(mtoon.clone()),
+			liltoon_like: Some(un_avatar_core::UnaLilToonLikeMaterial::from_mtoon_compat(
+				&mtoon,
+				[0.1, 0.2, 0.3],
+				Some(4),
+			)),
+			..Default::default()
+		};
+
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		let features = plan.shader_features;
+
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::UNToon);
 		assert!(features.shadow_layers);
 		assert!(features.matcap);
 		assert!(features.reflection);
 		assert!(features.reflection_cube);
 		assert!(features.rim);
 		assert!(features.emission);
-		assert!(!features.main_layers);
-		assert!(!features.audio_link);
+	}
+
+	#[test]
+	fn mtoon_source_marker_runtime_uniforms_use_untoon_profile() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.shadow.enabled_factor = 1.0;
+		liltoon_like.shadow.border_factor = 0.25;
+		liltoon_like.matcap.enabled_factor = 1.0;
+		liltoon_like.matcap.blend_factor = 1.0;
+		liltoon_like.matcap.texture_index = Some(1);
+		liltoon_like.rim.enabled_factor = 1.0;
+		liltoon_like.rim.color_factor = [0.2, 0.3, 0.4, 1.0];
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::MToonLike,
+			liltoon_like: Some(liltoon_like),
+			mtoon: Some(UnaMtoonMaterial {
+				shading_shift_factor: -0.9,
+				shading_toony_factor: 0.9,
+				matcap_texture_index: None,
+				..Default::default()
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(mesh_draw_shading_for_material(&mat), UnaShadingModel::LilToonLike);
+		let plan = material_untoon_feature_plan(&mat, mesh_draw_shading_for_material(&mat), &SceneMeshLoadOpts::default());
+		assert_eq!(plan.semantic_profile, UntoonSemanticProfile::UNToon);
+		assert!(plan.shader_features.shadow_layers);
+		assert!(plan.shader_features.matcap);
+		assert!(plan.shader_features.rim);
+
+		let draw = mesh_draw_material_gpu_runtime(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+		assert_eq!(draw.shadow_params[0], 1.0);
+		assert_eq!(draw.shadow_params[2], 0.25);
+		assert_eq!(draw.matcap_params[0], 1.0);
+		assert_eq!(draw.rim_params[3], 1.0);
+		assert_eq!(draw.rim_color, [0.2, 0.3, 0.4, 1.0]);
 	}
 
 	#[test]
@@ -14853,7 +14985,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.normal_uv_offset_scale, [0.1, 0.2, 0.75, 1.5]);
 		assert_eq!(draw.normal2nd_uv_offset_scale, [0.3, 0.4, 1.25, 1.75]);
@@ -14871,7 +15003,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main_color_adjust_params, [0.25, 0.8, 1.2, 0.9]);
 	}
@@ -14886,7 +15018,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap2_ext_params[1], 0.42);
 	}
@@ -14904,7 +15036,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rim_indirect_params[0], 0.5);
 		assert_eq!(draw.rim_indirect_params[1], -0.75);
@@ -14923,7 +15055,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_params[0], 0.2);
 	}
@@ -14935,7 +15067,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_eq!(flags & MAT_UNTOON_GEM_PROFILE, 0);
@@ -14945,7 +15077,7 @@ mod tests {
 	#[test]
 	fn gem_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem;
 		liltoon_like.reflection.gem_refraction_strength_factor = 0.45;
 		liltoon_like.reflection.gem_chromatic_aberration_factor = 0.03;
 		liltoon_like.reflection.gem_particle_loop_factor = 6.0;
@@ -14958,7 +15090,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & MAT_UNTOON_GEM_PROFILE, 0);
@@ -14971,6 +15103,7 @@ mod tests {
 	fn liltoon_gem_prepass_requires_gem_source() {
 		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
 			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			runtime_variant: un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem,
 			..Default::default()
 		};
 		let gem_material = UnaMaterialPbr {
@@ -15002,6 +15135,7 @@ mod tests {
 	fn liltoon_gem_uses_exported_cube_without_override() {
 		let mut gem = un_avatar_core::UnaLilToonLikeMaterial {
 			source_profile: un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonGem,
+			runtime_variant: un_avatar_core::UnaLilToonLikeRuntimeVariant::Gem,
 			..Default::default()
 		};
 		gem.reflection.cube_texture_index = Some(42);
@@ -15010,6 +15144,7 @@ mod tests {
 
 		let mut normal = gem.clone();
 		normal.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::Liltoon;
+		normal.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::UNToon;
 		assert_eq!(liltoon_reflection_texture_index(&normal), None);
 
 		normal.reflection.cube_override_factor = 1.0;
@@ -15022,7 +15157,7 @@ mod tests {
 	#[test]
 	fn refraction_profile_flag_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
-		liltoon_like.source_profile = un_avatar_core::UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		liltoon_like.runtime_variant = un_avatar_core::UnaLilToonLikeRuntimeVariant::Refraction;
 		liltoon_like.reflection.gem_refraction_strength_factor = -0.25;
 		liltoon_like.reflection.refraction_color_from_main_factor = 1.0;
 		liltoon_like.reflection.refraction_color_factor = [0.8, 0.9, 1.0, 0.6];
@@ -15031,7 +15166,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		let flags = draw.params[3].to_bits();
 
 		assert_ne!(flags & MAT_UNTOON_REFRACTION_PROFILE, 0);
@@ -15050,14 +15185,13 @@ mod tests {
 			..Default::default()
 		};
 
-		let normal = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let normal = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(normal.reflection_control[0], 1.0);
 		assert_eq!(normal.reflection_control[1], 0.8);
 		assert_eq!(normal.reflection_control[2], 0.6);
 
 		let disabled = mesh_draw_material_gpu(
 			&mat,
-			&UnaMtoonMaterial::default(),
 			&SceneMeshLoadOpts {
 				debug_disable_reflection: true,
 				..Default::default()
@@ -15588,7 +15722,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.fur_params, [1.0, 13.0, 0.35, 0.45]);
 		assert_eq!(draw.fur_vector_params, [0.1, 0.2, 0.3, 0.4]);
@@ -15611,7 +15745,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.fur_noise_params, [50.0, 50.0, 0.0, -49.0]);
 	}
@@ -15660,7 +15794,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.backlight_color, [0.2, 0.3, 0.4, 0.5]);
 		assert_eq!(draw.backlight_params, [1.0, 0.6, 0.7, 8.0]);
@@ -15683,7 +15817,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.backface_color, [0.9, 0.8, 0.7, 0.6]);
 		assert_eq!(draw.distance_fade, [0.2, 5.0, 0.75, 1.0]);
@@ -15713,7 +15847,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.dissolve_color, [1.2, 1.1, 1.0, 0.9]);
 		assert_eq!(draw.dissolve_params, [1.0, 0.0, 0.45, 0.12]);
@@ -15740,7 +15874,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.parallax_params, [1.0, 1.0, 0.07, 0.35]);
 		assert_eq!(draw.parallax_uv_offset_scale, [0.12, 0.23, 1.2, 1.3]);
@@ -15794,7 +15928,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.main2nd_ext, [2.0, 1.0, 0.0, 0.0]);
 		assert_eq!(draw.main2nd_distance_fade, [1.0, 6.0, 0.4, 0.0]);
@@ -15844,7 +15978,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.id_mask_params, [1.0, 8.0, 1.0, 1.0]);
 		assert_eq!(draw.id_mask_flags0, [1.0, 0.0, 1.0, 0.0]);
@@ -15891,7 +16025,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.glitter_color, [0.2, 0.3, 0.4, 0.5]);
 		assert_eq!(draw.glitter_params1, [512.0, 513.0, 0.08, 2.0]);
@@ -15925,7 +16059,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_uv_params, [0.1, 0.2, 0.3, 0.4]);
 		assert_eq!(draw.matcap_uv_ext_params, [0.5, 0.6, 0.7, 0.8]);
@@ -15953,7 +16087,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_bump_params, [1.0, 0.7, 0.0, 0.0]);
 		assert_eq!(draw.matcap2_bump_params, [1.0, 0.8, 0.0, 0.0]);
@@ -15971,7 +16105,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.matcap_bump_params[0], 0.0);
 		assert_eq!(draw.matcap2_bump_params[0], 0.0);
@@ -15989,7 +16123,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.transparency_params, [0.1, 0.2, 0.3, 0.4]);
 	}
@@ -16003,7 +16137,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params, [0.7, 0.0, 0.0, 0.0]);
 	}
@@ -16041,7 +16175,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.audio_link_params, [1.0, 2.0, 1.0, 0.75]);
 		assert_eq!(draw.audio_link_default, [0.4, 0.5, 3.0, 0.2]);
@@ -16070,6 +16204,7 @@ mod tests {
 		};
 		assert!(material_needs_audio_link_texture(&mat, UnaShadingModel::LilToonLike));
 		assert!(!material_needs_audio_link_texture(&mat, UnaShadingModel::MToonLike));
+		assert!(material_needs_audio_link_texture(&mat, mesh_draw_shading_for_material(&mat)));
 
 		liltoon_like.audio_link.enabled_factor = 0.0;
 		let disabled = UnaMaterialPbr {
@@ -16104,7 +16239,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.rendering_ext_params[2], 0.4);
 	}
@@ -16118,7 +16253,7 @@ mod tests {
 			liltoon_like: Some(liltoon_like.clone()),
 			..Default::default()
 		};
-		let without_override = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let without_override = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(without_override.rendering_ext_params[1], 0.0);
 
 		liltoon_like.reflection.cube_override_factor = 1.0;
@@ -16126,7 +16261,7 @@ mod tests {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
 		};
-		let with_override = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let with_override = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 		assert_eq!(with_override.rendering_ext_params[1], 1.0);
 	}
 
@@ -16139,9 +16274,60 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.material_ext_params, [1.0, 0.0, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_light_direction_override_reaches_draw_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.rendering.light_direction_override_factor = [0.0, 0.001, 0.0, 0.0];
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.light_direction_override, [0.0, 0.001, 0.0, 0.0]);
+	}
+
+	#[test]
+	fn liltoon_runtime_draw_uniforms_do_not_leak_mtoon_profile_values() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.main_color.main_uv_scroll_rotate_factor = [0.01, 0.02, 0.03, 0.0];
+		liltoon_like.blend_state.pre_zwrite_factor = 0.0;
+		let hostile_mtoon = UnaMtoonMaterial {
+			shading_shift_factor: 0.37,
+			shading_toony_factor: 0.42,
+			shading_shift_texture_scale: 0.91,
+			gi_equalization_factor: 0.73,
+			transparent_with_z_write: true,
+			uv_animation_scroll_x_speed_factor: 9.0,
+			uv_animation_scroll_y_speed_factor: 8.0,
+			uv_animation_rotation_speed_factor: 7.0,
+			..Default::default()
+		};
+		let mat = UnaMaterialPbr {
+			shading: UnaShadingModel::LilToonLike,
+			liltoon_like: Some(liltoon_like),
+			mtoon: Some(hostile_mtoon),
+			unavatar_material: Some(serde_json::json!({
+				"family": "liltoon",
+				"sourceShader": "lilToon",
+				"floatParams": {
+					"_ZWrite": 0.0
+				}
+			})),
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu_runtime(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.shading_params, [0.0, 1.0, 0.0, 0.0]);
+		assert_eq!(draw.outline_params[3], 0.0);
+		assert_eq!(draw.uv_anim_params, [0.01, 0.02, 0.03, 0.0]);
 	}
 
 	#[test]
@@ -16157,7 +16343,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.shadow_params[0], 0.0);
 		assert_eq!(draw.shadow_params[1], 0.0);
@@ -16177,7 +16363,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_ext_params, [0.4, 1.0, 0.3, 1.0]);
 	}
@@ -16231,7 +16417,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.shade_uv_offset_scale, [0.01, 0.02, 1.01, 1.02]);
 		assert_eq!(draw.rim_uv_offset_scale, [0.03, 0.04, 1.03, 1.04]);
@@ -16262,9 +16448,24 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_mask_params, [1.0, 1.0, 0.13, 1.0]);
+	}
+
+	#[test]
+	fn liltoon_alpha_boost_reaches_premultiply_uniform() {
+		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
+		liltoon_like.blend_state.alpha_boost_factor = 10.0;
+		let mat = UnaMaterialPbr {
+			liltoon_like: Some(liltoon_like),
+			alpha_mode: UnaAlphaMode::Blend,
+			..Default::default()
+		};
+
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
+
+		assert_eq!(draw.alpha_mask_params[3], 10.0);
 	}
 
 	#[test]
@@ -16279,7 +16480,7 @@ mod tests {
 			..Default::default()
 		};
 
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &SceneMeshLoadOpts::default(), 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
 		assert_eq!(draw.alpha_mask_params[0], 2.0);
 	}
@@ -16314,7 +16515,7 @@ mod tests {
 			relax_iris_alpha: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 
 		assert_eq!(draw.params[1], UnaAlphaMode::Mask.as_shader_alpha_kind());
 		assert_eq!(draw.base_color[3], 1.0);
@@ -16332,7 +16533,7 @@ mod tests {
 			relax_iris_alpha: true,
 			..Default::default()
 		};
-		let draw = mesh_draw_material_gpu(&mat, &UnaMtoonMaterial::default(), &opts, 0, 0);
+		let draw = mesh_draw_material_gpu(&mat, &opts, 0, 0);
 
 		assert_eq!(draw.params[1], UnaAlphaMode::Opaque.as_shader_alpha_kind());
 		assert_eq!(draw.base_color[3], 1.0);
@@ -16341,14 +16542,12 @@ mod tests {
 	#[test]
 	fn cull_mode_sets_shader_flags() {
 		let opts = SceneMeshLoadOpts::default();
-		let mtoon = UnaMtoonMaterial::default();
 
 		let off = mesh_draw_material_gpu(
 			&UnaMaterialPbr {
 				cull_mode: UnaCullMode::Off,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,
@@ -16361,7 +16560,6 @@ mod tests {
 				cull_mode: UnaCullMode::Front,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,
@@ -16374,7 +16572,6 @@ mod tests {
 				cull_mode: UnaCullMode::Back,
 				..Default::default()
 			},
-			&mtoon,
 			&opts,
 			0,
 			0,

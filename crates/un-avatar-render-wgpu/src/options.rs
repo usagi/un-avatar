@@ -358,7 +358,7 @@ impl Default for EnvironmentColorOptions {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct EnvironmentLightOptions {
 	pub enabled: bool,
 	pub color: [f32; 3],
@@ -375,7 +375,7 @@ impl Default for EnvironmentLightOptions {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub struct DirectionalLightOptions {
 	pub enabled: bool,
 	pub color: [f32; 3],
@@ -394,13 +394,13 @@ impl Default for DirectionalLightOptions {
 			intensity: 1.0,
 			azimuth_deg: 0.0,
 			elevation_deg: 33.84,
-			follow_camera_yaw: true,
+			follow_camera_yaw: false,
 			follow_camera_pitch: false,
 		}
 	}
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct LightingOptions {
 	pub environment: EnvironmentLightOptions,
 	pub directional: DirectionalLightOptions,
@@ -663,12 +663,13 @@ pub struct AvatarWindowOptions {
 	/// 一部 VRM モデルで `_OutlineColor` が肌色寄りに設定されていると、目周辺の outline が
 	/// 「太い肌色のリング」として目立つ場合がある（VSeeFace では薄く出るが、UN Avatar の
 	/// 単純 mix(1, lighting, mix_factor) 式では明るすぎる傾向）。この toggle で outline 描画を
-	/// バイパスして原因切り分けに使う。manifest key は legacy 互換で `[debug] disable_mtoon_outlines = true`。
-	pub disable_mtoon_outlines: bool,
+	/// バイパスして原因切り分けに使う。manifest key は `[debug] disable_geometry_outlines = true`。
+	/// `[debug] disable_mtoon_outlines = true` は legacy alias としてだけ読む。
+	pub disable_geometry_outlines: bool,
 	/// UNToon rim lighting 寄与を 0 にする診断フラグ。
 	/// manifest `[debug] disable_rim_lighting = true`。
 	pub debug_disable_rim_lighting: bool,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断フラグ。
+	/// v1 MToon 診断キーの互換 no-op。v2-UNToon shader では shading shift をこの経路で制御しない。
 	/// manifest `[debug] force_shading_shift_zero = true`。
 	pub debug_force_shading_shift_zero: bool,
 	/// matcap (sphere add) 寄与を 0 にする診断フラグ。
@@ -812,7 +813,7 @@ impl Default for AvatarWindowOptions {
 			debug_material_dump: false,
 			show_axes: false,
 			show_bone_colliders: false,
-			disable_mtoon_outlines: false,
+			disable_geometry_outlines: false,
 			debug_disable_rim_lighting: false,
 			debug_force_shading_shift_zero: false,
 			debug_disable_matcap: false,
@@ -830,7 +831,7 @@ impl Default for AvatarWindowOptions {
 
 #[cfg(test)]
 mod tests {
-	use super::{ColorGradingLook, TextureCompressionMode};
+	use super::{ColorGradingLook, DirectionalLightOptions, TextureCompressionMode};
 
 	#[test]
 	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {
@@ -877,5 +878,13 @@ mod tests {
 		}
 		assert_eq!("cinematic".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Film);
 		assert_eq!("vivid".parse::<ColorGradingLook>().unwrap(), ColorGradingLook::Pop);
+	}
+
+	#[test]
+	fn default_directional_light_is_world_referenced() {
+		let light = DirectionalLightOptions::default();
+
+		assert!(!light.follow_camera_yaw);
+		assert!(!light.follow_camera_pitch);
 	}
 }

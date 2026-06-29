@@ -19,16 +19,16 @@ pub enum UnaShadingModel {
 	LitLambert,
 	/// `KHR_materials_unlit` 相当。
 	Unlit,
-	/// Legacy v1 avatar toon path for VRM/MToon inputs.
+	/// MToon/VRM source compatibility marker. Runtime rendering is v2-UNToon.
 	MToonLike,
-	/// v2 avatar toon path for `.unavatar` / lilToon-compatible inputs.
+	/// v2-UNToon path for `.unavatar` / lilToon-compatible inputs.
 	LilToonLike,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum UnaRuntimeToonModel {
-	MToonLike,
-	LilToonLike,
+	/// Independent v2-UNToon runtime. Source profiles are normalized before drawing.
+	UNToon,
 }
 
 impl UnaShadingModel {
@@ -42,16 +42,13 @@ impl UnaShadingModel {
 		}
 	}
 
+	/// True only for normalized v2-UNToon material shading.
+	///
+	/// `MToonLike` is a source compatibility marker; importers should attach a
+	/// `liltoon_like` semantic payload and normalize runtime rendering through
+	/// `UnaMaterialPbr::liltoon_like_runtime()`.
 	pub fn is_toon_like(self) -> bool {
-		matches!(self, UnaShadingModel::MToonLike | UnaShadingModel::LilToonLike)
-	}
-
-	pub fn is_liltoon_like(self) -> bool {
 		matches!(self, UnaShadingModel::LilToonLike)
-	}
-
-	pub fn is_mtoon_like(self) -> bool {
-		matches!(self, UnaShadingModel::MToonLike)
 	}
 }
 
@@ -4360,6 +4357,8 @@ pub struct UnaSceneSnapshot {
 	pub meshes: Vec<Vec<UnaMeshBuffers>>,
 	pub materials: Vec<UnaMaterialPbr>,
 	pub images: Vec<UnaImageRgba>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub lighting: Option<UnaSceneLighting>,
 	/// Source package metadata for `images`, without duplicating source bytes in memory.
 	/// The binary itself remains owned by the `.unavatar` / glTF package layer.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -4376,6 +4375,49 @@ pub struct UnaSceneSnapshot {
 	/// Runtime hot switch state remains in [`UnaRuntimeState::active_asset_groups`].
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub asset_group_ownership: Vec<UnaSceneAssetGroupOwnership>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneLighting {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub environment: Option<UnaSceneEnvironmentLight>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub directional: Option<UnaSceneDirectionalLight>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneEnvironmentLight {
+	pub color: [f32; 3],
+	pub intensity: f32,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub sky_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub equator_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub ground_color: Option<[f32; 3]>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub spherical_harmonics: Option<UnaSceneSphericalHarmonics>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneSphericalHarmonics {
+	pub ar: [f32; 4],
+	pub ag: [f32; 4],
+	pub ab: [f32; 4],
+	pub br: [f32; 4],
+	pub bg: [f32; 4],
+	pub bb: [f32; 4],
+	pub c: [f32; 4],
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaSceneDirectionalLight {
+	pub color: [f32; 3],
+	pub intensity: f32,
+	/// Direction from the shaded surface toward the light, in U.N. Avatar/glTF world axes.
+	pub direction: [f32; 3],
+	pub azimuth_deg: f32,
+	pub elevation_deg: f32,
 }
 
 impl UnaSceneSnapshot {
@@ -4788,23 +4830,17 @@ pub struct UnaMaterialPbr {
 
 impl UnaMaterialPbr {
 	pub fn runtime_toon_model(&self) -> Option<UnaRuntimeToonModel> {
-		match self.shading {
-			UnaShadingModel::MToonLike => Some(UnaRuntimeToonModel::MToonLike),
-			UnaShadingModel::LilToonLike => Some(UnaRuntimeToonModel::LilToonLike),
-			UnaShadingModel::LitLambert | UnaShadingModel::Unlit => None,
-		}
+		self.liltoon_like_runtime().map(|_| UnaRuntimeToonModel::UNToon)
 	}
 
 	pub fn liltoon_like_runtime(&self) -> Option<&UnaLilToonLikeMaterial> {
-		self.shading.is_liltoon_like().then_some(self.liltoon_like.as_ref()).flatten()
+		matches!(self.shading, UnaShadingModel::LilToonLike | UnaShadingModel::MToonLike)
+			.then_some(self.liltoon_like.as_ref())
+			.flatten()
 	}
 
 	pub fn liltoon_like_source_profile(&self) -> Option<&UnaLilToonLikeMaterial> {
 		self.liltoon_like.as_ref()
-	}
-
-	pub fn mtoon_like_runtime(&self) -> Option<&UnaMtoonMaterial> {
-		self.shading.is_mtoon_like().then_some(self.mtoon.as_ref()).flatten()
 	}
 
 	pub fn mtoon_source_profile(&self) -> Option<&UnaMtoonMaterial> {
@@ -4831,6 +4867,23 @@ pub enum UnaLilToonLikeSourceProfile {
 	MtoonConverted,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaLilToonLikeRuntimeVariant {
+	#[default]
+	UNToon,
+	Gem,
+	Refraction,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaColorFactorColorSpace {
+	#[default]
+	Linear,
+	Srgb,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaLilToonLikeBlendMode {
@@ -4845,6 +4898,10 @@ pub enum UnaLilToonLikeBlendMode {
 pub struct UnaLilToonLikeMainColor {
 	#[serde(default = "default_liltoon_main_texture_hsvg")]
 	pub main_texture_hsvg_factor: [f32; 4],
+	#[serde(default)]
+	pub main_uv_scroll_rotate_factor: [f32; 4],
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub uv_animation_mask_texture_index: Option<usize>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub main_color_adjust_mask_texture_index: Option<usize>,
 	#[serde(default)]
@@ -5605,6 +5662,40 @@ pub struct UnaLilToonLikeBlendState {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikeStencilState {
+	#[serde(default)]
+	pub reference: u8,
+	#[serde(default = "default_liltoon_stencil_mask")]
+	pub read_mask: u8,
+	#[serde(default = "default_liltoon_stencil_mask")]
+	pub write_mask: u8,
+	#[serde(default = "default_liltoon_stencil_compare")]
+	pub compare: u8,
+	#[serde(default)]
+	pub pass_op: u8,
+	#[serde(default)]
+	pub fail_op: u8,
+	#[serde(default)]
+	pub depth_fail_op: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UnaLilToonLikePipelineState {
+	#[serde(default)]
+	pub stencil: UnaLilToonLikeStencilState,
+	#[serde(default)]
+	pub outline_stencil: UnaLilToonLikeStencilState,
+	#[serde(default)]
+	pub fur_stencil: UnaLilToonLikeStencilState,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub color_mask: u8,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub outline_color_mask: u8,
+	#[serde(default = "default_liltoon_color_mask")]
+	pub fur_color_mask: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeRendering {
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub render_queue_number: Option<i32>,
@@ -5620,6 +5711,8 @@ pub struct UnaLilToonLikeRendering {
 	pub distance_fade_rim_fresnel_power_factor: f32,
 	#[serde(default)]
 	pub distance_fade_mode_factor: f32,
+	#[serde(default)]
+	pub light_direction_override_factor: [f32; 4],
 	#[serde(default = "default_liltoon_light_min_limit")]
 	pub light_min_limit_factor: f32,
 	#[serde(default = "one_f32")]
@@ -5634,12 +5727,18 @@ pub struct UnaLilToonLikeRendering {
 	pub aa_strength_factor: f32,
 	#[serde(default)]
 	pub gsaa_strength_factor: f32,
+	#[serde(default)]
+	pub pipeline_state: UnaLilToonLikePipelineState,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaLilToonLikeMaterial {
 	#[serde(default)]
 	pub source_profile: UnaLilToonLikeSourceProfile,
+	#[serde(default)]
+	pub runtime_variant: UnaLilToonLikeRuntimeVariant,
+	#[serde(default)]
+	pub color_factor_color_space: UnaColorFactorColorSpace,
 	#[serde(default)]
 	pub flip_backface_normal_factor: f32,
 	#[serde(default)]
@@ -5688,11 +5787,11 @@ pub struct UnaLilToonLikeMaterial {
 
 impl UnaLilToonLikeMaterial {
 	pub fn is_gem_profile(&self) -> bool {
-		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonGem
+		self.runtime_variant == UnaLilToonLikeRuntimeVariant::Gem
 	}
 
 	pub fn is_refraction_profile(&self) -> bool {
-		self.source_profile == UnaLilToonLikeSourceProfile::LiltoonRefraction
+		self.runtime_variant == UnaLilToonLikeRuntimeVariant::Refraction
 	}
 
 	pub fn needs_screen_refraction(&self) -> bool {
@@ -5701,6 +5800,85 @@ impl UnaLilToonLikeMaterial {
 
 	pub fn uses_reflection_source_cube(&self) -> bool {
 		self.reflection.cube_override_factor > 0.5 || self.is_gem_profile()
+	}
+
+	pub fn from_mtoon_compat(mtoon: &UnaMtoonMaterial, emissive_factor: [f32; 3], emissive_texture_index: Option<usize>) -> Self {
+		let mut out = Self {
+			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			runtime_variant: UnaLilToonLikeRuntimeVariant::UNToon,
+			..Default::default()
+		};
+
+		out.shadow.enabled_factor = 1.0;
+		out.shadow.strength_factor = 1.0;
+		out.shadow.color_factor = mtoon.shade_color_factor;
+		out.shadow.color_texture_index = mtoon.shade_multiply_texture_index;
+		out.shadow.strength_mask_texture_index = mtoon.shading_shift_texture_index;
+		out.shadow.border_factor = (1.0 - mtoon.shading_toony_factor).clamp(0.0, 1.0);
+		out.shadow.main_strength_factor = mtoon.gi_equalization_factor.clamp(0.0, 1.0);
+
+		out.matcap.enabled_factor = if mtoon.matcap_texture_index.is_some() { 1.0 } else { 0.0 };
+		out.matcap.color_factor = [mtoon.matcap_factor[0], mtoon.matcap_factor[1], mtoon.matcap_factor[2]];
+		out.matcap.texture_index = mtoon.matcap_texture_index;
+		out.matcap.blend_factor = 1.0;
+		out.matcap.main_strength_factor = 1.0;
+		out.matcap.enable_lighting_factor = 0.0;
+
+		out.rim.enabled_factor =
+			if mtoon.rim_multiply_texture_index.is_some() || mtoon.parametric_rim_color_factor.iter().any(|value| value.abs() > 0.00001) {
+				1.0
+			} else {
+				0.0
+			};
+		out.rim.color_factor = [
+			mtoon.parametric_rim_color_factor[0],
+			mtoon.parametric_rim_color_factor[1],
+			mtoon.parametric_rim_color_factor[2],
+			1.0,
+		];
+		out.rim.texture_index = mtoon.rim_multiply_texture_index;
+		out.rim.fresnel_power_factor = mtoon.parametric_rim_fresnel_power_factor;
+		out.rim.main_strength_factor = 1.0;
+		out.rim.enable_lighting_factor = mtoon.rim_lighting_mix_factor.clamp(0.0, 1.0);
+
+		out.reflection.enabled_factor = if mtoon.reflection_cube_texture_index.is_some() { 1.0 } else { 0.0 };
+		out.reflection.cube_texture_index = mtoon.reflection_cube_texture_index;
+		out.reflection.cube_override_factor = out.reflection.enabled_factor;
+		out.reflection.apply_reflection_factor = out.reflection.enabled_factor;
+
+		out.outline.enabled_factor = if mtoon.outline_width_factor > 0.0 && mtoon.outline_width_mode != UnaMtoonOutlineWidthMode::None {
+			1.0
+		} else {
+			0.0
+		};
+		out.outline.width_factor = mtoon.outline_width_factor;
+		out.outline.width_mask_texture_index = mtoon.outline_width_multiply_texture_index;
+		out.outline.color_factor = [
+			mtoon.outline_color_factor[0],
+			mtoon.outline_color_factor[1],
+			mtoon.outline_color_factor[2],
+			1.0,
+		];
+		out.outline.enable_lighting_factor = mtoon.outline_lighting_mix_factor.clamp(0.0, 1.0);
+
+		out.main_color.main_uv_scroll_rotate_factor = [
+			mtoon.uv_animation_scroll_x_speed_factor,
+			mtoon.uv_animation_scroll_y_speed_factor,
+			mtoon.uv_animation_rotation_speed_factor,
+			0.0,
+		];
+		out.main_color.uv_animation_mask_texture_index = mtoon.uv_animation_mask_texture_index;
+
+		out.emission.enabled_factor = if emissive_texture_index.is_some() || emissive_factor.iter().any(|value| value.abs() > 0.00001) {
+			1.0
+		} else {
+			0.0
+		};
+		out.emission.color_factor = [emissive_factor[0], emissive_factor[1], emissive_factor[2], 1.0];
+		out.emission.texture_index = emissive_texture_index;
+		out.emission.main_strength_factor = 1.0;
+		out.emission.blend_factor = 1.0;
+		out
 	}
 }
 
@@ -5745,6 +5923,8 @@ impl Default for UnaLilToonLikeMainColor {
 	fn default() -> Self {
 		Self {
 			main_texture_hsvg_factor: default_liltoon_main_texture_hsvg(),
+			main_uv_scroll_rotate_factor: [0.0, 0.0, 0.0, 0.0],
+			uv_animation_mask_texture_index: None,
 			main_color_adjust_mask_texture_index: None,
 			gradation_enabled_factor: 0.0,
 			gradation_texture_index: None,
@@ -6175,6 +6355,45 @@ impl Default for UnaLilToonLikeBlendState {
 	}
 }
 
+fn default_liltoon_stencil_mask() -> u8 {
+	255
+}
+
+fn default_liltoon_stencil_compare() -> u8 {
+	8
+}
+
+fn default_liltoon_color_mask() -> u8 {
+	15
+}
+
+impl Default for UnaLilToonLikeStencilState {
+	fn default() -> Self {
+		Self {
+			reference: 0,
+			read_mask: default_liltoon_stencil_mask(),
+			write_mask: default_liltoon_stencil_mask(),
+			compare: default_liltoon_stencil_compare(),
+			pass_op: 0,
+			fail_op: 0,
+			depth_fail_op: 0,
+		}
+	}
+}
+
+impl Default for UnaLilToonLikePipelineState {
+	fn default() -> Self {
+		Self {
+			stencil: UnaLilToonLikeStencilState::default(),
+			outline_stencil: UnaLilToonLikeStencilState::default(),
+			fur_stencil: UnaLilToonLikeStencilState::default(),
+			color_mask: default_liltoon_color_mask(),
+			outline_color_mask: default_liltoon_color_mask(),
+			fur_color_mask: default_liltoon_color_mask(),
+		}
+	}
+}
+
 impl Default for UnaLilToonLikeRendering {
 	fn default() -> Self {
 		Self {
@@ -6185,6 +6404,7 @@ impl Default for UnaLilToonLikeRendering {
 			distance_fade_rim_color_factor: [0.0, 0.0, 0.0, 0.0],
 			distance_fade_rim_fresnel_power_factor: default_liltoon_distance_fade_rim_fresnel_power(),
 			distance_fade_mode_factor: 0.0,
+			light_direction_override_factor: [0.0, 0.0, 0.0, 0.0],
 			light_min_limit_factor: default_liltoon_light_min_limit(),
 			light_max_limit_factor: 1.0,
 			monochrome_lighting_factor: 0.0,
@@ -6192,6 +6412,7 @@ impl Default for UnaLilToonLikeRendering {
 			vertex_light_strength_factor: 0.0,
 			aa_strength_factor: 1.0,
 			gsaa_strength_factor: 0.0,
+			pipeline_state: UnaLilToonLikePipelineState::default(),
 		}
 	}
 }
@@ -6200,6 +6421,8 @@ impl Default for UnaLilToonLikeMaterial {
 	fn default() -> Self {
 		Self {
 			source_profile: UnaLilToonLikeSourceProfile::Unknown,
+			runtime_variant: UnaLilToonLikeRuntimeVariant::UNToon,
+			color_factor_color_space: UnaColorFactorColorSpace::Linear,
 			flip_backface_normal_factor: 0.0,
 			main_color: UnaLilToonLikeMainColor::default(),
 			texture_uv_offset_scales: BTreeMap::new(),
@@ -9344,7 +9567,7 @@ mod tests {
 	}
 
 	#[test]
-	fn runtime_resolver_cache_key_hashes_material_source_profile() {
+	fn runtime_resolver_cache_key_hashes_material_payload_metadata() {
 		let mut document = UnaDocument {
 			scene: Some(UnaSceneSnapshot {
 				materials: vec![UnaMaterialPbr {
@@ -9527,30 +9750,65 @@ mod tests {
 		};
 		assert_eq!(material.runtime_toon_model(), None);
 		assert!(material.liltoon_like_runtime().is_none());
-		assert!(material.mtoon_like_runtime().is_none());
 
 		material.shading = UnaShadingModel::LilToonLike;
-		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::LilToonLike));
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::UNToon));
 		assert!(material.liltoon_like_runtime().is_some());
 		assert!(material.liltoon_like_source_profile().is_some());
-		assert!(material.mtoon_like_runtime().is_none());
 
 		material.shading = UnaShadingModel::MToonLike;
-		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::MToonLike));
-		assert!(material.liltoon_like_runtime().is_none());
-		assert!(material.mtoon_like_runtime().is_some());
+		assert_eq!(material.runtime_toon_model(), Some(UnaRuntimeToonModel::UNToon));
+		assert!(material.liltoon_like_runtime().is_some());
 		assert!(material.mtoon_source_profile().is_some());
+
+		material.liltoon_like = None;
+		assert_eq!(material.runtime_toon_model(), None);
+		assert!(material.liltoon_like_runtime().is_none());
+		assert!(
+			material.mtoon_source_profile().is_some(),
+			"MToon provenance may remain, but runtime UNToon requires importer-normalized semantic material"
+		);
 	}
 
 	#[test]
-	fn liltoon_source_profile_helpers_capture_special_runtime_semantics() {
+	fn mtoon_compat_loader_maps_source_texture_slots_to_untoon_profile() {
+		let mtoon = UnaMtoonMaterial {
+			shade_multiply_texture_index: Some(10),
+			shading_shift_texture_index: Some(11),
+			matcap_texture_index: Some(12),
+			rim_multiply_texture_index: Some(13),
+			reflection_cube_texture_index: Some(14),
+			outline_width_multiply_texture_index: Some(15),
+			uv_animation_mask_texture_index: Some(16),
+			uv_animation_scroll_x_speed_factor: 0.25,
+			uv_animation_scroll_y_speed_factor: -0.5,
+			uv_animation_rotation_speed_factor: 0.75,
+			..Default::default()
+		};
+
+		let compat = UnaLilToonLikeMaterial::from_mtoon_compat(&mtoon, [0.1, 0.2, 0.3], Some(17));
+
+		assert_eq!(compat.shadow.color_texture_index, Some(10));
+		assert_eq!(compat.shadow.strength_mask_texture_index, Some(11));
+		assert_eq!(compat.matcap.texture_index, Some(12));
+		assert_eq!(compat.rim.texture_index, Some(13));
+		assert_eq!(compat.reflection.cube_texture_index, Some(14));
+		assert_eq!(compat.outline.width_mask_texture_index, Some(15));
+		assert_eq!(compat.main_color.uv_animation_mask_texture_index, Some(16));
+		assert_eq!(compat.main_color.main_uv_scroll_rotate_factor, [0.25, -0.5, 0.75, 0.0]);
+		assert_eq!(compat.emission.texture_index, Some(17));
+	}
+
+	#[test]
+	fn liltoon_runtime_variant_helpers_capture_special_runtime_semantics() {
 		let mut material = UnaLilToonLikeMaterial::default();
 		assert!(!material.is_gem_profile());
 		assert!(!material.is_refraction_profile());
 		assert!(!material.needs_screen_refraction());
 		assert!(!material.uses_reflection_source_cube());
 
-		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonGem;
+		material.source_profile = UnaLilToonLikeSourceProfile::Liltoon;
+		material.runtime_variant = UnaLilToonLikeRuntimeVariant::Gem;
 		assert!(material.is_gem_profile());
 		assert!(!material.is_refraction_profile());
 		assert!(material.uses_reflection_source_cube());
@@ -9559,7 +9817,7 @@ mod tests {
 		material.reflection.gem_refraction_strength_factor = 0.0;
 		assert!(material.needs_screen_refraction());
 
-		material.source_profile = UnaLilToonLikeSourceProfile::LiltoonRefraction;
+		material.runtime_variant = UnaLilToonLikeRuntimeVariant::Refraction;
 		assert!(!material.is_gem_profile());
 		assert!(material.is_refraction_profile());
 		assert!(!material.needs_screen_refraction());

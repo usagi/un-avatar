@@ -550,10 +550,12 @@ pub(crate) struct DebugManifest {
 	pub show_bone_colliders: Option<bool>,
 	/// UNToon geometry outline 描画を完全に無効化する診断 toggle（既定 false）。
 	/// 一部の VRM モデルで目周辺に肌色寄りの outline が太く出る現象の切り分け用。
+	pub disable_geometry_outlines: Option<bool>,
+	/// Legacy alias for `disable_geometry_outlines`.
 	pub disable_mtoon_outlines: Option<bool>,
 	/// UNToon rim lighting 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_rim_lighting: Option<bool>,
-	/// `shading_shift_factor` と `shadingShiftTexture` の寄与を 0 固定にする診断 toggle（既定 false）。
+	/// v1 MToon 診断キーの互換 no-op。v2-UNToon shader では shading shift をこの経路で制御しない。
 	pub force_shading_shift_zero: Option<bool>,
 	/// matcap (sphere add) 寄与を 0 にする診断 toggle（既定 false）。
 	pub disable_matcap: Option<bool>,
@@ -687,7 +689,7 @@ impl RendererManifest {
 				&mut opts.debug_material_dump,
 				&mut opts.show_axes,
 				&mut opts.show_bone_colliders,
-				&mut opts.disable_mtoon_outlines,
+				&mut opts.disable_geometry_outlines,
 				&mut opts.debug_disable_rim_lighting,
 				&mut opts.debug_force_shading_shift_zero,
 				&mut opts.debug_disable_matcap,
@@ -1125,7 +1127,7 @@ fn parse_outline_policy(value: &str) -> Option<AvatarOutlinePolicy> {
 
 fn parse_outline_kind(value: &str) -> Option<AvatarOutlineKind> {
 	match value.trim().to_ascii_lowercase().as_str() {
-		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Geometry),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -1435,7 +1437,7 @@ impl DebugManifest {
 		debug_material_dump: &mut bool,
 		show_axes: &mut bool,
 		show_bone_colliders: &mut bool,
-		disable_mtoon_outlines: &mut bool,
+		disable_geometry_outlines: &mut bool,
 		debug_disable_rim_lighting: &mut bool,
 		debug_force_shading_shift_zero: &mut bool,
 		debug_disable_matcap: &mut bool,
@@ -1477,8 +1479,8 @@ impl DebugManifest {
 		if let Some(value) = self.show_bone_colliders {
 			*show_bone_colliders = value;
 		}
-		if let Some(value) = self.disable_mtoon_outlines {
-			*disable_mtoon_outlines = value;
+		if let Some(value) = self.disable_geometry_outlines.or(self.disable_mtoon_outlines) {
+			*disable_geometry_outlines = value;
 		}
 		if let Some(value) = self.disable_rim_lighting {
 			*debug_disable_rim_lighting = value;
@@ -1642,6 +1644,7 @@ minimized = true
 vmc = true
 scene = true
 disable_expression_morphs = true
+disable_geometry_outlines = true
 
 [diagnostics]
 zero_morphs = true
@@ -1814,6 +1817,7 @@ drag_scale = 1.4
 		);
 		assert_eq!(opts.gpu_adapter.as_deref(), Some("gpu:8086:a780:Intel UHD Graphics"));
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
+		assert!(opts.disable_geometry_outlines);
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
 		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));
 		assert_eq!(opts.audio_link.input_device_name_hint.as_deref(), Some("Main Mix"));
@@ -1881,7 +1885,7 @@ drag_scale = 1.4
 		assert!(opts.mesh_diagnostics.debug_zero_morphs);
 		assert!(opts.mesh_diagnostics.relax_iris_alpha);
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.policy, AvatarOutlinePolicy::Override);
-		assert_eq!(opts.mesh_diagnostics.avatar_outline.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(opts.mesh_diagnostics.avatar_outline.kind, AvatarOutlineKind::Geometry);
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.width, Some(0.004));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.color, Some([0.02, 0.01, 0.03]));
 		assert_eq!(opts.mesh_diagnostics.avatar_outline.lighting_mix, Some(0.25));

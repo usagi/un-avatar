@@ -45,6 +45,7 @@ namespace UNAvatar.UnityExporter
                 ["dynamics"] = dynamicsPayload ?? new List<object>(),
                 ["contacts"] = contactsPayload ?? new List<object>(),
                 ["textureAssets"] = TextureAssetsToJson(textureAssets),
+                ["sceneLighting"] = BuildSceneLightingPayload(),
                 ["variants"] = VariantsToJson(variants),
                 ["wardrobe"] = BuildWardrobePayload(variants, exportBaseSnapshot, exportWardrobeSets, registryRoot, rendererAssets, dynamicsPayload),
                 ["animator"] = BuildAnimatorPayload(registryRoot),
@@ -66,6 +67,107 @@ namespace UNAvatar.UnityExporter
                     ["gltfWriter"] = "built-in"
                 }
             };
+        }
+
+        private static Dictionary<string, object> BuildSceneLightingPayload()
+        {
+            var json = new Dictionary<string, object>
+            {
+                ["source"] = "unity_scene"
+            };
+
+            var sky = RenderSettings.ambientSkyColor;
+            var equator = RenderSettings.ambientEquatorColor;
+            var ground = RenderSettings.ambientGroundColor;
+            var flatAmbient = (sky + equator + ground) / 3.0f * Mathf.Max(0.0f, RenderSettings.ambientIntensity);
+            var flatIntensity = Mathf.Max(flatAmbient.r, Mathf.Max(flatAmbient.g, flatAmbient.b));
+            var flatColor = flatIntensity > 0.000001f
+                ? new Color(flatAmbient.r / flatIntensity, flatAmbient.g / flatIntensity, flatAmbient.b / flatIntensity, 1.0f)
+                : Color.black;
+            json["environment"] = new Dictionary<string, object>
+            {
+                ["mode"] = RenderSettings.ambientMode.ToString(),
+                ["color"] = FloatArray(flatColor.r, flatColor.g, flatColor.b),
+                ["intensity"] = flatIntensity,
+                ["skyColor"] = FloatArray(sky.r, sky.g, sky.b),
+                ["equatorColor"] = FloatArray(equator.r, equator.g, equator.b),
+                ["groundColor"] = FloatArray(ground.r, ground.g, ground.b),
+                ["ambientIntensity"] = RenderSettings.ambientIntensity,
+                ["sphericalHarmonics"] = BuildUnitySphericalHarmonicsPayload()
+            };
+
+            var directional = FindSceneDirectionalLight();
+            if (directional != null)
+            {
+                var color = directional.color;
+                var direction = UnityDirectionToUnAvatar(-directional.transform.forward).normalized;
+                json["directional"] = new Dictionary<string, object>
+                {
+                    ["name"] = directional.name,
+                    ["color"] = FloatArray(color.r, color.g, color.b),
+                    ["intensity"] = Mathf.Max(0.0f, directional.intensity),
+                    ["direction"] = FloatArray(direction.x, direction.y, direction.z)
+                };
+            }
+
+            return json;
+        }
+
+        private static Dictionary<string, object> BuildUnitySphericalHarmonicsPayload()
+        {
+            var probe = RenderSettings.ambientProbe;
+            return new Dictionary<string, object>
+            {
+                ["source"] = "unity_render_settings_ambient_probe",
+                ["ar"] = SphericalHarmonicsL2UnityAr(probe, 0),
+                ["ag"] = SphericalHarmonicsL2UnityAr(probe, 1),
+                ["ab"] = SphericalHarmonicsL2UnityAr(probe, 2),
+                ["br"] = SphericalHarmonicsL2UnityBr(probe, 0),
+                ["bg"] = SphericalHarmonicsL2UnityBr(probe, 1),
+                ["bb"] = SphericalHarmonicsL2UnityBr(probe, 2),
+                ["c"] = FloatArray(probe[0, 8], probe[1, 8], probe[2, 8], 1.0f)
+            };
+        }
+
+        private static List<object> SphericalHarmonicsL2UnityAr(UnityEngine.Rendering.SphericalHarmonicsL2 sh, int channel)
+        {
+            return FloatArray(sh[channel, 3], sh[channel, 1], sh[channel, 2], sh[channel, 0] - sh[channel, 6]);
+        }
+
+        private static List<object> SphericalHarmonicsL2UnityBr(UnityEngine.Rendering.SphericalHarmonicsL2 sh, int channel)
+        {
+            return FloatArray(sh[channel, 4], sh[channel, 5], sh[channel, 6] * 3.0f, sh[channel, 7]);
+        }
+
+        private static Light FindSceneDirectionalLight()
+        {
+            if (RenderSettings.sun != null &&
+                RenderSettings.sun.type == LightType.Directional &&
+                RenderSettings.sun.enabled &&
+                RenderSettings.sun.intensity > 0.0f)
+            {
+                return RenderSettings.sun;
+            }
+
+            var lights = UnityEngine.Object.FindObjectsOfType<Light>();
+            Light fallback = null;
+            foreach (var light in lights)
+            {
+                if (light == null || light.type != LightType.Directional || !light.enabled || light.intensity <= 0.0f)
+                {
+                    continue;
+                }
+                if (fallback == null || light.intensity > fallback.intensity)
+                {
+                    fallback = light;
+                }
+            }
+            return fallback;
+        }
+
+        private static Vector3 UnityDirectionToUnAvatar(Vector3 value)
+        {
+            return new Vector3(-value.x, value.y, value.z);
         }
 
         private Dictionary<string, object> BuildReportPayload(
@@ -129,6 +231,7 @@ namespace UNAvatar.UnityExporter
                 ["nodeConstraints"] = BuildNodeConstraintsReportSummary(nodeConstraintsPayload),
                 ["dynamics"] = BuildDynamicsReportSummary(dynamicsPayload),
                 ["contacts"] = BuildContactsReportSummary(contactsPayload),
+                ["sceneLighting"] = BuildSceneLightingPayload(),
                 ["materialAlphaDiagnostics"] = BuildMaterialAlphaDiagnosticsReport(),
                 ["unityExporter"] = new Dictionary<string, object>
                 {

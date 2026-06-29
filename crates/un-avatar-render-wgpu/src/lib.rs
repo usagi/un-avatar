@@ -1366,7 +1366,7 @@ fn parse_avatar_outline_policy(value: Option<&str>) -> Option<AvatarOutlinePolic
 
 fn parse_avatar_outline_kind(value: Option<&str>) -> Option<AvatarOutlineKind> {
 	match value?.trim().to_ascii_lowercase().as_str() {
-		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Mtoon),
+		"silhouette" | "screen" | "mtoon" | "geometry" => Some(AvatarOutlineKind::Geometry),
 		"ink" => Some(AvatarOutlineKind::Ink),
 		"brush" | "hake" | "fude" => Some(AvatarOutlineKind::Brush),
 		"double" | "double_outline" => Some(AvatarOutlineKind::Double),
@@ -7628,6 +7628,8 @@ pub fn run_cli() -> Result<(), RunError> {
 			long,
 			help = "診断用: UNToon geometry outline 描画を全 skip（一部 VRM で目周辺に肌色寄りの太い outline が出る現象の切り分け用）"
 		)]
+		disable_geometry_outlines: bool,
+		#[arg(long, help = "互換 alias: --disable-geometry-outlines と同じ")]
 		disable_mtoon_outlines: bool,
 		#[arg(
 			long,
@@ -7654,7 +7656,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		debug_skin_legacy_no_inv_mesh: bool,
 		#[arg(long, help = "診断用: UNToon rim lighting 寄与を 0 に固定")]
 		debug_disable_rim_lighting: bool,
-		#[arg(long, help = "診断用: shading_shift_factor と shadingShiftTexture の寄与を 0 に固定")]
+		#[arg(long, help = "互換 no-op: v1 MToon shading shift 診断キー。v2-UNToon shader では未使用")]
 		debug_force_shading_shift_zero: bool,
 		#[arg(long, help = "診断用: UNToon matcap / sphere add 寄与を 0 に固定")]
 		debug_disable_matcap: bool,
@@ -7783,7 +7785,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		show_bone_colliders: false,
 		camera_locked: false,
 		start_minimized: cli.start_minimized,
-		disable_mtoon_outlines: cli.disable_mtoon_outlines,
+		disable_geometry_outlines: cli.disable_geometry_outlines || cli.disable_mtoon_outlines,
 		debug_disable_rim_lighting: cli.debug_disable_rim_lighting,
 		debug_force_shading_shift_zero: cli.debug_force_shading_shift_zero,
 		debug_disable_matcap: cli.debug_disable_matcap,
@@ -7799,7 +7801,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			debug_zero_morphs: cli.debug_zero_morphs,
 			relax_iris_alpha: cli.relax_iris_alpha,
 			debug_skin_legacy_no_inv_mesh: cli.debug_skin_legacy_no_inv_mesh,
-			disable_mtoon_outlines: cli.disable_mtoon_outlines,
+			disable_geometry_outlines: cli.disable_geometry_outlines || cli.disable_mtoon_outlines,
 			debug_disable_rim_lighting: cli.debug_disable_rim_lighting,
 			debug_force_shading_shift_zero: cli.debug_force_shading_shift_zero,
 			debug_disable_matcap: cli.debug_disable_matcap,
@@ -7842,8 +7844,8 @@ pub fn run_cli() -> Result<(), RunError> {
 	if cli.start_minimized {
 		opts.start_minimized = true;
 	}
-	if cli.disable_mtoon_outlines {
-		opts.disable_mtoon_outlines = true;
+	if cli.disable_geometry_outlines || cli.disable_mtoon_outlines {
+		opts.disable_geometry_outlines = true;
 	}
 	if cli.debug_disable_rim_lighting {
 		opts.debug_disable_rim_lighting = true;
@@ -10470,7 +10472,7 @@ mod tests {
 			None,
 		);
 		assert_eq!(next.policy, AvatarOutlinePolicy::Override);
-		assert_eq!(next.kind, AvatarOutlineKind::Mtoon);
+		assert_eq!(next.kind, AvatarOutlineKind::Geometry);
 		assert_eq!(next.width, Some(0.004));
 	}
 

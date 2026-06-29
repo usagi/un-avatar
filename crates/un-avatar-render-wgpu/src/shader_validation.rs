@@ -227,6 +227,24 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_transparent_premultiply_uses_alpha_boost_without_boosting_output_alpha() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {\n\tif alpha_kind > 1.5 {\n\t\treturn clamp(a, 0.0, 1.0);"),
+			"lilToon transparent output alpha remains fd.col.a; _AlphaBoostFA only affects premultiplied rgb"
+		);
+		assert!(
+			mesh.contains("return rgb * clamp(out_a * max(drawu.alpha_mask_params.w, 0.0), 0.0, 1.0);"),
+			"lilToon LIL_PREMULTIPLY multiplies transparent rgb by saturate(alpha * _AlphaBoostFA)"
+		);
+		assert!(
+			mesh.contains("let lil_premultiply_alpha_boost = clamp(out_a * max(drawu.alpha_mask_params.w, 0.0), 0.0, 1.0);")
+				&& mesh.contains("lit = mix(lit, lit * lil_premultiply_alpha_boost, select(0.0, 1.0, lil_premultiplied_before_effects));"),
+			"main toon transparent path must use _AlphaBoostFA when it premultiplies before lighting effects"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_color_textures_use_main_uv_without_slot_transform() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
@@ -270,8 +288,11 @@ mod tests {
 			"_ShadowPostAO must control shadow border mask ordering"
 		);
 		assert!(
-			mesh.contains("lil_shadow_apply_pre_ao") && mesh.contains("lil_shadow_apply_post_ao"),
-			"shadow border AO must be applicable before or after tooning"
+			mesh.contains("lil_shadow_apply_pre_ao")
+				&& mesh.contains("lil_shadow_apply_post_ao")
+				&& mesh.contains("fn lil_tooning_no_saturate_scale_range")
+				&& mesh.contains("clamp(lil_shadow_apply_post_ao(lil_shadow_raw, shadow_border_mask.r, shadow_post_ao), 0.0, 1.0)"),
+			"shadow border AO must match lilToon's no-saturate tooning, then final lns saturate"
 		);
 	}
 
@@ -285,6 +306,35 @@ mod tests {
 		assert!(
 			mesh.contains("border_max - border_min + fwidth(value) * aa_scale"),
 			"shadow border range tooning should widen by fwidth(value) and _AAStrength"
+		);
+		assert!(
+			!mesh.contains("let aa_blur = blur * aa_scale"),
+			"lilToon _AAStrength scales derivative AA, not the authored _ShadowBlur width"
+		);
+	}
+
+	#[test]
+	fn liltoon_shadow_extra_colors_mix_before_light_color() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		let start = mesh
+			.find("var indirect_col = shade_term;")
+			.expect("lilToon first shadow color starts before lightColor multiplication");
+		let shadow2 = mesh[start..]
+			.find("indirect_col = mix(indirect_col, shadow2_color, shadow2_strength);")
+			.expect("second shadow color should mix before lightColor");
+		let shadow3 = mesh[start..]
+			.find("indirect_col = mix(indirect_col, shadow3_color, shadow3_strength);")
+			.expect("third shadow color should mix before lightColor");
+		let light = mesh[start..]
+			.find("indirect_col = indirect_col * lil_light_color;")
+			.expect("lightColor should be applied once after shadow colors are resolved");
+		assert!(
+			shadow2 < light && shadow3 < light,
+			"lilToon resolves Shadow2nd/Shadow3rd colors before multiplying indirectCol by fd.lightColor"
+		);
+		assert!(
+			!mesh.contains("shadow2_color * lil_light_color") && !mesh.contains("shadow3_color * lil_light_color"),
+			"extra shadow colors must not receive lightColor before they are mixed into indirectCol"
 		);
 	}
 
@@ -455,9 +505,7 @@ mod tests {
 	fn liltoon_reflection_apply_transparency_is_transparent_only() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains(
-				"let liltoon_apply_effect_transparency = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_refraction_profile;"
-			),
+			mesh.contains("let liltoon_apply_effect_transparency = alpha_kind > 1.5 && !is_untoon_refraction_profile;"),
 			"lilToon effect transparency flags apply only in transparent render mode and not in refraction"
 		);
 		assert!(
@@ -649,18 +697,67 @@ mod tests {
 	}
 
 	#[test]
-	fn liltoon_light_color_includes_environment_proxy() {
+	fn liltoon_light_color_matches_brp_sh_direct_and_indirect() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("fn liltoon_light_color() -> vec3<f32>")
+			mesh.contains("fn liltoon_raw_light_color(light_dir_un: vec3<f32>) -> vec3<f32>")
 				&& mesh.contains("let main_light = frame.light_color.rgb * frame.light_color.w;")
-				&& mesh.contains("let sh_proxy = frame.ambient_color.rgb * frame.ambient_color.w;")
-				&& mesh.contains("return lil_correct_light_color(main_light + sh_proxy);"),
-			"lilToon fd.lightColor must include an SH/environment proxy, matching lilToon main light + SH semantics"
+				&& mesh.contains("unity_openlit_sh_direct(light_dir_un)")
+				&& mesh.contains("return main_light + sh_direct_proxy;")
+				&& mesh.contains("fn liltoon_light_color(light_dir_un: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("return lil_correct_light_color(liltoon_raw_light_color(light_dir_un));"),
+			"lilToon/OpenLit BRP direct light is directional plus OpenLit SH direct; scene SH must be used when exported"
 		);
 		assert!(
-			mesh.contains("let effect_light_color = select(raw_light_color, lil_light_color, has_untoon_extensions);"),
-			"UNToon extension path should replace direct light with the lilToon lightColor approximation"
+			mesh.contains("fn liltoon_indirect_light_color(light_dir_un: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("fn unity_openlit_sh_indirect(n_un: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("let sh_dir_unity = safe_normalize_or(frame.sh_ar.xyz + frame.sh_ag.xyz + frame.sh_ab.xyz, n_unity);")
+				&& mesh.contains("return unity_sh_l0_l2(n_unity) + unity_openlit_sh_l1(indirect_dir_unity);")
+				&& mesh.contains("let indirect = select(fallback, unity_openlit_sh_indirect(light_dir_un), unity_sh_available());")
+				&& mesh.contains("return clamp(indirect, vec3<f32>(0.0), vec3<f32>(1.0));")
+				&& mesh.contains("let lil_light_color = liltoon_light_color(l);")
+				&& mesh.contains("let lil_indirect_light_color = liltoon_indirect_light_color(l);")
+				&& mesh.contains("clamp(lil_indirect_light_color * drawu.shadow_ext_params.z, vec3<f32>(0.0), vec3<f32>(1.0))"),
+			"lilToon BRP shadow Environment Light must use OpenLit fd.indLightColor = saturate(indirectLight), not the non-BRP res-l1 path"
+		);
+		assert!(
+			mesh.contains("fn untoon_dir_to_unity_sh_dir(n: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("return vec3<f32>(-n.x, n.y, n.z);")
+				&& mesh.contains("fn unity_sh_l0_l2(n_unity: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("let v_b = n_unity.xyzz * n_unity.yzzx;"),
+			"exported raw Unity SH coefficients must be evaluated in Unity axes with lilToon/OpenLit basis terms"
+		);
+		assert!(
+			mesh.contains("let direct_color = mix(shade_term, base, shading) * lil_light_color;\n\t\tlit = direct_color * authored_occlusion(uv, dbg);"),
+			"lilToon no-shadow path should be fd.col.rgb *= fd.lightColor, without a second ambient add"
+		);
+		assert!(
+			mesh.contains("lit = min(lit, base * max(drawu.lighting_ext_params.y, drawu.lighting_ext_params.x));")
+				&& mesh
+					.find("lit = min(lit, base * max(drawu.lighting_ext_params.y, drawu.lighting_ext_params.x));")
+					.unwrap() < mesh
+					.find("if (UNTOON_FEATURE_MAIN_LAYERS > 0.5 && !is_untoon_gem_profile)")
+					.unwrap(),
+			"lilToon forward pass clamps lit body color to fd.albedo * _LightMaxLimit before unlit main layers and effects"
+		);
+		assert!(
+			mesh.contains("let effect_light_color = lil_light_color;"),
+			"UNToon runtime should use the lilToon lightColor approximation without a source-profile branch"
+		);
+	}
+
+	#[test]
+	fn liltoon_light_direction_uses_material_override() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("fn liltoon_light_direction(base_dir: vec3<f32>) -> vec3<f32>")
+				&& mesh.contains("let main_dir = base_dir * lil_light_direction_luminance(main_light);")
+				&& mesh.contains("let sh9_dir_unity = (frame.sh_ar.xyz + frame.sh_ag.xyz + frame.sh_ab.xyz) * 0.333333;")
+				&& mesh.contains("let sh9_dir_abs_unity = vec3<f32>(sh9_dir_unity.x, abs(sh9_dir_unity.y), sh9_dir_unity.z);")
+				&& mesh.contains("unity_sh_dir_to_untoon_dir(sh9_dir_abs_unity)")
+				&& mesh.contains("let custom_dir = unity_sh_dir_to_untoon_dir(drawu.light_direction_override.xyz);")
+				&& mesh.contains("let l = liltoon_light_direction(base_l);"),
+			"lilToon/OpenLit BRP shadow lighting must match OpenLit ComputeLightDirection by folding the SH y component upward before material _LightDirectionOverride"
 		);
 	}
 
@@ -668,11 +765,11 @@ mod tests {
 	fn liltoon_light_color_clamps_before_monochrome() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let limited = mesh.find("let limited = clamp(raw").unwrap();
-		let luminance = mesh.find("let luminance = dot(limited").unwrap();
+		let gray = mesh.find("let gray = dot(limited").unwrap();
 		let monochrome = mesh.find("let monochrome = mix(limited").unwrap();
 		let as_unlit = mesh.find("return mix(monochrome, vec3<f32>(1.0)").unwrap();
 		assert!(
-			limited < luminance && luminance < monochrome && monochrome < as_unlit,
+			limited < gray && gray < monochrome && monochrome < as_unlit,
 			"lilToon _LightMinLimit/_LightMaxLimit should apply before _MonochromeLighting and _AsUnlit"
 		);
 	}
@@ -687,7 +784,7 @@ mod tests {
 			"lilToon effect masks must use fd.shadowmix before _ShadowStrength is applied"
 		);
 		assert!(
-			mesh.contains("specular_reflect = specular_reflect * select(1.0, lil_shadowmix, has_untoon_extensions);"),
+			mesh.contains("specular_reflect = specular_reflect * lil_shadowmix;"),
 			"lilToon screen-shadow specular path attenuates specular by fd.shadowmix"
 		);
 	}
@@ -727,7 +824,7 @@ mod tests {
 	fn liltoon_transparent_premultiplies_before_reflection_effects() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let premultiply = mesh
-			.find("let lil_premultiplied_before_effects = has_untoon_extensions && alpha_kind > 1.5 && !is_untoon_additive_blend;")
+			.find("let lil_premultiplied_before_effects = alpha_kind > 1.5 && !is_untoon_additive_blend;")
 			.expect("lilToon transparent premultiply flag");
 		let reflection = premultiply
 			+ mesh[premultiply..]
@@ -795,12 +892,12 @@ mod tests {
 	fn liltoon_rim_shade_runs_before_reflection_and_matcap() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let rim_shade = mesh
-			.find("lil_apply_rim_shade(lit, geometry_n, n, v, uv), has_untoon_extensions && UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_untoon_gem_profile && !is_fur_pass")
+			.find(
+				"lil_apply_rim_shade(lit, geometry_n, n, v, uv), UNTOON_FEATURE_RIM_SHADE > 0.5 && !is_untoon_gem_profile && !is_fur_pass",
+			)
 			.expect("lilToon rim shade application");
 		let backlight = mesh
-			.find(
-				"if (has_untoon_extensions && UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_untoon_gem_profile && drawu.backlight_params.x > 0.5)",
-			)
+			.find("if (UNTOON_FEATURE_BACKLIGHT > 0.5 && !is_untoon_gem_profile && drawu.backlight_params.x > 0.5)")
 			.expect("lilToon backlight block");
 		let reflection = backlight
 			+ mesh[backlight..]

@@ -387,13 +387,28 @@ namespace UNAvatar.UnityExporter
                 if (material.TryGetValue("extras", out var rawExtras) &&
                     rawExtras is Dictionary<string, object> extras &&
                     extras.TryGetValue("UN_avatar_material", out var rawUnAvatarMaterial) &&
-                    rawUnAvatarMaterial is Dictionary<string, object> unAvatarMaterial &&
-                    unAvatarMaterial.TryGetValue("mtoon", out var rawMtoon) &&
-                    rawMtoon is Dictionary<string, object> mtoon)
+                    rawUnAvatarMaterial is Dictionary<string, object> unAvatarMaterial)
                 {
-                    foreach (var item in mtoon)
+                    foreach (var textureIndex in TextureIndicesForUnAvatarMaterialPayload(unAvatarMaterial))
                     {
-                        if (item.Key.EndsWith("TextureIndex", StringComparison.Ordinal) && item.Value is int textureIndex)
+                        yield return textureIndex;
+                    }
+                }
+            }
+
+            private static IEnumerable<int> TextureIndicesForUnAvatarMaterialPayload(Dictionary<string, object> unAvatarMaterial)
+            {
+                foreach (var payloadKey in new[] { "untoon", "liltoon", "mtoon" })
+                {
+                    if (!unAvatarMaterial.TryGetValue(payloadKey, out var rawPayload) ||
+                        !(rawPayload is Dictionary<string, object> payload))
+                    {
+                        continue;
+                    }
+                    foreach (var item in payload)
+                    {
+                        if (item.Key.EndsWith("TextureIndex", StringComparison.Ordinal) &&
+                            item.Value is int textureIndex)
                         {
                             yield return textureIndex;
                         }

@@ -22,14 +22,15 @@ use serde_json::Value;
 use un_avatar_core::{
 	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
 	unavatar_modular_avatar_components_slice, unavatar_modular_avatar_value, Approximation, ReportStatus, UnaAlphaMode, UnaBounds,
-	UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef, UnaDynamicsContact,
-	UnaDynamicsContactKind, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsInteraction, UnaDynamicsLimit,
-	UnaDynamicsSettings, UnaDynamicsSourceKind, UnaDynamicsWritebackMode, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights,
-	UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
-	UnaLilToonLikeSourceProfile, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas,
-	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaRuntimeAction,
-	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
-	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneNode,
+	UnaColorFactorColorSpace, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
+	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsInteraction,
+	UnaDynamicsLimit, UnaDynamicsSettings, UnaDynamicsSourceKind, UnaDynamicsWritebackMode, UnaExpressionCatalog, UnaExpressionPreset,
+	UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
+	UnaLilToonLikeRuntimeVariant, UnaLilToonLikeSourceProfile, UnaLilToonLikeStencilState, UnaMaterialPbr, UnaMeshBuffers,
+	UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
+	UnaNodeConstraintKind, UnaNodeConstraintSource, UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect,
+	UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget,
+	UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneDirectionalLight, UnaSceneEnvironmentLight, UnaSceneLighting, UnaSceneNode,
 	UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler,
 	UnaTextureWrapMode, UnaUnavatarExtension,
 };
@@ -1117,93 +1118,105 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 		let Some(unavatar_material) = material.get("extras").and_then(|extras| extras.get("UN_avatar_material")) else {
 			continue;
 		};
-		let Some(mtoon) = unavatar_material.get("mtoon") else {
+		let Some(untoon) = unavatar_untoon_or_legacy_payload(unavatar_material) else {
 			continue;
 		};
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadeMultiplyTextureIndexAsset", asset_map) {
-			scene_material
-				.mtoon
-				.get_or_insert_with(Default::default)
-				.shade_multiply_texture_index = Some(image_index);
+		let family = unavatar_material.get("family").and_then(|v| v.as_str()).unwrap_or("");
+		let source_shader = unavatar_material
+			.get("sourceShader")
+			.or_else(|| unavatar_material.get("source_shader"))
+			.and_then(|v| v.as_str())
+			.unwrap_or("");
+		let has_mtoon_source_payload = unavatar_material_source_is_mtoon(family, source_shader)
+			&& unavatar_material.get("mtoon").is_some()
+			&& unavatar_material.get("untoon").is_none()
+			&& unavatar_material.get("liltoon").is_none();
+		if let Some(image_index) = texture_asset_ref(untoon, "shadeMultiplyTextureIndexAsset", asset_map) {
+			if has_mtoon_source_payload {
+				scene_material
+					.mtoon
+					.get_or_insert_with(Default::default)
+					.shade_multiply_texture_index = Some(image_index);
+			}
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadowColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadowColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.color_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadow2ndColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadow2ndColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.second_color_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadow3rdColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadow3rdColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.third_color_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadowStrengthMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadowStrengthMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.strength_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadowBorderMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadowBorderMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.border_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "shadowBlurMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "shadowBlurMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.shadow
 				.blur_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "normal2ndTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "normal2ndTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.normal
 				.second_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "normal2ndScaleMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "normal2ndScaleMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.normal
 				.second_scale_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main2ndTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main2ndTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.second_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "mainColorAdjustMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "mainColorAdjustMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.main_color_adjust_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main2ndBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main2ndBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.second_blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main2ndDissolveMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main2ndDissolveMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
@@ -1211,7 +1224,7 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.second_dissolve
 				.mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main2ndDissolveNoiseMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main2ndDissolveNoiseMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
@@ -1219,21 +1232,21 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.second_dissolve
 				.noise_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main3rdTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main3rdTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.third_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main3rdBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main3rdBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.third_blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main3rdDissolveMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main3rdDissolveMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
@@ -1241,7 +1254,7 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.third_dissolve
 				.mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "main3rdDissolveNoiseMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "main3rdDissolveNoiseMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
@@ -1249,103 +1262,107 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.third_dissolve
 				.noise_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcapTextureIndexAsset", asset_map) {
-			scene_material.mtoon.get_or_insert_with(Default::default).matcap_texture_index = Some(image_index);
+		if let Some(image_index) = texture_asset_ref(untoon, "matcapTextureIndexAsset", asset_map) {
+			if has_mtoon_source_payload {
+				scene_material.mtoon.get_or_insert_with(Default::default).matcap_texture_index = Some(image_index);
+			}
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcapBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "matcapBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcapBumpTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "matcapBumpTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.bump_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcap2ndTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "matcap2ndTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.second_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcap2ndBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "matcap2ndBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.second_blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "matcap2ndBumpTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "matcap2ndBumpTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.matcap
 				.second_bump_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "rimMultiplyTextureIndexAsset", asset_map) {
-			scene_material.mtoon.get_or_insert_with(Default::default).rim_multiply_texture_index = Some(image_index);
+		if let Some(image_index) = texture_asset_ref(untoon, "rimMultiplyTextureIndexAsset", asset_map) {
+			if has_mtoon_source_payload {
+				scene_material.mtoon.get_or_insert_with(Default::default).rim_multiply_texture_index = Some(image_index);
+			}
 			scene_material.liltoon_like.get_or_insert_with(Default::default).rim.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "rimShadeMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "rimShadeMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.rim
 				.shade_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "backlightColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "backlightColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.backlight
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "glitterColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "glitterColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.glitter
 				.color_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "glitterShapeTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "glitterShapeTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.glitter
 				.shape_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "dissolveMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "dissolveMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.dissolve
 				.mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "dissolveNoiseMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "dissolveNoiseMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.dissolve
 				.noise_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "parallaxTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "parallaxTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.parallax
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emissionTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emissionTextureIndexAsset", asset_map) {
 			scene_material.emissive_texture_index = Some(image_index);
 			scene_material
 				.liltoon_like
@@ -1353,134 +1370,138 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 				.emission
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emissionBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emissionBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.emission
 				.blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emissionGradationTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emissionGradationTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.emission
 				.gradation_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emission2ndTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emission2ndTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.emission
 				.second_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emission2ndBlendMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emission2ndBlendMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.emission
 				.second_blend_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "emission2ndGradationTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "emission2ndGradationTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.emission
 				.second_gradation_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "audioLinkMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "audioLinkMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.audio_link
 				.mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "audioLinkLocalMapTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "audioLinkLocalMapTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.audio_link
 				.local_map_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "reflectionCubeTextureIndexAsset", asset_map) {
-			scene_material
-				.mtoon
-				.get_or_insert_with(Default::default)
-				.reflection_cube_texture_index = Some(image_index);
+		if let Some(image_index) = texture_asset_ref(untoon, "reflectionCubeTextureIndexAsset", asset_map) {
+			if has_mtoon_source_payload {
+				scene_material
+					.mtoon
+					.get_or_insert_with(Default::default)
+					.reflection_cube_texture_index = Some(image_index);
+			}
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.cube_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "reflectionColorTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "reflectionColorTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.color_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "smoothnessTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "smoothnessTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.smoothness_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "metallicGlossTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "metallicGlossTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.metallic_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "outlineWidthMultiplyTextureIndexAsset", asset_map) {
-			scene_material
-				.mtoon
-				.get_or_insert_with(Default::default)
-				.outline_width_multiply_texture_index = Some(image_index);
+		if let Some(image_index) = texture_asset_ref(untoon, "outlineWidthMultiplyTextureIndexAsset", asset_map) {
+			if has_mtoon_source_payload {
+				scene_material
+					.mtoon
+					.get_or_insert_with(Default::default)
+					.outline_width_multiply_texture_index = Some(image_index);
+			}
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.outline
 				.width_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "outlineTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "outlineTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.outline
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "alphaMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "alphaMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.alpha_mask
 				.texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "gradationMapTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "gradationMapTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.main_color
 				.gradation_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyTangentTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "anisotropyTangentTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.anisotropy_tangent_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyScaleMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "anisotropyScaleMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
 				.reflection
 				.anisotropy_scale_mask_texture_index = Some(image_index);
 		}
-		if let Some(image_index) = texture_asset_ref(mtoon, "anisotropyShiftNoiseMaskTextureIndexAsset", asset_map) {
+		if let Some(image_index) = texture_asset_ref(untoon, "anisotropyShiftNoiseMaskTextureIndexAsset", asset_map) {
 			scene_material
 				.liltoon_like
 				.get_or_insert_with(Default::default)
@@ -1493,6 +1514,53 @@ fn apply_unavatar_material_texture_asset_refs(scene: &mut UnaSceneSnapshot, root
 fn texture_asset_ref(value: &Value, key: &str, asset_map: &BTreeMap<String, usize>) -> Option<usize> {
 	let id = value.get(key).and_then(Value::as_str)?;
 	asset_map.get(id).copied()
+}
+
+fn unavatar_untoon_or_legacy_payload(extras: &Value) -> Option<&Value> {
+	// `untoon` is the current semantic payload. `liltoon` and `mtoon` are read
+	// only as legacy exporter compatibility payloads and must not drive runtime
+	// shader-family branching.
+	extras
+		.get("untoon")
+		.or_else(|| extras.get("liltoon"))
+		.or_else(|| extras.get("mtoon"))
+}
+
+fn unavatar_untoon_uv_offset_scale(extras: &Value) -> Option<[f32; 4]> {
+	unavatar_untoon_or_legacy_payload(extras)
+		.and_then(|payload| json_vec4(payload.get("uvOffsetScale").or_else(|| payload.get("uv_offset_scale"))))
+}
+
+fn unavatar_material_source_is_mtoon(family: &str, source_shader: &str) -> bool {
+	family.eq_ignore_ascii_case("mtoon") || source_shader.to_ascii_lowercase().contains("mtoon")
+}
+
+fn unavatar_material_color_factor_color_space(extras: &Value, untoon: Option<&Value>, source_is_liltoon: bool) -> UnaColorFactorColorSpace {
+	let color_space = json_string(
+		extras
+			.get("colorFactorColorSpace")
+			.or_else(|| extras.get("color_factor_color_space"))
+			.or_else(|| {
+				untoon.and_then(|payload| {
+					payload
+						.get("colorFactorColorSpace")
+						.or_else(|| payload.get("color_factor_color_space"))
+				})
+			}),
+	)
+	.unwrap_or_default();
+	if color_space.eq_ignore_ascii_case("srgb") {
+		return UnaColorFactorColorSpace::Srgb;
+	}
+	let un_material_model = extras
+		.get("unMaterialModel")
+		.or_else(|| extras.get("un_material_model"))
+		.and_then(|v| v.as_str())
+		.unwrap_or("");
+	if color_space.eq_ignore_ascii_case("linear") && un_material_model.eq_ignore_ascii_case("untoon") && source_is_liltoon {
+		return UnaColorFactorColorSpace::Srgb;
+	}
+	UnaColorFactorColorSpace::Linear
 }
 
 fn source_hash64(bytes: &[u8]) -> u64 {
@@ -1684,6 +1752,71 @@ fn unavatar_extension_from_root(root: &Value) -> Option<UnaUnavatarExtension> {
 	let ext = root.get("extensions")?.as_object()?.get(UN_AVATAR_EXTENSION_NAME)?.clone();
 	let spec_version = ext.get("specVersion").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
 	Some(UnaUnavatarExtension { spec_version, source: ext })
+}
+
+fn unavatar_scene_lighting(unavatar: &UnaUnavatarExtension) -> Option<UnaSceneLighting> {
+	let lighting = unavatar
+		.source
+		.get("sceneLighting")
+		.or_else(|| unavatar.source.get("scene_lighting"))?;
+	let environment = lighting.get("environment").and_then(|environment| {
+		let color = json_vec3(environment.get("color")).unwrap_or([1.0, 1.0, 1.0]);
+		let intensity = json_f32(environment.get("intensity")).unwrap_or(0.0).clamp(0.0, 2.0);
+		(intensity > 0.0).then(|| UnaSceneEnvironmentLight {
+			color: clamp_rgb01(color),
+			intensity,
+			sky_color: json_vec3(environment.get("skyColor").or_else(|| environment.get("sky_color"))).map(clamp_rgb01),
+			equator_color: json_vec3(environment.get("equatorColor").or_else(|| environment.get("equator_color"))).map(clamp_rgb01),
+			ground_color: json_vec3(environment.get("groundColor").or_else(|| environment.get("ground_color"))).map(clamp_rgb01),
+			spherical_harmonics: unavatar_scene_spherical_harmonics(environment),
+		})
+	});
+	let directional = lighting.get("directional").and_then(|directional| {
+		let direction = json_vec3(directional.get("direction"))?;
+		let direction = normalized_vec3(direction)?;
+		let color = json_vec3(directional.get("color")).unwrap_or([1.0, 1.0, 1.0]);
+		let intensity = json_f32(directional.get("intensity")).unwrap_or(0.0).clamp(0.0, 4.0);
+		(intensity > 0.0).then(|| {
+			let azimuth_deg = direction[0].atan2(direction[2]).to_degrees();
+			let elevation_deg = direction[1].clamp(-1.0, 1.0).asin().to_degrees().clamp(-89.0, 89.0);
+			UnaSceneDirectionalLight {
+				color: clamp_rgb01(color),
+				intensity,
+				direction,
+				azimuth_deg,
+				elevation_deg,
+			}
+		})
+	});
+	(environment.is_some() || directional.is_some()).then_some(UnaSceneLighting { environment, directional })
+}
+
+fn unavatar_scene_spherical_harmonics(environment: &Value) -> Option<un_avatar_core::UnaSceneSphericalHarmonics> {
+	let sh = environment
+		.get("sphericalHarmonics")
+		.or_else(|| environment.get("spherical_harmonics"))?;
+	Some(un_avatar_core::UnaSceneSphericalHarmonics {
+		ar: json_vec4(sh.get("ar"))?,
+		ag: json_vec4(sh.get("ag"))?,
+		ab: json_vec4(sh.get("ab"))?,
+		br: json_vec4(sh.get("br"))?,
+		bg: json_vec4(sh.get("bg"))?,
+		bb: json_vec4(sh.get("bb"))?,
+		c: json_vec4(sh.get("c"))?,
+	})
+}
+
+fn clamp_rgb01(value: [f32; 3]) -> [f32; 3] {
+	[value[0].clamp(0.0, 1.0), value[1].clamp(0.0, 1.0), value[2].clamp(0.0, 1.0)]
+}
+
+fn normalized_vec3(value: [f32; 3]) -> Option<[f32; 3]> {
+	let v = Vec3::from_array(value);
+	let len = v.length();
+	if len <= f32::EPSILON || !len.is_finite() {
+		return None;
+	}
+	Some((v / len).to_array())
 }
 
 fn scene_node_paths(scene: &UnaSceneSnapshot) -> BTreeMap<String, usize> {
@@ -2209,6 +2342,16 @@ fn unavatar_dynamics_multi_child_ignore(value: &Value) -> bool {
 		.and_then(Value::as_str)
 		.unwrap_or("");
 	value.eq_ignore_ascii_case("ignore") || value.eq_ignore_ascii_case("ignored")
+}
+
+fn unavatar_dynamics_has_multi_child_hint(value: &Value) -> bool {
+	value
+		.get("multiChildType")
+		.or_else(|| value.get("multi_child_type"))
+		.or_else(|| value.get("multiChild"))
+		.or_else(|| value.get("multi_child"))
+		.and_then(Value::as_str)
+		.is_some_and(|value| !value.trim().is_empty())
 }
 
 fn unavatar_dynamics_collider_shape(value: &Value) -> UnaDynamicsColliderShape {
@@ -3065,6 +3208,7 @@ fn unavatar_dynamics_settings(
 		);
 		ignored_transform_count += ignored_nodes.len();
 		let multi_child_ignore = unavatar_dynamics_multi_child_ignore(item);
+		let has_multi_child_hint = unavatar_dynamics_has_multi_child_hint(item);
 		if multi_child_ignore {
 			multi_child_ignore_count += 1;
 		}
@@ -3113,8 +3257,26 @@ fn unavatar_dynamics_settings(
 					}
 				}
 			}
-			for chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes) {
-				let prepended_parent_anchor = false;
+			let non_ignored_child_count = scene.nodes[root_idx]
+				.children
+				.iter()
+				.filter(|child| **child < scene.nodes.len() && !root_ignored_nodes.contains(child))
+				.count();
+			for mut chain in collect_scene_child_chains(scene, root_idx, &root_ignored_nodes) {
+				let prepended_parent_anchor = if source_kind == UnaDynamicsSourceKind::VrcPhysBone
+					&& !has_multi_child_hint
+					&& non_ignored_child_count == 1
+					&& parents
+						.get(root_idx)
+						.and_then(|parent| *parent)
+						.is_some_and(|parent| parent < scene.nodes.len() && !chain.contains(&parent))
+				{
+					let parent = parents[root_idx].expect("checked parent");
+					chain.insert(0, parent);
+					true
+				} else {
+					false
+				};
 				if chain.len() < 2 {
 					short_chains += 1;
 					continue;
@@ -8848,10 +9010,17 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 				}
 			}
 			let unavatar_mtoon = extras.as_ref().and_then(unavatar_mtoon_from_extras);
+			if unavatar_liltoon_like.is_none() {
+				if let Some(mtoon) = unavatar_mtoon.as_ref() {
+					unavatar_liltoon_like = Some(UnaLilToonLikeMaterial::from_mtoon_compat(
+						mtoon,
+						emissive_factor,
+						emissive_texture_index,
+					));
+				}
+			}
 			let shading = if unavatar_liltoon_like.is_some() {
 				UnaShadingModel::LilToonLike
-			} else if unavatar_mtoon.is_some() {
-				UnaShadingModel::MToonLike
 			} else if m.unlit() {
 				UnaShadingModel::Unlit
 			} else {
@@ -8871,6 +9040,7 @@ fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
 			let uv_offset_scale = unavatar_mtoon
 				.as_ref()
 				.map(|mtoon| mtoon.uv_offset_scale)
+				.or_else(|| extras.as_ref().and_then(unavatar_untoon_uv_offset_scale))
 				.or(gltf_uv_offset_scale)
 				.unwrap_or([0.0, 0.0, 1.0, 1.0]);
 			UnaMaterialPbr {
@@ -9037,7 +9207,9 @@ fn unavatar_material_inferred_alpha_mode(
 	let extras = extras?;
 	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	if !family.eq_ignore_ascii_case("liltoon") && !source_shader.to_ascii_lowercase().contains("liltoon") {
+	let source_is_liltoon = unavatar_material_source_is_liltoon(family, source_shader);
+	let has_untoon_semantic_payload = extras.get("untoon").is_some() || unavatar_material_model_is_untoon(extras);
+	if !source_is_liltoon && !has_untoon_semantic_payload {
 		return None;
 	}
 
@@ -9050,10 +9222,10 @@ fn unavatar_material_inferred_alpha_mode(
 	}
 
 	let shader = source_shader.to_ascii_lowercase();
-	if shader.contains("refraction") || shader.contains("liltoonref") {
+	if source_is_liltoon && (shader.contains("refraction") || shader.contains("liltoonref")) {
 		return Some(UnaAlphaMode::Opaque);
 	}
-	if shader.contains("liltoongem") {
+	if source_is_liltoon && shader.contains("liltoongem") {
 		return Some(UnaAlphaMode::Blend);
 	}
 	if let Some(render_queue) = json_i32(extras.get("renderQueue").or_else(|| extras.get("render_queue"))) {
@@ -9064,11 +9236,11 @@ fn unavatar_material_inferred_alpha_mode(
 			return Some(UnaAlphaMode::Mask);
 		}
 	}
-	if shader.contains("cutout") {
+	if source_is_liltoon && shader.contains("cutout") {
 		Some(UnaAlphaMode::Mask)
-	} else if shader.contains("transparent") || shader.contains("fur") {
+	} else if source_is_liltoon && (shader.contains("transparent") || shader.contains("fur")) {
 		Some(UnaAlphaMode::Blend)
-	} else if shader == "hidden/liltoonoutline" || shader == "hidden/liltoon" {
+	} else if source_is_liltoon && (shader == "hidden/liltoonoutline" || shader == "hidden/liltoon") {
 		Some(UnaAlphaMode::Opaque)
 	} else {
 		None
@@ -9133,30 +9305,35 @@ fn unavatar_material_emissive_factor_from_source_params(extras: &Value) -> Optio
 	Some([color[0] * strength, color[1] * strength, color[2] * strength])
 }
 
-fn unavatar_material_is_ordinary_liltoon(material: &UnaMaterialPbr) -> bool {
+fn unavatar_material_is_ordinary_untoon(material: &UnaMaterialPbr) -> bool {
+	if material.liltoon_like.is_none() {
+		return false;
+	}
 	let Some(extras) = material.unavatar_material.as_ref() else {
 		return false;
 	};
-	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	if !unavatar_material_source_is_liltoon(family, source_shader) {
-		return false;
-	}
 	let shader = source_shader.to_ascii_lowercase();
 	!(shader.contains("cutout") || shader.contains("transparent") || shader.contains("refraction") || shader.contains("fur"))
 }
 
-fn unavatar_material_is_liltoon(material: &UnaMaterialPbr) -> bool {
-	let Some(extras) = material.unavatar_material.as_ref() else {
-		return false;
-	};
-	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
-	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	unavatar_material_source_is_liltoon(family, source_shader)
+fn unavatar_material_is_untoon_semantic(material: &UnaMaterialPbr) -> bool {
+	material.liltoon_like.is_some()
 }
 
 fn unavatar_material_source_is_liltoon(family: &str, source_shader: &str) -> bool {
 	family.eq_ignore_ascii_case("liltoon") || source_shader.to_ascii_lowercase().contains("liltoon")
+}
+
+fn unavatar_material_model_is_untoon(extras: &Value) -> bool {
+	let Some(model) = extras
+		.get("unMaterialModel")
+		.or_else(|| extras.get("un_material_model"))
+		.and_then(|v| v.as_str())
+	else {
+		return false;
+	};
+	model.eq_ignore_ascii_case("untoon") || model.eq_ignore_ascii_case("un_toon")
 }
 
 fn image_alpha_has_transparency(image: &UnaImageRgba) -> bool {
@@ -9181,10 +9358,10 @@ fn image_alpha_has_translucency(image: &UnaImageRgba) -> bool {
 	}
 }
 
-fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[UnaImageRgba]) {
+fn refine_untoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[UnaImageRgba]) {
 	let mut alpha_cache = vec![None; images.len()];
 	for material in materials {
-		if !unavatar_material_is_liltoon(material) {
+		if !unavatar_material_is_untoon_semantic(material) {
 			continue;
 		}
 		let Some(image_index) = material.base_color_texture_index else {
@@ -9210,7 +9387,7 @@ fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[
 		if material.alpha_mode == UnaAlphaMode::Mask && has_transparent_alpha && material.alpha_cutoff <= 0.0 {
 			material.alpha_cutoff = 1.0 / 255.0;
 		}
-		if !unavatar_material_is_ordinary_liltoon(material) {
+		if !unavatar_material_is_ordinary_untoon(material) {
 			continue;
 		}
 		match material.alpha_mode {
@@ -9229,12 +9406,14 @@ fn refine_liltoon_alpha_from_images(materials: &mut [UnaMaterialPbr], images: &[
 fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMaterial> {
 	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	let source_is_liltoon = family.eq_ignore_ascii_case("liltoon") || source_shader.to_ascii_lowercase().contains("liltoon");
-	if !source_is_liltoon {
+	let source_is_liltoon = unavatar_material_source_is_liltoon(family, source_shader);
+	let source_is_mtoon = unavatar_material_source_is_mtoon(family, source_shader);
+	let has_untoon_semantic_payload = extras.get("untoon").is_some() || unavatar_material_model_is_untoon(extras);
+	if !source_is_liltoon && !has_untoon_semantic_payload {
 		return None;
 	}
-	let mtoon = extras.get("mtoon");
-	let outline_width_unit = mtoon
+	let untoon = unavatar_untoon_or_legacy_payload(extras);
+	let outline_width_unit = untoon
 		.and_then(|m| m.get("outlineWidthFactorUnit").or_else(|| m.get("outline_width_factor_unit")))
 		.and_then(|v| v.as_str())
 		.unwrap_or("");
@@ -9244,14 +9423,40 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		0.01
 	};
 	let source_shader_lower = source_shader.to_ascii_lowercase();
+	let runtime_variant = untoon
+		.and_then(|m| json_string(m.get("runtimeVariant").or_else(|| m.get("runtime_variant"))))
+		.and_then(|value| match value.to_ascii_lowercase().as_str() {
+			"gem" | "liltoon_gem" | "liltoongem" => Some(UnaLilToonLikeRuntimeVariant::Gem),
+			"refraction" | "liltoon_refraction" | "liltoonrefraction" | "liltoon_multi_refraction" | "liltoonmultirefraction" => {
+				Some(UnaLilToonLikeRuntimeVariant::Refraction)
+			}
+			"untoon" | "un_toon" | "normal" | "default" => Some(UnaLilToonLikeRuntimeVariant::UNToon),
+			_ => None,
+		})
+		.unwrap_or_else(|| {
+			if source_shader_lower.contains("liltoongem") {
+				UnaLilToonLikeRuntimeVariant::Gem
+			} else if source_shader_lower.contains("liltoonref") || source_shader_lower.contains("liltoonmultirefraction") {
+				UnaLilToonLikeRuntimeVariant::Refraction
+			} else {
+				UnaLilToonLikeRuntimeVariant::UNToon
+			}
+		});
+	let color_factor_color_space = unavatar_material_color_factor_color_space(extras, untoon, source_is_liltoon);
 	let mut out = UnaLilToonLikeMaterial {
 		source_profile: if source_shader_lower.contains("liltoongem") {
 			UnaLilToonLikeSourceProfile::LiltoonGem
 		} else if source_shader_lower.contains("liltoonref") || source_shader_lower.contains("liltoonmultirefraction") {
 			UnaLilToonLikeSourceProfile::LiltoonRefraction
-		} else {
+		} else if source_is_mtoon {
+			UnaLilToonLikeSourceProfile::MtoonConverted
+		} else if source_is_liltoon {
 			UnaLilToonLikeSourceProfile::Liltoon
+		} else {
+			UnaLilToonLikeSourceProfile::Unknown
 		},
+		runtime_variant,
+		color_factor_color_space,
 		..Default::default()
 	};
 	if source_shader_lower.contains("transparent") && !source_shader_lower.contains("twopass") {
@@ -9264,7 +9469,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_BackfaceColor") {
 		out.rendering.backface_color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = unavatar_material_vector_param(extras, "_LightDirectionOverride") {
+		out.rendering.light_direction_override_factor = value;
+	}
+	if let Some(value) = untoon.and_then(|m| {
 		json_vec4(
 			m.get("mainTexHsvgFactor")
 				.or_else(|| m.get("main_tex_hsvg_factor"))
@@ -9274,12 +9482,41 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.main_color.main_texture_hsvg_factor = value;
 	}
+	if let Some(value) = unavatar_material_vector_param(extras, "_MainTex_ScrollRotate") {
+		out.main_color.main_uv_scroll_rotate_factor = value;
+	} else if let Some(value) = untoon.and_then(|m| {
+		let x = json_number_f32(
+			m.get("uvAnimationScrollXSpeedFactor")
+				.or_else(|| m.get("uv_animation_scroll_x_speed_factor"))?,
+		)?;
+		let y = json_number_f32(
+			m.get("uvAnimationScrollYSpeedFactor")
+				.or_else(|| m.get("uv_animation_scroll_y_speed_factor"))?,
+		)?;
+		let z = json_number_f32(
+			m.get("uvAnimationRotationSpeedFactor")
+				.or_else(|| m.get("uv_animation_rotation_speed_factor"))?,
+		)?;
+		Some([x, y, z, 0.0])
+	}) {
+		out.main_color.main_uv_scroll_rotate_factor = value;
+	}
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_UvAnimMaskTexture").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("uvAnimationMaskTextureIndex")
+					.or_else(|| m.get("uv_animation_mask_texture_index")),
+			)
+		})
+	}) {
+		out.main_color.uv_animation_mask_texture_index = Some(value);
+	}
 	let main_gradation_strength = unavatar_material_float_param(extras, "_MainGradationStrength").unwrap_or(0.0);
 	out.main_color.gradation_strength_factor = main_gradation_strength.clamp(0.0, 1.0);
 	out.main_color.gradation_enabled_factor = unavatar_material_float_param(extras, "_UseGradationMap")
 		.unwrap_or_else(|| {
 			if main_gradation_strength > 0.0
-				&& mtoon
+				&& untoon
 					.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
 					.is_some()
 			{
@@ -9289,11 +9526,11 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 			}
 		})
 		.clamp(0.0, 1.0);
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("gradationMapTextureIndex").or_else(|| m.get("gradation_map_texture_index"))))
 	{
 		out.main_color.gradation_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("mainColorAdjustMaskTextureIndex")
 				.or_else(|| m.get("main_color_adjust_mask_texture_index")),
@@ -9304,10 +9541,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.main_color.second_enabled_factor = unavatar_material_float_param(extras, "_UseMain2ndTex")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("main2ndTextureIndex").or_else(|| m.get("main_2nd_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("main2ndTextureIndex").or_else(|| m.get("main_2nd_texture_index")))) {
 		out.main_color.second_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main2ndBlendMaskTextureIndex")
 				.or_else(|| m.get("main_2nd_blend_mask_texture_index")),
@@ -9315,7 +9552,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.main_color.second_blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main2ndDissolveMaskTextureIndex")
 				.or_else(|| m.get("main_2nd_dissolve_mask_texture_index")),
@@ -9323,7 +9560,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.main_color.second_dissolve.mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main2ndDissolveNoiseMaskTextureIndex")
 				.or_else(|| m.get("main_2nd_dissolve_noise_mask_texture_index")),
@@ -9397,10 +9634,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.main_color.third_enabled_factor = unavatar_material_float_param(extras, "_UseMain3rdTex")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("main3rdTextureIndex").or_else(|| m.get("main_3rd_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("main3rdTextureIndex").or_else(|| m.get("main_3rd_texture_index")))) {
 		out.main_color.third_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main3rdBlendMaskTextureIndex")
 				.or_else(|| m.get("main_3rd_blend_mask_texture_index")),
@@ -9408,7 +9645,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.main_color.third_blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main3rdDissolveMaskTextureIndex")
 				.or_else(|| m.get("main_3rd_dissolve_mask_texture_index")),
@@ -9416,7 +9653,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.main_color.third_dissolve.mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("main3rdDissolveNoiseMaskTextureIndex")
 				.or_else(|| m.get("main_3rd_dissolve_noise_mask_texture_index")),
@@ -9487,25 +9724,46 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_vector_param(extras, "_Main3rdDissolveNoiseMask_ScrollRotate") {
 		out.main_color.third_dissolve.noise_uv_scroll_rotate_factor = value;
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_LightMinLimit") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("lightMinLimitFactor").or_else(|| m.get("light_min_limit_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_LightMinLimit"))
+	{
 		out.rendering.light_min_limit_factor = value.max(0.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_LightMaxLimit") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("lightMaxLimitFactor").or_else(|| m.get("light_max_limit_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_LightMaxLimit"))
+	{
 		out.rendering.light_max_limit_factor = value.max(0.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_MonochromeLighting") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("monochromeLightingFactor").or_else(|| m.get("monochrome_lighting_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_MonochromeLighting"))
+	{
 		out.rendering.monochrome_lighting_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_AsUnlit") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("asUnlitFactor").or_else(|| m.get("as_unlit_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_AsUnlit"))
+	{
 		out.rendering.as_unlit_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_VertexLightStrength") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("vertexLightStrengthFactor").or_else(|| m.get("vertex_light_strength_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_VertexLightStrength"))
+	{
 		out.rendering.vertex_light_strength_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_AAStrength") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("aaStrengthFactor").or_else(|| m.get("aa_strength_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_AAStrength"))
+	{
 		out.rendering.aa_strength_factor = value.max(0.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_GSAAStrength") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("gsaaStrengthFactor").or_else(|| m.get("gsaa_strength_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_GSAAStrength"))
+	{
 		out.rendering.gsaa_strength_factor = value.max(0.0);
 	}
 	if let Some(value) = unavatar_material_vector_param(extras, "_DistanceFade") {
@@ -9526,7 +9784,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.normal.second_enabled_factor = unavatar_material_float_param(extras, "_UseBumpMap2nd")
 		.or_else(|| unavatar_material_float_param(extras, "_UseNormalMap2nd"))
 		.unwrap_or_else(|| {
-			if mtoon
+			if untoon
 				.and_then(|m| {
 					json_usize(
 						m.get("normal2ndTextureIndex")
@@ -9543,7 +9801,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 			}
 		})
 		.clamp(0.0, 1.0);
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("normal2ndTextureIndex")
 				.or_else(|| m.get("normal_2nd_texture_index"))
@@ -9553,7 +9811,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.normal.second_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("normal2ndScaleMaskTextureIndex")
 				.or_else(|| m.get("normal_2nd_scale_mask_texture_index"))
@@ -9563,7 +9821,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.normal.second_scale_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| {
 			json_f32(
 				m.get("normal2ndScaleFactor")
@@ -9578,76 +9836,91 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.normal.second_scale_factor = value;
 	}
 	out.shadow.enabled_factor = unavatar_material_float_param(extras, "_UseShadow").unwrap_or(1.0).clamp(0.0, 1.0);
-	if let Some(value) =
-		unavatar_material_color_param_rgb(extras, "_ShadeColor").or_else(|| unavatar_material_color_param_rgb(extras, "_ShadowColor"))
+	if let Some(value) = untoon
+		.and_then(|m| json_vec3(m.get("shadeColorFactor").or_else(|| m.get("shade_color_factor"))))
+		.or_else(|| unavatar_material_color_param_rgb(extras, "_ShadeColor"))
+		.or_else(|| unavatar_material_color_param_rgb(extras, "_ShadowColor"))
 	{
 		out.shadow.color_factor = value;
 	}
-	if let Some(value) = mtoon
-		.and_then(|m| json_usize(m.get("shadowColorTextureIndex").or_else(|| m.get("shadow_color_texture_index"))))
-		.or_else(|| mtoon.and_then(|m| json_usize(m.get("shadeMultiplyTextureIndex").or_else(|| m.get("shade_multiply_texture_index")))))
-	{
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_ShadowColorTex").or_else(|| {
+		untoon
+			.and_then(|m| json_usize(m.get("shadowColorTextureIndex").or_else(|| m.get("shadow_color_texture_index"))))
+			.or_else(|| {
+				untoon.and_then(|m| json_usize(m.get("shadeMultiplyTextureIndex").or_else(|| m.get("shade_multiply_texture_index"))))
+			})
+	}) {
 		out.shadow.color_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("shadow2ndColorTextureIndex")
-				.or_else(|| m.get("shadow_2nd_color_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_Shadow2ndColorTex").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("shadow2ndColorTextureIndex")
+					.or_else(|| m.get("shadow_2nd_color_texture_index")),
+			)
+		})
 	}) {
 		out.shadow.second_color_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("shadow3rdColorTextureIndex")
-				.or_else(|| m.get("shadow_3rd_color_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_Shadow3rdColorTex").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("shadow3rdColorTextureIndex")
+					.or_else(|| m.get("shadow_3rd_color_texture_index")),
+			)
+		})
 	}) {
 		out.shadow.third_color_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("shadowStrengthMaskTextureIndex")
-				.or_else(|| m.get("shadow_strength_mask_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_ShadowStrengthMask").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("shadowStrengthMaskTextureIndex")
+					.or_else(|| m.get("shadow_strength_mask_texture_index")),
+			)
+		})
 	}) {
 		out.shadow.strength_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("shadowBorderMaskTextureIndex")
-				.or_else(|| m.get("shadow_border_mask_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_ShadowBorderMask").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("shadowBorderMaskTextureIndex")
+					.or_else(|| m.get("shadow_border_mask_texture_index")),
+			)
+		})
 	}) {
 		out.shadow.border_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("shadowBlurMaskTextureIndex")
-				.or_else(|| m.get("shadow_blur_mask_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_ShadowBlurMask").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("shadowBlurMaskTextureIndex")
+					.or_else(|| m.get("shadow_blur_mask_texture_index")),
+			)
+		})
 	}) {
 		out.shadow.blur_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("shadowStrengthFactor").or_else(|| m.get("shadow_strength_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_ShadowStrength"))
 	{
 		out.shadow.strength_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("shadowBorderFactor").or_else(|| m.get("shadow_border_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_ShadowBorder"))
 	{
 		out.shadow.border_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("shadowBlurFactor").or_else(|| m.get("shadow_blur_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_ShadowBlur"))
 	{
 		out.shadow.blur_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("shadowBorderRangeFactor").or_else(|| m.get("shadow_border_range_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_ShadowBorderRange"))
 	{
@@ -9708,38 +9981,55 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.shadow.third_receive_factor = value.clamp(0.0, 1.0);
 	}
 
-	out.matcap.enabled_factor = unavatar_material_float_param(extras, "_UseMatCap").unwrap_or(0.0).clamp(0.0, 1.0);
-	if let Some(value) = unavatar_material_color_param_rgba(extras, "_MatCapColor") {
+	let untoon_matcap_texture_index =
+		untoon.and_then(|m| json_usize(m.get("matcapTextureIndex").or_else(|| m.get("matcap_texture_index"))));
+	out.matcap.enabled_factor = untoon
+		.and_then(|m| json_f32(m.get("matcapEnabledFactor").or_else(|| m.get("matcap_enabled_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_UseMatCap"))
+		.unwrap_or_else(|| if untoon_matcap_texture_index.is_some() { 1.0 } else { 0.0 })
+		.clamp(0.0, 1.0);
+	if let Some(value) = untoon
+		.and_then(|m| json_vec3(m.get("matcapFactor").or_else(|| m.get("matcap_factor"))))
+		.map(|value| [value[0], value[1], value[2], 1.0])
+		.or_else(|| unavatar_material_color_param_rgba(extras, "_MatCapColor"))
+	{
 		out.matcap.color_factor = [value[0], value[1], value[2]];
 		out.matcap.color_alpha_factor = value[3].clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("matcapTextureIndex").or_else(|| m.get("matcap_texture_index")))) {
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCapTex")
+		.or_else(|| unavatar_material_texture_param_index(extras, "_MatcapTex"))
+		.or(untoon_matcap_texture_index)
+	{
 		out.matcap.texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("matcapBlendMaskTextureIndex")
-				.or_else(|| m.get("matcap_blend_mask_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCapBlendMask").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("matcapBlendMaskTextureIndex")
+					.or_else(|| m.get("matcap_blend_mask_texture_index")),
+			)
+		})
 	}) {
 		out.matcap.blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("matcapBumpTextureIndex").or_else(|| m.get("matcap_bump_texture_index")))) {
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCapBumpMap")
+		.or_else(|| untoon.and_then(|m| json_usize(m.get("matcapBumpTextureIndex").or_else(|| m.get("matcap_bump_texture_index")))))
+	{
 		out.matcap.bump_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("matcapBlendFactor").or_else(|| m.get("matcap_blend_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_MatCapBlend"))
 	{
 		out.matcap.blend_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_f32(m.get("matcapMainStrengthFactor").or_else(|| m.get("matcap_main_strength_factor"))))
 		.or_else(|| unavatar_material_float_param(extras, "_MatCapMainStrength"))
 	{
 		out.matcap.main_strength_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| {
 			json_f32(
 				m.get("matcapEnableLightingFactor")
@@ -9750,7 +10040,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	{
 		out.matcap.enable_lighting_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_u32(m.get("matcapBlendMode").or_else(|| m.get("matcap_blend_mode"))))
 		.or_else(|| unavatar_material_float_param(extras, "_MatCapBlendMode").map(float_to_u32_saturating))
 	{
@@ -9792,22 +10082,28 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	out.matcap.second_enabled_factor = unavatar_material_float_param(extras, "_UseMatCap2nd")
 		.unwrap_or(0.0)
 		.clamp(0.0, 1.0);
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("matcap2ndTextureIndex").or_else(|| m.get("matcap_2nd_texture_index")))) {
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCap2ndTex")
+		.or_else(|| untoon.and_then(|m| json_usize(m.get("matcap2ndTextureIndex").or_else(|| m.get("matcap_2nd_texture_index")))))
+	{
 		out.matcap.second_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("matcap2ndBlendMaskTextureIndex")
-				.or_else(|| m.get("matcap_2nd_blend_mask_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCap2ndBlendMask").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("matcap2ndBlendMaskTextureIndex")
+					.or_else(|| m.get("matcap_2nd_blend_mask_texture_index")),
+			)
+		})
 	}) {
 		out.matcap.second_blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
-		json_usize(
-			m.get("matcap2ndBumpTextureIndex")
-				.or_else(|| m.get("matcap_2nd_bump_texture_index")),
-		)
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCap2ndBumpMap").or_else(|| {
+		untoon.and_then(|m| {
+			json_usize(
+				m.get("matcap2ndBumpTextureIndex")
+					.or_else(|| m.get("matcap_2nd_bump_texture_index")),
+			)
+		})
 	}) {
 		out.matcap.second_bump_texture_index = Some(value);
 	}
@@ -9866,7 +10162,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_ReflectionColor") {
 		out.reflection.color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("reflectionCubeTextureIndex")
 				.or_else(|| m.get("reflection_cube_texture_index")),
@@ -9874,7 +10170,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.reflection.cube_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("reflectionColorTextureIndex")
 				.or_else(|| m.get("reflection_color_texture_index")),
@@ -9882,15 +10178,15 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.reflection.color_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("smoothnessTextureIndex").or_else(|| m.get("smoothness_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("smoothnessTextureIndex").or_else(|| m.get("smoothness_texture_index")))) {
 		out.reflection.smoothness_texture_index = Some(value);
 	}
 	if let Some(value) =
-		mtoon.and_then(|m| json_usize(m.get("metallicGlossTextureIndex").or_else(|| m.get("metallic_gloss_texture_index"))))
+		untoon.and_then(|m| json_usize(m.get("metallicGlossTextureIndex").or_else(|| m.get("metallic_gloss_texture_index"))))
 	{
 		out.reflection.metallic_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("anisotropyTangentTextureIndex")
 				.or_else(|| m.get("anisotropy_tangent_texture_index")),
@@ -9898,7 +10194,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.reflection.anisotropy_tangent_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("anisotropyScaleMaskTextureIndex")
 				.or_else(|| m.get("anisotropy_scale_mask_texture_index")),
@@ -9906,7 +10202,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.reflection.anisotropy_scale_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("anisotropyShiftNoiseMaskTextureIndex")
 				.or_else(|| m.get("anisotropy_shift_noise_mask_texture_index")),
@@ -10038,18 +10334,32 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.reflection.anisotropy_second_bitangent_width_factor = value.max(0.0);
 	}
 
-	out.rim.enabled_factor = unavatar_material_float_param(extras, "_UseRim").unwrap_or(0.0).clamp(0.0, 1.0);
-	if let Some(value) = unavatar_material_color_param_rgba(extras, "_RimColor") {
+	let untoon_rim_texture_index =
+		untoon.and_then(|m| json_usize(m.get("rimMultiplyTextureIndex").or_else(|| m.get("rim_multiply_texture_index"))));
+	out.rim.enabled_factor = untoon
+		.and_then(|m| json_f32(m.get("rimEnabledFactor").or_else(|| m.get("rim_enabled_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_UseRim"))
+		.unwrap_or_else(|| if untoon_rim_texture_index.is_some() { 1.0 } else { 0.0 })
+		.clamp(0.0, 1.0);
+	if let Some(value) = untoon
+		.and_then(|m| json_vec3(m.get("parametricRimColorFactor").or_else(|| m.get("parametric_rim_color_factor"))))
+		.map(|value| [value[0], value[1], value[2], 1.0])
+		.or_else(|| unavatar_material_color_param_rgba(extras, "_RimColor"))
+	{
 		out.rim.color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("rimMultiplyTextureIndex").or_else(|| m.get("rim_multiply_texture_index")))) {
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_RimColorTex").or(untoon_rim_texture_index) {
 		out.rim.texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("rimShadeMaskTextureIndex").or_else(|| m.get("rim_shade_mask_texture_index"))))
+	if let Some(value) = unavatar_material_texture_param_index(extras, "_RimShadeMask")
+		.or_else(|| untoon.and_then(|m| json_usize(m.get("rimShadeMaskTextureIndex").or_else(|| m.get("rim_shade_mask_texture_index")))))
 	{
 		out.rim.shade_mask_texture_index = Some(value);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_RimMainStrength") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("rimMainStrengthFactor").or_else(|| m.get("rim_main_strength_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_RimMainStrength"))
+	{
 		out.rim.main_strength_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_RimBorder") {
@@ -10061,10 +10371,13 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_RimFresnelPower") {
 		out.rim.fresnel_power_factor = value.clamp(0.01, 50.0);
 	}
-	if let Some(value) = unavatar_material_float_param(extras, "_RimEnableLighting") {
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("rimLightingMixFactor").or_else(|| m.get("rim_lighting_mix_factor"))))
+		.or_else(|| unavatar_material_float_param(extras, "_RimEnableLighting"))
+	{
 		out.rim.enable_lighting_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon
+	if let Some(value) = untoon
 		.and_then(|m| json_u32(m.get("rimBlendMode").or_else(|| m.get("rim_blend_mode"))))
 		.or_else(|| unavatar_material_float_param(extras, "_RimBlendMode").map(float_to_u32_saturating))
 	{
@@ -10125,7 +10438,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_BacklightColor") {
 		out.backlight.color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("backlightColorTextureIndex")
 				.or_else(|| m.get("backlight_color_texture_index")),
@@ -10162,11 +10475,11 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_GlitterColor") {
 		out.glitter.color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("glitterColorTextureIndex").or_else(|| m.get("glitter_color_texture_index"))))
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("glitterColorTextureIndex").or_else(|| m.get("glitter_color_texture_index"))))
 	{
 		out.glitter.color_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("glitterShapeTextureIndex").or_else(|| m.get("glitter_shape_texture_index"))))
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("glitterShapeTextureIndex").or_else(|| m.get("glitter_shape_texture_index"))))
 	{
 		out.glitter.shape_texture_index = Some(value);
 	}
@@ -10222,11 +10535,11 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.glitter.vr_parallax_strength_factor = value.clamp(0.0, 1.0);
 	}
 
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("dissolveMaskTextureIndex").or_else(|| m.get("dissolve_mask_texture_index"))))
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("dissolveMaskTextureIndex").or_else(|| m.get("dissolve_mask_texture_index"))))
 	{
 		out.dissolve.mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("dissolveNoiseMaskTextureIndex")
 				.or_else(|| m.get("dissolve_noise_mask_texture_index")),
@@ -10250,7 +10563,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		out.dissolve.noise_uv_scroll_rotate_factor = value;
 	}
 
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("parallaxTextureIndex").or_else(|| m.get("parallax_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("parallaxTextureIndex").or_else(|| m.get("parallax_texture_index")))) {
 		out.parallax.texture_index = Some(value);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_UseParallax") {
@@ -10316,10 +10629,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_EmissionColor") {
 		out.emission.color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("emissionTextureIndex").or_else(|| m.get("emission_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("emissionTextureIndex").or_else(|| m.get("emission_texture_index")))) {
 		out.emission.texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("emissionBlendMaskTextureIndex")
 				.or_else(|| m.get("emission_blend_mask_texture_index")),
@@ -10327,7 +10640,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.emission.blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("emissionGradationTextureIndex")
 				.or_else(|| m.get("emission_gradation_texture_index")),
@@ -10367,7 +10680,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}
 	out.emission.second_enabled_factor = unavatar_material_float_param(extras, "_UseEmission2nd")
 		.unwrap_or_else(|| {
-			if mtoon
+			if untoon
 				.and_then(|m| json_usize(m.get("emission2ndTextureIndex").or_else(|| m.get("emission_2nd_texture_index"))))
 				.is_some()
 			{
@@ -10380,10 +10693,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_Emission2ndColor") {
 		out.emission.second_color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("emission2ndTextureIndex").or_else(|| m.get("emission_2nd_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("emission2ndTextureIndex").or_else(|| m.get("emission_2nd_texture_index")))) {
 		out.emission.second_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("emission2ndBlendMaskTextureIndex")
 				.or_else(|| m.get("emission_2nd_blend_mask_texture_index")),
@@ -10391,7 +10704,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.emission.second_blend_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("emission2ndGradationTextureIndex")
 				.or_else(|| m.get("emission_2nd_gradation_texture_index")),
@@ -10445,7 +10758,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_vector_param(extras, "_AudioLinkStart") {
 		out.audio_link.start_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("audioLinkMaskTextureIndex")
 				.or_else(|| m.get("audio_link_mask_texture_index")),
@@ -10495,7 +10808,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_AudioLinkAsLocal") {
 		out.audio_link.as_local_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("audioLinkLocalMapTextureIndex")
 				.or_else(|| m.get("audio_link_local_map_texture_index")),
@@ -10519,10 +10832,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_color_param_rgba(extras, "_OutlineLitColor") {
 		out.outline.lit_color_factor = value;
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("outlineTextureIndex").or_else(|| m.get("outline_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("outlineTextureIndex").or_else(|| m.get("outline_texture_index")))) {
 		out.outline.texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("outlineWidthMultiplyTextureIndex")
 				.or_else(|| m.get("outline_width_multiply_texture_index")),
@@ -10530,9 +10843,9 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.outline.width_mask_texture_index = Some(value);
 	}
-	let mtoon_outline_width = mtoon.and_then(|m| json_f32(m.get("outlineWidthFactor").or_else(|| m.get("outline_width_factor"))));
+	let untoon_outline_width = untoon.and_then(|m| json_f32(m.get("outlineWidthFactor").or_else(|| m.get("outline_width_factor"))));
 	let source_outline_width = unavatar_material_float_param(extras, "_OutlineWidth");
-	let outline_width = match (mtoon_outline_width, source_outline_width) {
+	let outline_width = match (untoon_outline_width, source_outline_width) {
 		(Some(value), Some(source_value)) if source_shader_has_outline_pass && value <= 0.0 && source_value > 0.0 => {
 			Some(source_value * 0.01)
 		}
@@ -10568,7 +10881,7 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskMode") {
 			out.alpha_mask.mode_factor = value.clamp(0.0, 4.0);
 		}
-		if let Some(value) = mtoon.and_then(|m| json_usize(m.get("alphaMaskTextureIndex").or_else(|| m.get("alpha_mask_texture_index")))) {
+		if let Some(value) = untoon.and_then(|m| json_usize(m.get("alphaMaskTextureIndex").or_else(|| m.get("alpha_mask_texture_index")))) {
 			out.alpha_mask.texture_index = Some(value);
 		}
 		if let Some(value) = unavatar_material_float_param(extras, "_AlphaMaskScale") {
@@ -10624,10 +10937,10 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_FurRimAntiLight") {
 		out.fur.rim_anti_light_factor = value.clamp(0.0, 1.0);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furVectorTextureIndex").or_else(|| m.get("fur_vector_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("furVectorTextureIndex").or_else(|| m.get("fur_vector_texture_index")))) {
 		out.fur.vector_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| {
+	if let Some(value) = untoon.and_then(|m| {
 		json_usize(
 			m.get("furLengthMaskTextureIndex")
 				.or_else(|| m.get("fur_length_mask_texture_index")),
@@ -10635,11 +10948,12 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	}) {
 		out.fur.length_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furNoiseMaskTextureIndex").or_else(|| m.get("fur_noise_mask_texture_index"))))
+	if let Some(value) =
+		untoon.and_then(|m| json_usize(m.get("furNoiseMaskTextureIndex").or_else(|| m.get("fur_noise_mask_texture_index"))))
 	{
 		out.fur.noise_mask_texture_index = Some(value);
 	}
-	if let Some(value) = mtoon.and_then(|m| json_usize(m.get("furMaskTextureIndex").or_else(|| m.get("fur_mask_texture_index")))) {
+	if let Some(value) = untoon.and_then(|m| json_usize(m.get("furMaskTextureIndex").or_else(|| m.get("fur_mask_texture_index")))) {
 		out.fur.mask_texture_index = Some(value);
 	}
 	if let Some(value) = unavatar_material_float_param(extras, "_SrcBlend") {
@@ -10687,7 +11001,39 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_AlphaToMask") {
 		out.blend_state.alpha_to_mask_factor = value.clamp(0.0, 1.0);
 	}
+	out.rendering.pipeline_state.stencil = unavatar_material_stencil_state(extras, "");
+	out.rendering.pipeline_state.outline_stencil = unavatar_material_stencil_state(extras, "Outline");
+	out.rendering.pipeline_state.fur_stencil = unavatar_material_stencil_state(extras, "Fur");
+	out.rendering.pipeline_state.color_mask = unavatar_material_u8_param(extras, "_ColorMask", 15) & 0x0f;
+	out.rendering.pipeline_state.outline_color_mask = unavatar_material_u8_param(extras, "_OutlineColorMask", 15) & 0x0f;
+	out.rendering.pipeline_state.fur_color_mask = unavatar_material_u8_param(extras, "_FurColorMask", 15) & 0x0f;
 	Some(out)
+}
+
+fn unavatar_material_u8_param(extras: &Value, name: &str, default_value: u8) -> u8 {
+	unavatar_material_float_param(extras, name)
+		.map(|value| value.round().clamp(0.0, 255.0) as u8)
+		.unwrap_or(default_value)
+}
+
+fn prefixed_unity_param(prefix: &str, suffix: &str) -> String {
+	if prefix.is_empty() {
+		format!("_{suffix}")
+	} else {
+		format!("_{prefix}{suffix}")
+	}
+}
+
+fn unavatar_material_stencil_state(extras: &Value, prefix: &str) -> UnaLilToonLikeStencilState {
+	UnaLilToonLikeStencilState {
+		reference: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilRef"), 0),
+		read_mask: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilReadMask"), 255),
+		write_mask: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilWriteMask"), 255),
+		compare: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilComp"), 8),
+		pass_op: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilPass"), 0),
+		fail_op: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilFail"), 0),
+		depth_fail_op: unavatar_material_u8_param(extras, &prefixed_unity_param(prefix, "StencilZFail"), 0),
+	}
 }
 
 fn float_to_u32_saturating(value: f32) -> u32 {
@@ -10707,18 +11053,9 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 	let mtoon = extras.get("mtoon")?;
 	let family = extras.get("family").and_then(|v| v.as_str()).unwrap_or("");
 	let source_shader = extras.get("sourceShader").and_then(|v| v.as_str()).unwrap_or("");
-	let outline_width_unit = mtoon
-		.get("outlineWidthFactorUnit")
-		.or_else(|| mtoon.get("outline_width_factor_unit"))
-		.and_then(|v| v.as_str())
-		.unwrap_or("");
-	let liltoon_outline_width_scale = if outline_width_unit.eq_ignore_ascii_case("meters") {
-		1.0
-	} else if family.eq_ignore_ascii_case("liltoon") || source_shader.to_ascii_lowercase().contains("liltoon") {
-		0.01
-	} else {
-		1.0
-	};
+	if !unavatar_material_source_is_mtoon(family, source_shader) {
+		return None;
+	}
 	let mut out = UnaMtoonMaterial::default();
 	if let Some(value) = json_bool(mtoon.get("transparentWithZWrite").or_else(|| mtoon.get("transparent_with_z_write"))) {
 		out.transparent_with_z_write = value;
@@ -10825,7 +11162,7 @@ fn unavatar_mtoon_from_extras(extras: &Value) -> Option<UnaMtoonMaterial> {
 		};
 	}
 	if let Some(value) = json_f32(mtoon.get("outlineWidthFactor").or_else(|| mtoon.get("outline_width_factor"))) {
-		out.outline_width_factor = value * liltoon_outline_width_scale;
+		out.outline_width_factor = value;
 	}
 	if let Some(value) = json_usize(
 		mtoon
@@ -10954,6 +11291,14 @@ fn unavatar_material_vector_param(extras: &Value, name: &str) -> Option<[f32; 4]
 		.or_else(|| extras.get("vector_params"))
 		.and_then(|params| params.get(name))
 		.and_then(|value| json_vec4(Some(value)))
+}
+
+fn unavatar_material_texture_param_index(extras: &Value, name: &str) -> Option<usize> {
+	extras
+		.get("textureParams")
+		.or_else(|| extras.get("texture_params"))
+		.and_then(|params| params.get(name))
+		.and_then(|value| json_usize(Some(value)))
 }
 
 fn unavatar_material_uv_offset_scales(extras: &Value) -> BTreeMap<String, [f32; 4]> {
@@ -11539,8 +11884,8 @@ fn scene_snapshot_from_gltf_inner(
 		));
 	}
 	let step_started = Instant::now();
-	refine_liltoon_alpha_from_images(&mut materials, &images);
-	record_scene_snapshot_profile_step(report, profile, "refine_liltoon_alpha_from_images", step_started);
+	refine_untoon_alpha_from_images(&mut materials, &images);
+	record_scene_snapshot_profile_step(report, profile, "refine_untoon_alpha_from_images", step_started);
 
 	let step_started = Instant::now();
 	let skins = build_skins(document, buffers)?;
@@ -11677,6 +12022,7 @@ fn scene_snapshot_from_gltf_inner(
 		meshes,
 		materials,
 		images,
+		lighting: None,
 		image_sources,
 		skins,
 		nodes,
@@ -12012,6 +12358,9 @@ impl AvatarImporter for GltfImporter {
 		let step_started = Instant::now();
 		let unavatar = root_json.as_ref().and_then(unavatar_extension_from_root);
 		record_gltf_import_profile_step(&mut report, "parse_unavatar_extension", step_started);
+		if let Some(scene_lighting) = unavatar.as_ref().and_then(unavatar_scene_lighting) {
+			scene.lighting = Some(scene_lighting);
+		}
 		let step_started = Instant::now();
 		let humanoid_profile = unavatar
 			.as_ref()
@@ -12173,6 +12522,50 @@ mod tests {
 	use std::io::Write;
 	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
 	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource};
+
+	#[test]
+	fn unavatar_scene_lighting_parses_unity_scene_payload() {
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"sceneLighting": {
+					"environment": {
+						"color": [0.4, 0.5, 0.6],
+						"intensity": 0.25,
+						"skyColor": [0.212, 0.227, 0.259],
+						"equatorColor": [0.114, 0.125, 0.133],
+						"groundColor": [0.047, 0.043, 0.035],
+						"sphericalHarmonics": {
+							"ar": [0.1, 0.2, 0.3, 0.4],
+							"ag": [0.5, 0.6, 0.7, 0.8],
+							"ab": [0.9, 1.0, 1.1, 1.2],
+							"br": [1.3, 1.4, 1.5, 1.6],
+							"bg": [1.7, 1.8, 1.9, 2.0],
+							"bb": [2.1, 2.2, 2.3, 2.4],
+							"c": [2.5, 2.6, 2.7, 2.8]
+						}
+					},
+					"directional": {
+						"color": [1.0, 0.95686275, 0.8392157],
+						"intensity": 1.0,
+						"direction": [0.32139377, 0.7660444, -0.55667046]
+					}
+				}
+			}),
+		};
+
+		let lighting = unavatar_scene_lighting(&unavatar).expect("scene lighting");
+		let environment = lighting.environment.expect("environment");
+		assert_eq!(environment.color, [0.4, 0.5, 0.6]);
+		assert_eq!(environment.sky_color, Some([0.212, 0.227, 0.259]));
+		let sh = environment.spherical_harmonics.expect("spherical harmonics");
+		assert_eq!(sh.ar, [0.1, 0.2, 0.3, 0.4]);
+		assert_eq!(sh.c, [2.5, 2.6, 2.7, 2.8]);
+		let directional = lighting.directional.expect("directional");
+		assert!((directional.azimuth_deg - 150.0).abs() < 0.01);
+		assert!((directional.elevation_deg - 50.0).abs() < 0.01);
+		assert_eq!(directional.color, [1.0, 0.95686275, 0.8392157]);
+	}
 
 	fn triangle_bin_bytes() -> Vec<u8> {
 		let mut v = Vec::with_capacity(48);
@@ -13697,7 +14090,8 @@ mod tests {
 				wrap_t: UnaTextureWrapMode::Repeat,
 			})
 		);
-		assert_eq!(scene.materials[0].mtoon.as_ref().unwrap().matcap_texture_index, Some(0));
+		assert!(scene.materials[0].mtoon.is_none());
+		assert_eq!(scene.materials[0].liltoon_like.as_ref().unwrap().matcap.texture_index, Some(0));
 	}
 
 	#[test]
@@ -13929,7 +14323,11 @@ mod tests {
 			)
 			.unwrap();
 		let scene = got.document.scene.as_ref().unwrap();
-		assert_eq!(scene.materials[0].mtoon.as_ref().unwrap().reflection_cube_texture_index, Some(0));
+		assert!(scene.materials[0].mtoon.is_none());
+		assert_eq!(
+			scene.materials[0].liltoon_like.as_ref().unwrap().reflection.cube_texture_index,
+			Some(0)
+		);
 	}
 
 	#[test]
@@ -14320,12 +14718,10 @@ mod tests {
 			}]
 		);
 		assert_eq!(scene.materials[0].shading, UnaShadingModel::LilToonLike);
-		assert!(scene.materials[0].liltoon_like.is_some());
-		let mtoon = scene.materials[0].mtoon.as_ref().unwrap();
-		assert_eq!(mtoon.shade_color_factor, [0.7, 0.8, 0.9]);
-		assert_eq!(mtoon.shading_shift_factor, -0.1);
-		assert_eq!(mtoon.outline_width_mode, UnaMtoonOutlineWidthMode::WorldCoordinates);
-		assert!((mtoon.outline_width_factor - 0.0003).abs() < 1e-8);
+		assert!(scene.materials[0].mtoon.is_none());
+		let liltoon_like = scene.materials[0].liltoon_like.as_ref().unwrap();
+		assert_eq!(liltoon_like.shadow.color_factor, [0.7, 0.8, 0.9]);
+		assert!((liltoon_like.outline.width_factor - 0.0003).abs() < 1e-8);
 		let applied = apply_unavatar_wardrobe_set(&mut got.document, "visible").unwrap();
 		assert_eq!(applied.visibility_applied, 1);
 		assert_eq!(applied.visibility_missing, 0);
@@ -15667,6 +16063,18 @@ mod tests {
 			"sourceShader": "Hidden/lilToonOutline",
 			"floatParams": { "_SrcBlend": 1.0, "_DstBlend": 0.0, "_AlphaToMask": 1.0 }
 		});
+		let native_untoon_queue_transparent = serde_json::json!({
+			"family": "toon",
+			"sourceShader": "UN/Toon",
+			"unMaterialModel": "UNToon",
+			"renderQueue": 3000
+		});
+		let mtoon_untoon_alpha_to_mask = serde_json::json!({
+			"family": "mtoon",
+			"sourceShader": "VRM/MToon",
+			"untoon": {},
+			"floatParams": { "_SrcBlend": 1.0, "_DstBlend": 0.0, "_AlphaToMask": 1.0 }
+		});
 
 		assert_eq!(
 			unavatar_material_inferred_alpha_mode(Some(&transparent), UnaAlphaMode::Opaque, None, true),
@@ -15741,6 +16149,14 @@ mod tests {
 			Some(UnaAlphaMode::Mask)
 		);
 		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&native_untoon_queue_transparent), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Blend)
+		);
+		assert_eq!(
+			unavatar_material_inferred_alpha_mode(Some(&mtoon_untoon_alpha_to_mask), UnaAlphaMode::Opaque, None, true),
+			Some(UnaAlphaMode::Mask)
+		);
+		assert_eq!(
 			unavatar_material_alpha_cutoff_from_source_params(&serde_json::json!({
 				"floatParams": { "_Cutoff": 0.25 }
 			})),
@@ -15781,7 +16197,7 @@ mod tests {
 	}
 
 	#[test]
-	fn refines_ordinary_liltoon_mask_from_texture_alpha_shape() {
+	fn refines_ordinary_untoon_mask_from_texture_alpha_shape() {
 		let extras = serde_json::json!({
 			"family": "liltoon",
 			"sourceShader": "Hidden/lilToonOutline"
@@ -15809,6 +16225,7 @@ mod tests {
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.5,
 				base_color_texture_index: Some(0),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
 				unavatar_material: Some(extras.clone()),
 				..Default::default()
 			},
@@ -15816,6 +16233,7 @@ mod tests {
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.5,
 				base_color_texture_index: Some(1),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
 				unavatar_material: Some(extras),
 				..Default::default()
 			},
@@ -15823,6 +16241,7 @@ mod tests {
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.001,
 				base_color_texture_index: Some(2),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
 				unavatar_material: Some(serde_json::json!({
 					"family": "liltoon",
 					"sourceShader": "Hidden/lilToonOutline"
@@ -15833,6 +16252,7 @@ mod tests {
 				alpha_mode: UnaAlphaMode::Opaque,
 				alpha_cutoff: 0.001,
 				base_color_texture_index: Some(1),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
 				unavatar_material: Some(serde_json::json!({
 					"family": "liltoon",
 					"sourceShader": "Hidden/lilToonOutline"
@@ -15843,15 +16263,28 @@ mod tests {
 				alpha_mode: UnaAlphaMode::Mask,
 				alpha_cutoff: 0.0,
 				base_color_texture_index: Some(1),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
 				unavatar_material: Some(serde_json::json!({
 					"family": "liltoon",
 					"sourceShader": "Hidden/lilToonTransparentOutline"
 				})),
 				..Default::default()
 			},
+			UnaMaterialPbr {
+				alpha_mode: UnaAlphaMode::Mask,
+				alpha_cutoff: 0.5,
+				base_color_texture_index: Some(0),
+				liltoon_like: Some(UnaLilToonLikeMaterial::default()),
+				unavatar_material: Some(serde_json::json!({
+					"family": "toon",
+					"sourceShader": "UN/Toon",
+					"unMaterialModel": "UNToon"
+				})),
+				..Default::default()
+			},
 		];
 
-		refine_liltoon_alpha_from_images(&mut materials, &[opaque_image, transparent_image, translucent_image]);
+		refine_untoon_alpha_from_images(&mut materials, &[opaque_image, transparent_image, translucent_image]);
 
 		assert_eq!(materials[0].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[1].alpha_mode, UnaAlphaMode::Mask);
@@ -15859,6 +16292,7 @@ mod tests {
 		assert_eq!(materials[3].alpha_mode, UnaAlphaMode::Opaque);
 		assert_eq!(materials[4].alpha_mode, UnaAlphaMode::Mask);
 		assert_eq!(materials[4].alpha_cutoff, 1.0 / 255.0);
+		assert_eq!(materials[5].alpha_mode, UnaAlphaMode::Opaque);
 	}
 
 	#[test]
@@ -15872,9 +16306,10 @@ mod tests {
 			}
 		});
 
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
 
-		assert!(mtoon.transparent_with_z_write);
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+		assert_eq!(liltoon_like.blend_state.pre_zwrite_factor, 1.0);
 	}
 
 	#[test]
@@ -15887,9 +16322,8 @@ mod tests {
 		});
 
 		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
 
-		assert!(mtoon.transparent_with_z_write);
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
 		assert_eq!(liltoon_like.blend_state.pre_zwrite_factor, 0.0);
 	}
 
@@ -15904,9 +16338,10 @@ mod tests {
 			}
 		});
 
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
 
-		assert!(!mtoon.transparent_with_z_write);
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+		assert_eq!(liltoon_like.blend_state.pre_zwrite_factor, 1.0);
 	}
 
 	#[test]
@@ -16001,8 +16436,39 @@ mod tests {
 					"_EmissionMap": 1.0,
 					"_Bump2ndMap": 2.0
 				},
+				"textureParams": {
+					"_ShadowColorTex": 108,
+					"_Shadow2ndColorTex": 138,
+					"_Shadow3rdColorTex": 139,
+					"_ShadowStrengthMask": 109,
+					"_ShadowBorderMask": 110,
+					"_ShadowBlurMask": 111,
+					"_MatCapTex": 119,
+					"_MatCapBlendMask": 120,
+					"_MatCapBumpMap": 166,
+					"_MatCap2ndTex": 122,
+					"_MatCap2ndBlendMask": 123,
+					"_MatCap2ndBumpMap": 167,
+					"_RimColorTex": 112,
+					"_RimShadeMask": 113,
+					"_UvAnimMaskTexture": 107
+				},
 				"floatParams": {
 					"_FlipNormal": 1.0,
+					"_StencilRef": 12.0,
+					"_StencilReadMask": 127.0,
+					"_StencilWriteMask": 63.0,
+					"_StencilComp": 6.0,
+					"_StencilPass": 2.0,
+					"_StencilFail": 3.0,
+					"_StencilZFail": 4.0,
+					"_ColorMask": 11.0,
+					"_OutlineStencilRef": 2.0,
+					"_OutlineStencilComp": 3.0,
+					"_OutlineColorMask": 7.0,
+					"_FurStencilRef": 5.0,
+					"_FurStencilPass": 2.0,
+					"_FurColorMask": 8.0,
 					"_UseShadow": 1.0,
 					"_UseMatCap": 1.0,
 					"_UseReflection": 1.0,
@@ -16285,6 +16751,8 @@ mod tests {
 					"_DistanceFadeRimColor": [0.7, 0.6, 0.5, 0.4]
 				},
 				"vectorParams": {
+					"_MainTex_ScrollRotate": [0.01, 0.02, 0.03, 0.0],
+					"_LightDirectionOverride": [0.0, 0.001, 0.0, 0.0],
 					"_ShadowAOShift": [3.0, 0.1, 2.0, 0.2],
 					"_ShadowAOShift2": [1.5, 0.3, 0.0, 0.0],
 					"_MatCapBlendUV1": [0.12, 0.34, 0.0, 0.0],
@@ -16367,7 +16835,7 @@ mod tests {
 		.expect("test extras JSON");
 
 		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
 		assert_eq!(liltoon_like.flip_backface_normal_factor, 1.0);
@@ -16434,6 +16902,20 @@ mod tests {
 		assert_eq!(liltoon_like.texture_uv_mode_factors.get("_EmissionMap"), Some(&1.0));
 		assert_eq!(liltoon_like.texture_uv_mode_factors.get("_Bump2ndMap"), Some(&2.0));
 		assert_eq!(liltoon_like.rendering.render_queue_number, Some(2461));
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.reference, 12);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.read_mask, 127);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.write_mask, 63);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.compare, 6);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.pass_op, 2);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.fail_op, 3);
+		assert_eq!(liltoon_like.rendering.pipeline_state.stencil.depth_fail_op, 4);
+		assert_eq!(liltoon_like.rendering.pipeline_state.color_mask, 11);
+		assert_eq!(liltoon_like.rendering.pipeline_state.outline_stencil.reference, 2);
+		assert_eq!(liltoon_like.rendering.pipeline_state.outline_stencil.compare, 3);
+		assert_eq!(liltoon_like.rendering.pipeline_state.outline_color_mask, 7);
+		assert_eq!(liltoon_like.rendering.pipeline_state.fur_stencil.reference, 5);
+		assert_eq!(liltoon_like.rendering.pipeline_state.fur_stencil.pass_op, 2);
+		assert_eq!(liltoon_like.rendering.pipeline_state.fur_color_mask, 8);
 		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.06);
 		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.9);
 		assert_eq!(liltoon_like.rendering.monochrome_lighting_factor, 0.25);
@@ -16446,15 +16928,18 @@ mod tests {
 		assert_eq!(liltoon_like.rendering.distance_fade_rim_color_factor, [0.7, 0.6, 0.5, 0.4]);
 		assert_eq!(liltoon_like.rendering.distance_fade_rim_fresnel_power_factor, 6.5);
 		assert_eq!(liltoon_like.rendering.distance_fade_mode_factor, 1.0);
+		assert_eq!(liltoon_like.rendering.light_direction_override_factor, [0.0, 0.001, 0.0, 0.0]);
+		assert_eq!(liltoon_like.main_color.main_uv_scroll_rotate_factor, [0.01, 0.02, 0.03, 0.0]);
+		assert_eq!(liltoon_like.main_color.uv_animation_mask_texture_index, Some(107));
 		assert_eq!(liltoon_like.normal.second_enabled_factor, 1.0);
 		assert_eq!(liltoon_like.normal.second_texture_index, Some(24));
 		assert_eq!(liltoon_like.normal.second_scale_mask_texture_index, Some(65));
 		assert_eq!(liltoon_like.normal.second_scale_factor, 0.33);
 		assert_eq!(liltoon_like.shadow.color_factor, [0.7, 0.8, 0.9]);
-		assert_eq!(liltoon_like.shadow.color_texture_index, Some(8));
-		assert_eq!(liltoon_like.shadow.strength_mask_texture_index, Some(9));
-		assert_eq!(liltoon_like.shadow.border_mask_texture_index, Some(10));
-		assert_eq!(liltoon_like.shadow.blur_mask_texture_index, Some(11));
+		assert_eq!(liltoon_like.shadow.color_texture_index, Some(108));
+		assert_eq!(liltoon_like.shadow.strength_mask_texture_index, Some(109));
+		assert_eq!(liltoon_like.shadow.border_mask_texture_index, Some(110));
+		assert_eq!(liltoon_like.shadow.blur_mask_texture_index, Some(111));
 		assert_eq!(liltoon_like.shadow.strength_factor, 0.75);
 		assert_eq!(liltoon_like.shadow.border_factor, 0.42);
 		assert_eq!(liltoon_like.shadow.blur_factor, 0.18);
@@ -16468,22 +16953,22 @@ mod tests {
 		assert_eq!(liltoon_like.shadow.normal_strength_factor, 0.55);
 		assert_eq!(liltoon_like.shadow.receive_factor, 0.65);
 		assert_eq!(liltoon_like.shadow.second_color_factor, [0.4, 0.5, 0.6, 0.7]);
-		assert_eq!(liltoon_like.shadow.second_color_texture_index, Some(38));
+		assert_eq!(liltoon_like.shadow.second_color_texture_index, Some(138));
 		assert_eq!(liltoon_like.shadow.second_border_factor, 0.31);
 		assert_eq!(liltoon_like.shadow.second_blur_factor, 0.21);
 		assert_eq!(liltoon_like.shadow.second_normal_strength_factor, 0.71);
 		assert_eq!(liltoon_like.shadow.second_receive_factor, 0.81);
 		assert_eq!(liltoon_like.shadow.third_color_factor, [0.3, 0.4, 0.5, 0.6]);
-		assert_eq!(liltoon_like.shadow.third_color_texture_index, Some(39));
+		assert_eq!(liltoon_like.shadow.third_color_texture_index, Some(139));
 		assert_eq!(liltoon_like.shadow.third_border_factor, 0.41);
 		assert_eq!(liltoon_like.shadow.third_blur_factor, 0.32);
 		assert_eq!(liltoon_like.shadow.third_normal_strength_factor, 0.72);
 		assert_eq!(liltoon_like.shadow.third_receive_factor, 0.82);
 		assert_eq!(liltoon_like.matcap.color_factor, [0.2, 0.4, 0.6]);
 		assert_eq!(liltoon_like.matcap.color_alpha_factor, 0.7);
-		assert_eq!(liltoon_like.matcap.texture_index, Some(19));
-		assert_eq!(liltoon_like.matcap.blend_mask_texture_index, Some(20));
-		assert_eq!(liltoon_like.matcap.bump_texture_index, Some(66));
+		assert_eq!(liltoon_like.matcap.texture_index, Some(119));
+		assert_eq!(liltoon_like.matcap.blend_mask_texture_index, Some(120));
+		assert_eq!(liltoon_like.matcap.bump_texture_index, Some(166));
 		assert_eq!(liltoon_like.matcap.main_strength_factor, 0.5);
 		assert_eq!(liltoon_like.matcap.blend_factor, 0.25);
 		assert_eq!(liltoon_like.matcap.enable_lighting_factor, 0.75);
@@ -16500,9 +16985,9 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.vr_parallax_strength_factor, 0.84);
 		assert_eq!(liltoon_like.matcap.blend_uv1_factor, [0.12, 0.34]);
 		assert_eq!(liltoon_like.matcap.second_enabled_factor, 1.0);
-		assert_eq!(liltoon_like.matcap.second_texture_index, Some(22));
-		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(23));
-		assert_eq!(liltoon_like.matcap.second_bump_texture_index, Some(67));
+		assert_eq!(liltoon_like.matcap.second_texture_index, Some(122));
+		assert_eq!(liltoon_like.matcap.second_blend_mask_texture_index, Some(123));
+		assert_eq!(liltoon_like.matcap.second_bump_texture_index, Some(167));
 		assert_eq!(liltoon_like.matcap.second_color_factor, [0.3, 0.5, 0.7, 0.9]);
 		assert_eq!(liltoon_like.matcap.second_main_strength_factor, 0.58);
 		assert_eq!(liltoon_like.matcap.second_blend_factor, 0.68);
@@ -16560,7 +17045,8 @@ mod tests {
 		assert_eq!(liltoon_like.reflection.anisotropy_shift_noise_mask_texture_index, Some(28));
 		assert_eq!(liltoon_like.rim.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.rim.color_factor, [0.1, 0.2, 0.3, 1.0]);
-		assert_eq!(liltoon_like.rim.texture_index, Some(12));
+		assert_eq!(liltoon_like.rim.texture_index, Some(112));
+		assert_eq!(liltoon_like.rim.shade_mask_texture_index, Some(113));
 		assert_eq!(liltoon_like.rim.main_strength_factor, 0.4);
 		assert_eq!(liltoon_like.rim.border_factor, 0.3);
 		assert_eq!(liltoon_like.rim.blur_factor, 0.2);
@@ -16709,8 +17195,151 @@ mod tests {
 		assert_eq!(liltoon_like.blend_state.pre_zwrite_factor, 0.0);
 		assert_eq!(liltoon_like.blend_state.pre_cull_factor, 1.0);
 		assert_eq!(liltoon_like.blend_state.alpha_to_mask_factor, 1.0);
-		assert_eq!(mtoon.parametric_rim_color_factor, [0.040000003, 0.080000006, 0.120000005]);
-		assert_eq!(mtoon.outline_color_factor, [0.01, 0.02, 0.03]);
+	}
+
+	#[test]
+	fn unavatar_untoon_payload_imports_without_creating_mtoon_source_profile() {
+		let extras = serde_json::json!({
+			"sourceShader": "lilToon",
+			"family": "liltoon",
+			"unMaterialModel": "UNToon",
+			"colorParams": {
+				"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
+				"_ShadowColor": [0.6, 0.5, 0.4, 1.0]
+			},
+			"untoon": {
+				"shadeColorFactor": [0.2, 0.3, 0.4],
+				"shadowColorTextureIndex": 8,
+				"mainTexHsvgFactor": [0.0, 0.8, 1.2, 1.0],
+				"matcapTextureIndex": 9,
+				"outlineWidthFactor": 0.0004,
+				"outlineWidthFactorUnit": "meters",
+				"lightMinLimitFactor": 0.07,
+				"lightMaxLimitFactor": 0.8,
+				"monochromeLightingFactor": 0.2,
+				"asUnlitFactor": 0.3,
+				"vertexLightStrengthFactor": 0.4,
+				"aaStrengthFactor": 1.5,
+				"gsaaStrengthFactor": 0.6,
+				"matcapEnabledFactor": 1.0,
+				"matcapFactor": [0.25, 0.5, 0.75],
+				"matcapMainStrengthFactor": 0.6,
+				"matcapBlendFactor": 0.7,
+				"matcapEnableLightingFactor": 0.8,
+				"rimEnabledFactor": 1.0,
+				"parametricRimColorFactor": [0.1, 0.2, 0.3],
+				"rimMainStrengthFactor": 0.4,
+				"rimLightingMixFactor": 0.5,
+				"rimBlendMode": 1,
+				"rimMultiplyTextureIndex": 10
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("UNToon semantic material");
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+		assert_eq!(liltoon_like.color_factor_color_space, UnaColorFactorColorSpace::Linear);
+		assert_eq!(liltoon_like.shadow.color_factor, [0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.shadow.color_texture_index, Some(8));
+		assert_eq!(liltoon_like.main_color.main_texture_hsvg_factor, [0.0, 0.8, 1.2, 1.0]);
+		assert_eq!(liltoon_like.matcap.texture_index, Some(9));
+		assert_eq!(liltoon_like.matcap.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.matcap.color_factor, [0.25, 0.5, 0.75]);
+		assert_eq!(liltoon_like.matcap.main_strength_factor, 0.6);
+		assert_eq!(liltoon_like.matcap.blend_factor, 0.7);
+		assert_eq!(liltoon_like.matcap.enable_lighting_factor, 0.8);
+		assert_eq!(liltoon_like.rim.enabled_factor, 1.0);
+		assert_eq!(liltoon_like.rim.color_factor, [0.1, 0.2, 0.3, 1.0]);
+		assert_eq!(liltoon_like.rim.main_strength_factor, 0.4);
+		assert_eq!(liltoon_like.rim.enable_lighting_factor, 0.5);
+		assert_eq!(liltoon_like.rim.blend_mode, UnaLilToonLikeBlendMode::Add);
+		assert_eq!(liltoon_like.rim.texture_index, Some(10));
+		assert!((liltoon_like.outline.width_factor - 0.0004).abs() < 0.000001);
+		assert_eq!(liltoon_like.rendering.light_min_limit_factor, 0.07);
+		assert_eq!(liltoon_like.rendering.light_max_limit_factor, 0.8);
+		assert_eq!(liltoon_like.rendering.monochrome_lighting_factor, 0.2);
+		assert_eq!(liltoon_like.rendering.as_unlit_factor, 0.3);
+		assert_eq!(liltoon_like.rendering.vertex_light_strength_factor, 0.4);
+		assert_eq!(liltoon_like.rendering.aa_strength_factor, 1.5);
+		assert_eq!(liltoon_like.rendering.gsaa_strength_factor, 0.6);
+	}
+
+	#[test]
+	fn unavatar_untoon_payload_takes_precedence_over_legacy_mtoon_payload() {
+		let extras = serde_json::json!({
+			"sourceShader": "lilToon",
+			"family": "liltoon",
+			"unMaterialModel": "UNToon",
+			"untoon": {
+				"shadeColorFactor": [0.2, 0.3, 0.4],
+				"matcapTextureIndex": 9
+			},
+			"mtoon": {
+				"shadeColorFactor": [0.9, 0.8, 0.7],
+				"matcapTextureIndex": 19,
+				"rimMultiplyTextureIndex": 29
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("UNToon semantic material");
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::Liltoon);
+		assert_eq!(liltoon_like.shadow.color_factor, [0.2, 0.3, 0.4]);
+		assert_eq!(liltoon_like.matcap.texture_index, Some(9));
+		assert_eq!(liltoon_like.rim.texture_index, None);
+	}
+
+	#[test]
+	fn unavatar_untoon_payload_imports_independent_of_liltoon_source_name() {
+		let extras = serde_json::json!({
+			"sourceShader": "UN/Toon",
+			"family": "toon",
+			"unMaterialModel": "UNToon",
+			"colorFactorColorSpace": "srgb",
+			"untoon": {
+				"shadeColorFactor": [0.2, 0.3, 0.4],
+				"matcapTextureIndex": 9
+			}
+		});
+
+		let material = unavatar_liltoon_like_from_extras(&extras).expect("native UNToon semantic material");
+		assert_eq!(material.source_profile, UnaLilToonLikeSourceProfile::Unknown);
+		assert_eq!(material.color_factor_color_space, UnaColorFactorColorSpace::Srgb);
+		assert_eq!(material.shadow.color_factor, [0.2, 0.3, 0.4]);
+		assert_eq!(material.matcap.texture_index, Some(9));
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+	}
+
+	#[test]
+	fn legacy_liltoon_linear_marker_is_normalized_to_srgb_color_factors_at_import() {
+		let extras = serde_json::json!({
+			"sourceShader": "Hidden/lilToonOutline",
+			"family": "liltoon",
+			"unMaterialModel": "UNToon",
+			"colorFactorColorSpace": "linear",
+			"untoon": {}
+		});
+
+		let material = unavatar_liltoon_like_from_extras(&extras).expect("lilToon source material");
+		assert_eq!(material.color_factor_color_space, UnaColorFactorColorSpace::Srgb);
+	}
+
+	#[test]
+	fn unavatar_untoon_payload_from_mtoon_family_imports_as_converted_untoon_without_mtoon_payload() {
+		let extras = serde_json::json!({
+			"sourceShader": "VRM/MToon",
+			"family": "mtoon",
+			"unMaterialModel": "UNToon",
+			"untoon": {
+				"shadeColorFactor": [0.5, 0.4, 0.3],
+				"rimMultiplyTextureIndex": 12
+			}
+		});
+
+		let material = unavatar_liltoon_like_from_extras(&extras).expect("MToon source normalized to UNToon semantic material");
+		assert_eq!(material.source_profile, UnaLilToonLikeSourceProfile::MtoonConverted);
+		assert_eq!(material.shadow.color_factor, [0.5, 0.4, 0.3]);
+		assert_eq!(material.rim.texture_index, Some(12));
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
 	}
 
 	#[test]
@@ -16782,19 +17411,13 @@ mod tests {
 		});
 
 		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("legacy mtoon material");
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
 
-		assert_eq!(mtoon.shade_color_factor, UnaMtoonMaterial::default().shade_color_factor);
-		assert_eq!(mtoon.matcap_factor, UnaMtoonMaterial::default().matcap_factor);
 		assert_eq!(liltoon_like.shadow.enabled_factor, 0.0);
 		assert_eq!(liltoon_like.matcap.enabled_factor, 0.0);
 		assert_eq!(liltoon_like.rim.enabled_factor, 0.0);
 		assert_eq!(liltoon_like.emission.enabled_factor, 0.0);
 		assert_eq!(liltoon_like.outline.enabled_factor, 0.0);
-		assert_eq!(
-			mtoon.parametric_rim_color_factor,
-			UnaMtoonMaterial::default().parametric_rim_color_factor
-		);
 	}
 
 	#[test]
@@ -16845,6 +17468,7 @@ mod tests {
 		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon gem material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::LiltoonGem);
+		assert_eq!(liltoon_like.runtime_variant, UnaLilToonLikeRuntimeVariant::Gem);
 		assert_eq!(liltoon_like.reflection.gem_env_color_factor, [0.8, 0.9, 1.0, 0.7]);
 		assert_eq!(liltoon_like.reflection.gem_env_contrast_factor, 2.5);
 		assert_eq!(liltoon_like.reflection.gem_refraction_fresnel_power_factor, 4.25);
@@ -16874,6 +17498,7 @@ mod tests {
 		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon refraction material");
 
 		assert_eq!(liltoon_like.source_profile, UnaLilToonLikeSourceProfile::LiltoonRefraction);
+		assert_eq!(liltoon_like.runtime_variant, UnaLilToonLikeRuntimeVariant::Refraction);
 		assert_eq!(liltoon_like.reflection.gem_refraction_fresnel_power_factor, 0.75);
 		assert_eq!(liltoon_like.reflection.gem_refraction_strength_factor, -0.25);
 		assert_eq!(liltoon_like.reflection.refraction_color_factor, [0.8, 0.9, 1.0, 0.6]);
@@ -16881,7 +17506,7 @@ mod tests {
 	}
 
 	#[test]
-	fn imports_mtoon_uv_animation_fields() {
+	fn imports_legacy_liltoon_payload_uv_animation_fields() {
 		let extras = serde_json::json!({
 			"family": "liltoon",
 			"sourceShader": "lilToon",
@@ -16894,13 +17519,12 @@ mod tests {
 			}
 		});
 
-		let mtoon = unavatar_mtoon_from_extras(&extras).expect("mtoon material");
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("liltoon_like material");
 
-		assert_eq!(mtoon.uv_offset_scale, [0.1, 0.2, 2.0, 3.0]);
-		assert_eq!(mtoon.uv_animation_mask_texture_index, Some(7));
-		assert_eq!(mtoon.uv_animation_scroll_x_speed_factor, 0.25);
-		assert_eq!(mtoon.uv_animation_scroll_y_speed_factor, -0.5);
-		assert_eq!(mtoon.uv_animation_rotation_speed_factor, 0.75);
+		assert!(unavatar_mtoon_from_extras(&extras).is_none());
+		assert_eq!(unavatar_untoon_uv_offset_scale(&extras), Some([0.1, 0.2, 2.0, 3.0]));
+		assert_eq!(liltoon_like.main_color.uv_animation_mask_texture_index, Some(7));
+		assert_eq!(liltoon_like.main_color.main_uv_scroll_rotate_factor, [0.25, -0.5, 0.75, 0.0]);
 	}
 
 	#[test]

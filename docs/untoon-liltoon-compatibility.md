@@ -24,7 +24,7 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 - `UnaLilToonLikeMaterial`: v2 開発中の lilToon source profile。lilToon-compatible な Shadow / MatCap / Reflection / Rim / Outline をここへ保持し、UNToon semantic material へ正規化する。
 - `UnaMtoonMaterial`: legacy MToon / VRM import 用 source profile。v2 lilToon 互換機能をここへ追加せず、MToon 由来の値を UNToon semantic material へ変換する。
 - `UnaMaterialPbr`: glTF/PBR由来の共通 material container。UNPBR の設計正本ではなく、`liltoon_like` / `mtoon` などの source profile payload をぶら下げる既存構造。
-- Renderer の通常描画 / texture role / runtime requirement 判定は `liltoon_like_runtime()` / `mtoon_like_runtime()` を経由する。`*_source_profile()` は provenance、import policy、互換テスト、source-to-semantic 変換用の入口に限定する。v1 互換性は MToon source profile を runtime UNToon semantic view へ変換する作業として扱い、MToon 専用 renderer へ戻さない。
+- Renderer の通常描画 / runtime requirement / texture role 判定は `UnaRuntimeToonModel::UNToon` と `liltoon_like_runtime()` を経由する。MToon source profile は互換ロード時に `UnaLilToonLikeMaterial` へ正規化し、診断では `*_source_profile()` を参照して provenance を残す。v1 互換性は MToon source profile を runtime UNToon semantic view へ変換する作業として扱い、MToon 専用 renderer へ戻さない。
 - Renderer はモデル単位の UNToon dynamic variant planning で、必要な material features、screen-grab、Fur、Gem、AudioLink、GPU skinning / morph resource を集計し、そのモデルに必要十分な shader resource layout を作る。現在の `FullOnePass` / `Portable16` は実装上の歴史名であり、正式な外部 tier ではない。
 - Adapter が必要 resource を満たせない場合は、最低保証構成へ固定 fallback し、UNAvatar 側で警告を出す。fallback は互換性維持のための低機能構成であり、lilToon 利用層の標準品質目標ではない。
 
@@ -38,7 +38,7 @@ WGSL は独立実装とする。ただし、挙動を移植する機能では li
 4. Validation sample: Base / original / noble1 / noble13 での見え方確認
 5. Known gaps: 未対応 feature と近似理由
 
-`UnaLilToonLikeMaterial` の内部 parameter は、できるだけ単位・次元の整合性を持つ値にする。長さは meters、角度は radians、色は linear RGB、強度や blend weight は原則 `[0..1]` の無次元量として扱う。lilToon の Unity material property は source profile であり、互換 import layer が v2 parameter へ変換する。
+`UnaLilToonLikeMaterial` の内部 parameter は、できるだけ単位・次元の整合性を持つ値にする。長さは meters、角度は radians、強度や blend weight は原則 `[0..1]` の無次元量として扱う。色 factor は `colorFactorColorSpace` で source 保存色空間を明示し、renderer uniform 化時に linear RGB へ正規化する。lilToon の Unity material property は source profile であり、互換 import layer が v2 parameter へ変換する。
 
 ## Current Snapshot (2026-06-05)
 
