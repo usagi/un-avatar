@@ -4065,6 +4065,9 @@ fn constrain_tail_limit(next_tail: Vec3, child_pos: Vec3, fallback_axis: Vec3, l
 	if rest_axis.length_squared() < 1e-12 || dir.length_squared() < 1e-12 {
 		return child_pos + fallback_axis * length;
 	}
+	if (dir - rest_axis).length_squared() <= 1e-10 {
+		return child_pos + rest_axis * length;
+	}
 	let constrained_dir = constrain_axis_by_limit_type(dir, rest_axis, limit);
 	child_pos + constrained_dir.normalize_or_zero() * length
 }
@@ -4090,13 +4093,10 @@ fn constrain_axis_by_limit_type(axis: Vec3, rest_axis: Vec3, limit: &UnaDynamics
 		rest_axis
 	};
 	if limit_type.contains("hinge") {
-		let projected = (axis - limit_axis_x * axis.dot(limit_axis_x)).normalize_or_zero();
-		let axis = if projected.length_squared() < 1e-12 {
-			limit_axis_y
-		} else {
-			projected
-		};
-		return constrain_axis_angle(axis, limit_axis_y, limit_axis_x, limit.max_angle_x);
+		let hinge_axis = limit_hinge_axis(limit_axis_x, limit_rotation * Vec3::Z, rest_axis);
+		let projected = (axis - hinge_axis * axis.dot(hinge_axis)).normalize_or_zero();
+		let axis = if projected.length_squared() < 1e-12 { rest_axis } else { projected };
+		return constrain_axis_angle(axis, rest_axis, hinge_axis, limit.max_angle_x);
 	}
 	if limit_type.contains("polar") {
 		return constrain_axis_polar(axis, limit_axis_x, limit_axis_y, limit.max_angle_x, limit.max_angle_z);
@@ -4105,6 +4105,24 @@ fn constrain_axis_by_limit_type(axis: Vec3, rest_axis: Vec3, limit: &UnaDynamics
 		return constrain_axis_angle(axis, limit_axis_y, limit_axis_x, limit.max_angle_x);
 	}
 	axis
+}
+
+fn limit_hinge_axis(authored_x: Vec3, authored_z: Vec3, rest_axis: Vec3) -> Vec3 {
+	let rest_axis = rest_axis.normalize_or_zero();
+	let x = (authored_x - rest_axis * authored_x.dot(rest_axis)).normalize_or_zero();
+	if x.length_squared() >= 1e-12 {
+		return x;
+	}
+	let z = (authored_z - rest_axis * authored_z.dot(rest_axis)).normalize_or_zero();
+	if z.length_squared() >= 1e-12 {
+		return z;
+	}
+	let fallback = rest_axis.cross(Vec3::Y).normalize_or_zero();
+	if fallback.length_squared() >= 1e-12 {
+		fallback
+	} else {
+		rest_axis.cross(Vec3::X).normalize_or_zero()
+	}
 }
 
 fn constrain_axis_angle(axis: Vec3, rest_axis: Vec3, fallback_rotation_axis: Vec3, max_angle_deg: f32) -> Vec3 {
@@ -6008,6 +6026,28 @@ mod tests {
 		assert!(
 			axis.x.abs() < 1e-4,
 			"Hinge limit should project motion onto the hinge plane instead of allowing cone drift: axis={axis:?}"
+		);
+	}
+
+	#[test]
+	fn dynamics_hinge_limit_rotation_preserves_rest_axis() {
+		let limit = UnaDynamicsLimit {
+			limit_type: "Hinge".to_string(),
+			limit_rotation: [-45.0, 90.0, 0.0],
+			max_angle_x: 45.0,
+			max_angle_z: 45.0,
+			max_stretch: 0.0,
+			max_squish: 0.0,
+			stretch_motion: None,
+			max_stretch_samples: Vec::new(),
+			max_squish_samples: Vec::new(),
+			stretch_motion_samples: Vec::new(),
+		};
+		let rest_axis = Vec3::new(0.011671454, -0.764903, 0.6440398).normalize();
+		let constrained = constrain_axis_by_limit_type(rest_axis, rest_axis, &limit);
+		assert!(
+			constrained.distance(rest_axis) < 1e-5,
+			"Hinge limit rotation must not bend the neutral rest axis: constrained={constrained:?} rest={rest_axis:?}"
 		);
 	}
 
