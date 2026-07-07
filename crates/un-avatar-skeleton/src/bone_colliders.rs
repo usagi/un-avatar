@@ -63,7 +63,7 @@ pub struct BoneColliderConfig {
 impl Default for BoneColliderConfig {
 	fn default() -> Self {
 		Self {
-			enabled: true,
+			enabled: false,
 			radius_mm: BoneColliderPartRadiiMm::default(),
 		}
 	}
@@ -820,6 +820,24 @@ mod tests {
 	}
 
 	#[test]
+	fn bone_collider_config_defaults_to_disabled() {
+		assert!(!BoneColliderConfig::default().enabled);
+	}
+
+	#[test]
+	fn default_config_generates_no_auto_bone_colliders() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node("Head", Vec3::ZERO, vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let mut profile = HumanoidProfile::default();
+		profile.bone_node_indices.insert("head".to_string(), 0);
+		let colliders = build_bone_colliders(&scene, Some(&profile), BoneColliderConfig::default());
+		assert!(colliders.is_empty(), "colliders={colliders:?}");
+	}
+
+	#[test]
 	fn generates_basic_humanoid_colliders() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![
@@ -852,7 +870,14 @@ mod tests {
 		] {
 			profile.bone_node_indices.insert(key.to_string(), index);
 		}
-		let colliders = build_bone_colliders(&scene, Some(&profile), BoneColliderConfig::default());
+		let colliders = build_bone_colliders(
+			&scene,
+			Some(&profile),
+			BoneColliderConfig {
+				enabled: true,
+				..BoneColliderConfig::default()
+			},
+		);
 		assert!(colliders.len() >= 8, "colliders={colliders:?}");
 	}
 

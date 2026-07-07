@@ -12050,7 +12050,7 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 		dynamics_match_overrides: dynamics_match_override_settings(dynamics_solver),
 		dynamics_collider_augment_overrides: dynamics_collider_augment_override_settings(dynamics_solver),
 		dynamics_group_overrides: dynamics_group_override_settings(dynamics_solver),
-		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
+		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(false),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
 		bone_collider_torso: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.torso), 140.0),
@@ -13915,17 +13915,39 @@ mod tests {
 		build_launcher_task_specs, classify_dynamics_category_from_text, data_image_base64_parts, diagnostics_archive_path,
 		diagnostics_generated_at_secs, encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp,
 		manifest_wardrobe_shortcut_settings, midi_note_on_event, migrate_avatar_manifest_to_v2, model_dynamics_category_authored_params,
-		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
-		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_dynamics_physics_config, repo_root, resolve_renderer_window_icon_path,
-		resolve_screenshot_path, runtime_status_from_renderer, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, standalone_renderer_runtime_bus_key,
-		startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate,
-		write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
-		ManagedRenderer, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererDynamicsSetting, RendererInstance,
-		RendererRuntimeTelemetry, RendererRuntimeTelemetryCache, RendererSpoutProfileState, RendererState, RuntimeCountEntry,
-		SupervisorState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, physics_settings, read_avatar_setting,
+		read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, renderer_dynamics_physics_config, repo_root,
+		resolve_renderer_window_icon_path, resolve_screenshot_path, runtime_status_from_renderer, screenshot_profile_filename_stem,
+		send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note,
+		standalone_renderer_runtime_bus_key, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
+		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
+		vrm_expression_is_user_action_candidate, write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting,
+		AvatarSettingFieldDomain, LauncherTaskProfile, ManagedRenderer, ManifestBoneColliders, ManifestPhysics, ProfileIconCropRequest,
+		ProfileStorage, RendererControlCommand, RendererDynamicsSetting, RendererInstance, RendererRuntimeTelemetry,
+		RendererRuntimeTelemetryCache, RendererSpoutProfileState, RendererState, RuntimeCountEntry, SupervisorState, TextureRuntimeSummary,
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
+
+	#[test]
+	fn physics_settings_default_bone_colliders_disabled() {
+		let manifest_path = Path::new("target/tmp/profile.toml");
+		let settings = physics_settings(None, None, manifest_path);
+		assert!(!settings.bone_colliders_enabled);
+	}
+
+	#[test]
+	fn physics_settings_preserves_explicit_bone_colliders_enabled() {
+		let manifest_path = Path::new("target/tmp/profile.toml");
+		let physics = ManifestPhysics {
+			bone_colliders: Some(ManifestBoneColliders {
+				enabled: Some(true),
+				..ManifestBoneColliders::default()
+			}),
+			..ManifestPhysics::default()
+		};
+		let settings = physics_settings(Some(&physics), None, manifest_path);
+		assert!(settings.bone_colliders_enabled);
+	}
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
 		RendererRuntimeTelemetry {
