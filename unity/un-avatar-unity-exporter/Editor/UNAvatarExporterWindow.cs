@@ -148,6 +148,11 @@ namespace UNAvatar.UnityExporter
                     {
                         developerDiagnosticsText = BuildDeveloperDiagnostics();
                     }
+                    if (GUILayout.Button("Diagnose Skin Export", GUILayout.Height(22)))
+                    {
+                        developerDiagnosticsText = BuildSkinExportDiagnostics();
+                        Debug.Log(developerDiagnosticsText);
+                    }
                     if (!string.IsNullOrEmpty(developerDiagnosticsText))
                     {
                         EditorGUILayout.TextArea(developerDiagnosticsText, GUILayout.MinHeight(180));

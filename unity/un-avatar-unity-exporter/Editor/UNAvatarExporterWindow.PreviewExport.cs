@@ -352,11 +352,6 @@ namespace UNAvatar.UnityExporter
 
             var referenceRoot = normalizeRoot != null ? normalizeRoot : avatarRoot;
             var rebased = WardrobeSnapshotCapture.Diff(exportBaseSnapshot, snapshot, set.displayName, referenceRoot);
-            var groupValidation = ValidateWardrobeSetAssetGroupsForUpdate(set, rebased);
-            if (!string.IsNullOrEmpty(groupValidation))
-            {
-                return CloneWardrobeSetForExport(set);
-            }
 
             rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
             rebased.displayName = set.displayName;

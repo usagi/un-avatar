@@ -248,13 +248,14 @@ namespace UNAvatar.UnityExporter
                     if (skinned.sharedMesh != null)
                     {
                         var node = (Dictionary<string, object>)nodes[nodeIndices[transform]];
-                        var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned);
+                        var skinPlan = BuildSkinExportPlan(skinned);
+                        var mesh = ExportMesh(skinned.sharedMesh, skinned.sharedMaterials, skinned, skinPlan);
                         if (mesh >= 0)
                         {
                             node["mesh"] = mesh;
                             RecordRendererAsset(transform, mesh);
                         }
-                        var skin = ExportSkin(skinned);
+                        var skin = ExportSkin(skinned, skinPlan);
                         if (skin >= 0)
                         {
                             node["skin"] = skin;
@@ -427,7 +428,7 @@ namespace UNAvatar.UnityExporter
                 }
             }
 
-            private int ExportMesh(Mesh mesh, Material[] sourceMaterials, SkinnedMeshRenderer skinned)
+            private int ExportMesh(Mesh mesh, Material[] sourceMaterials, SkinnedMeshRenderer skinned, SkinExportPlan skinPlan = null)
             {
                 var vertices = mesh.vertices;
                 if (vertices == null || vertices.Length == 0)
@@ -446,8 +447,8 @@ namespace UNAvatar.UnityExporter
                 var tangentAccessor = tangents != null && tangents.Length == vertices.Length ? AddVec4Accessor(tangents, true) : -1;
                 var uvAccessor = uv != null && uv.Length == vertices.Length ? AddVec2Accessor(uv) : -1;
                 var colorAccessor = colors != null && colors.Length == vertices.Length ? AddColorAccessor(colors) : -1;
-                var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddJointsAccessor(boneWeights) : -1;
-                var weightsAccessor = boneWeights != null && boneWeights.Length == vertices.Length ? AddWeightsAccessor(boneWeights) : -1;
+                var jointsAccessor = boneWeights != null && boneWeights.Length == vertices.Length && skinPlan != null ? AddJointsAccessor(boneWeights, skinPlan) : -1;
+                var weightsAccessor = boneWeights != null && boneWeights.Length == vertices.Length && skinPlan != null ? AddWeightsAccessor(boneWeights) : -1;
                 var morphTargets = BuildMorphTargets(mesh, vertices.Length);
                 var morphWeights = skinned != null && morphTargets.Count > 0 ? BuildMorphWeights(mesh, skinned, morphTargets) : new List<object>(0);
 
@@ -645,19 +646,37 @@ namespace UNAvatar.UnityExporter
                 return accessors.Count - 1;
             }
 
-            private int AddJointsAccessor(BoneWeight[] values)
+            private int AddJointsAccessor(BoneWeight[] values, SkinExportPlan skinPlan = null)
             {
                 var bytes = new byte[values.Length * 8];
                 for (var i = 0; i < values.Length; i++)
                 {
-                    WriteUShort(bytes, i * 8, values[i].boneIndex0);
-                    WriteUShort(bytes, i * 8 + 2, values[i].boneIndex1);
-                    WriteUShort(bytes, i * 8 + 4, values[i].boneIndex2);
-                    WriteUShort(bytes, i * 8 + 6, values[i].boneIndex3);
+                    WriteUShort(bytes, i * 8, RemapBoneIndex(values[i].boneIndex0, values[i].weight0, skinPlan));
+                    WriteUShort(bytes, i * 8 + 2, RemapBoneIndex(values[i].boneIndex1, values[i].weight1, skinPlan));
+                    WriteUShort(bytes, i * 8 + 4, RemapBoneIndex(values[i].boneIndex2, values[i].weight2, skinPlan));
+                    WriteUShort(bytes, i * 8 + 6, RemapBoneIndex(values[i].boneIndex3, values[i].weight3, skinPlan));
                 }
                 var view = AddBufferView(bytes);
                 accessors.Add(Accessor(view, values.Length, 5123, "VEC4"));
                 return accessors.Count - 1;
+            }
+
+            private static int RemapBoneIndex(int sourceIndex, float weight, SkinExportPlan skinPlan)
+            {
+                if (skinPlan == null)
+                {
+                    return sourceIndex;
+                }
+                if (weight <= 0.0f)
+                {
+                    return 0;
+                }
+                if (sourceIndex < 0 || sourceIndex >= skinPlan.OldToNew.Length)
+                {
+                    return 0;
+                }
+                var remapped = skinPlan.OldToNew[sourceIndex];
+                return remapped >= 0 ? remapped : 0;
             }
 
             private int AddWeightsAccessor(BoneWeight[] values)

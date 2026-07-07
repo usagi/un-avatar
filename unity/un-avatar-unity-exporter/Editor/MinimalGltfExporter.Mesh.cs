@@ -77,17 +77,98 @@ namespace UNAvatar.UnityExporter
                 return false;
             }
 
-            private int ExportSkin(SkinnedMeshRenderer renderer)
+            private sealed class SkinExportPlan
             {
-                var bones = renderer.bones;
+                public readonly List<int> SourceBoneIndices = new List<int>();
+                public int[] OldToNew = Array.Empty<int>();
+            }
+
+            private SkinExportPlan BuildSkinExportPlan(SkinnedMeshRenderer renderer)
+            {
+                var bones = renderer != null ? renderer.bones : null;
                 if (bones == null || bones.Length == 0)
+                {
+                    return null;
+                }
+
+                var mesh = renderer.sharedMesh;
+                var boneWeights = mesh != null ? mesh.boneWeights : null;
+                var usedBoneIndices = new HashSet<int>();
+                if (mesh != null && boneWeights != null && boneWeights.Length == mesh.vertexCount)
+                {
+                    foreach (var weight in boneWeights)
+                    {
+                        if (!AddUsedBoneIndex(usedBoneIndices, weight.boneIndex0, weight.weight0, bones.Length) ||
+                            !AddUsedBoneIndex(usedBoneIndices, weight.boneIndex1, weight.weight1, bones.Length) ||
+                            !AddUsedBoneIndex(usedBoneIndices, weight.boneIndex2, weight.weight2, bones.Length) ||
+                            !AddUsedBoneIndex(usedBoneIndices, weight.boneIndex3, weight.weight3, bones.Length))
+                        {
+                            return null;
+                        }
+                    }
+                }
+
+                if (usedBoneIndices.Count == 0)
+                {
+                    for (var i = 0; i < bones.Length; i++)
+                    {
+                        usedBoneIndices.Add(i);
+                    }
+                }
+
+                var sourceBoneIndices = new List<int>(usedBoneIndices);
+                sourceBoneIndices.Sort();
+                var oldToNew = new int[bones.Length];
+                for (var i = 0; i < oldToNew.Length; i++)
+                {
+                    oldToNew[i] = -1;
+                }
+
+                var plan = new SkinExportPlan { OldToNew = oldToNew };
+                foreach (var sourceIndex in sourceBoneIndices)
+                {
+                    if (sourceIndex < 0 || sourceIndex >= bones.Length)
+                    {
+                        return null;
+                    }
+                    var bone = bones[sourceIndex];
+                    if (bone == null || !nodeIndices.ContainsKey(bone))
+                    {
+                        return null;
+                    }
+                    oldToNew[sourceIndex] = plan.SourceBoneIndices.Count;
+                    plan.SourceBoneIndices.Add(sourceIndex);
+                }
+
+                return plan.SourceBoneIndices.Count > 0 ? plan : null;
+            }
+
+            private static bool AddUsedBoneIndex(HashSet<int> usedBoneIndices, int boneIndex, float weight, int boneCount)
+            {
+                if (weight <= 0.0f)
+                {
+                    return true;
+                }
+                if (boneIndex >= 0 && boneIndex < boneCount)
+                {
+                    usedBoneIndices.Add(boneIndex);
+                    return true;
+                }
+                return false;
+            }
+
+            private int ExportSkin(SkinnedMeshRenderer renderer, SkinExportPlan skinPlan)
+            {
+                var bones = renderer != null ? renderer.bones : null;
+                if (bones == null || bones.Length == 0 || skinPlan == null || skinPlan.SourceBoneIndices.Count == 0)
                 {
                     return -1;
                 }
 
                 var joints = new List<object>();
-                foreach (var bone in bones)
+                foreach (var sourceBoneIndex in skinPlan.SourceBoneIndices)
                 {
+                    var bone = bones[sourceBoneIndex];
                     if (bone == null || !nodeIndices.TryGetValue(bone, out var nodeIndex))
                     {
                         return -1;
@@ -97,9 +178,9 @@ namespace UNAvatar.UnityExporter
 
                 var bindposes = renderer.sharedMesh != null ? renderer.sharedMesh.bindposes : null;
                 var matrices = new List<Matrix4x4>();
-                for (var i = 0; i < bones.Length; i++)
+                foreach (var sourceBoneIndex in skinPlan.SourceBoneIndices)
                 {
-                    matrices.Add(UnityMatrixToGltf(bindposes != null && i < bindposes.Length ? bindposes[i] : Matrix4x4.identity));
+                    matrices.Add(UnityMatrixToGltf(bindposes != null && sourceBoneIndex < bindposes.Length ? bindposes[sourceBoneIndex] : Matrix4x4.identity));
                 }
 
                 var skin = new Dictionary<string, object>

@@ -59,6 +59,261 @@ namespace UNAvatar.UnityExporter
             return string.Join("\n", lines);
         }
 
+        private string BuildSkinExportDiagnostics()
+        {
+            if (avatarRoot == null)
+            {
+                return "Avatar Root is missing.";
+            }
+
+            var rootTransform = avatarRoot.transform;
+            var exportNodes = new HashSet<Transform>();
+            foreach (var transform in avatarRoot.GetComponentsInChildren<Transform>(true))
+            {
+                exportNodes.Add(transform);
+            }
+
+            var skinnedRenderers = avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            var riskyRenderers = 0;
+            var missingBoneReferences = 0;
+            var lines = new List<string>
+            {
+                "Skin export diagnostics",
+                "Avatar Root: " + avatarRoot.name,
+                "Export node count: " + exportNodes.Count.ToString(CultureInfo.InvariantCulture),
+                "SkinnedMeshRenderer count: " + skinnedRenderers.Length.ToString(CultureInfo.InvariantCulture),
+                "",
+                "ExportSkin writes node.skin only when every SkinnedMeshRenderer.bones entry is inside Avatar Root."
+            };
+
+            foreach (var renderer in skinnedRenderers)
+            {
+                if (renderer == null)
+                {
+                    continue;
+                }
+
+                var bones = renderer.bones;
+                var mesh = renderer.sharedMesh;
+                var bindposes = mesh != null ? mesh.bindposes : null;
+                var boneWeights = mesh != null ? mesh.boneWeights : null;
+                var usedBoneIndices = UsedBoneIndicesForDiagnostics(boneWeights, mesh != null ? mesh.vertexCount : 0, bones != null ? bones.Length : 0, out var invalidUsedBoneIndices);
+                var missing = new List<string>();
+                var outside = new List<string>();
+                var usedMissing = new List<string>();
+                var nullBones = 0;
+
+                if (bones == null || bones.Length == 0)
+                {
+                    missing.Add("bones array is empty");
+                    usedMissing.Add("bones array is empty");
+                }
+                else
+                {
+                    for (var i = 0; i < bones.Length; i++)
+                    {
+                        var bone = bones[i];
+                        if (bone == null)
+                        {
+                            nullBones++;
+                            missing.Add("bone[" + i.ToString(CultureInfo.InvariantCulture) + "] is <null>");
+                            if (usedBoneIndices.Contains(i))
+                            {
+                                usedMissing.Add("used bone[" + i.ToString(CultureInfo.InvariantCulture) + "] is <null>");
+                            }
+                            continue;
+                        }
+                        if (!exportNodes.Contains(bone))
+                        {
+                            missingBoneReferences++;
+                            outside.Add(FormatBoneExportMiss(i, bone, rootTransform));
+                            if (usedBoneIndices.Contains(i))
+                            {
+                                usedMissing.Add("used " + FormatBoneExportMiss(i, bone, rootTransform));
+                            }
+                        }
+                    }
+                }
+
+                var hasWeightedMesh = boneWeights != null && boneWeights.Length == (mesh != null ? mesh.vertexCount : 0) && HasAnyBoneWeight(boneWeights);
+                var bindposeMismatch = bones != null && bindposes != null && bindposes.Length > 0 && bindposes.Length != bones.Length;
+                var rootBoneOutside = renderer.rootBone != null && !exportNodes.Contains(renderer.rootBone);
+                var legacyExportSkinWillFail = missing.Count > 0 || outside.Count > 0;
+                var compactedExportSkinWillFail = invalidUsedBoneIndices.Count > 0 || usedMissing.Count > 0;
+                var shouldPrint = legacyExportSkinWillFail || compactedExportSkinWillFail || bindposeMismatch || rootBoneOutside;
+                if (!shouldPrint)
+                {
+                    continue;
+                }
+
+                riskyRenderers++;
+                lines.Add("");
+                lines.Add("Renderer: " + BuildTransformPathForProbe(renderer.transform));
+                lines.Add("  activeSelf: " + renderer.gameObject.activeSelf + ", activeInHierarchy: " + renderer.gameObject.activeInHierarchy + ", enabled: " + renderer.enabled);
+                lines.Add("  sharedMesh: " + (mesh != null ? mesh.name : "<null>"));
+                lines.Add("  vertices: " + (mesh != null ? mesh.vertexCount.ToString(CultureInfo.InvariantCulture) : "0"));
+                lines.Add("  boneWeights: " + (boneWeights != null ? boneWeights.Length.ToString(CultureInfo.InvariantCulture) : "0") + ", hasWeightedMesh: " + hasWeightedMesh);
+                lines.Add("  bones: " + (bones != null ? bones.Length.ToString(CultureInfo.InvariantCulture) : "0") + ", nullBones: " + nullBones.ToString(CultureInfo.InvariantCulture));
+                lines.Add("  usedBones: " + usedBoneIndices.Count.ToString(CultureInfo.InvariantCulture) + ", invalidUsedBones: " + invalidUsedBoneIndices.Count.ToString(CultureInfo.InvariantCulture));
+                lines.Add("  bindposes: " + (bindposes != null ? bindposes.Length.ToString(CultureInfo.InvariantCulture) : "0") + (bindposeMismatch ? " (mismatch)" : ""));
+                lines.Add("  rootBone: " + FormatTransformPath(renderer.rootBone) + (rootBoneOutside ? " (outside Avatar Root)" : ""));
+                if (legacyExportSkinWillFail)
+                {
+                    lines.Add("  Legacy ExportSkin result: FAIL - node.skin would be omitted");
+                }
+                else
+                {
+                    lines.Add("  Legacy ExportSkin result: OK");
+                }
+                if (compactedExportSkinWillFail)
+                {
+                    lines.Add("  Compacted ExportSkin result: FAIL - a used bone cannot be exported");
+                }
+                else
+                {
+                    lines.Add("  Compacted ExportSkin result: OK");
+                }
+                foreach (var reason in missing)
+                {
+                    lines.Add("  reason: " + reason);
+                }
+                foreach (var reason in usedMissing)
+                {
+                    lines.Add("  used reason: " + reason);
+                }
+                foreach (var index in invalidUsedBoneIndices)
+                {
+                    lines.Add("  used reason: bone[" + index.ToString(CultureInfo.InvariantCulture) + "] is outside bones array");
+                }
+                if (outside.Count > 0)
+                {
+                    lines.Add("  bones outside Avatar Root:");
+                    lines.AddRange(IndentLines(string.Join("\n", outside), "    "));
+                }
+            }
+
+            lines.Insert(4, "Renderers with skin export risk: " + riskyRenderers.ToString(CultureInfo.InvariantCulture));
+            lines.Insert(5, "Bone references outside Avatar Root: " + missingBoneReferences.ToString(CultureInfo.InvariantCulture));
+            if (riskyRenderers == 0)
+            {
+                lines.Add("");
+                lines.Add("No SkinnedMeshRenderer matched the current ExportSkin failure conditions.");
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private static HashSet<int> UsedBoneIndicesForDiagnostics(BoneWeight[] boneWeights, int vertexCount, int boneCount, out List<int> invalidUsedBoneIndices)
+        {
+            var used = new HashSet<int>();
+            invalidUsedBoneIndices = new List<int>();
+            if (boneWeights == null || boneWeights.Length != vertexCount || vertexCount <= 0)
+            {
+                for (var i = 0; i < boneCount; i++)
+                {
+                    used.Add(i);
+                }
+                return used;
+            }
+            foreach (var weight in boneWeights)
+            {
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex0, weight.weight0, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex1, weight.weight1, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex2, weight.weight2, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex3, weight.weight3, boneCount);
+            }
+            if (used.Count == 0)
+            {
+                for (var i = 0; i < boneCount; i++)
+                {
+                    used.Add(i);
+                }
+            }
+            return used;
+        }
+
+        private static void AddUsedBoneIndexForDiagnostics(HashSet<int> used, List<int> invalid, int boneIndex, float weight, int boneCount)
+        {
+            if (weight <= 0.0f)
+            {
+                return;
+            }
+            if (boneIndex >= 0 && boneIndex < boneCount)
+            {
+                used.Add(boneIndex);
+                return;
+            }
+            if (!invalid.Contains(boneIndex))
+            {
+                invalid.Add(boneIndex);
+            }
+        }
+
+        private static string FormatBoneExportMiss(int index, Transform bone, Transform rootTransform)
+        {
+            var line = "bone[" + index.ToString(CultureInfo.InvariantCulture) + "]: " + FormatTransformPath(bone);
+            if (rootTransform != null)
+            {
+                var candidates = FindTransformsByName(rootTransform, bone != null ? bone.name : "");
+                if (candidates.Count > 0)
+                {
+                    line += " | same-name inside Avatar Root: " + FormatTransformCandidates(candidates, 5);
+                }
+            }
+            return line;
+        }
+
+        private static List<Transform> FindTransformsByName(Transform rootTransform, string name)
+        {
+            var result = new List<Transform>();
+            if (rootTransform == null || string.IsNullOrEmpty(name))
+            {
+                return result;
+            }
+            foreach (var transform in rootTransform.GetComponentsInChildren<Transform>(true))
+            {
+                if (transform != null && string.Equals(transform.name, name, StringComparison.Ordinal))
+                {
+                    result.Add(transform);
+                }
+            }
+            return result;
+        }
+
+        private static string FormatTransformCandidates(List<Transform> candidates, int limit)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return "<none>";
+            }
+            var parts = new List<string>(Math.Min(candidates.Count, limit));
+            for (var i = 0; i < candidates.Count && i < limit; i++)
+            {
+                parts.Add(FormatTransformPath(candidates[i]));
+            }
+            if (candidates.Count > limit)
+            {
+                parts.Add("...+" + (candidates.Count - limit).ToString(CultureInfo.InvariantCulture));
+            }
+            return string.Join(" | ", parts);
+        }
+
+        private static bool HasAnyBoneWeight(BoneWeight[] boneWeights)
+        {
+            if (boneWeights == null)
+            {
+                return false;
+            }
+            foreach (var weight in boneWeights)
+            {
+                if (weight.weight0 > 0.0f || weight.weight1 > 0.0f || weight.weight2 > 0.0f || weight.weight3 > 0.0f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private string BuildSelectedGameObjectProbe()
         {
             if (Selection.activeGameObject == null)
