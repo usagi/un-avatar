@@ -247,12 +247,11 @@ namespace UNAvatar.UnityExporter
                 lastSummary = $"Imported wardrobe sets from .unavatar: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}. Imported ids: {string.Join(", ", imported.importedSetIds)}.";
                 if (TryAutoAssignAvatarRoot(false))
                 {
-                    BuildSnapshotsFromCurrentSets();
-                    lastSummary = $"Imported wardrobe sets from .unavatar and rebuilt snapshots for the current scene: {capturedWardrobeSets.Count} sets. Base operations: {importedBaseOperations.Count}. Imported ids: {string.Join(", ", imported.importedSetIds)}.";
+                    lastSummary += "\nAvatar Root was auto-assigned. Imported operations are ready to apply; snapshots were not rebuilt automatically.";
                 }
                 else
                 {
-                    lastSummary += "\nAvatar Root is not selected. Select the avatar root or press Auto, then restore again to rebuild editable snapshots.";
+                    lastSummary += "\nAvatar Root is not selected. Select the avatar root or press Auto before applying imported sets.";
                 }
             }
             catch (Exception ex)
