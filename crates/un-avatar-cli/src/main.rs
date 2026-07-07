@@ -7976,7 +7976,7 @@ fn visible_mesh_materials(
 }
 
 fn skin_summaries(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<DiagnoseSkinSummary> {
-	const RENDERER_MAX_BONES: usize = 512;
+	const RENDERER_MAX_BONES: usize = 1024;
 	let mut summaries = scene
 		.skins
 		.iter()

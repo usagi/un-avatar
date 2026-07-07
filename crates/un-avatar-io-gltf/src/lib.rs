@@ -40,8 +40,9 @@ use un_avatar_io::{
 };
 use un_avatar_types::HumanoidProfile;
 
-/// glTF スキン 1 本あたりの joint 上限（レンダラのボーンパレット上限と揃える）。
-const MAX_SKIN_JOINTS: usize = 512;
+/// glTF スキン 1 本あたりの実効 joint 上限（レンダラのボーンパレット上限と揃える）。
+const MAX_SKIN_JOINTS: usize = 1024;
+const COMPACT_SKIN_JOINTS_THRESHOLD: usize = 512;
 const UN_AVATAR_EXTENSION_NAME: &str = "UN_avatar";
 const MAX_UNANIMATOR_ACTIONS: usize = 1024;
 const MAX_UNANIMATOR_EFFECTS_PER_ACTION: usize = 16;
@@ -8947,14 +8948,6 @@ fn build_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Res
 		if joint_nodes.is_empty() {
 			return Err(ImportError::Message(format!("skin {} に joint がありません", skin.index())));
 		}
-		if joint_nodes.len() > MAX_SKIN_JOINTS {
-			return Err(ImportError::Message(format!(
-				"skin {} の joint 数 {} が上限 {} を超えています",
-				skin.index(),
-				joint_nodes.len(),
-				MAX_SKIN_JOINTS
-			)));
-		}
 
 		let reader = skin.reader(|b| buffers.get(b.index()).map(|d| d.as_ref()));
 		let inverse_bind_matrices: Vec<[f32; 16]> = if let Some(iter) = reader.read_inverse_bind_matrices() {
@@ -8977,6 +8970,162 @@ fn build_skins(document: &gltf::Document, buffers: &[gltf::buffer::Data]) -> Res
 		});
 	}
 	Ok(out)
+}
+
+fn collect_skin_primitive_refs(nodes: &[UnaSceneNode], mesh_count: usize, skin_count: usize) -> (Vec<Vec<(usize, usize)>>, usize) {
+	let mut owners = BTreeMap::<usize, BTreeSet<usize>>::new();
+	let mut refs = vec![Vec::new(); skin_count];
+	for node in nodes {
+		let (Some(skin_index), Some(mesh_index)) = (node.skin, node.mesh) else {
+			continue;
+		};
+		if skin_index >= skin_count || mesh_index >= mesh_count {
+			continue;
+		}
+		owners.entry(mesh_index).or_default().insert(skin_index);
+	}
+	let mut shared_mesh_count = 0usize;
+	for (mesh_index, skin_indices) in owners {
+		if skin_indices.len() != 1 {
+			shared_mesh_count += 1;
+			continue;
+		}
+		if let Some(skin_index) = skin_indices.into_iter().next() {
+			refs[skin_index].push((mesh_index, usize::MAX));
+		}
+	}
+	(refs, shared_mesh_count)
+}
+
+fn skin_weighted_joint_usage(
+	skin_index: usize,
+	skin: &UnaSkin,
+	meshes: &[Vec<UnaMeshBuffers>],
+	primitive_refs: &[(usize, usize)],
+) -> Result<BTreeSet<usize>, ImportError> {
+	let mut used = BTreeSet::new();
+	for &(mesh_index, primitive_index) in primitive_refs {
+		let Some(primitives) = meshes.get(mesh_index) else {
+			continue;
+		};
+		let primitive_iter: Box<dyn Iterator<Item = &UnaMeshBuffers> + '_> = if primitive_index == usize::MAX {
+			Box::new(primitives.iter())
+		} else if let Some(primitive) = primitives.get(primitive_index) {
+			Box::new(std::iter::once(primitive))
+		} else {
+			continue;
+		};
+		for primitive in primitive_iter {
+			let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+				continue;
+			};
+			for (vertex_index, (joint_row, weight_row)) in joints.iter().zip(weights).enumerate() {
+				for (&joint, &weight) in joint_row.iter().zip(weight_row) {
+					if weight <= 0.0 {
+						continue;
+					}
+					let joint = joint as usize;
+					if joint >= skin.joint_nodes.len() || joint >= skin.inverse_bind_matrices.len() {
+						return Err(ImportError::Message(format!(
+							"skin {skin_index}: vertex {vertex_index} の joint index {joint} が skin joint 数 {} を超えています",
+							skin.joint_nodes.len().min(skin.inverse_bind_matrices.len())
+						)));
+					}
+					used.insert(joint);
+				}
+			}
+		}
+	}
+	Ok(used)
+}
+
+fn remap_skin_primitives(meshes: &mut [Vec<UnaMeshBuffers>], primitive_refs: &[(usize, usize)], old_to_new: &[Option<u16>]) -> usize {
+	let mut remapped = 0usize;
+	for &(mesh_index, primitive_index) in primitive_refs {
+		let Some(primitives) = meshes.get_mut(mesh_index) else {
+			continue;
+		};
+		let range: Box<dyn Iterator<Item = usize>> = if primitive_index == usize::MAX {
+			Box::new(0..primitives.len())
+		} else {
+			Box::new(std::iter::once(primitive_index))
+		};
+		for primitive_index in range {
+			let Some(primitive) = primitives.get_mut(primitive_index) else {
+				continue;
+			};
+			let (Some(joints), Some(weights)) = (&mut primitive.joints, &primitive.weights) else {
+				continue;
+			};
+			let mut changed = false;
+			for (joint_row, weight_row) in joints.iter_mut().zip(weights) {
+				for (joint, &weight) in joint_row.iter_mut().zip(weight_row) {
+					let next = if weight > 0.0 {
+						old_to_new.get(*joint as usize).and_then(|mapped| *mapped).unwrap_or(0)
+					} else {
+						0
+					};
+					if *joint != next {
+						*joint = next;
+						changed = true;
+					}
+				}
+			}
+			if changed {
+				primitive.vertex_payload_id = None;
+				remapped += 1;
+			}
+		}
+	}
+	remapped
+}
+
+fn compact_skin_joint_palettes(
+	skins: &mut [UnaSkin],
+	meshes: &mut [Vec<UnaMeshBuffers>],
+	nodes: &[UnaSceneNode],
+	report: &mut ImportReport,
+) -> Result<(), ImportError> {
+	let (skin_refs, shared_mesh_count) = collect_skin_primitive_refs(nodes, meshes.len(), skins.len());
+	let mut compacted = 0usize;
+	let mut remapped_primitives = 0usize;
+	for skin_index in 0..skins.len() {
+		let original_count = skins[skin_index]
+			.joint_nodes
+			.len()
+			.min(skins[skin_index].inverse_bind_matrices.len());
+		if original_count <= COMPACT_SKIN_JOINTS_THRESHOLD {
+			continue;
+		}
+		let used = skin_weighted_joint_usage(skin_index, &skins[skin_index], meshes, &skin_refs[skin_index])?;
+		let effective_count = if used.is_empty() { original_count } else { used.len() };
+		if effective_count > MAX_SKIN_JOINTS {
+			return Err(ImportError::Message(format!(
+				"skin {skin_index} の実効 joint 数 {effective_count} が上限 {MAX_SKIN_JOINTS} を超えています"
+			)));
+		}
+		if used.is_empty() || used.len() >= original_count {
+			continue;
+		}
+		let mut old_to_new = vec![None; original_count];
+		let mut joint_nodes = Vec::with_capacity(used.len());
+		let mut inverse_bind_matrices = Vec::with_capacity(used.len());
+		for (new_index, old_index) in used.iter().copied().enumerate() {
+			old_to_new[old_index] = Some(new_index as u16);
+			joint_nodes.push(skins[skin_index].joint_nodes[old_index]);
+			inverse_bind_matrices.push(skins[skin_index].inverse_bind_matrices[old_index]);
+		}
+		remapped_primitives += remap_skin_primitives(meshes, &skin_refs[skin_index], &old_to_new);
+		skins[skin_index].joint_nodes = joint_nodes;
+		skins[skin_index].inverse_bind_matrices = inverse_bind_matrices;
+		compacted += 1;
+	}
+	if compacted > 0 {
+		report.push_info(format!(
+			"glTF skin compaction: compacted_skins={compacted} remapped_primitives={remapped_primitives} shared_meshes_skipped={shared_mesh_count} threshold={COMPACT_SKIN_JOINTS_THRESHOLD} max_effective_joints={MAX_SKIN_JOINTS}"
+		));
+	}
+	Ok(())
 }
 
 fn build_materials(document: &gltf::Document) -> Vec<UnaMaterialPbr> {
@@ -11623,15 +11772,6 @@ fn read_primitive(input: PrimitiveReadInput<'_>) -> Result<Option<(UnaMeshBuffer
 					"JOINTS_0 / WEIGHTS_0 の頂点数が POSITION と一致しません".into(),
 				));
 			}
-			for row in &joints {
-				for &ji in row {
-					if ji as usize >= MAX_SKIN_JOINTS {
-						return Err(ImportError::Message(format!(
-							"ジョイントインデックス {ji} が上限 {MAX_SKIN_JOINTS} を超えています"
-						)));
-					}
-				}
-			}
 			for i in 0..weights.len() {
 				let s: f32 = weights[i].iter().copied().sum();
 				if s < 1e-6 {
@@ -11888,7 +12028,7 @@ fn scene_snapshot_from_gltf_inner(
 	record_scene_snapshot_profile_step(report, profile, "refine_untoon_alpha_from_images", step_started);
 
 	let step_started = Instant::now();
-	let skins = build_skins(document, buffers)?;
+	let mut skins = build_skins(document, buffers)?;
 	record_scene_snapshot_profile_step(report, profile, "build_skins", step_started);
 
 	let step_started = Instant::now();
@@ -12009,6 +12149,10 @@ fn scene_snapshot_from_gltf_inner(
 		});
 	}
 	record_scene_snapshot_profile_step(report, profile, "read_nodes", step_started);
+
+	let step_started = Instant::now();
+	compact_skin_joint_palettes(&mut skins, &mut meshes, &nodes, report)?;
+	record_scene_snapshot_profile_step(report, profile, "compact_skins", step_started);
 
 	let step_started = Instant::now();
 	let roots: Vec<usize> = document
@@ -12522,6 +12666,88 @@ mod tests {
 	use std::io::Write;
 	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
 	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource};
+
+	fn test_skin_primitive(joints: Vec<[u16; 4]>, weights: Vec<[f32; 4]>) -> UnaMeshBuffers {
+		UnaMeshBuffers {
+			name: None,
+			vertex_payload_id: Some(7),
+			positions: vec![[0.0; 3]; joints.len()],
+			normals: None,
+			tangents: None,
+			tex_coords_0: None,
+			tex_coords_1: None,
+			tex_coords_2: None,
+			tex_coords_3: None,
+			colors_0: None,
+			joints: Some(joints),
+			weights: Some(weights),
+			indices: None,
+			material_index: None,
+			morph_targets: Vec::new(),
+			morph_target_names: Vec::new(),
+			default_morph_weights: Vec::new(),
+		}
+	}
+
+	fn test_skin_with_joint_count(count: usize) -> UnaSkin {
+		UnaSkin {
+			joint_nodes: (0..count).collect(),
+			inverse_bind_matrices: vec![Mat4::IDENTITY.to_cols_array(); count],
+			skeleton_node: Some(0),
+		}
+	}
+
+	fn test_mesh_skin_node(mesh: usize, skin: usize) -> UnaSceneNode {
+		UnaSceneNode {
+			name: None,
+			source_node_id: None,
+			resolved_node_id: None,
+			visible: true,
+			transform: Mat4::IDENTITY.to_cols_array(),
+			children: Vec::new(),
+			mesh: Some(mesh),
+			skin: Some(skin),
+			probe_anchor_node: None,
+			local_bounds: None,
+		}
+	}
+
+	#[test]
+	fn compact_skin_joint_palettes_remaps_weighted_joints() {
+		let mut skins = vec![test_skin_with_joint_count(560)];
+		let mut meshes = vec![vec![test_skin_primitive(
+			vec![[0, 512, 558, 400], [10, 20, 30, 40]],
+			vec![[0.0, 0.5, 0.5, 0.0], [1.0, 0.0, 0.0, 0.0]],
+		)]];
+		let nodes = vec![test_mesh_skin_node(0, 0)];
+		let mut report = ImportReport::default();
+
+		compact_skin_joint_palettes(&mut skins, &mut meshes, &nodes, &mut report).unwrap();
+
+		assert_eq!(skins[0].joint_nodes, vec![10, 512, 558]);
+		assert_eq!(skins[0].inverse_bind_matrices.len(), 3);
+		assert_eq!(meshes[0][0].joints.as_deref(), Some(&[[0, 1, 2, 0], [0, 0, 0, 0]][..]));
+		assert_eq!(meshes[0][0].vertex_payload_id, None);
+		assert!(report
+			.messages
+			.iter()
+			.any(|message| message.contains("glTF skin compaction: compacted_skins=1")));
+	}
+
+	#[test]
+	fn compact_skin_joint_palettes_skips_meshes_shared_by_multiple_skins() {
+		let mut skins = vec![test_skin_with_joint_count(560), test_skin_with_joint_count(560)];
+		let mut meshes = vec![vec![test_skin_primitive(vec![[558, 0, 0, 0]], vec![[1.0, 0.0, 0.0, 0.0]])]];
+		let nodes = vec![test_mesh_skin_node(0, 0), test_mesh_skin_node(0, 1)];
+		let mut report = ImportReport::default();
+
+		compact_skin_joint_palettes(&mut skins, &mut meshes, &nodes, &mut report).unwrap();
+
+		assert_eq!(skins[0].joint_nodes.len(), 560);
+		assert_eq!(skins[1].joint_nodes.len(), 560);
+		assert_eq!(meshes[0][0].joints.as_deref(), Some(&[[558, 0, 0, 0]][..]));
+		assert_eq!(meshes[0][0].vertex_payload_id, Some(7));
+	}
 
 	#[test]
 	fn unavatar_scene_lighting_parses_unity_scene_payload() {

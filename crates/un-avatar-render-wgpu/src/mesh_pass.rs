@@ -523,7 +523,7 @@ fn baseline_fallback_mesh_shader_source() -> String {
 }
 
 /// シェーダとボーンバッファの上限（io-gltf のスキン joint 上限と同値に保つ）。
-pub(crate) const MAX_BONES: usize = 512;
+pub(crate) const MAX_BONES: usize = 1024;
 
 const BONE_MATRIX_SIZE: u64 = (16 * std::mem::size_of::<f32>()) as u64;
 const STATIC_IDENTITY_SKIN_PALETTE_NODE: usize = usize::MAX;
