@@ -190,6 +190,22 @@ struct NativeNotificationStatus {
 }
 
 #[derive(Clone, Serialize)]
+struct RendererCacheStatus {
+	texture: RendererCacheGroupStatus,
+	pipeline: RendererCacheGroupStatus,
+	total_bytes: u64,
+	total_files: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct RendererCacheGroupStatus {
+	label: String,
+	path: String,
+	bytes: u64,
+	files: u64,
+}
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum NotificationLevel {
 	#[allow(dead_code)]
@@ -2846,6 +2862,7 @@ pub fn run() {
 			delete_avatar_setting,
 			export_diagnostics,
 			get_app_settings,
+			get_renderer_cache_status,
 			get_renderer_runtime_status,
 			get_native_notification_status,
 			list_app_notifications,
@@ -2909,6 +2926,7 @@ pub fn run() {
 			send_test_native_notification,
 			stop_renderer,
 			stop_all_renderers,
+			clear_renderer_cache,
 			sync_app_settings,
 			read_unavatar_wardrobe_options,
 			read_unavatar_animator_action_page,
@@ -5169,6 +5187,127 @@ fn encode_profile_icon_crop_webp(bytes: &[u8], crop: ProfileIconCropRequest) -> 
 	Ok(output)
 }
 
+#[tauri::command]
+fn get_renderer_cache_status() -> Result<RendererCacheStatus, String> {
+	renderer_cache_status()
+}
+
+#[tauri::command]
+fn clear_renderer_cache(state: State<'_, Mutex<SupervisorState>>) -> Result<RendererCacheStatus, String> {
+	let live_count = {
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		state
+			.renderers
+			.values()
+			.filter(|renderer| !matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed))
+			.count()
+	};
+	if live_count > 0 {
+		return Err(format!(
+			"renderer cache cannot be cleared while {live_count} renderer(s) are active"
+		));
+	}
+	for dir in renderer_cache_dirs()? {
+		if dir.path.exists() {
+			remove_renderer_cache_dir(&dir.path)?;
+		}
+		fs::create_dir_all(&dir.path).map_err(|e| format!("create {}: {e}", dir.path.display()))?;
+	}
+	renderer_cache_status()
+}
+
+struct RendererCacheDir {
+	label: &'static str,
+	path: PathBuf,
+}
+
+fn renderer_cache_dirs() -> Result<[RendererCacheDir; 2], String> {
+	let base = renderer_cache_base_dir()?;
+	Ok([
+		RendererCacheDir {
+			label: "Texture",
+			path: base.join("texture-cache").join("v1"),
+		},
+		RendererCacheDir {
+			label: "Pipeline",
+			path: base.join("pipeline-cache").join("v1"),
+		},
+	])
+}
+
+fn renderer_cache_base_dir() -> Result<PathBuf, String> {
+	#[cfg(windows)]
+	{
+		env::var_os("LOCALAPPDATA")
+			.map(PathBuf::from)
+			.map(|path| path.join("UN Avatar"))
+			.ok_or_else(|| "LOCALAPPDATA is not set".to_string())
+	}
+	#[cfg(not(windows))]
+	{
+		env::var_os("XDG_CACHE_HOME")
+			.map(PathBuf::from)
+			.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+			.map(|path| path.join("un-avatar"))
+			.ok_or_else(|| "XDG_CACHE_HOME and HOME are not set".to_string())
+	}
+}
+
+fn renderer_cache_status() -> Result<RendererCacheStatus, String> {
+	let dirs = renderer_cache_dirs()?;
+	let texture = renderer_cache_group_status(&dirs[0])?;
+	let pipeline = renderer_cache_group_status(&dirs[1])?;
+	Ok(RendererCacheStatus {
+		total_bytes: texture.bytes.saturating_add(pipeline.bytes),
+		total_files: texture.files.saturating_add(pipeline.files),
+		texture,
+		pipeline,
+	})
+}
+
+fn renderer_cache_group_status(dir: &RendererCacheDir) -> Result<RendererCacheGroupStatus, String> {
+	let (files, bytes) = directory_file_count_and_bytes(&dir.path)?;
+	Ok(RendererCacheGroupStatus {
+		label: dir.label.to_string(),
+		path: dir.path.display().to_string(),
+		bytes,
+		files,
+	})
+}
+
+fn directory_file_count_and_bytes(path: &Path) -> Result<(u64, u64), String> {
+	if !path.exists() {
+		return Ok((0, 0));
+	}
+	let mut files = 0u64;
+	let mut bytes = 0u64;
+	let mut stack = vec![path.to_path_buf()];
+	while let Some(dir) = stack.pop() {
+		let entries = fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+		for entry in entries {
+			let entry = entry.map_err(|e| format!("read {} entry: {e}", dir.display()))?;
+			let metadata = entry.metadata().map_err(|e| format!("metadata {}: {e}", entry.path().display()))?;
+			if metadata.is_dir() {
+				stack.push(entry.path());
+			} else if metadata.is_file() {
+				files = files.saturating_add(1);
+				bytes = bytes.saturating_add(metadata.len());
+			}
+		}
+	}
+	Ok((files, bytes))
+}
+
+fn remove_renderer_cache_dir(path: &Path) -> Result<(), String> {
+	let base = renderer_cache_base_dir()?;
+	let full = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let base = base.canonicalize().unwrap_or(base);
+	if !full.starts_with(&base) {
+		return Err(format!("refusing to clear cache outside {}: {}", base.display(), full.display()));
+	}
+	fs::remove_dir_all(&full).map_err(|e| format!("remove {}: {e}", full.display()))
+}
+
 fn remove_profile_icon_thumbnail_files(cache_dir: &Path, stem: &str) {
 	for extension in ["webp", "png", "jpg", "jpeg"] {
 		let _ = fs::remove_file(cache_dir.join(format!("{stem}.{extension}")));
@@ -7388,17 +7527,13 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		});
 	}
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-	let last_line = stderr
-		.lines()
-		.rev()
-		.find(|line| !line.trim().is_empty())
-		.unwrap_or("no stderr output");
+	let error_detail = prewarm_renderer_scene_cache_error_detail(&stderr).unwrap_or_else(|| "no stderr output".to_string());
 	let elapsed_secs = format!("{elapsed:.1}");
 	let message = t!(
 		"notifications.cache.failed_body",
 		name = &setting.name,
 		seconds = &elapsed_secs,
-		error = last_line
+		error = &error_detail
 	)
 	.to_string();
 	push_notification(
@@ -7410,13 +7545,43 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 	Err(message)
 }
 
+fn prewarm_renderer_scene_cache_error_detail(stderr: &str) -> Option<String> {
+	let mut last_nonempty = None;
+	for line in stderr.lines() {
+		let line = line.trim();
+		if line.is_empty() {
+			continue;
+		}
+		last_nonempty = Some(line);
+		if line.starts_with("memory allocation of ") && line.ends_with(" failed") {
+			return Some(line.to_string());
+		}
+		if line.contains("panicked at ") {
+			return Some(line.to_string());
+		}
+		if line.starts_with("error:") {
+			return Some(line.to_string());
+		}
+		if line.contains(": error:") {
+			return Some(line.to_string());
+		}
+	}
+	last_nonempty.map(str::to_string)
+}
+
 fn prewarm_renderer_scene_cache_detail(stderr: &str) -> Option<String> {
 	let texture_line = stderr
 		.lines()
 		.rev()
-		.find(|line| line.contains("gpu scene texture prepare summary:"));
+		.find(|line| line.contains("texture cache prewarm summary") || line.contains("gpu scene texture prepare summary:"));
 	let mut parts = Vec::new();
 	if let Some(line) = texture_line {
+		if let Some(resident) = metric_token(line, "resident=") {
+			parts.push(format!("resident {resident}"));
+		}
+		if let Some(ready) = metric_token(line, "ready=") {
+			parts.push(format!("ready {ready}"));
+		}
 		if let Some(processed) = metric_token(line, "processed_cache=") {
 			parts.push(format!("processed {processed}"));
 		}
@@ -9905,7 +10070,7 @@ fn refresh_renderer_stderr(renderer: &mut ManagedRenderer) {
 fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let manifest_value: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
-	let scene_cache_fingerprint = scene_cache_manifest_fingerprint(&manifest_value);
+	let scene_cache_fingerprint = scene_cache_manifest_fingerprint_for_path(&manifest_value, path);
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
 	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
@@ -10906,7 +11071,16 @@ fn ensure_avatar_profile_metadata(manifest: &mut toml::Value, path: &Path, sort_
 	Ok(())
 }
 
+#[cfg(test)]
 fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
+	scene_cache_manifest_fingerprint_inner(manifest, None)
+}
+
+fn scene_cache_manifest_fingerprint_for_path(manifest: &toml::Value, manifest_path: &Path) -> String {
+	scene_cache_manifest_fingerprint_inner(manifest, Some(manifest_path))
+}
+
+fn scene_cache_manifest_fingerprint_inner(manifest: &toml::Value, manifest_path: Option<&Path>) -> String {
 	let mut normalized = manifest.clone();
 	if let Some(profile) = normalized
 		.as_table_mut()
@@ -10929,7 +11103,37 @@ fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
 		}
 	}
 	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
-	format!("{:016x}", fnv1a64(serialized.as_bytes()))
+	let mut input = serialized.into_bytes();
+	if let Some(manifest_path) = manifest_path {
+		if let Some(avatar_fingerprint) = scene_cache_avatar_file_fingerprint(manifest, manifest_path) {
+			input.extend_from_slice(b"\n# avatar-file\n");
+			input.extend_from_slice(avatar_fingerprint.as_bytes());
+		}
+	}
+	format!("{:016x}", fnv1a64(&input))
+}
+
+fn scene_cache_avatar_file_fingerprint(manifest: &toml::Value, manifest_path: &Path) -> Option<String> {
+	let avatar_path = manifest
+		.as_table()
+		.and_then(|table| table.get("avatar_path").or_else(|| table.get("avatarPath")))
+		.and_then(toml::Value::as_str)
+		.map(str::trim)
+		.filter(|path| !path.is_empty())?;
+	let resolved = PathBuf::from(avatar_path_for_manifest_value(avatar_path, manifest_path));
+	let metadata = fs::metadata(&resolved).ok()?;
+	let modified_nanos = metadata
+		.modified()
+		.ok()
+		.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+		.map(|duration| duration.as_nanos())
+		.unwrap_or_default();
+	Some(format!(
+		"path={};size={};modified_nanos={}",
+		resolved.display(),
+		metadata.len(),
+		modified_nanos
+	))
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -18280,8 +18484,49 @@ un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\
 
 		assert_eq!(
 			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
-			Some("processed 0/0/0, compressed 59/0/0, pipeline cache stored")
+			Some("resident 59, processed 0/0/0, compressed 59/0/0, pipeline cache stored")
 		);
+	}
+
+	#[test]
+	fn prewarm_renderer_scene_cache_detail_reports_sequential_texture_cache() {
+		let stderr = r#"
+un-avatar-renderer: scene cache prewarm texture cache prewarm summary resident=72 ready=66
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
+			Some("resident 72, ready 66")
+		);
+	}
+
+	#[test]
+	fn prewarm_renderer_scene_cache_error_detail_prefers_allocation_failure_over_backtrace_hint() {
+		let stderr = r#"
+un-avatar-renderer: scene cache prewarm progress phase=gpu-upload 115/515 Uploading cached source texture
+memory allocation of 67108864 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_error_detail(stderr).as_deref(),
+			Some("memory allocation of 67108864 bytes failed")
+		);
+	}
+
+	#[test]
+	fn renderer_cache_directory_stats_count_nested_files() {
+		let root = std::env::temp_dir().join(format!("un-avatar-cache-stats-{}", std::process::id()));
+		let nested = root.join("nested");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&nested).unwrap();
+		fs::write(root.join("a.utxc"), [1u8; 3]).unwrap();
+		fs::write(nested.join("b.utbc"), [2u8; 5]).unwrap();
+
+		let stats = crate::directory_file_count_and_bytes(&root).unwrap();
+		let _ = fs::remove_dir_all(&root);
+
+		assert_eq!(stats, (2, 8));
 	}
 
 	#[test]
@@ -18374,6 +18619,30 @@ minimized = true
 			crate::scene_cache_manifest_fingerprint(&window_preview),
 			crate::scene_cache_manifest_fingerprint(&spout_only)
 		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_changes_when_avatar_file_changes() {
+		let root = std::env::temp_dir().join(format!("un-avatar-scene-cache-fingerprint-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).unwrap();
+		let manifest_path = root.join("profile.toml");
+		let avatar_path = root.join("main.unavatar");
+		fs::write(&avatar_path, b"first").unwrap();
+		let manifest: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+"#,
+		)
+		.unwrap();
+
+		let first = crate::scene_cache_manifest_fingerprint_for_path(&manifest, &manifest_path);
+		fs::write(&avatar_path, b"second export with more bytes").unwrap();
+		let second = crate::scene_cache_manifest_fingerprint_for_path(&manifest, &manifest_path);
+		let _ = fs::remove_dir_all(&root);
+
+		assert_ne!(first, second);
 	}
 
 	#[test]

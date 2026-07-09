@@ -126,7 +126,18 @@
 	} from "./lib/storageState";
 	import { animatorItemCount } from "./lib/rendererAnimator";
 	import { spoutSenderLabel, spoutTimingLabel, textureCacheLabel, texturePolicyLabel, textureSummaryLabel } from "./lib/runtimeLabels";
-	import { Activity, AlertTriangle, Camera, FileCog, FolderOpen, Monitor, Play, Settings, TerminalSquare } from "lucide-svelte";
+	import {
+		Activity,
+		AlertTriangle,
+		Database,
+		FileCog,
+		FolderOpen,
+		Monitor,
+		RefreshCw,
+		Settings,
+		TerminalSquare,
+		Trash2,
+	} from "lucide-svelte";
 	import ThemeModeSwitch from "./lib/ThemeModeSwitch.svelte";
 
 	const COLOR_DISPLAY_MODE_KEY = "un-avatar-supervisor.colorDisplayMode";
@@ -202,6 +213,18 @@
 		elapsed_secs: number;
 		detail: string | null;
 	};
+	type RendererCacheGroupStatus = {
+		label: string;
+		path: string;
+		bytes: number;
+		files: number;
+	};
+	type RendererCacheStatus = {
+		texture: RendererCacheGroupStatus;
+		pipeline: RendererCacheGroupStatus;
+		total_bytes: number;
+		total_files: number;
+	};
 	const launchTargetStorageKey = "un-avatar-supervisor.launch-target-id";
 	const defaultIconSrc = DEFAULT_PROFILE_ICON_SRC;
 
@@ -220,6 +243,8 @@
 	let rendererActivationSeq = new Map<number, number>();
 	let notifications = $state<AppNotification[]>([]);
 	let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
+	let rendererCacheStatus = $state<RendererCacheStatus | null>(null);
+	let rendererCacheBusy = $state(false);
 	let avatarSettings = $state<AvatarSetting[]>([]);
 	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
@@ -280,6 +305,9 @@
 	let deleteHoldProgress = $state(0);
 	let deleteHoldTimer: number | null = null;
 	let deleteHoldStartedAt = 0;
+	let cacheDeleteHoldProgress = $state(0);
+	let cacheDeleteHoldTimer: number | null = null;
+	let cacheDeleteHoldStartedAt = 0;
 	let runtimeRefreshBusy = false;
 	let runtimeRefreshPending = false;
 	let runtimeRefreshTraceSeq = 0;
@@ -382,6 +410,13 @@
 	const runningCount = $derived(rendererStatusCounts.running);
 	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
+	const rendererCacheTotalLabel = $derived(
+		rendererCacheStatus
+			? `${formatCacheBytes(rendererCacheStatus.total_bytes)} / ${$_("app.cache_files", {
+					values: { count: rendererCacheStatus.total_files },
+				})}`
+			: "--"
+	);
 	$effect(() => {
 		reconcileSelectedRendererId(renderers);
 	});
@@ -416,6 +451,20 @@
 	function updateSettingsHintFromEvent(event: Event): void {
 		const hint = hintFromEventTarget(event);
 		if (hint) settingsHint = hint;
+	}
+
+	function formatCacheBytes(bytes: number | null | undefined): string {
+		if (bytes == null) return "--";
+		if (bytes < 1024) return `${bytes} B`;
+		const units = ["KiB", "MiB", "GiB", "TiB"];
+		let value = bytes / 1024;
+		let unitIndex = 0;
+		while (value >= 1024 && unitIndex < units.length - 1) {
+			value /= 1024;
+			unitIndex += 1;
+		}
+		const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+		return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 	}
 
 	function clearSettingsHint(): void {
@@ -1216,6 +1265,7 @@
 			runtimeStatuses = {};
 			notifications = [];
 			nativeNotificationStatus = null;
+			rendererCacheStatus = null;
 			avatarSettings = browserPreviewSettings;
 			selectedSettingId = pickInitialSelectedSettingId(
 				selectedSettingId,
@@ -1246,6 +1296,7 @@
 			renderers = instances;
 			avatarSettings = settings;
 			await refreshRendererRuntimeStatuses(instances);
+			void refreshRendererCacheStatus();
 			notifications = appNotifications;
 			nativeNotificationStatus = nativeNotifications;
 			reconcileSelectedRendererId(instances);
@@ -1256,6 +1307,66 @@
 			message = String(error);
 			traceFrontendEvent("refreshAll:error", { error: String(error) });
 		}
+	}
+
+	async function refreshRendererCacheStatus(): Promise<void> {
+		if (!hasTauriRuntime()) {
+			rendererCacheStatus = null;
+			return;
+		}
+		try {
+			rendererCacheStatus = await invoke<RendererCacheStatus>("get_renderer_cache_status");
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function clearRendererCache(): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = $_("app.cache_clear_requires_tauri");
+			return;
+		}
+		if (visibleRenderers.length > 0) {
+			message = $_("app.cache_clear_blocked_running");
+			return;
+		}
+		const status = rendererCacheStatus;
+		if (!status || status.total_files === 0) return;
+		rendererCacheBusy = true;
+		try {
+			const next = await invoke<RendererCacheStatus>("clear_renderer_cache");
+			rendererCacheStatus = next;
+			message = $_("app.cache_cleared");
+		} catch (error) {
+			message = String(error);
+		} finally {
+			rendererCacheBusy = false;
+		}
+	}
+
+	function startCacheDeleteHold(): void {
+		if (busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0) return;
+		cancelCacheDeleteHold();
+		cacheDeleteHoldProgress = 0;
+		cacheDeleteHoldStartedAt = performance.now();
+		const tick = () => {
+			cacheDeleteHoldProgress = Math.min(1, (performance.now() - cacheDeleteHoldStartedAt) / deleteHoldDurationMs);
+			if (cacheDeleteHoldProgress >= 1) {
+				cancelCacheDeleteHold();
+				void clearRendererCache();
+				return;
+			}
+			cacheDeleteHoldTimer = window.requestAnimationFrame(tick);
+		};
+		cacheDeleteHoldTimer = window.requestAnimationFrame(tick);
+	}
+
+	function cancelCacheDeleteHold(): void {
+		if (cacheDeleteHoldTimer != null) {
+			window.cancelAnimationFrame(cacheDeleteHoldTimer);
+			cacheDeleteHoldTimer = null;
+		}
+		cacheDeleteHoldProgress = 0;
 	}
 
 	async function refreshRendererRuntimeStatuses(instances: RendererInstance[] = renderers): Promise<void> {
@@ -1461,6 +1572,7 @@
 					});
 			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
+			await refreshRendererCacheStatus();
 		} catch (error) {
 			message = String(error);
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
@@ -3168,6 +3280,7 @@
 
 	$effect(() => () => {
 		cancelDeleteHold();
+		cancelCacheDeleteHold();
 		cancelSettingPointerDrag();
 	});
 
@@ -3256,6 +3369,47 @@
 				><Settings size={17} />{$_("sidebar.settings")}</button
 			>
 			<div class="rail-footer">
+				<div class="cache-panel" aria-label={$_("app.cache_panel_aria")}>
+					<div class="cache-panel-head">
+						<span><Database size={14} />{$_("app.cache_title")}</span>
+						<div class="cache-panel-actions">
+							<button
+								class="icon-button"
+								title={$_("app.cache_refresh")}
+								disabled={rendererCacheBusy}
+								onclick={() => void refreshRendererCacheStatus()}><RefreshCw size={14} /></button
+							>
+							<button
+								class="icon-button danger-icon hold-delete"
+								title={visibleRenderers.length > 0 ? $_("app.cache_clear_blocked_running") : $_("app.cache_clear")}
+								disabled={busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0}
+								style={`--hold-progress: ${cacheDeleteHoldProgress}`}
+								onpointerdown={startCacheDeleteHold}
+								onpointerup={cancelCacheDeleteHold}
+								onpointercancel={cancelCacheDeleteHold}
+								onpointerleave={cancelCacheDeleteHold}
+								onkeydown={(event) => {
+									if (event.key === " " || event.key === "Enter") {
+										event.preventDefault();
+										startCacheDeleteHold();
+									}
+								}}
+								onkeyup={cancelCacheDeleteHold}><span class="hold-fill"></span><Trash2 size={14} /></button
+							>
+						</div>
+					</div>
+					<div class="cache-total">{rendererCacheTotalLabel}</div>
+					<div class="cache-groups">
+						<div title={rendererCacheStatus?.texture.path ?? ""}>
+							<span>{$_("app.cache_texture")}</span>
+							<strong>{formatCacheBytes(rendererCacheStatus?.texture.bytes)}</strong>
+						</div>
+						<div title={rendererCacheStatus?.pipeline.path ?? ""}>
+							<span>{$_("app.cache_pipeline")}</span>
+							<strong>{formatCacheBytes(rendererCacheStatus?.pipeline.bytes)}</strong>
+						</div>
+					</div>
+				</div>
 				<button class="danger" disabled={busy || visibleRenderers.length === 0} onclick={stopAll}
 					><AlertTriangle size={16} />{$_("app.stop_all")}</button
 				>

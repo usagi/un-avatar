@@ -36,7 +36,8 @@ use crate::skin_tone::{
 use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compressed_cache_lookup_from_source_metadata, compressed_upload_kind_for_texture,
 	compression_preference_for_role, create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count,
-	load_or_build_processed_texture, load_or_build_processed_texture_with_rgba, mip_level_count, read_compressed_texture_cache,
+	load_or_build_processed_texture, load_or_build_processed_texture_with_rgba, mip_level_count, processed_texture_cache_path_from_key,
+	read_compressed_texture_cache,
 	source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata, texture_upload_payload, GpuTextureCompressionContext,
 	SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind, TextureUploadPayload,
 };
@@ -916,6 +917,12 @@ struct TexturePrepareSummary {
 	compressed_cache_misses: u32,
 	compressed_cache_writes: u32,
 	roles: [TexturePrepareRoleSummary; TEXTURE_PREPARE_ROLE_COUNT],
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SceneTextureCachePrewarmSummary {
+	pub(crate) resident_images: u32,
+	pub(crate) cache_ready_images: u32,
 }
 
 const TEXTURE_PREPARE_ROLE_COUNT: usize = 8;
@@ -2476,6 +2483,128 @@ fn residency_transition_indices(old: &[bool], next: &[bool], from: bool, to: boo
 		}
 	}
 	indices
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prewarm_scene_texture_caches(
+	scene: &UnaSceneSnapshot,
+	active_asset_groups: &[String],
+	mut opts: SceneMeshLoadOpts,
+	texture_max_dimension: Option<u32>,
+	texture_compression: TextureCompressionMode,
+	block_compression_encoder: BlockCompressionEncoder,
+	block_compression_cpu_threads: usize,
+	mipmap_filter: TextureMipmapFilter,
+	texture_compression_advanced: &TextureCompressionAdvancedOptions,
+	texture_compression_bc_supported: bool,
+	processed_texture_cache: bool,
+	gpu_texture_compression_enabled: bool,
+	mut progress: impl FnMut(SceneMeshBuildProgress),
+) -> Result<SceneTextureCachePrewarmSummary, String> {
+	let texture_roles = texture_roles_for_scene(scene);
+	let asset_residency = SceneAssetResidencySets::for_scene(scene, active_asset_groups);
+	let effective_visibility = scene_effective_visibility(scene);
+	opts.dynamic_deforming_node_indices.clear();
+	let active_texture_indices = initial_active_2d_texture_indices_for_scene(scene, &effective_visibility, &asset_residency, &opts);
+	let total = active_texture_indices.len().max(1) as u32;
+	let mut current = 0u32;
+	let mut summary = SceneTextureCachePrewarmSummary::default();
+	let mut gpu_texture_compression = None;
+	for image_index in active_texture_indices {
+		if !asset_residency.image_resident(image_index) {
+			continue;
+		}
+		if texture_source_is_cube(scene.image_sources.get(image_index).and_then(Option::as_ref)) {
+			continue;
+		}
+		current = current.saturating_add(1).min(total);
+		let role = texture_roles.get(image_index).copied().unwrap_or_default();
+		progress(SceneMeshBuildProgress {
+			phase: "texture-cache",
+			current,
+			total,
+			message: format!("Prewarming texture cache {}/{} ({role:?})", image_index + 1, scene.images.len()),
+		});
+		if prewarm_scene_texture_cache_ready(
+			scene,
+			image_index,
+			role,
+			texture_max_dimension,
+			texture_compression,
+			texture_compression_advanced,
+			texture_compression_bc_supported,
+			mipmap_filter,
+			processed_texture_cache,
+		) {
+			summary.resident_images += 1;
+			summary.cache_ready_images += 1;
+			continue;
+		}
+		let lazy = SceneImageTextureLazyUpload {
+			image_index,
+			role,
+			mipmap_filter,
+			texture_max_dimension,
+			texture_compression,
+			block_compression_encoder,
+			block_compression_cpu_threads,
+			processed_texture_cache,
+			texture_compression_advanced: texture_compression_advanced.clone(),
+			texture_compression_bc_supported,
+			gpu_texture_compression_enabled,
+		};
+		let _upload = build_lazy_scene_image_texture_upload(scene, &lazy, &mut gpu_texture_compression);
+		summary.resident_images += 1;
+	}
+	Ok(summary)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prewarm_scene_texture_cache_ready(
+	scene: &UnaSceneSnapshot,
+	image_index: usize,
+	role: TextureRole,
+	texture_max_dimension: Option<u32>,
+	texture_compression: TextureCompressionMode,
+	texture_compression_advanced: &TextureCompressionAdvancedOptions,
+	texture_compression_bc_supported: bool,
+	mipmap_filter: TextureMipmapFilter,
+	processed_texture_cache: bool,
+) -> bool {
+	if !processed_texture_cache {
+		return false;
+	}
+	let Some(image) = scene.images.get(image_index) else {
+		return false;
+	};
+	if !is_deferred_scene_image_placeholder(image) {
+		return false;
+	}
+	let Some(source) = scene
+		.image_sources
+		.get(image_index)
+		.and_then(Option::as_ref)
+		.filter(|source| source_has_lazy_encoded_bytes(source))
+	else {
+		return false;
+	};
+	let (src_w, src_h) = scene_image_source_dimensions(image, Some(source));
+	let source_key = texture_cache_key_from_source_metadata(src_w, src_h, texture_max_dimension, role, mipmap_filter, source);
+	if let Some(lookup) = compressed_cache_lookup_from_source_metadata(
+		src_w,
+		src_h,
+		texture_max_dimension,
+		role,
+		texture_compression,
+		texture_compression_advanced,
+		texture_compression_bc_supported,
+		source_key,
+	) {
+		return lookup.path.is_file();
+	}
+	processed_texture_cache_path_from_key(source_key)
+		.as_ref()
+		.is_some_and(|path| path.is_file())
 }
 
 fn promote_residency_indices(residency: &mut [bool], indices: &[usize]) -> usize {

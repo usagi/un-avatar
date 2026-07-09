@@ -34,8 +34,8 @@ use crate::{
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier, SceneMeshActiveResidencyGaps,
-		SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts,
+		prewarm_scene_texture_caches, AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier,
+		SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts,
 		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
 	},
 	model_loader,
@@ -5523,7 +5523,7 @@ fn startup_texture_target_size_for_window_options(opts: &AvatarWindowOptions) ->
 	}
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GpuSceneWarmupPurpose {
 	Benchmark,
 	PrewarmSceneCache,
@@ -5538,6 +5538,20 @@ impl GpuSceneWarmupPurpose {
 	}
 }
 
+fn prewarm_scene_cache_apply_default_wardrobe_set(
+	document: &mut UnaDocument,
+	opts: &AvatarWindowOptions,
+) -> Result<Option<String>, String> {
+	if opts.wardrobe_set.as_deref().map(str::trim).is_some_and(|set_id| !set_id.is_empty()) {
+		return Ok(None);
+	}
+	if model_loader::base_wardrobe_set_id(document).is_none() {
+		return Ok(None);
+	}
+	model_loader::apply_required_wardrobe_set(document, " ")?;
+	Ok(document.runtime_model().active_wardrobe_set().map(str::to_owned))
+}
+
 pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuSceneWarmupPurpose) -> Result<(), String> {
 	let Some(path) = opts.gltf_path.as_deref() else {
 		return Err(format!("{}: --gltf or manifest avatar_path is required", purpose.label()));
@@ -5545,7 +5559,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 	let label = purpose.label();
 	let started = Instant::now();
 	let import_started = Instant::now();
-	let document = model_loader::load_document_profiled(
+	let mut document = model_loader::load_document_profiled(
 		path,
 		opts.wardrobe_set.as_deref(),
 		&opts.animator_action_ids,
@@ -5559,6 +5573,70 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		path.display(),
 		import_started.elapsed().as_secs_f64() * 1000.0
 	);
+	if purpose == GpuSceneWarmupPurpose::PrewarmSceneCache {
+		if let Some(set_id) = prewarm_scene_cache_apply_default_wardrobe_set(Arc::make_mut(&mut document), opts)
+			.map_err(|e| format!("{label}: default wardrobe set prewarm failed: {e}"))?
+		{
+			eprintln!("un-avatar-renderer: {label} applied default wardrobe set `{set_id}` for scoped cache prewarm");
+		}
+	}
+
+	if purpose == GpuSceneWarmupPurpose::PrewarmSceneCache {
+		let scene_started = Instant::now();
+		let runtime_model = document.runtime_model();
+		let Some(runtime) = runtime_model.scene_expression_catalog() else {
+			eprintln!(
+				"un-avatar-renderer: {label} no scene texture cache target elapsed={:.1}ms total={:.1}ms",
+				scene_started.elapsed().as_secs_f64() * 1000.0,
+				started.elapsed().as_secs_f64() * 1000.0
+			);
+			return Ok(());
+		};
+		let (target_width, target_height) = startup_texture_target_size_for_window_options(opts);
+		let texture_max_dimension = opts.texture_resolution_limit.max_dimension(target_width, target_height);
+		let summary = prewarm_scene_texture_caches(
+			runtime.scene,
+			runtime_model.active_asset_groups(),
+			scene_mesh_load_opts_for_window_options(opts),
+			texture_max_dimension,
+			opts.texture_compression,
+			opts.block_compression_encoder,
+			opts.block_compression_cpu_threads,
+			opts.mipmap_filter,
+			&opts.texture_compression_advanced,
+			cfg!(windows)
+				&& !matches!(
+					opts.texture_compression,
+					TextureCompressionMode::Source | TextureCompressionMode::Compat
+				),
+			opts.processed_texture_cache,
+			opts.block_compression_encoder == BlockCompressionEncoder::Gpu
+				&& !matches!(
+					opts.texture_compression,
+					TextureCompressionMode::Source | TextureCompressionMode::Compat
+				),
+			|progress| {
+				eprintln!(
+					"un-avatar-renderer: {label} progress phase={} {}/{} {} ({:.1}ms)",
+					progress.phase,
+					progress.current,
+					progress.total,
+					progress.message,
+					scene_started.elapsed().as_secs_f64() * 1000.0
+				);
+			},
+		)?;
+		eprintln!(
+			"un-avatar-renderer: {label} texture cache prewarm summary resident={} ready={}",
+			summary.resident_images, summary.cache_ready_images,
+		);
+		eprintln!(
+			"un-avatar-renderer: {label} scene elapsed={:.1}ms total={:.1}ms",
+			scene_started.elapsed().as_secs_f64() * 1000.0,
+			started.elapsed().as_secs_f64() * 1000.0
+		);
+		return Ok(());
+	}
 
 	let requested_render_backend = opts.render_backend;
 	let render_backend = effective_window_backend(requested_render_backend, opts.transparent);

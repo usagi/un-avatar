@@ -1001,6 +1001,10 @@ fn processed_texture_cache_dir() -> Option<PathBuf> {
 	}
 }
 
+pub(crate) fn processed_texture_cache_path_from_key(key: u64) -> Option<PathBuf> {
+	processed_texture_cache_dir().map(|cache_dir| cache_dir.join(format!("{key:016x}.utxc")))
+}
+
 fn read_exact_array<const N: usize>(reader: &mut impl Read) -> Option<[u8; N]> {
 	let mut bytes = [0u8; N];
 	reader.read_exact(&mut bytes).ok()?;
