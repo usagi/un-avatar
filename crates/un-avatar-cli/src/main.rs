@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
 	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count,
@@ -5331,9 +5331,7 @@ fn dynamics_vertex_probe_interaction_values(
 			continue;
 		}
 		let shape_angle = dynamics_vertex_probe_group_shape_angle(rest_nodes, &scene.nodes, group).unwrap_or(0.0);
-		let source_limit_rotation = dynamics_vertex_probe_source_limit_rotation(doc, group.source_id);
-		let gravity_angle =
-			dynamics_vertex_probe_group_gravity_sensor_angle(rest_nodes, &world, group, node_paths, source_limit_rotation).unwrap_or(0.0);
+		let gravity_angle = dynamics_vertex_probe_group_gravity_sensor_angle(rest_nodes, &world, group, node_paths).unwrap_or(0.0);
 		let angle = shape_angle.max(gravity_angle);
 		let max_angle = dynamics_vertex_probe_interaction_angle_normalizer(group.limit);
 		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
@@ -5800,7 +5798,6 @@ fn dynamics_vertex_probe_group_gravity_sensor_angle(
 	world: &[Mat4],
 	group: un_avatar_core::UnaDynamicsGroup<'_>,
 	node_paths: &[Option<String>],
-	source_limit_rotation: Option<[f32; 3]>,
 ) -> Option<f32> {
 	if group.parameters.gravity_power.abs() <= f32::EPSILON {
 		return Some(0.0);
@@ -5825,16 +5822,6 @@ fn dynamics_vertex_probe_group_gravity_sensor_angle(
 		};
 		let (_, parent_rot, _) = parent_world.to_scale_rotation_translation();
 		let (_, _, rest_child_translation) = Mat4::from_cols_array(&rest_child.transform).to_scale_rotation_translation();
-		let rest_child_translation = if let Some(rotation) = source_limit_rotation {
-			Quat::from_euler(
-				EulerRot::XYZ,
-				rotation[0].to_radians(),
-				rotation[1].to_radians(),
-				rotation[2].to_radians(),
-			) * rest_child_translation
-		} else {
-			rest_child_translation
-		};
 		let Some(axis) = (parent_rot.normalize() * rest_child_translation).try_normalize() else {
 			continue;
 		};
@@ -5847,28 +5834,6 @@ fn dynamics_vertex_probe_group_gravity_sensor_angle(
 		measured = true;
 	}
 	measured.then_some(max_angle)
-}
-
-fn dynamics_vertex_probe_source_limit_rotation(doc: &UnaDocument, source_id: &str) -> Option<[f32; 3]> {
-	let source_path = source_id.split_once(':').map(|(_, path)| path).unwrap_or(source_id);
-	let entries = doc.unavatar.as_ref()?.source.get("dynamics")?.get("entries")?.as_array()?;
-	for entry in entries {
-		let id = entry.get("id").and_then(serde_json::Value::as_str).unwrap_or("");
-		if id != source_id && id.split_once(':').map(|(_, path)| path).unwrap_or(id) != source_path {
-			continue;
-		}
-		let params = entry.get("sourceParams").or_else(|| entry.get("source_params"))?;
-		let values = params.get("limitRotation").or_else(|| params.get("limit_rotation"))?.as_array()?;
-		if values.len() < 3 {
-			return None;
-		}
-		return Some([
-			values[0].as_f64().unwrap_or(0.0) as f32,
-			values[1].as_f64().unwrap_or(0.0) as f32,
-			values[2].as_f64().unwrap_or(0.0) as f32,
-		]);
-	}
-	None
 }
 
 fn run_dynamics_vertex_probe(

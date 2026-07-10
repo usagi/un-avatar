@@ -3380,6 +3380,30 @@ fn diagnostic_runtime_parameters_for_patterns(doc: &UnaDocument, patterns: &[&st
 	serde_json::json!(entries)
 }
 
+fn diagnostic_animator_morph_overrides_for_patterns(doc: &UnaDocument, patterns: &[&str]) -> Value {
+	let entries = animator_morph_overrides_for_doc(doc)
+		.into_iter()
+		.filter_map(|(key, value)| {
+			let (target_path, morph_name) = key
+				.split_once('\0')
+				.map(|(path, morph)| (Some(path), morph))
+				.unwrap_or((None, key.as_str()));
+			(diagnostic_matches_any_pattern(&key, patterns)
+				|| target_path.is_some_and(|path| diagnostic_matches_any_pattern(path, patterns))
+				|| diagnostic_matches_any_pattern(morph_name, patterns))
+			.then(|| {
+				serde_json::json!({
+					"key": key,
+					"target_path": target_path,
+					"morph_name": morph_name,
+					"value": value,
+				})
+			})
+		})
+		.collect::<Vec<_>>();
+	serde_json::json!(entries)
+}
+
 fn diagnostic_dynamics_interactions_for_patterns(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>, patterns: &[&str]) -> Value {
 	let entries = dynamics_interaction_parameter_diagnostics(doc, rest_nodes)
 		.into_iter()
@@ -9293,6 +9317,10 @@ impl GpuState {
 			object.insert(
 				"runtime_parameter_focus".to_string(),
 				diagnostic_runtime_parameters_for_patterns(&doc, &["ArmDown", "ArmPit"]),
+			);
+			object.insert(
+				"animator_morph_override_focus".to_string(),
+				diagnostic_animator_morph_overrides_for_patterns(&doc, &["ArmDown", "ArmPit", "UV3_Cape"]),
 			);
 			object.insert(
 				"dynamics_interaction_focus".to_string(),
