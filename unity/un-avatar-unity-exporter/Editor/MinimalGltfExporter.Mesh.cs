@@ -43,7 +43,8 @@ namespace UNAvatar.UnityExporter
                     {
                         Name = name,
                         PositionAccessor = AddVec3Accessor(deltaVertices, false, true),
-                        NormalAccessor = HasAnyNonZero(deltaNormals) ? AddVec3Accessor(deltaNormals, false, true) : -1
+                        NormalAccessor = HasAnyNonZero(deltaNormals) ? AddVec3Accessor(deltaNormals, false, true) : -1,
+                        TangentAccessor = HasAnyNonZero(deltaTangents) ? AddVec3Accessor(deltaTangents, false, true) : -1
                     };
                     targets.Add(record);
                 }

@@ -35,8 +35,8 @@ use crate::{
 	debug_log::DebugLog,
 	mesh_pass::{
 		prewarm_scene_texture_caches, AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier,
-		SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts,
-		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary,
+		SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress,
+		SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary, VertexPickRequest,
 	},
 	model_loader,
 	options::{
@@ -626,6 +626,7 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_residency_refresh_image_unload_count: usize,
 	pub(crate) last_residency_refresh_material_load_count: usize,
 	pub(crate) last_residency_refresh_material_unload_count: usize,
+	pub(crate) last_visible_draw_residency_promotion_count: usize,
 	pub(crate) last_mesh_buffer_scoped_load_count: usize,
 	pub(crate) last_mesh_buffer_scoped_unload_count: usize,
 	pub(crate) last_image_texture_scoped_load_count: usize,
@@ -633,6 +634,8 @@ pub(crate) struct WardrobeAssetUploadPlan {
 	pub(crate) last_cubemap_scoped_load_count: usize,
 	pub(crate) last_cubemap_scoped_unload_count: usize,
 	pub(crate) last_material_slot_scoped_upload_count: usize,
+	#[serde(default, skip_serializing_if = "wardrobe_transition_progress_is_default")]
+	pub(crate) transition_progress: WardrobeTransitionProgress,
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub(crate) missing_active_asset_groups: Vec<String>,
 	pub(crate) inactive_owned_asset_group_count: usize,
@@ -647,6 +650,31 @@ pub(crate) struct WardrobeAssetUploadPlan {
 
 pub(crate) fn wardrobe_asset_upload_plan_is_default(plan: &WardrobeAssetUploadPlan) -> bool {
 	plan == &WardrobeAssetUploadPlan::default()
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct WardrobeTransitionProgress {
+	pub(crate) active: bool,
+	pub(crate) revision: u64,
+	pub(crate) mesh_total: usize,
+	pub(crate) mesh_remaining: usize,
+	pub(crate) image_total: usize,
+	pub(crate) image_remaining: usize,
+	pub(crate) cube_total: usize,
+	pub(crate) cube_remaining: usize,
+	pub(crate) material_total: usize,
+	pub(crate) material_remaining: usize,
+	pub(crate) draw_resource_remaining: usize,
+	pub(crate) total_work_bytes: u64,
+	pub(crate) remaining_work_bytes: u64,
+	pub(crate) image_upload_budget_bytes: u64,
+	pub(crate) process_ram_mb: Option<u64>,
+	pub(crate) memory_pressure: bool,
+	pub(crate) last_step_ms: u32,
+}
+
+fn wardrobe_transition_progress_is_default(progress: &WardrobeTransitionProgress) -> bool {
+	progress == &WardrobeTransitionProgress::default()
 }
 
 struct WardrobeResidencyGapIndexStatus {
@@ -776,6 +804,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_residency_refresh_image_unload_count: 0,
 		last_residency_refresh_material_load_count: 0,
 		last_residency_refresh_material_unload_count: 0,
+		last_visible_draw_residency_promotion_count: 0,
 		last_mesh_buffer_scoped_load_count: 0,
 		last_mesh_buffer_scoped_unload_count: 0,
 		last_image_texture_scoped_load_count: 0,
@@ -783,6 +812,7 @@ fn wardrobe_asset_upload_plan_for_document(document: &UnaDocument) -> WardrobeAs
 		last_cubemap_scoped_load_count: 0,
 		last_cubemap_scoped_unload_count: 0,
 		last_material_slot_scoped_upload_count: 0,
+		transition_progress: WardrobeTransitionProgress::default(),
 		missing_active_asset_groups: source_asset_work.missing_active_asset_groups,
 		inactive_owned_asset_group_count,
 		scoped_draw_supported: false,
@@ -3335,6 +3365,125 @@ fn dynamics_interaction_parameter_diagnostics(doc: &UnaDocument, rest_nodes: Opt
 	out
 }
 
+fn diagnostic_matches_any_pattern(value: &str, patterns: &[&str]) -> bool {
+	let value = value.to_ascii_lowercase();
+	patterns.iter().any(|pattern| value.contains(&pattern.to_ascii_lowercase()))
+}
+
+fn diagnostic_runtime_parameters_for_patterns(doc: &UnaDocument, patterns: &[&str]) -> Value {
+	let values = doc.runtime_model().runtime_parameter_values();
+	let entries = values
+		.iter()
+		.filter(|(name, _)| diagnostic_matches_any_pattern(name, patterns))
+		.map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+		.collect::<Vec<_>>();
+	serde_json::json!(entries)
+}
+
+fn diagnostic_dynamics_interactions_for_patterns(doc: &UnaDocument, rest_nodes: Option<&[UnaSceneNode]>, patterns: &[&str]) -> Value {
+	let entries = dynamics_interaction_parameter_diagnostics(doc, rest_nodes)
+		.into_iter()
+		.filter(|entry| {
+			entry
+				.get("parameter")
+				.and_then(Value::as_str)
+				.is_some_and(|name| diagnostic_matches_any_pattern(name, patterns))
+				|| entry
+					.get("angle_parameter")
+					.and_then(Value::as_str)
+					.is_some_and(|name| diagnostic_matches_any_pattern(name, patterns))
+				|| entry
+					.get("source_id")
+					.and_then(Value::as_str)
+					.is_some_and(|name| diagnostic_matches_any_pattern(name, patterns))
+				|| entry.get("chain").and_then(Value::as_array).is_some_and(|chain| {
+					chain
+						.iter()
+						.filter_map(Value::as_str)
+						.any(|path| diagnostic_matches_any_pattern(path, patterns))
+				})
+		})
+		.collect::<Vec<_>>();
+	serde_json::json!(entries)
+}
+
+fn diagnostic_node_transforms_for_patterns(scene: &UnaSceneSnapshot, rest_nodes: Option<&[UnaSceneNode]>, patterns: &[&str]) -> Value {
+	let paths = scene_node_paths_by_index(scene);
+	let parents = scene_parent_indices(scene);
+	let world = diagnostic_world_from_scene(scene);
+	let rest_scene = rest_nodes.filter(|nodes| nodes.len() == scene.nodes.len());
+	let rest_world = rest_scene.map(|nodes| {
+		let rest_scene = UnaSceneSnapshot {
+			meshes: Vec::new(),
+			materials: Vec::new(),
+			images: Vec::new(),
+			lighting: None,
+			image_sources: Vec::new(),
+			skins: Vec::new(),
+			nodes: nodes.to_vec(),
+			roots: scene.roots.clone(),
+			node_constraints: Vec::new(),
+			asset_group_ownership: Vec::new(),
+		};
+		diagnostic_world_from_scene(&rest_scene)
+	});
+	let entries = scene
+		.nodes
+		.iter()
+		.enumerate()
+		.filter_map(|(index, node)| {
+			let name = node.name.as_deref().unwrap_or("");
+			let path = paths.get(index).and_then(|path| path.as_deref()).unwrap_or("");
+			if !diagnostic_matches_any_pattern(name, patterns) && !diagnostic_matches_any_pattern(path, patterns) {
+				return None;
+			}
+			let local = Mat4::from_cols_array(&node.transform);
+			let (_, local_rotation, local_translation) = local.to_scale_rotation_translation();
+			let world_matrix = world.get(index).copied().unwrap_or(Mat4::IDENTITY);
+			let (_, world_rotation, world_translation) = world_matrix.to_scale_rotation_translation();
+			let rest_local = rest_scene
+				.and_then(|nodes| nodes.get(index))
+				.map(|node| Mat4::from_cols_array(&node.transform));
+			let rest_local_json = rest_local.map(|matrix| {
+				let (_, rotation, translation) = matrix.to_scale_rotation_translation();
+				serde_json::json!({
+					"translation": translation.to_array(),
+					"rotation_xyzw": [rotation.x, rotation.y, rotation.z, rotation.w],
+				})
+			});
+			let rest_world_json = rest_world.as_ref().and_then(|world| world.get(index).copied()).map(|matrix| {
+				let (_, rotation, translation) = matrix.to_scale_rotation_translation();
+				serde_json::json!({
+					"translation": translation.to_array(),
+					"rotation_xyzw": [rotation.x, rotation.y, rotation.z, rotation.w],
+				})
+			});
+			Some(serde_json::json!({
+				"index": index,
+				"name": node.name,
+				"path": paths.get(index).cloned().flatten(),
+				"parent_index": parents.get(index).copied().flatten(),
+				"parent_path": parents.get(index).copied().flatten().and_then(|parent| paths.get(parent).cloned().flatten()),
+				"children": node.children,
+				"mesh": node.mesh,
+				"skin": node.skin,
+				"visible": node.visible,
+				"local": {
+					"translation": local_translation.to_array(),
+					"rotation_xyzw": [local_rotation.x, local_rotation.y, local_rotation.z, local_rotation.w],
+				},
+				"world": {
+					"translation": world_translation.to_array(),
+					"rotation_xyzw": [world_rotation.x, world_rotation.y, world_rotation.z, world_rotation.w],
+				},
+				"rest_local": rest_local_json,
+				"rest_world": rest_world_json,
+			}))
+		})
+		.collect::<Vec<_>>();
+	serde_json::json!(entries)
+}
+
 struct ActiveDynamicsSourceIds {
 	owned: Vec<String>,
 	active: Vec<String>,
@@ -3467,15 +3616,9 @@ fn dynamics_interaction_angle_normalizer(limit: Option<&un_avatar_core::UnaDynam
 	};
 	let x = limit.max_angle_x.max(0.0);
 	let z = limit.max_angle_z.max(0.0);
-	let positive_min = match (x > 0.0, z > 0.0) {
-		(true, true) => x.min(z),
-		(true, false) => x,
-		(false, true) => z,
-		(false, false) => 90.0,
-	};
 	let limit_type = limit.limit_type.to_ascii_lowercase();
 	if limit_type.contains("hinge") {
-		positive_min.max(1.0)
+		x.max(1.0)
 	} else {
 		x.max(z).max(1.0)
 	}
@@ -3689,6 +3832,84 @@ struct WardrobeBillboardGpu {
 	time_params: [f32; 4],
 }
 
+struct WardrobeTransitionScene {
+	pipeline: wgpu::RenderPipeline,
+	buffer: wgpu::Buffer,
+	bind_group: wgpu::BindGroup,
+}
+
+impl WardrobeTransitionScene {
+	fn new(
+		device: &wgpu::Device,
+		global_bind_group_layout: &wgpu::BindGroupLayout,
+		format: wgpu::TextureFormat,
+		aa_sample_count: u32,
+	) -> Self {
+		let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+			label: Some("wardrobe_transition_scene"),
+			entries: &[wgpu::BindGroupLayoutEntry {
+				binding: 0,
+				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+				ty: wgpu::BindingType::Buffer {
+					ty: wgpu::BufferBindingType::Uniform,
+					has_dynamic_offset: false,
+					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<WardrobeBillboardGpu>() as u64),
+				},
+				count: None,
+			}],
+		});
+		let pipeline = create_wardrobe_billboard_pipeline(device, global_bind_group_layout, &bind_group_layout, format, aa_sample_count);
+		let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+			label: Some("wardrobe_transition_scene"),
+			size: std::mem::size_of::<WardrobeBillboardGpu>() as u64,
+			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+			mapped_at_creation: false,
+		});
+		let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("wardrobe_transition_scene"),
+			layout: &bind_group_layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: buffer.as_entire_binding(),
+			}],
+		});
+		Self {
+			pipeline,
+			buffer,
+			bind_group,
+		}
+	}
+
+	fn draw<'a>(
+		&'a self,
+		queue: &wgpu::Queue,
+		global_bind_group: &'a wgpu::BindGroup,
+		pass: &mut wgpu::RenderPass<'a>,
+		billboard: &WardrobeChangingBillboardFrame,
+	) {
+		let center = Vec3::from_array(billboard.billboard_center);
+		queue.write_buffer(
+			&self.buffer,
+			0,
+			bytemuck::bytes_of(&WardrobeBillboardGpu {
+				view_proj: billboard.billboard_view_proj,
+				camera_pos: [
+					billboard.billboard_camera_pos[0],
+					billboard.billboard_camera_pos[1],
+					billboard.billboard_camera_pos[2],
+					1.0,
+				],
+				center_size: [center.x, center.y, center.z, billboard.billboard_size.max(0.01)],
+				time_params: [billboard.time_secs, billboard.progress.clamp(0.0, 1.0), 0.0, 0.0],
+			}),
+		);
+		pass.set_pipeline(&self.pipeline);
+		pass.set_bind_group(0, global_bind_group, &[]);
+		pass.set_bind_group(1, &self.bind_group, &[]);
+		pass.draw(0..6, 0..1);
+	}
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 struct ContactShadowGpu {
@@ -3712,6 +3933,7 @@ pub(crate) struct StartupProgressOverlayFrame {
 
 pub(crate) struct WardrobeChangingBillboardFrame {
 	pub(crate) time_secs: f32,
+	pub(crate) progress: f32,
 	pub(crate) billboard_center: [f32; 3],
 	pub(crate) billboard_size: f32,
 	pub(crate) billboard_view_proj: [[f32; 4]; 4],
@@ -4401,6 +4623,7 @@ fn runtime_bone_collider_detail(
 			center,
 			radius,
 			inside_bounds,
+			bones_as_sphere,
 		} => serde_json::json!({
 			"index": index,
 			"source_id": source_id,
@@ -4412,6 +4635,7 @@ fn runtime_bone_collider_detail(
 			"radius": radius,
 			"world_center": world_point(node, center),
 			"inside_bounds": inside_bounds,
+			"bones_as_sphere": bones_as_sphere,
 		}),
 		BoneColliderPrimitive::LocalCapsule {
 			node,
@@ -4420,6 +4644,7 @@ fn runtime_bone_collider_detail(
 			half_length,
 			radius,
 			inside_bounds,
+			bones_as_sphere,
 		} => {
 			let axis_vec = Vec3::from_array(axis).normalize_or_zero();
 			let a = Vec3::from_array(center) - axis_vec * half_length;
@@ -4439,6 +4664,7 @@ fn runtime_bone_collider_detail(
 				"world_b": world_point(node, b.to_array()),
 				"world_axis": world_vector(node, axis),
 				"inside_bounds": inside_bounds,
+				"bones_as_sphere": bones_as_sphere,
 			})
 		}
 		BoneColliderPrimitive::LocalPlane {
@@ -5199,6 +5425,7 @@ fn reset_runtime_dynamics_nodes_to_rest(
 	changed
 }
 
+#[cfg(test)]
 pub(crate) fn restore_runtime_scene_transforms_to_rest(document: &mut UnaDocument, rest_nodes: &[UnaSceneNode]) -> Result<(), String> {
 	let mut runtime_model = document.runtime_model_mut();
 	let Some((scene, _profile)) = runtime_model.humanoid_scene_mut() else {
@@ -5538,18 +5765,27 @@ impl GpuSceneWarmupPurpose {
 	}
 }
 
-fn prewarm_scene_cache_apply_default_wardrobe_set(
-	document: &mut UnaDocument,
-	opts: &AvatarWindowOptions,
-) -> Result<Option<String>, String> {
-	if opts.wardrobe_set.as_deref().map(str::trim).is_some_and(|set_id| !set_id.is_empty()) {
-		return Ok(None);
-	}
-	if model_loader::base_wardrobe_set_id(document).is_none() {
-		return Ok(None);
-	}
-	model_loader::apply_required_wardrobe_set(document, " ")?;
-	Ok(document.runtime_model().active_wardrobe_set().map(str::to_owned))
+fn prewarm_scene_cache_wardrobe_set_ids(document: &UnaDocument) -> Vec<String> {
+	let mut ids = model_loader::wardrobe_set_ids(document);
+	let Some(base_id) = model_loader::base_wardrobe_set_id(document) else {
+		return ids;
+	};
+	let Some(base_index) = ids.iter().position(|id| id == &base_id) else {
+		return ids;
+	};
+	let base = ids.remove(base_index);
+	ids.insert(0, base);
+	ids
+}
+
+fn prewarm_scene_cache_apply_wardrobe_set(document: &mut UnaDocument, set_id: &str) -> Result<String, String> {
+	let apply_id = if set_id.trim().is_empty() { " " } else { set_id };
+	model_loader::apply_required_wardrobe_set(document, apply_id)?;
+	Ok(document
+		.runtime_model()
+		.active_wardrobe_set()
+		.map(str::to_owned)
+		.unwrap_or_else(|| set_id.to_string()))
 }
 
 pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuSceneWarmupPurpose) -> Result<(), String> {
@@ -5559,7 +5795,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 	let label = purpose.label();
 	let started = Instant::now();
 	let import_started = Instant::now();
-	let mut document = model_loader::load_document_profiled(
+	let document = model_loader::load_document_profiled(
 		path,
 		opts.wardrobe_set.as_deref(),
 		&opts.animator_action_ids,
@@ -5574,65 +5810,92 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 		import_started.elapsed().as_secs_f64() * 1000.0
 	);
 	if purpose == GpuSceneWarmupPurpose::PrewarmSceneCache {
-		if let Some(set_id) = prewarm_scene_cache_apply_default_wardrobe_set(Arc::make_mut(&mut document), opts)
-			.map_err(|e| format!("{label}: default wardrobe set prewarm failed: {e}"))?
-		{
-			eprintln!("un-avatar-renderer: {label} applied default wardrobe set `{set_id}` for scoped cache prewarm");
-		}
-	}
-
-	if purpose == GpuSceneWarmupPurpose::PrewarmSceneCache {
-		let scene_started = Instant::now();
-		let runtime_model = document.runtime_model();
-		let Some(runtime) = runtime_model.scene_expression_catalog() else {
-			eprintln!(
-				"un-avatar-renderer: {label} no scene texture cache target elapsed={:.1}ms total={:.1}ms",
-				scene_started.elapsed().as_secs_f64() * 1000.0,
-				started.elapsed().as_secs_f64() * 1000.0
-			);
-			return Ok(());
-		};
+		let prewarm_started = Instant::now();
 		let (target_width, target_height) = startup_texture_target_size_for_window_options(opts);
 		let texture_max_dimension = opts.texture_resolution_limit.max_dimension(target_width, target_height);
-		let summary = prewarm_scene_texture_caches(
-			runtime.scene,
-			runtime_model.active_asset_groups(),
-			scene_mesh_load_opts_for_window_options(opts),
-			texture_max_dimension,
-			opts.texture_compression,
-			opts.block_compression_encoder,
-			opts.block_compression_cpu_threads,
-			opts.mipmap_filter,
-			&opts.texture_compression_advanced,
-			cfg!(windows)
-				&& !matches!(
-					opts.texture_compression,
-					TextureCompressionMode::Source | TextureCompressionMode::Compat
-				),
-			opts.processed_texture_cache,
-			opts.block_compression_encoder == BlockCompressionEncoder::Gpu
-				&& !matches!(
-					opts.texture_compression,
-					TextureCompressionMode::Source | TextureCompressionMode::Compat
-				),
-			|progress| {
+		let mut set_ids = prewarm_scene_cache_wardrobe_set_ids(&document);
+		if set_ids.is_empty() {
+			set_ids.push(String::new());
+		}
+		let mut total_resident_images = 0u32;
+		let mut total_cache_ready_images = 0u32;
+		let mut warmed_sets = 0usize;
+		for (set_index, set_id) in set_ids.iter().enumerate() {
+			let mut target_document = document.as_ref().clone();
+			let applied_set = if model_loader::wardrobe_set_ids(&target_document).is_empty() {
+				target_document
+					.runtime_model()
+					.active_wardrobe_set()
+					.unwrap_or("<current>")
+					.to_string()
+			} else {
+				prewarm_scene_cache_apply_wardrobe_set(&mut target_document, set_id)
+					.map_err(|e| format!("{label}: wardrobe set `{set_id}` prewarm failed: {e}"))?
+			};
+			let runtime_model = target_document.runtime_model();
+			let Some(runtime) = runtime_model.scene_expression_catalog() else {
 				eprintln!(
-					"un-avatar-renderer: {label} progress phase={} {}/{} {} ({:.1}ms)",
-					progress.phase,
-					progress.current,
-					progress.total,
-					progress.message,
-					scene_started.elapsed().as_secs_f64() * 1000.0
+					"un-avatar-renderer: {label} no scene texture cache target set={} elapsed={:.1}ms total={:.1}ms",
+					applied_set,
+					prewarm_started.elapsed().as_secs_f64() * 1000.0,
+					started.elapsed().as_secs_f64() * 1000.0
 				);
-			},
-		)?;
+				continue;
+			};
+			eprintln!(
+				"un-avatar-renderer: {label} prewarming wardrobe set {}/{} `{}` active_asset_groups={:?}",
+				set_index + 1,
+				set_ids.len(),
+				applied_set,
+				runtime_model.active_asset_groups()
+			);
+			let summary = prewarm_scene_texture_caches(
+				runtime.scene,
+				runtime_model.active_asset_groups(),
+				scene_mesh_load_opts_for_window_options(opts),
+				texture_max_dimension,
+				opts.texture_compression,
+				opts.block_compression_encoder,
+				opts.block_compression_cpu_threads,
+				opts.mipmap_filter,
+				&opts.texture_compression_advanced,
+				cfg!(windows)
+					&& !matches!(
+						opts.texture_compression,
+						TextureCompressionMode::Source | TextureCompressionMode::Compat
+					),
+				opts.processed_texture_cache,
+				opts.block_compression_encoder == BlockCompressionEncoder::Gpu
+					&& !matches!(
+						opts.texture_compression,
+						TextureCompressionMode::Source | TextureCompressionMode::Compat
+					),
+				|progress| {
+					eprintln!(
+						"un-avatar-renderer: {label} progress set={applied_set} phase={} {}/{} {} ({:.1}ms)",
+						progress.phase,
+						progress.current,
+						progress.total,
+						progress.message,
+						prewarm_started.elapsed().as_secs_f64() * 1000.0
+					);
+				},
+			)?;
+			total_resident_images = total_resident_images.saturating_add(summary.resident_images);
+			total_cache_ready_images = total_cache_ready_images.saturating_add(summary.cache_ready_images);
+			warmed_sets += 1;
+			eprintln!(
+				"un-avatar-renderer: {label} wardrobe set `{applied_set}` texture cache prewarm summary resident={} ready={}",
+				summary.resident_images, summary.cache_ready_images,
+			);
+		}
 		eprintln!(
-			"un-avatar-renderer: {label} texture cache prewarm summary resident={} ready={}",
-			summary.resident_images, summary.cache_ready_images,
+			"un-avatar-renderer: {label} texture cache prewarm summary sets={} resident={} ready={}",
+			warmed_sets, total_resident_images, total_cache_ready_images,
 		);
 		eprintln!(
 			"un-avatar-renderer: {label} scene elapsed={:.1}ms total={:.1}ms",
-			scene_started.elapsed().as_secs_f64() * 1000.0,
+			prewarm_started.elapsed().as_secs_f64() * 1000.0,
 			started.elapsed().as_secs_f64() * 1000.0
 		);
 		return Ok(());
@@ -7461,9 +7724,7 @@ pub(crate) struct GpuState {
 	startup_progress_overlay_pipeline: wgpu::RenderPipeline,
 	startup_progress_overlay_buffer: wgpu::Buffer,
 	startup_progress_overlay_bind_group: wgpu::BindGroup,
-	wardrobe_billboard_pipeline: wgpu::RenderPipeline,
-	wardrobe_billboard_buffer: wgpu::Buffer,
-	wardrobe_billboard_bind_group: wgpu::BindGroup,
+	wardrobe_transition_scene: WardrobeTransitionScene,
 	contact_shadow_resources: Option<ContactShadowResources>,
 	contact_shadow_pipeline: Option<wgpu::RenderPipeline>,
 	document: Option<Arc<RwLock<UnaDocument>>>,
@@ -7484,6 +7745,7 @@ pub(crate) struct GpuState {
 	contact_shadow: ContactShadowOptions,
 	texture_summary: Option<TextureUploadSummary>,
 	last_asset_residency_refresh: SceneMeshAssetResidencyRefresh,
+	last_visible_draw_residency_promotion_count: usize,
 	last_mesh_buffer_scoped_load_count: usize,
 	last_mesh_buffer_scoped_unload_count: usize,
 	last_image_texture_scoped_load_count: usize,
@@ -7491,6 +7753,15 @@ pub(crate) struct GpuState {
 	last_cubemap_scoped_load_count: usize,
 	last_cubemap_scoped_unload_count: usize,
 	last_material_slot_scoped_upload_count: usize,
+	pending_wardrobe_gpu_update: Option<PendingWardrobeGpuUpdate>,
+	wardrobe_transition_image_upload_budget_bytes: u64,
+	wardrobe_transition_min_image_upload_budget_bytes: u64,
+	wardrobe_transition_max_image_upload_budget_bytes: u64,
+	wardrobe_transition_step_target_ms: f32,
+	last_wardrobe_transition_step_ms: f32,
+	last_wardrobe_transition_progress: WardrobeTransitionProgress,
+	last_wardrobe_transition_process_ram_mb: Option<u64>,
+	wardrobe_transition_memory_pressure: bool,
 	last_draw_doc_lock_ms: f32,
 	last_draw_expression_select_ms: f32,
 	last_draw_update_total_ms: f32,
@@ -7558,6 +7829,111 @@ pub(crate) struct GpuState {
 	show_bone_colliders: bool,
 	bone_collider_count: u32,
 	bone_collider_source: BoneColliderSource,
+}
+
+#[derive(Default)]
+struct PendingWardrobeGpuUpdate {
+	revision: u64,
+	total_work_bytes: u64,
+	remaining_work_bytes: u64,
+	total_mesh_load_count: usize,
+	mesh_load_indices: Vec<usize>,
+	mesh_unload_indices: Vec<usize>,
+	total_image_load_count: usize,
+	image_load_indices: Vec<usize>,
+	image_unload_indices: Vec<usize>,
+	total_cube_load_count: usize,
+	cube_load_indices: Vec<usize>,
+	cube_unload_indices: Vec<usize>,
+	total_material_slot_load_count: usize,
+	material_slot_load_indices: Vec<usize>,
+	material_bind_groups_rebuilt: bool,
+	draw_resources_remaining: usize,
+}
+
+const WARDROBE_TRANSITION_INITIAL_IMAGE_UPLOAD_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
+const WARDROBE_TRANSITION_MIN_IMAGE_UPLOAD_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
+const WARDROBE_TRANSITION_MAX_IMAGE_UPLOAD_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+const WARDROBE_TRANSITION_MESH_UPLOAD_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+const WARDROBE_TRANSITION_CUBE_LOADS_PER_FRAME: usize = 1;
+const WARDROBE_TRANSITION_DRAW_RESOURCES_PER_FRAME: usize = 4;
+const WARDROBE_TRANSITION_CUBE_WORK_BYTES: u64 = 64 * 1024 * 1024;
+const WARDROBE_TRANSITION_MATERIAL_WORK_BYTES: u64 = 64 * 1024;
+const WARDROBE_TRANSITION_DRAW_RESOURCE_WORK_BYTES: u64 = 512 * 1024;
+const WARDROBE_TRANSITION_RAM_PRESSURE_MB_ENV: &str = "UN_AVATAR_WARDROBE_RAM_PRESSURE_MB";
+const WARDROBE_TRANSITION_STEP_TARGET_MS_ENV: &str = "UN_AVATAR_WARDROBE_STEP_TARGET_MS";
+const WARDROBE_TRANSITION_IMAGE_BUDGET_MIN_MB_ENV: &str = "UN_AVATAR_WARDROBE_IMAGE_BUDGET_MIN_MB";
+const WARDROBE_TRANSITION_IMAGE_BUDGET_MAX_MB_ENV: &str = "UN_AVATAR_WARDROBE_IMAGE_BUDGET_MAX_MB";
+const WARDROBE_TRANSITION_IMAGE_BUDGET_INITIAL_MB_ENV: &str = "UN_AVATAR_WARDROBE_IMAGE_BUDGET_INITIAL_MB";
+
+fn env_u64(name: &str) -> Option<u64> {
+	std::env::var(name).ok()?.trim().parse().ok()
+}
+
+fn env_f32(name: &str) -> Option<f32> {
+	std::env::var(name).ok()?.trim().parse().ok()
+}
+
+fn wardrobe_transition_budget_bytes_from_env(name: &str, default: u64) -> u64 {
+	env_u64(name)
+		.map(|mb| mb.saturating_mul(1024 * 1024))
+		.unwrap_or(default)
+		.max(1024 * 1024)
+}
+
+fn wardrobe_transition_process_ram_mb() -> Option<u64> {
+	memory_stats::memory_stats().map(|snapshot| snapshot.physical_mem as u64 / 1_048_576)
+}
+
+fn drain_index_budget(indices: &mut Vec<usize>, limit: usize) -> Vec<usize> {
+	let take = indices.len().min(limit);
+	indices.drain(0..take).collect()
+}
+
+fn wardrobe_transition_progress_from_pending(
+	pending: &PendingWardrobeGpuUpdate,
+	image_upload_budget_bytes: u64,
+	process_ram_mb: Option<u64>,
+	memory_pressure: bool,
+	last_step_ms: f32,
+) -> WardrobeTransitionProgress {
+	WardrobeTransitionProgress {
+		active: true,
+		revision: pending.revision,
+		mesh_total: pending.total_mesh_load_count,
+		mesh_remaining: pending.mesh_load_indices.len(),
+		image_total: pending.total_image_load_count,
+		image_remaining: pending.image_load_indices.len(),
+		cube_total: pending.total_cube_load_count,
+		cube_remaining: pending.cube_load_indices.len(),
+		material_total: pending.total_material_slot_load_count,
+		material_remaining: pending.material_slot_load_indices.len(),
+		draw_resource_remaining: if pending.draw_resources_remaining == usize::MAX {
+			0
+		} else {
+			pending.draw_resources_remaining
+		},
+		total_work_bytes: pending.total_work_bytes,
+		remaining_work_bytes: pending.remaining_work_bytes,
+		image_upload_budget_bytes,
+		process_ram_mb,
+		memory_pressure,
+		last_step_ms: last_step_ms.max(0.0).round() as u32,
+	}
+}
+
+fn wardrobe_transition_estimated_work_bytes(
+	mesh_bytes: u64,
+	image_bytes: u64,
+	cube_count: usize,
+	material_count: usize,
+	draw_resource_count: usize,
+) -> u64 {
+	mesh_bytes
+		.saturating_add(image_bytes)
+		.saturating_add((cube_count as u64).saturating_mul(WARDROBE_TRANSITION_CUBE_WORK_BYTES))
+		.saturating_add((material_count as u64).saturating_mul(WARDROBE_TRANSITION_MATERIAL_WORK_BYTES))
+		.saturating_add((draw_resource_count as u64).saturating_mul(WARDROBE_TRANSITION_DRAW_RESOURCE_WORK_BYTES))
 }
 
 impl Drop for GpuState {
@@ -7758,41 +8134,23 @@ impl GpuState {
 				resource: startup_progress_overlay_buffer.as_entire_binding(),
 			}],
 		});
-		let wardrobe_billboard_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-			label: Some("wardrobe_billboard"),
-			entries: &[wgpu::BindGroupLayoutEntry {
-				binding: 0,
-				visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-				ty: wgpu::BindingType::Buffer {
-					ty: wgpu::BufferBindingType::Uniform,
-					has_dynamic_offset: false,
-					min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<WardrobeBillboardGpu>() as u64),
-				},
-				count: None,
-			}],
-		});
-		let wardrobe_billboard_pipeline = create_wardrobe_billboard_pipeline(
-			&device,
-			&bind_group_layout,
-			&wardrobe_billboard_bind_group_layout,
-			format,
-			aa_sample_count,
-		);
-		let wardrobe_billboard_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-			label: Some("wardrobe_billboard"),
-			size: std::mem::size_of::<WardrobeBillboardGpu>() as u64,
-			usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-			mapped_at_creation: false,
-		});
-		let wardrobe_billboard_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-			label: Some("wardrobe_billboard"),
-			layout: &wardrobe_billboard_bind_group_layout,
-			entries: &[wgpu::BindGroupEntry {
-				binding: 0,
-				resource: wardrobe_billboard_buffer.as_entire_binding(),
-			}],
-		});
+		let wardrobe_transition_scene = WardrobeTransitionScene::new(&device, &bind_group_layout, format, aa_sample_count);
 		let texture_summary = None;
+		let configured_min_image_budget = wardrobe_transition_budget_bytes_from_env(
+			WARDROBE_TRANSITION_IMAGE_BUDGET_MIN_MB_ENV,
+			WARDROBE_TRANSITION_MIN_IMAGE_UPLOAD_BUDGET_BYTES,
+		);
+		let configured_max_image_budget = wardrobe_transition_budget_bytes_from_env(
+			WARDROBE_TRANSITION_IMAGE_BUDGET_MAX_MB_ENV,
+			WARDROBE_TRANSITION_MAX_IMAGE_UPLOAD_BUDGET_BYTES,
+		);
+		let min_image_budget = configured_min_image_budget.min(configured_max_image_budget);
+		let max_image_budget = configured_min_image_budget.max(configured_max_image_budget);
+		let wardrobe_transition_image_upload_budget_bytes = wardrobe_transition_budget_bytes_from_env(
+			WARDROBE_TRANSITION_IMAGE_BUDGET_INITIAL_MB_ENV,
+			WARDROBE_TRANSITION_INITIAL_IMAGE_UPLOAD_BUDGET_BYTES,
+		)
+		.clamp(min_image_budget, max_image_budget);
 		let avatar_outline = mesh_diagnostics.avatar_outline;
 		let scene_meshes = None;
 		let dynamics_sim = None;
@@ -7848,9 +8206,7 @@ impl GpuState {
 			startup_progress_overlay_pipeline,
 			startup_progress_overlay_buffer,
 			startup_progress_overlay_bind_group,
-			wardrobe_billboard_pipeline,
-			wardrobe_billboard_buffer,
-			wardrobe_billboard_bind_group,
+			wardrobe_transition_scene,
 			contact_shadow_resources: None,
 			contact_shadow_pipeline,
 			document: None,
@@ -7870,6 +8226,7 @@ impl GpuState {
 			contact_shadow,
 			texture_summary,
 			last_asset_residency_refresh: SceneMeshAssetResidencyRefresh::default(),
+			last_visible_draw_residency_promotion_count: 0,
 			last_mesh_buffer_scoped_load_count: 0,
 			last_mesh_buffer_scoped_unload_count: 0,
 			last_image_texture_scoped_load_count: 0,
@@ -7877,6 +8234,15 @@ impl GpuState {
 			last_cubemap_scoped_load_count: 0,
 			last_cubemap_scoped_unload_count: 0,
 			last_material_slot_scoped_upload_count: 0,
+			pending_wardrobe_gpu_update: None,
+			wardrobe_transition_image_upload_budget_bytes,
+			wardrobe_transition_min_image_upload_budget_bytes: min_image_budget,
+			wardrobe_transition_max_image_upload_budget_bytes: max_image_budget,
+			wardrobe_transition_step_target_ms: env_f32(WARDROBE_TRANSITION_STEP_TARGET_MS_ENV).unwrap_or(16.0).clamp(4.0, 64.0),
+			last_wardrobe_transition_step_ms: 0.0,
+			last_wardrobe_transition_progress: WardrobeTransitionProgress::default(),
+			last_wardrobe_transition_process_ram_mb: None,
+			wardrobe_transition_memory_pressure: false,
 			last_draw_doc_lock_ms: 0.0,
 			last_draw_expression_select_ms: 0.0,
 			last_draw_update_total_ms: 0.0,
@@ -8050,7 +8416,7 @@ impl GpuState {
 		scene_node_constraint_counts(scene)
 	}
 
-	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>) -> bool {
+	fn refresh_scene_draw_state(&mut self, document_revision_to_apply: Option<u64>, defer_heavy_loads: bool) -> bool {
 		let (Some(sm), Some(doc_arc)) = (&mut self.scene_meshes, &self.document) else {
 			return false;
 		};
@@ -8097,52 +8463,106 @@ impl GpuState {
 			(!cache.overrides.is_empty()).then_some(&cache.overrides)
 		};
 		self.last_draw_expression_select_ms = t_expr0.elapsed().as_secs_f32() * 1000.0;
+		let mut document_update_complete = true;
 		if document_changed {
-			sm.refresh_draw_visibility_from_scene(runtime.scene);
-			sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
-			let mut residency_refresh = sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
-			let visible_residency_promotions = sm.promote_visible_draw_residency();
-			if !visible_residency_promotions.is_empty() {
-				residency_refresh
-					.mesh_buffer_load_indices
-					.extend(visible_residency_promotions.iter().copied());
-				residency_refresh.mesh_buffer_load_indices.sort_unstable();
-				residency_refresh.mesh_buffer_load_indices.dedup();
-				residency_refresh
-					.mesh_buffer_unload_indices
-					.retain(|index| visible_residency_promotions.binary_search(index).is_err());
-				if self.debug_log.is_enabled() {
+			let active_document_revision = document_revision_to_apply.unwrap_or(self.applied_document_revision);
+			if self
+				.pending_wardrobe_gpu_update
+				.as_ref()
+				.is_none_or(|pending| pending.revision != active_document_revision)
+			{
+				sm.refresh_draw_visibility_from_scene(runtime.scene);
+				sm.refresh_draw_materials_from_scene(&self.device, &self.queue, runtime.scene);
+				let mut residency_refresh =
+					sm.refresh_asset_group_residency_with_changes(runtime.scene, runtime_model.active_asset_groups());
+				let visible_residency_promotions = sm.promote_visible_draw_residency();
+				self.last_visible_draw_residency_promotion_count = visible_residency_promotions.len();
+				if !visible_residency_promotions.is_empty() {
+					residency_refresh
+						.mesh_buffer_load_indices
+						.extend(visible_residency_promotions.iter().copied());
+					residency_refresh.mesh_buffer_load_indices.sort_unstable();
+					residency_refresh.mesh_buffer_load_indices.dedup();
+					residency_refresh
+						.mesh_buffer_unload_indices
+						.retain(|index| visible_residency_promotions.binary_search(index).is_err());
+					if self.debug_log.is_enabled() {
+						self.debug_log.line(
+							"wardrobe",
+							format!(
+								"visible draw residency promoted count={} draws={:?}",
+								visible_residency_promotions.len(),
+								visible_residency_promotions
+							),
+						);
+					}
+				}
+				if residency_refresh.has_scoped_resource_changes() && self.debug_log.is_enabled() {
 					self.debug_log.line(
 						"wardrobe",
 						format!(
-							"visible draw residency promoted count={} draws={:?}",
-							visible_residency_promotions.len(),
-							visible_residency_promotions
+							"asset residency refresh mesh_load={:?} mesh_unload={:?} image_load={:?} image_unload={:?} material_load={:?} material_unload={:?}",
+							residency_refresh.mesh_buffer_load_indices,
+							residency_refresh.mesh_buffer_unload_indices,
+							residency_refresh.image_texture_load_indices,
+							residency_refresh.image_texture_unload_indices,
+							residency_refresh.material_slot_load_indices,
+							residency_refresh.material_slot_unload_indices
 						),
 					);
 				}
-			}
-			if residency_refresh.has_scoped_resource_changes() && self.debug_log.is_enabled() {
-				self.debug_log.line(
-					"wardrobe",
-					format!(
-						"asset residency refresh mesh_load={:?} mesh_unload={:?} image_load={:?} image_unload={:?} material_load={:?} material_unload={:?}",
-						residency_refresh.mesh_buffer_load_indices,
-						residency_refresh.mesh_buffer_unload_indices,
-						residency_refresh.image_texture_load_indices,
-						residency_refresh.image_texture_unload_indices,
-						residency_refresh.material_slot_load_indices,
-						residency_refresh.material_slot_unload_indices
-					),
+				let active_gaps = sm.active_residency_gaps();
+				let image_load_indices = sorted_unique_index_union(
+					&residency_refresh.image_texture_load_indices,
+					&active_gaps.inactive_image_texture_indices,
 				);
+				let image_unload_indices = sorted_index_difference(&residency_refresh.image_texture_unload_indices, &image_load_indices);
+				let cube_load_indices = sorted_unique_index_union(
+					&residency_refresh.cube_texture_load_indices,
+					&active_gaps.inactive_cube_texture_indices,
+				);
+				let cube_unload_indices = sorted_index_difference(&residency_refresh.cube_texture_unload_indices, &cube_load_indices);
+				self.last_asset_residency_refresh = residency_refresh.clone();
+				let mesh_load_indices = residency_refresh.mesh_buffer_load_indices;
+				let mesh_unload_indices = residency_refresh.mesh_buffer_unload_indices;
+				let material_slot_load_indices = active_gaps.inactive_material_slot_indices;
+				let total_work_bytes = wardrobe_transition_estimated_work_bytes(
+					sm.mesh_buffer_upload_work_bytes(&mesh_load_indices),
+					sm.image_texture_upload_work_bytes(runtime.scene, &image_load_indices),
+					cube_load_indices.len(),
+					material_slot_load_indices.len(),
+					0,
+				);
+				self.pending_wardrobe_gpu_update = Some(PendingWardrobeGpuUpdate {
+					revision: active_document_revision,
+					total_work_bytes,
+					remaining_work_bytes: total_work_bytes,
+					total_mesh_load_count: mesh_load_indices.len(),
+					mesh_load_indices,
+					mesh_unload_indices,
+					total_image_load_count: image_load_indices.len(),
+					image_load_indices,
+					image_unload_indices,
+					total_cube_load_count: cube_load_indices.len(),
+					cube_load_indices,
+					cube_unload_indices,
+					total_material_slot_load_count: material_slot_load_indices.len(),
+					material_slot_load_indices,
+					material_bind_groups_rebuilt: false,
+					draw_resources_remaining: usize::MAX,
+				});
 			}
-			let (mesh_buffer_load_count, mesh_buffer_unload_count) = sm.apply_mesh_buffer_residency(
-				&self.device,
-				&self.queue,
-				runtime.scene,
-				&residency_refresh.mesh_buffer_load_indices,
-				&residency_refresh.mesh_buffer_unload_indices,
-			);
+			let Some(pending) = self.pending_wardrobe_gpu_update.as_mut() else {
+				return false;
+			};
+			let mesh_load_indices = if defer_heavy_loads {
+				sm.drain_mesh_buffer_load_indices_by_budget(&mut pending.mesh_load_indices, WARDROBE_TRANSITION_MESH_UPLOAD_BUDGET_BYTES)
+			} else {
+				std::mem::take(&mut pending.mesh_load_indices)
+			};
+			let mesh_unload_indices = std::mem::take(&mut pending.mesh_unload_indices);
+			let (mesh_buffer_load_count, mesh_buffer_unload_count) =
+				sm.apply_mesh_buffer_residency(&self.device, &self.queue, runtime.scene, &mesh_load_indices, &mesh_unload_indices);
 			self.last_mesh_buffer_scoped_load_count = mesh_buffer_load_count;
 			self.last_mesh_buffer_scoped_unload_count = mesh_buffer_unload_count;
 			if (mesh_buffer_load_count > 0 || mesh_buffer_unload_count > 0) && self.debug_log.is_enabled() {
@@ -8150,39 +8570,49 @@ impl GpuState {
 					"wardrobe",
 					format!(
 						"mesh buffer scoped load_count={} unload_count={} load={:?} unload={:?}",
-						mesh_buffer_load_count,
-						mesh_buffer_unload_count,
-						residency_refresh.mesh_buffer_load_indices,
-						residency_refresh.mesh_buffer_unload_indices
+						mesh_buffer_load_count, mesh_buffer_unload_count, mesh_load_indices, mesh_unload_indices
 					),
 				);
 			}
-			self.last_asset_residency_refresh = residency_refresh;
-			let active_gaps = sm.active_residency_gaps();
-			let image_load_indices = sorted_unique_index_union(
-				&self.last_asset_residency_refresh.image_texture_load_indices,
-				&active_gaps.inactive_image_texture_indices,
-			);
-			let image_unload_indices =
-				sorted_index_difference(&self.last_asset_residency_refresh.image_texture_unload_indices, &image_load_indices);
-			let cube_load_indices = sorted_unique_index_union(
-				&self.last_asset_residency_refresh.cube_texture_load_indices,
-				&active_gaps.inactive_cube_texture_indices,
-			);
-			let cube_unload_indices =
-				sorted_index_difference(&self.last_asset_residency_refresh.cube_texture_unload_indices, &cube_load_indices);
+			let image_load_indices = if defer_heavy_loads {
+				sm.drain_image_texture_load_indices_by_budget(
+					runtime.scene,
+					&mut pending.image_load_indices,
+					self.wardrobe_transition_image_upload_budget_bytes,
+				)
+			} else {
+				std::mem::take(&mut pending.image_load_indices)
+			};
+			let image_unload_indices = std::mem::take(&mut pending.image_unload_indices);
+			let cube_load_indices = if defer_heavy_loads {
+				drain_index_budget(&mut pending.cube_load_indices, WARDROBE_TRANSITION_CUBE_LOADS_PER_FRAME)
+			} else {
+				std::mem::take(&mut pending.cube_load_indices)
+			};
+			let cube_unload_indices = std::mem::take(&mut pending.cube_unload_indices);
 			sm.promote_image_texture_residency(&image_load_indices);
 			sm.promote_cube_texture_residency(&cube_load_indices);
-			let (image_texture_bind_load_count, image_texture_bind_unload_count, cubemap_load_count, cubemap_unload_count) = sm
-				.apply_image_texture_view_residency(
-					&self.device,
-					&self.queue,
-					runtime.scene,
-					&image_load_indices,
-					&image_unload_indices,
-					&cube_load_indices,
-					&cube_unload_indices,
-				);
+			let (
+				image_texture_bind_load_count,
+				image_texture_bind_unload_count,
+				cubemap_load_count,
+				cubemap_unload_count,
+				deferred_image_load_indices,
+			) = sm.apply_image_texture_view_residency(
+				&self.device,
+				&self.queue,
+				runtime.scene,
+				&image_load_indices,
+				&image_unload_indices,
+				&cube_load_indices,
+				&cube_unload_indices,
+				defer_heavy_loads,
+			);
+			if !deferred_image_load_indices.is_empty() {
+				let remaining = std::mem::take(&mut pending.image_load_indices);
+				pending.image_load_indices = deferred_image_load_indices;
+				pending.image_load_indices.extend(remaining);
+			}
 			self.last_image_texture_scoped_load_count = image_texture_bind_load_count;
 			self.last_image_texture_scoped_unload_count = image_texture_bind_unload_count;
 			self.last_cubemap_scoped_load_count = cubemap_load_count;
@@ -8206,24 +8636,76 @@ impl GpuState {
 					),
 				);
 			}
-			let material_slot_upload_count = sm.promote_material_slot_residency(&active_gaps.inactive_material_slot_indices);
+			let material_slot_indices = std::mem::take(&mut pending.material_slot_load_indices);
+			let material_slot_upload_count = sm.promote_material_slot_residency(&material_slot_indices);
 			self.last_material_slot_scoped_upload_count = material_slot_upload_count;
 			if material_slot_upload_count > 0 && self.debug_log.is_enabled() {
 				self.debug_log.line(
 					"wardrobe",
 					format!(
 						"material slot scoped upload count={} slots={:?}",
-						material_slot_upload_count, active_gaps.inactive_material_slot_indices
+						material_slot_upload_count, material_slot_indices
 					),
 				);
 			}
-			sm.rebuild_material_bind_groups(&self.device);
-			let ensured_draw_resources = sm.ensure_active_draw_gpu_resources(&self.device, &self.queue, runtime.scene);
+			let residency_loads_complete =
+				pending.mesh_load_indices.is_empty() && pending.image_load_indices.is_empty() && pending.cube_load_indices.is_empty();
+			if residency_loads_complete && !pending.material_bind_groups_rebuilt {
+				sm.rebuild_material_bind_groups(&self.device);
+				pending.material_bind_groups_rebuilt = true;
+			}
+			let (ensured_draw_resources, remaining_draw_resources) = if residency_loads_complete && pending.material_bind_groups_rebuilt {
+				if defer_heavy_loads {
+					sm.ensure_active_draw_gpu_resources_limited(
+						&self.device,
+						&self.queue,
+						runtime.scene,
+						WARDROBE_TRANSITION_DRAW_RESOURCES_PER_FRAME,
+					)
+				} else {
+					(sm.ensure_active_draw_gpu_resources(&self.device, &self.queue, runtime.scene), 0)
+				}
+			} else {
+				(0, usize::MAX)
+			};
+			pending.draw_resources_remaining = remaining_draw_resources;
 			if ensured_draw_resources > 0 && self.debug_log.is_enabled() {
 				self.debug_log.line(
 					"wardrobe",
 					format!("active draw gpu resources ensured count={ensured_draw_resources}"),
 				);
+			}
+			document_update_complete = pending.mesh_load_indices.is_empty()
+				&& pending.mesh_unload_indices.is_empty()
+				&& pending.image_load_indices.is_empty()
+				&& pending.image_unload_indices.is_empty()
+				&& pending.cube_load_indices.is_empty()
+				&& pending.cube_unload_indices.is_empty()
+				&& pending.material_slot_load_indices.is_empty()
+				&& pending.material_bind_groups_rebuilt
+				&& pending.draw_resources_remaining == 0;
+			let draw_resource_remaining = if pending.draw_resources_remaining == usize::MAX {
+				0
+			} else {
+				pending.draw_resources_remaining
+			};
+			pending.remaining_work_bytes = wardrobe_transition_estimated_work_bytes(
+				sm.mesh_buffer_upload_work_bytes(&pending.mesh_load_indices),
+				sm.image_texture_upload_work_bytes(runtime.scene, &pending.image_load_indices),
+				pending.cube_load_indices.len(),
+				pending.material_slot_load_indices.len(),
+				draw_resource_remaining,
+			);
+			self.last_wardrobe_transition_progress = wardrobe_transition_progress_from_pending(
+				pending,
+				self.wardrobe_transition_image_upload_budget_bytes,
+				self.last_wardrobe_transition_process_ram_mb,
+				self.wardrobe_transition_memory_pressure,
+				self.last_wardrobe_transition_step_ms,
+			);
+			if document_update_complete {
+				self.pending_wardrobe_gpu_update = None;
+				self.last_wardrobe_transition_progress = WardrobeTransitionProgress::default();
 			}
 		}
 		let t_update0 = Instant::now();
@@ -8238,7 +8720,7 @@ impl GpuState {
 		);
 		self.last_draw_update_total_ms = t_update0.elapsed().as_secs_f32() * 1000.0;
 		let runtime_requirements_after_update = refresh_scene_morph_defaults.then(|| sm.runtime_requirements());
-		if let Some(document_revision) = document_revision_to_apply {
+		if let Some(document_revision) = document_revision_to_apply.filter(|_| document_update_complete) {
 			self.applied_document_revision = document_revision;
 			self.applied_expression_overrides_revision = self.expression_overrides_revision;
 		}
@@ -8763,6 +9245,83 @@ impl GpuState {
 		self.write_globals(gw, gh);
 	}
 
+	pub fn pick_vertex_diagnostic(
+		&mut self,
+		cursor_x: f32,
+		cursor_y: f32,
+		viewport_width: u32,
+		viewport_height: u32,
+	) -> Result<serde_json::Value, String> {
+		let document_revision = self.document_revision.load(Ordering::Acquire);
+		let _ = self.refresh_scene_draw_state(Some(document_revision), false);
+		let Some(scene_meshes) = self.scene_meshes.as_ref() else {
+			return Err("scene meshes are not loaded".to_string());
+		};
+		let Some(doc_arc) = self.document.as_ref() else {
+			return Err("document is not loaded".to_string());
+		};
+		let doc = doc_arc.read().map_err(|_| "document lock poisoned".to_string())?;
+		let Some(scene) = doc.scene.as_ref() else {
+			return Err("scene is not loaded".to_string());
+		};
+		let aspect = viewport_width.max(1) as f32 / viewport_height.max(1) as f32;
+		let fovy = vertical_fov_from_diagonal(self.camera.diagonal_fov_deg.to_radians(), aspect);
+		let view = Mat4::look_at_rh(self.camera.position(), self.camera.target, Vec3::Y);
+		let view_proj = Mat4::perspective_rh(fovy, aspect, CAMERA_NEAR_CLIP_M, CAMERA_FAR_CLIP_M) * view;
+		let inv_view_proj = view_proj.inverse();
+		let ndc_x = (cursor_x / viewport_width.max(1) as f32) * 2.0 - 1.0;
+		let ndc_y = 1.0 - (cursor_y / viewport_height.max(1) as f32) * 2.0;
+		let near = inv_view_proj.project_point3(Vec3::new(ndc_x, ndc_y, -1.0));
+		let far = inv_view_proj.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
+		let ray_dir = (far - near).try_normalize().unwrap_or(Vec3::Z);
+		let mut diagnostic = scene_meshes
+			.pick_vertex_diagnostic(
+				scene,
+				&self.world_scratch,
+				VertexPickRequest {
+					cursor_x,
+					cursor_y,
+					viewport_width,
+					viewport_height,
+					view_proj,
+					ray_origin: near,
+					ray_dir,
+				},
+			)
+			.ok_or_else(|| "no visible vertex near cursor".to_string())?;
+		if let Some(object) = diagnostic.as_object_mut() {
+			object.insert(
+				"runtime_parameter_focus".to_string(),
+				diagnostic_runtime_parameters_for_patterns(&doc, &["ArmDown", "ArmPit"]),
+			);
+			object.insert(
+				"dynamics_interaction_focus".to_string(),
+				diagnostic_dynamics_interactions_for_patterns(
+					&doc,
+					self.rest_nodes.as_deref().map(Vec::as_slice),
+					&["ArmDown", "Arm_Phys", "Upperarm"],
+				),
+			);
+			object.insert(
+				"node_transform_focus".to_string(),
+				diagnostic_node_transforms_for_patterns(
+					scene,
+					self.rest_nodes.as_deref().map(Vec::as_slice),
+					&[
+						"Upperarm_L",
+						"Upperarm_R",
+						"UpperArm_twist_L",
+						"UpperArm_twist_R",
+						"Arm_Phys_L",
+						"Arm_Phys_R",
+						"UV3_Cape",
+					],
+				),
+			);
+		}
+		Ok(diagnostic)
+	}
+
 	/// 単発のオフスクリーンレンダリングで PNG を保存する。透過設定をそのまま含む。
 	pub fn capture_screenshot(&mut self, path: &std::path::Path, clear_color: wgpu::Color) -> Result<(), String> {
 		let (w, h) = self.render_pixel_dims();
@@ -8770,7 +9329,7 @@ impl GpuState {
 		let aa_sample_count = aa_sample_count(self.aa);
 
 		// シーンノードがある場合は現在の pose を再アップロードしておく（前フレーム未提出の可能性に備える）。
-		self.refresh_scene_draw_state(None);
+		self.refresh_scene_draw_state(None, false);
 		self.write_frame_globals(w, h, true);
 
 		let target_tex = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -8811,6 +9370,9 @@ impl GpuState {
 				grab.resize_to(&self.device, w, h, format);
 			} else {
 				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, w, h, format));
+			}
+			if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
+				sm.set_screen_grab_view(&self.device, grab.view());
 			}
 		}
 		let (depth_tex, depth_view) = create_depth(&self.device, w, h);
@@ -9218,6 +9780,10 @@ impl GpuState {
 		doc.runtime_model().active_wardrobe_set().map(str::to_owned)
 	}
 
+	pub(crate) fn document_state_applied(&self) -> bool {
+		self.document_revision.load(Ordering::Acquire) == self.applied_document_revision
+	}
+
 	pub(crate) fn base_wardrobe_set(&self) -> Option<String> {
 		let doc_arc = self.document.as_ref()?;
 		let doc = doc_arc.read().ok()?;
@@ -9261,6 +9827,7 @@ impl GpuState {
 		plan.last_residency_refresh_image_unload_count = self.last_asset_residency_refresh.image_texture_unload_indices.len();
 		plan.last_residency_refresh_material_load_count = self.last_asset_residency_refresh.material_slot_load_indices.len();
 		plan.last_residency_refresh_material_unload_count = self.last_asset_residency_refresh.material_slot_unload_indices.len();
+		plan.last_visible_draw_residency_promotion_count = self.last_visible_draw_residency_promotion_count;
 		plan.last_mesh_buffer_scoped_load_count = self.last_mesh_buffer_scoped_load_count;
 		plan.last_mesh_buffer_scoped_unload_count = self.last_mesh_buffer_scoped_unload_count;
 		plan.last_image_texture_scoped_load_count = self.last_image_texture_scoped_load_count;
@@ -9268,6 +9835,7 @@ impl GpuState {
 		plan.last_cubemap_scoped_load_count = self.last_cubemap_scoped_load_count;
 		plan.last_cubemap_scoped_unload_count = self.last_cubemap_scoped_unload_count;
 		plan.last_material_slot_scoped_upload_count = self.last_material_slot_scoped_upload_count;
+		plan.transition_progress = self.last_wardrobe_transition_progress.clone();
 		plan
 	}
 
@@ -10343,10 +10911,6 @@ impl GpuState {
 		}
 	}
 
-	pub(crate) fn rest_nodes_for_scene_prepare(&self) -> Option<Arc<Vec<UnaSceneNode>>> {
-		self.rest_nodes.as_ref().map(Arc::clone)
-	}
-
 	pub(crate) fn attach_prepared_document(
 		&mut self,
 		prepared: PreparedDocumentScene,
@@ -11003,31 +11567,8 @@ impl GpuState {
 		)
 	}
 
-	fn write_wardrobe_billboard_uniform(&self, billboard: &WardrobeChangingBillboardFrame) {
-		let center = Vec3::from_array(billboard.billboard_center);
-		self.queue.write_buffer(
-			&self.wardrobe_billboard_buffer,
-			0,
-			bytemuck::bytes_of(&WardrobeBillboardGpu {
-				view_proj: billboard.billboard_view_proj,
-				camera_pos: [
-					billboard.billboard_camera_pos[0],
-					billboard.billboard_camera_pos[1],
-					billboard.billboard_camera_pos[2],
-					1.0,
-				],
-				center_size: [center.x, center.y, center.z, billboard.billboard_size.max(0.01)],
-				time_params: [billboard.time_secs, 0.0, 0.0, 0.0],
-			}),
-		);
-	}
-
 	fn draw_wardrobe_billboard<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>, billboard: &WardrobeChangingBillboardFrame) {
-		self.write_wardrobe_billboard_uniform(billboard);
-		pass.set_pipeline(&self.wardrobe_billboard_pipeline);
-		pass.set_bind_group(0, &self.bind_group, &[]);
-		pass.set_bind_group(1, &self.wardrobe_billboard_bind_group, &[]);
-		pass.draw(0..6, 0..1);
+		self.wardrobe_transition_scene.draw(&self.queue, &self.bind_group, pass, billboard);
 	}
 
 	fn draw_startup_progress_overlay<'a>(
@@ -11260,6 +11801,9 @@ impl GpuState {
 			} else {
 				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, gw, gh, self.config.format));
 			}
+			if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
+				sm.set_screen_grab_view(&self.device, grab.view());
+			}
 		}
 		if use_msaa {
 			let sample_count = aa_sample_count(self.aa);
@@ -11287,7 +11831,7 @@ impl GpuState {
 		let mut world_scratch_current = false;
 		let t_draw_state0 = Instant::now();
 		if draw_scene && scene_pose_may_change {
-			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision));
+			world_scratch_current = self.refresh_scene_draw_state(Some(document_revision), wardrobe_transition_only);
 			if world_scratch_current {
 				self.scene_pose_dirty = false;
 			}
@@ -11726,6 +12270,43 @@ impl GpuState {
 			runtime_action_eval_ms: 0.0,
 			gpu_ms: self.gpu_timestamps.as_ref().and_then(|ts| ts.last_gpu_ms()).unwrap_or(0.0),
 		})
+	}
+
+	pub(crate) fn advance_wardrobe_transition_gpu_update(&mut self) -> bool {
+		let document_revision = self.document_revision.load(Ordering::Acquire);
+		if document_revision == self.applied_document_revision {
+			self.last_wardrobe_transition_progress = WardrobeTransitionProgress::default();
+			return true;
+		}
+		let started = Instant::now();
+		let refreshed = self.refresh_scene_draw_state(Some(document_revision), true);
+		let step_ms = started.elapsed().as_secs_f32() * 1000.0;
+		self.last_wardrobe_transition_step_ms = step_ms;
+		self.last_wardrobe_transition_process_ram_mb = wardrobe_transition_process_ram_mb();
+		self.wardrobe_transition_memory_pressure = env_u64(WARDROBE_TRANSITION_RAM_PRESSURE_MB_ENV).is_some_and(|limit_mb| {
+			self.last_wardrobe_transition_process_ram_mb
+				.is_some_and(|ram_mb| ram_mb >= limit_mb)
+		});
+		let target_ms = self.wardrobe_transition_step_target_ms.max(1.0);
+		if self.wardrobe_transition_memory_pressure || step_ms > target_ms {
+			self.wardrobe_transition_image_upload_budget_bytes =
+				(self.wardrobe_transition_image_upload_budget_bytes / 2).max(self.wardrobe_transition_min_image_upload_budget_bytes);
+		} else if step_ms < target_ms * 0.5 {
+			self.wardrobe_transition_image_upload_budget_bytes = self
+				.wardrobe_transition_image_upload_budget_bytes
+				.saturating_add(8 * 1024 * 1024)
+				.min(self.wardrobe_transition_max_image_upload_budget_bytes);
+		}
+		if let Some(pending) = self.pending_wardrobe_gpu_update.as_ref() {
+			self.last_wardrobe_transition_progress = wardrobe_transition_progress_from_pending(
+				pending,
+				self.wardrobe_transition_image_upload_budget_bytes,
+				self.last_wardrobe_transition_process_ram_mb,
+				self.wardrobe_transition_memory_pressure,
+				step_ms,
+			);
+		}
+		refreshed
 	}
 }
 
@@ -12280,12 +12861,13 @@ mod tests {
 		dynamics_collider_path_runtime_summary_statuses, dynamics_collider_shape_kind, dynamics_group_statuses_with_limit,
 		dynamics_interaction_angle_normalizer, dynamics_interaction_parameter_values, effective_window_backend,
 		menu_action_candidates_from_runtime, menu_graph_node_path, merge_scene_lighting_defaults, mesh_shader_resource_plan_for_adapter,
-		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, restore_runtime_scene_transforms_to_rest,
-		runtime_action_id_for_parameter, runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values,
-		runtime_action_parameter_values, runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference,
-		sorted_unique_index_union, surface_color_format, transparent_alpha_mode, wardrobe_action_statuses,
-		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
+		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, prewarm_scene_cache_apply_wardrobe_set,
+		prewarm_scene_cache_wardrobe_set_ids, restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter,
+		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_parameter_values,
+		runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference, sorted_unique_index_union, surface_color_format,
+		transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
+		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind,
+		RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
 		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
 		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
 		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
@@ -12299,7 +12881,7 @@ mod tests {
 	use serde_json::json;
 	use un_avatar_core::{
 		UnaDocument, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaSceneDirectionalLight, UnaSceneEnvironmentLight,
-		UnaSceneLighting, UnaSceneNode, UnaSceneSnapshot,
+		UnaSceneLighting, UnaSceneNode, UnaSceneSnapshot, UnaUnavatarExtension,
 	};
 	use un_avatar_skeleton::{
 		BoneColliderPrimitive, DynamicsColliderAugmentOverride, DynamicsPhysicsConfig, DynamicsTailSample, HumanoidProfile,
@@ -12325,6 +12907,45 @@ mod tests {
 				elevation_deg: 50.0,
 			}),
 		}
+	}
+
+	#[test]
+	fn prewarm_scene_cache_targets_base_first_and_applies_it() {
+		let mut document = UnaDocument {
+			scene: Some(UnaSceneSnapshot::default()),
+			unavatar: Some(UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"wardrobe": {
+						"baseSet": "base",
+						"sets": [
+							{
+								"id": "coat",
+								"name": "Coat",
+								"assetGroups": ["outfit:coat"],
+								"operations": []
+							},
+							{
+								"id": "base",
+								"name": "Base",
+								"assetGroups": [""],
+								"operations": []
+							}
+						]
+					}
+				}),
+			}),
+			..Default::default()
+		};
+
+		assert_eq!(
+			prewarm_scene_cache_wardrobe_set_ids(&document),
+			vec!["base".to_string(), "coat".to_string()]
+		);
+		let applied = prewarm_scene_cache_apply_wardrobe_set(&mut document, "base").unwrap();
+
+		assert_eq!(applied, "base");
+		assert_eq!(document.runtime_model().active_asset_groups(), &[String::new()]);
 	}
 
 	#[test]
@@ -12614,6 +13235,7 @@ mod tests {
 				center: [0.0; 3],
 				radius: 0.1,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 		}];
 		let config = DynamicsPhysicsConfig {
@@ -12661,6 +13283,7 @@ mod tests {
 				center: [0.0; 3],
 				radius: 0.1,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 		}];
 		let config = DynamicsPhysicsConfig {
@@ -13274,7 +13897,109 @@ mod tests {
 	}
 
 	#[test]
-	fn dynamics_interaction_angle_normalizer_uses_narrow_hinge_axis() {
+	fn dynamics_interaction_angle_ignores_vrc_source_limit_rotation_for_rest_axis_measurement() {
+		let mut document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: json!({
+					"dynamics": [{
+						"id": "physbone:Avatar/Upperarm/Arm_Phys",
+						"source": "vrc_physbone",
+						"sourceParams": {
+							"limitRotation": [90.0, 0.0, 0.0]
+						}
+					}],
+					"animator": {
+						"controllers": [{
+							"source": "modularAvatarMergeAnimator",
+							"layers": [{
+								"states": [{
+									"motion": {
+										"motionType": "BlendTree",
+										"blendType": "Simple1D",
+										"blendParameter": "LeftArmDown_Angle",
+										"children": [
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 0.5,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 100.0
+												}]
+											},
+											{
+												"motionType": "AnimationClip",
+												"threshold": 1.0,
+												"curveBindings": [{
+													"path": "ClothPanelMesh",
+													"propertyName": "blendShape.(Do not Modify)ArmPit_Fix_L",
+													"constantValue": 0.0
+												}]
+											}
+										]
+									}
+								}]
+							}]
+						}]
+					}
+				}),
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: vec![
+					test_scene_node_with_transform("Upperarm", Mat4::IDENTITY, vec![1]),
+					test_scene_node_with_transform("Arm_Phys", Mat4::IDENTITY, vec![2]),
+					test_scene_node_with_transform("Arm_Phys Endpoint", Mat4::from_translation(Vec3::NEG_Y), Vec::new()),
+				],
+				..Default::default()
+			}),
+			spring_bones: Some(un_avatar_core::UnaDynamicsSettings {
+				groups: vec![un_avatar_core::UnaSpringBoneGroup {
+					enabled: true,
+					source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+					source_id: "physbone:Avatar/Upperarm/Arm_Phys".to_string(),
+					interaction: Some(un_avatar_core::UnaDynamicsInteraction {
+						parameter: "LeftArmDown".to_string(),
+						..Default::default()
+					}),
+					limit: Some(un_avatar_core::UnaDynamicsLimit {
+						max_angle_x: 90.0,
+						max_angle_z: 90.0,
+						..Default::default()
+					}),
+					gravity_dir: [0.0, -1.0, 0.0],
+					gravity_power: 1.0,
+					bone_node_indices: vec![1, 2],
+					..Default::default()
+				}],
+				colliders: Vec::new(),
+				contacts: Vec::new(),
+				constraint_refs: Vec::new(),
+			}),
+			..Default::default()
+		};
+		document.runtime_model_mut().apply_runtime_parameter_initial_values();
+		let rest_nodes = document.scene.as_ref().unwrap().nodes.clone();
+
+		let values = dynamics_interaction_parameter_values(&document, Some(&rest_nodes));
+		assert_eq!(values.get("LeftArmDown_Angle").copied(), Some(0.0));
+
+		document.runtime_model_mut().set_runtime_parameter_values(values);
+		let overrides = animator_morph_overrides_for_doc(&document);
+		assert_eq!(overrides.get("ClothPanelMesh\0(Do not Modify)ArmPit_Fix_L").copied(), Some(0.0));
+	}
+
+	#[test]
+	fn dynamics_interaction_angle_normalizer_uses_hinge_max_angle_x() {
 		let limit = un_avatar_core::UnaDynamicsLimit {
 			limit_type: "Hinge".to_string(),
 			max_angle_x: 90.0,
@@ -13282,7 +14007,7 @@ mod tests {
 			..Default::default()
 		};
 
-		assert_eq!(dynamics_interaction_angle_normalizer(Some(&limit)), 45.0);
+		assert_eq!(dynamics_interaction_angle_normalizer(Some(&limit)), 90.0);
 
 		let limit = un_avatar_core::UnaDynamicsLimit {
 			limit_type: "Polar".to_string(),
@@ -14297,6 +15022,7 @@ mod tests {
 	fn startup_progress_and_wardrobe_transition_are_distinct_frame_roles() {
 		let wardrobe_changing = WardrobeChangingBillboardFrame {
 			time_secs: 0.0,
+			progress: 0.0,
 			billboard_center: [0.0, 1.0, 0.0],
 			billboard_size: 0.5,
 			billboard_view_proj: [[0.0; 4]; 4],

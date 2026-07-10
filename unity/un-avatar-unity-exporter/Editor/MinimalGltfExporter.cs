@@ -907,8 +907,9 @@ namespace UNAvatar.UnityExporter
         private sealed class MorphTargetRecord
         {
             public string Name;
-            public int PositionAccessor;
-            public int NormalAccessor;
+            public int PositionAccessor = -1;
+            public int NormalAccessor = -1;
+            public int TangentAccessor = -1;
 
             public Dictionary<string, object> ToJson()
             {
@@ -920,6 +921,10 @@ namespace UNAvatar.UnityExporter
                 if (NormalAccessor >= 0)
                 {
                     json["NORMAL"] = NormalAccessor;
+                }
+                if (TangentAccessor >= 0)
+                {
+                    json["TANGENT"] = TangentAccessor;
                 }
                 return json;
             }

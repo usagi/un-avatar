@@ -326,7 +326,7 @@ namespace UNAvatar.UnityExporter
 
         private Dictionary<string, object> BuildVrcPhysBoneSourceParams(Transform root, Type type, Component component)
         {
-            return new Dictionary<string, object>
+            var sourceParams = new Dictionary<string, object>
             {
                 ["pull"] = ReadFloatMember(type, component, "pull", 0.0f),
                 ["spring"] = ReadFloatMember(type, component, "spring", 0.0f),
@@ -366,6 +366,10 @@ namespace UNAvatar.UnityExporter
                 ["parameter"] = ReadStringMember(type, component, "parameter", ""),
                 ["colliders"] = BuildVrcPhysBoneColliderPayloads(root, ReadComponentListMember(type, component, "colliders"))
             };
+            AddOptionalSourceParam(sourceParams, type, component, "version");
+            AddOptionalSourceParam(sourceParams, type, component, "ignoreOtherPhysBones");
+            AddOptionalSourceParam(sourceParams, type, component, "isAnimated");
+            return sourceParams;
         }
 
         private static int SourceColliderCount(Dictionary<string, object> group)
@@ -409,7 +413,8 @@ namespace UNAvatar.UnityExporter
                         ["shapeType"] = colliderMap.TryGetValue("shapeType", out var shapeType) ? shapeType : "",
                         ["radius"] = colliderMap.TryGetValue("radius", out var radius) ? radius : 0.0f,
                         ["height"] = colliderMap.TryGetValue("height", out var height) ? height : 0.0f,
-                        ["insideBounds"] = colliderMap.TryGetValue("insideBounds", out var insideBounds) ? insideBounds : false
+                        ["insideBounds"] = colliderMap.TryGetValue("insideBounds", out var insideBounds) ? insideBounds : false,
+                        ["bonesAsSphere"] = colliderMap.TryGetValue("bonesAsSphere", out var bonesAsSphere) ? bonesAsSphere : true
                     });
                 }
             }
@@ -452,7 +457,7 @@ namespace UNAvatar.UnityExporter
             {
                 rootTransform = collider.transform;
             }
-            return new Dictionary<string, object>
+            var payload = new Dictionary<string, object>
             {
                 ["component"] = TransformTargetJson(root, collider.transform),
                 ["root"] = TransformTargetJson(root, rootTransform),
@@ -461,8 +466,11 @@ namespace UNAvatar.UnityExporter
                 ["height"] = ReadFloatMember(type, collider, "height", 0.0f),
                 ["position"] = Vector3Json(ReadVector3Member(type, collider, "position", Vector3.zero)),
                 ["rotation"] = QuaternionJson(ReadQuaternionMember(type, collider, "rotation", Quaternion.identity)),
-                ["insideBounds"] = ReadBoolMember(type, collider, "insideBounds", false)
+                ["insideBounds"] = ReadBoolMember(type, collider, "insideBounds", false),
+                ["bonesAsSphere"] = ReadBoolMember(type, collider, "bonesAsSphere", true)
             };
+            AddOptionalSourceParam(payload, type, collider, "globalCollision");
+            return payload;
         }
 
         private static List<object> TransformListTargetsJson(Transform root, List<Transform> transforms)
@@ -650,6 +658,43 @@ namespace UNAvatar.UnityExporter
         {
             var value = ReadMember(type, instance, name);
             return value != null ? value.ToString() ?? fallback : fallback;
+        }
+
+        private static void AddOptionalSourceParam(Dictionary<string, object> target, Type type, object instance, string name)
+        {
+            if (target == null || type == null || instance == null || string.IsNullOrEmpty(name))
+            {
+                return;
+            }
+            var value = ReadMember(type, instance, name);
+            if (value == null)
+            {
+                return;
+            }
+            switch (value)
+            {
+                case bool b:
+                    target[name] = b;
+                    break;
+                case int i:
+                    target[name] = i;
+                    break;
+                case long l:
+                    target[name] = l;
+                    break;
+                case float f:
+                    target[name] = SanitizeFloat(f, 0.0f);
+                    break;
+                case double d:
+                    target[name] = SanitizeFloat((float)d, 0.0f);
+                    break;
+                case string s:
+                    target[name] = s;
+                    break;
+                default:
+                    target[name] = value.ToString() ?? "";
+                    break;
+            }
         }
     }
 }

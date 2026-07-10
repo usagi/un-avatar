@@ -61,6 +61,8 @@ export type QualitySetting = {
 	debug_disable_shade_color: boolean;
 	debug_disable_normal_map: boolean;
 	debug_base_texture_only: boolean;
+	debug_zero_morphs: boolean;
+	debug_vertex_pick_diagnostics: boolean;
 };
 
 export type LightingSetting = LightingDiagramSource & {
@@ -168,6 +170,8 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	debug_disable_shade_color: boolean;
 	debug_disable_normal_map: boolean;
 	debug_base_texture_only: boolean;
+	debug_zero_morphs: boolean;
+	debug_vertex_pick_diagnostics: boolean;
 	outline_policy: string;
 	outline_type: string;
 	outline_width: number | null;

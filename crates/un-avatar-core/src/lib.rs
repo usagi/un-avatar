@@ -90,6 +90,8 @@ pub struct UnaMorphTargetDeltas {
 	pub position_deltas: Vec<[f32; 3]>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub normal_deltas: Option<Vec<[f32; 3]>>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub tangent_deltas: Option<Vec<[f32; 3]>>,
 }
 
 /// VRM の式プリセット 1 件（BlendShapeClip / Expression に対応する正規化形）。
@@ -881,6 +883,13 @@ fn hash_morph_targets(values: &[UnaMorphTargetDeltas]) -> u64 {
 						.normal_deltas
 						.as_ref()
 						.map_or(Value::Null, |normals| Value::from(hash_f32_arrays(normals))),
+				);
+				out.insert(
+					"tangents".to_string(),
+					target
+						.tangent_deltas
+						.as_ref()
+						.map_or(Value::Null, |tangents| Value::from(hash_f32_arrays(tangents))),
 				);
 				Value::Object(out)
 			})
@@ -1710,7 +1719,7 @@ pub enum UnaDynamicsColliderShape {
 	Unknown,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UnaDynamicsCollider {
 	#[serde(default, skip_serializing_if = "UnaDynamicsSourceKind::is_default")]
 	pub source_kind: UnaDynamicsSourceKind,
@@ -1731,6 +1740,26 @@ pub struct UnaDynamicsCollider {
 	pub rotation: [f32; 4],
 	#[serde(default)]
 	pub inside_bounds: bool,
+	#[serde(default = "default_true", skip_serializing_if = "is_true")]
+	pub bones_as_sphere: bool,
+}
+
+impl Default for UnaDynamicsCollider {
+	fn default() -> Self {
+		Self {
+			source_kind: UnaDynamicsSourceKind::default(),
+			source_id: String::new(),
+			collider_path: String::new(),
+			node: 0,
+			shape: UnaDynamicsColliderShape::default(),
+			radius: 0.0,
+			height: 0.0,
+			position: [0.0; 3],
+			rotation: identity_quat_array(),
+			inside_bounds: false,
+			bones_as_sphere: true,
+		}
+	}
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -4708,6 +4737,10 @@ fn default_true() -> bool {
 	true
 }
 
+fn is_true(value: &bool) -> bool {
+	*value
+}
+
 fn usize_is_zero(value: &usize) -> bool {
 	*value == 0
 }
@@ -7272,6 +7305,7 @@ mod tests {
 			morph_targets: vec![UnaMorphTargetDeltas {
 				position_deltas: vec![[0.0; 3]],
 				normal_deltas: None,
+				tangent_deltas: None,
 			}],
 			morph_target_names: vec![],
 			default_morph_weights: vec![0.0],
@@ -7314,6 +7348,7 @@ mod tests {
 			morph_targets: vec![UnaMorphTargetDeltas {
 				position_deltas: vec![[0.0; 3]],
 				normal_deltas: None,
+				tangent_deltas: None,
 			}],
 			morph_target_names: vec![],
 			default_morph_weights: vec![0.8],

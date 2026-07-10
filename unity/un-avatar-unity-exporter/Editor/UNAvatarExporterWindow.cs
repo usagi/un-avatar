@@ -39,6 +39,7 @@ namespace UNAvatar.UnityExporter
         private Vector2 scroll;
         private string lastSummary = "";
         private string developerDiagnosticsText = "";
+        private string developerDiagnosticsFilePath = "";
 
         internal static bool IsDeveloperModeEnabled => EditorPrefs.GetBool(DeveloperModePrefKey, false);
 
@@ -147,11 +148,30 @@ namespace UNAvatar.UnityExporter
                     if (GUILayout.Button("Refresh Diagnostics", GUILayout.Height(22)))
                     {
                         developerDiagnosticsText = BuildDeveloperDiagnostics();
+                        developerDiagnosticsFilePath = "";
                     }
                     if (GUILayout.Button("Diagnose Skin Export", GUILayout.Height(22)))
                     {
-                        developerDiagnosticsText = BuildSkinExportDiagnostics();
-                        Debug.Log(developerDiagnosticsText);
+                        SetDeveloperDiagnostics("skin-export", BuildSkinExportDiagnostics());
+                    }
+                    if (GUILayout.Button("Diagnose PhysBone Export", GUILayout.Height(22)))
+                    {
+                        SetDeveloperDiagnostics("physbone-export", BuildPhysBoneExportDiagnostics());
+                    }
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        if (GUILayout.Button("Clear Diagnostics", GUILayout.Height(22)))
+                        {
+                            developerDiagnosticsText = "";
+                            developerDiagnosticsFilePath = "";
+                        }
+                        using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(developerDiagnosticsFilePath)))
+                        {
+                            if (GUILayout.Button("Open Diagnostics File", GUILayout.Height(22)))
+                            {
+                                EditorUtility.RevealInFinder(developerDiagnosticsFilePath);
+                            }
+                        }
                     }
                     if (!string.IsNullOrEmpty(developerDiagnosticsText))
                     {
@@ -160,6 +180,44 @@ namespace UNAvatar.UnityExporter
                 }
             }
             EditorGUILayout.EndScrollView();
+        }
+
+        private void SetDeveloperDiagnostics(string label, string text)
+        {
+            developerDiagnosticsFilePath = WriteDeveloperDiagnosticsFile(label, text);
+            developerDiagnosticsText = BuildDeveloperDiagnosticsPreview(text, developerDiagnosticsFilePath);
+            Debug.Log("UNAvatar diagnostics written: " + developerDiagnosticsFilePath);
+        }
+
+        private static string WriteDeveloperDiagnosticsFile(string label, string text)
+        {
+            var safeLabel = string.IsNullOrEmpty(label) ? "diagnostics" : label.Replace(Path.DirectorySeparatorChar, '_').Replace(Path.AltDirectorySeparatorChar, '_');
+            var directory = Path.Combine(Path.GetTempPath(), "UNAvatarDiagnostics");
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, safeLabel + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".txt");
+            File.WriteAllText(path, text ?? "", Encoding.UTF8);
+            return path;
+        }
+
+        private static string BuildDeveloperDiagnosticsPreview(string text, string filePath)
+        {
+            const int MaxPreviewCharacters = 20000;
+            var source = text ?? "";
+            var builder = new StringBuilder();
+            builder.AppendLine("Full diagnostics written to:");
+            builder.AppendLine(filePath ?? "");
+            builder.AppendLine();
+            builder.AppendLine("Preview:");
+            if (source.Length > MaxPreviewCharacters)
+            {
+                builder.AppendLine(source.Substring(0, MaxPreviewCharacters));
+                builder.AppendLine("...(truncated; open diagnostics file for full output)");
+            }
+            else
+            {
+                builder.AppendLine(source);
+            }
+            return builder.ToString();
         }
 
         private bool IsCurrentToBaseOnlyExportMode()

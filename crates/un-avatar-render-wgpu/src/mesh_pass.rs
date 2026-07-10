@@ -37,9 +37,9 @@ use crate::texture_pipeline::{
 	compressed_cache_lookup_from_source, compressed_cache_lookup_from_source_metadata, compressed_upload_kind_for_texture,
 	compression_preference_for_role, create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count,
 	load_or_build_processed_texture, load_or_build_processed_texture_with_rgba, mip_level_count, processed_texture_cache_path_from_key,
-	read_compressed_texture_cache,
-	source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata, texture_upload_payload, GpuTextureCompressionContext,
-	SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind, TextureUploadPayload,
+	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
+	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
+	TextureUploadPayload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -1349,6 +1349,7 @@ struct ExpandedPrimitive {
 	indices: Vec<u32>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_tan: Option<Vec<Vec<[f32; 3]>>>,
 	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 }
@@ -1358,6 +1359,7 @@ struct ExpandedPrimitivePayload {
 	verts: Vec<Vertex>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_tan: Option<Vec<Vec<[f32; 3]>>>,
 	morph_source_indices: Vec<usize>,
 	default_morph_weights: Vec<f32>,
 }
@@ -1366,6 +1368,7 @@ struct ExpandedPrimitivePayload {
 struct ExpandedMorphPayload {
 	morph_pos: Box<[Vec<[f32; 3]>]>,
 	morph_nrm: Option<Box<[Vec<[f32; 3]>]>>,
+	morph_tan: Option<Box<[Vec<[f32; 3]>]>>,
 	morph_source_indices: Box<[usize]>,
 	default_morph_weights: Box<[f32]>,
 }
@@ -2093,6 +2096,17 @@ pub(crate) struct DrawTransformUpdateTimings {
 	pub draw_transform_ms: f32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct VertexPickRequest {
+	pub cursor_x: f32,
+	pub cursor_y: f32,
+	pub viewport_width: u32,
+	pub viewport_height: u32,
+	pub view_proj: Mat4,
+	pub ray_origin: Vec3,
+	pub ray_dir: Vec3,
+}
+
 enum SceneMeshIndexUpload {
 	U16(Box<[u16]>),
 	U32(Box<[u32]>),
@@ -2148,6 +2162,27 @@ impl SceneMeshIndexUpload {
 		match self {
 			Self::U16(indices) => compute_fur_cards_source_triangles_from_indices_u16(indices, vertex_count),
 			Self::U32(indices) => compute_fur_cards_source_triangles_from_indices(indices, vertex_count),
+		}
+	}
+
+	fn for_each_triangle(&self, vertex_count: usize, mut f: impl FnMut([usize; 3])) {
+		match self {
+			Self::U16(indices) => {
+				for tri in indices.chunks_exact(3) {
+					let indices = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+					if indices.iter().all(|&index| index < vertex_count) {
+						f(indices);
+					}
+				}
+			}
+			Self::U32(indices) => {
+				for tri in indices.chunks_exact(3) {
+					let indices = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+					if indices.iter().all(|&index| index < vertex_count) {
+						f(indices);
+					}
+				}
+			}
 		}
 	}
 }
@@ -2207,6 +2242,7 @@ struct MeshDraw {
 	morph_target_override_suffix_keys: Box<[Option<String>]>,
 	morph_pos: Vec<Vec<[f32; 3]>>,
 	morph_nrm: Option<Vec<Vec<[f32; 3]>>>,
+	morph_tan: Option<Vec<Vec<[f32; 3]>>>,
 	default_morph_weights: Vec<f32>,
 	expression_bindings: Box<[ExpressionBinding]>,
 	morph_weights: Vec<f32>,
@@ -2268,6 +2304,22 @@ impl MeshDraw {
 		let had_buffers = self.vertex_buffer.take().is_some() || self.index_buffer.take().is_some();
 		had_buffers
 	}
+
+	fn drop_scoped_gpu_resources(&mut self) -> bool {
+		let had_bind_material = self.bind_material.take().is_some();
+		let had_bind_outline_material = self.bind_outline_material.take().is_some();
+		let had_morph_resources = self.morph_resources.take().is_some();
+		let had_compute_fur_cards = self._compute_fur_cards.take().is_some();
+		self.draw_transform_uploaded = None;
+		self.morph_weights.clear();
+		self.morph_weights_match_default = false;
+		had_bind_material || had_bind_outline_material || had_morph_resources || had_compute_fur_cards
+	}
+}
+
+fn drain_dropped_gpu_resources(device: &wgpu::Device, queue: &wgpu::Queue) {
+	queue.submit([]);
+	device.poll(wgpu::PollType::wait_indefinitely()).ok();
 }
 
 #[allow(dead_code)]
@@ -3044,6 +3096,7 @@ enum SceneImageTextureUpload {
 	Lazy(SceneImageTextureLazyUpload),
 }
 
+#[derive(Clone)]
 struct SceneImageTextureLazyUpload {
 	image_index: usize,
 	role: TextureRole,
@@ -3060,16 +3113,82 @@ struct SceneImageTextureLazyUpload {
 
 struct SceneImageTextureSlot {
 	upload: SceneImageTextureUpload,
+	reload_lazy: Option<SceneImageTextureLazyUpload>,
 	texture: Option<wgpu::Texture>,
 	view: Option<wgpu::TextureView>,
 }
 
+#[allow(clippy::too_many_arguments)]
+fn scene_image_texture_lazy_upload(
+	image_index: usize,
+	role: TextureRole,
+	mipmap_filter: TextureMipmapFilter,
+	texture_max_dimension: Option<u32>,
+	texture_compression: TextureCompressionMode,
+	block_compression_encoder: BlockCompressionEncoder,
+	block_compression_cpu_threads: usize,
+	processed_texture_cache: bool,
+	texture_compression_advanced: TextureCompressionAdvancedOptions,
+	texture_compression_bc_supported: bool,
+	gpu_texture_compression_enabled: bool,
+) -> SceneImageTextureUpload {
+	SceneImageTextureUpload::Lazy(SceneImageTextureLazyUpload {
+		image_index,
+		role,
+		mipmap_filter,
+		texture_max_dimension,
+		texture_compression,
+		block_compression_encoder,
+		block_compression_cpu_threads,
+		processed_texture_cache,
+		texture_compression_advanced,
+		texture_compression_bc_supported,
+		gpu_texture_compression_enabled,
+	})
+}
+
 impl SceneImageTextureSlot {
 	fn new(upload: SceneImageTextureUpload) -> Self {
+		let reload_lazy = match &upload {
+			SceneImageTextureUpload::Lazy(lazy) => Some(lazy.clone()),
+			_ => None,
+		};
 		Self {
 			upload,
+			reload_lazy,
 			texture: None,
 			view: None,
+		}
+	}
+
+	fn set_upload(&mut self, upload: SceneImageTextureUpload) {
+		self.reload_lazy = match &upload {
+			SceneImageTextureUpload::Lazy(lazy) => Some(lazy.clone()),
+			_ => None,
+		};
+		self.upload = upload;
+	}
+
+	fn estimated_upload_work_bytes(&self, scene: &UnaSceneSnapshot) -> u64 {
+		if self.view.is_some() {
+			return 0;
+		}
+		match &self.upload {
+			SceneImageTextureUpload::Source(upload) => upload.data.len() as u64,
+			SceneImageTextureUpload::Payload { payload, .. } => payload.byte_len(),
+			SceneImageTextureUpload::Lazy(lazy) => {
+				let Some(image) = scene.images.get(lazy.image_index) else {
+					return 1;
+				};
+				let source = scene.image_sources.get(lazy.image_index).and_then(Option::as_ref);
+				let (src_w, src_h) = scene_image_source_dimensions(image, source);
+				let mip_count = estimated_processed_mip_count(src_w, src_h, lazy.texture_max_dimension, lazy.role);
+				(src_w as u64)
+					.saturating_mul(src_h as u64)
+					.saturating_mul(4)
+					.saturating_mul(mip_count.max(1) as u64)
+					.max(1)
+			}
 		}
 	}
 
@@ -3083,12 +3202,15 @@ impl SceneImageTextureSlot {
 		if let Some(view) = &self.view {
 			return Some(view.clone());
 		}
-		if let SceneImageTextureUpload::Lazy(lazy) = &self.upload {
-			let scene = scene?;
-			let upload = build_lazy_scene_image_texture_upload(scene, lazy, gpu_texture_compression)?;
-			self.upload = upload;
-		}
-		let texture = match &self.upload {
+		let lazy_upload = match &self.upload {
+			SceneImageTextureUpload::Lazy(lazy) => {
+				let scene = scene?;
+				Some(build_lazy_scene_image_texture_upload(scene, lazy, gpu_texture_compression)?)
+			}
+			_ => None,
+		};
+		let upload = lazy_upload.as_ref().unwrap_or(&self.upload);
+		let texture = match upload {
 			SceneImageTextureUpload::Source(upload) => create_source_image_texture(device, queue, upload),
 			SceneImageTextureUpload::Payload {
 				payload,
@@ -3101,7 +3223,43 @@ impl SceneImageTextureSlot {
 		let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 		self.texture = Some(texture);
 		self.view = Some(view.clone());
+		if let Some(lazy) = self.reload_lazy.clone() {
+			self.upload = SceneImageTextureUpload::Lazy(lazy);
+		}
 		Some(view)
+	}
+
+	fn prepare_lazy_upload(
+		&mut self,
+		scene: &UnaSceneSnapshot,
+		gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+	) -> bool {
+		let SceneImageTextureUpload::Lazy(lazy) = &self.upload else {
+			return false;
+		};
+		let Some(upload) = build_lazy_scene_image_texture_upload(scene, lazy, gpu_texture_compression) else {
+			return false;
+		};
+		self.upload = upload;
+		true
+	}
+
+	fn advance_upload_step(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
+		gpu_texture_compression: &mut Option<GpuTextureCompressionContext>,
+		split_lazy_upload: bool,
+	) -> Option<wgpu::TextureView> {
+		if self.view.is_some() {
+			return self.view.clone();
+		}
+		if split_lazy_upload && matches!(self.upload, SceneImageTextureUpload::Lazy(_)) {
+			self.prepare_lazy_upload(scene, gpu_texture_compression);
+			return None;
+		}
+		self.ensure_uploaded(device, queue, Some(scene), gpu_texture_compression)
 	}
 
 	fn unload(&mut self) -> bool {
@@ -3189,6 +3347,7 @@ fn scene_image_source_dimensions(image: &UnaImageRgba, source: Option<&UnaImageS
 		.unwrap_or((image.width.max(1), image.height.max(1)))
 }
 
+#[derive(Clone)]
 struct SceneCubeTextureLazyUpload {
 	image_index: usize,
 	processed_texture_cache: bool,
@@ -3234,12 +3393,17 @@ impl SceneCubeTextureSlot {
 		if let Some(view) = &self.view {
 			return Some(view.clone());
 		}
-		if let SceneCubeTextureUpload::Lazy(lazy) = &self.upload {
-			let (upload, _) = build_lazy_scene_cube_texture_upload(scene?, lazy)?;
-			self.upload = SceneCubeTextureUpload::Source(upload);
-		}
-		let SceneCubeTextureUpload::Source(upload) = &self.upload else {
-			return None;
+		let lazy_upload = match &self.upload {
+			SceneCubeTextureUpload::Lazy(lazy) => {
+				let (upload, _) = build_lazy_scene_cube_texture_upload(scene?, lazy)?;
+				Some(upload)
+			}
+			SceneCubeTextureUpload::Source(_) => None,
+		};
+		let upload = match (&self.upload, lazy_upload.as_ref()) {
+			(_, Some(upload)) => upload,
+			(SceneCubeTextureUpload::Source(upload), None) => upload,
+			(SceneCubeTextureUpload::Lazy(_), None) => return None,
 		};
 		let texture = create_cube_texture_from_upload(device, queue, upload);
 		let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -3468,6 +3632,17 @@ fn expand_primitive_with_cached_morph(
 	} else {
 		None
 	};
+	let has_morph_tangents = cached_morph_payload.is_none()
+		&& morph_source_indices.iter().any(|&target_index| {
+			buf.morph_targets
+				.get(target_index)
+				.is_some_and(|target| target.tangent_deltas.is_some())
+		});
+	let mut morph_tan_push: Option<Vec<Vec<[f32; 3]>>> = if cached_morph_payload.is_none() && has_morph_tangents {
+		Some(morph_source_indices.iter().map(|_| Vec::with_capacity(vertex_capacity)).collect())
+	} else {
+		None
+	};
 	let static_default_morphs = dynamic_morph_targets
 		.map(|dynamic_morph_targets| {
 			buf.morph_targets
@@ -3488,6 +3663,7 @@ fn expand_primitive_with_cached_morph(
 	for pi in 0..positions.len() {
 		let mut pos = positions[pi];
 		let mut n = normals.and_then(|nn| nn.get(pi)).copied().unwrap_or(default_n);
+		let mut tangent = tangents.and_then(|tt| tt.get(pi)).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
 		if !static_default_morphs.is_empty() {
 			for &(target, weight) in &static_default_morphs {
 				if let Some(delta) = target.position_deltas.get(pi) {
@@ -3500,13 +3676,17 @@ fn expand_primitive_with_cached_morph(
 					n[1] += delta[1] * weight;
 					n[2] += delta[2] * weight;
 				}
+				if let Some(delta) = target.tangent_deltas.as_ref().and_then(|deltas| deltas.get(pi)) {
+					tangent[0] += delta[0] * weight;
+					tangent[1] += delta[1] * weight;
+					tangent[2] += delta[2] * weight;
+				}
 			}
 		}
 		let uv = uvs.and_then(|uu| uu.get(pi)).copied().unwrap_or([0.0, 0.0]);
 		let uv1 = uvs1.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
 		let uv2 = uvs2.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
 		let uv3 = uvs3.and_then(|uu| uu.get(pi)).copied().unwrap_or(uv);
-		let tangent = tangents.and_then(|tt| tt.get(pi)).copied().unwrap_or([0.0, 0.0, 0.0, 1.0]);
 		let color = colors.and_then(|cc| cc.get(pi)).copied().unwrap_or([1.0, 1.0, 1.0, 1.0]);
 		let jo = joints_buf.and_then(|jj| jj.get(pi)).copied().unwrap_or(j_default);
 		let we = weights_buf.and_then(|ww| ww.get(pi)).copied().unwrap_or(w_default);
@@ -3548,6 +3728,17 @@ fn expand_primitive_with_cached_morph(
 				bucket.push(nd);
 			}
 		}
+		if let Some(ref mut tangent_buckets) = morph_tan_push {
+			for (&target_index, bucket) in morph_source_indices.iter().zip(tangent_buckets.iter_mut()) {
+				let td = buf
+					.morph_targets
+					.get(target_index)
+					.and_then(|target| target.tangent_deltas.as_ref().and_then(|t| t.get(pi)))
+					.copied()
+					.unwrap_or([0.0, 0.0, 0.0]);
+				bucket.push(td);
+			}
+		}
 	}
 
 	let indices = primitive_indices(buf);
@@ -3560,6 +3751,7 @@ fn expand_primitive_with_cached_morph(
 	let morph_payload = cached_morph_payload.cloned().unwrap_or_else(|| ExpandedMorphPayload {
 		morph_pos: morph_push.unwrap_or_default().into_boxed_slice(),
 		morph_nrm: morph_nrm_push.map(Vec::into_boxed_slice),
+		morph_tan: morph_tan_push.map(Vec::into_boxed_slice),
 		default_morph_weights: morph_source_indices
 			.iter()
 			.map(|&target_index| default_morph_weight_for(buf, target_index))
@@ -3573,6 +3765,7 @@ fn expand_primitive_with_cached_morph(
 		indices,
 		morph_pos: morph_payload.morph_pos.into_vec(),
 		morph_nrm: morph_payload.morph_nrm.map(|morph_nrm| morph_nrm.into_vec()),
+		morph_tan: morph_payload.morph_tan.map(|morph_tan| morph_tan.into_vec()),
 		default_morph_weights: morph_payload.default_morph_weights.into_vec(),
 		morph_source_indices: morph_payload.morph_source_indices.into_vec(),
 	})
@@ -3582,6 +3775,7 @@ fn expanded_morph_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedMor
 	ExpandedMorphPayload {
 		morph_pos: exp.morph_pos.clone().into_boxed_slice(),
 		morph_nrm: exp.morph_nrm.clone().map(Vec::into_boxed_slice),
+		morph_tan: exp.morph_tan.clone().map(Vec::into_boxed_slice),
 		morph_source_indices: exp.morph_source_indices.clone().into_boxed_slice(),
 		default_morph_weights: exp.default_morph_weights.clone().into_boxed_slice(),
 	}
@@ -3592,6 +3786,7 @@ fn expanded_payload_from_primitive(exp: &ExpandedPrimitive) -> ExpandedPrimitive
 		verts: exp.verts.clone(),
 		morph_pos: exp.morph_pos.clone(),
 		morph_nrm: exp.morph_nrm.clone(),
+		morph_tan: exp.morph_tan.clone(),
 		morph_source_indices: exp.morph_source_indices.clone(),
 		default_morph_weights: exp.default_morph_weights.clone(),
 	}
@@ -3603,6 +3798,7 @@ fn expanded_primitive_from_cached_payload(payload: ExpandedPrimitivePayload, ind
 		indices,
 		morph_pos: payload.morph_pos,
 		morph_nrm: payload.morph_nrm,
+		morph_tan: payload.morph_tan,
 		morph_source_indices: payload.morph_source_indices,
 		default_morph_weights: payload.default_morph_weights,
 	}
@@ -4159,22 +4355,36 @@ fn refresh_morph_default_weights(
 	changed
 }
 
-fn morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize) -> Vec<[f32; 4]> {
-	let mut out = Vec::with_capacity(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2).max(1));
-	fill_morph_delta_data(morph_pos, morph_nrm, vertex_count, &mut out);
+fn morph_delta_data(
+	morph_pos: &[Vec<[f32; 3]>],
+	morph_nrm: Option<&[Vec<[f32; 3]>]>,
+	morph_tan: Option<&[Vec<[f32; 3]>]>,
+	vertex_count: usize,
+) -> Vec<[f32; 4]> {
+	let mut out = Vec::with_capacity(morph_pos.len().saturating_mul(vertex_count).saturating_mul(3).max(1));
+	fill_morph_delta_data(morph_pos, morph_nrm, morph_tan, vertex_count, &mut out);
 	out
 }
 
-fn fill_morph_delta_data(morph_pos: &[Vec<[f32; 3]>], morph_nrm: Option<&[Vec<[f32; 3]>]>, vertex_count: usize, out: &mut Vec<[f32; 4]>) {
+fn fill_morph_delta_data(
+	morph_pos: &[Vec<[f32; 3]>],
+	morph_nrm: Option<&[Vec<[f32; 3]>]>,
+	morph_tan: Option<&[Vec<[f32; 3]>]>,
+	vertex_count: usize,
+	out: &mut Vec<[f32; 4]>,
+) {
 	out.clear();
-	out.reserve(morph_pos.len().saturating_mul(vertex_count).saturating_mul(2));
+	out.reserve(morph_pos.len().saturating_mul(vertex_count).saturating_mul(3));
 	for (target_index, target_pos) in morph_pos.iter().enumerate() {
 		let target_nrm = morph_nrm.and_then(|all| all.get(target_index));
+		let target_tan = morph_tan.and_then(|all| all.get(target_index));
 		for vertex_index in 0..vertex_count {
 			let pos = target_pos.get(vertex_index).copied().unwrap_or([0.0; 3]);
 			let nrm = target_nrm.and_then(|target| target.get(vertex_index)).copied().unwrap_or([0.0; 3]);
+			let tan = target_tan.and_then(|target| target.get(vertex_index)).copied().unwrap_or([0.0; 3]);
 			out.push([pos[0], pos[1], pos[2], 0.0]);
 			out.push([nrm[0], nrm[1], nrm[2], 0.0]);
+			out.push([tan[0], tan[1], tan[2], 0.0]);
 		}
 	}
 	if out.is_empty() {
@@ -4516,6 +4726,7 @@ fn upload_payload_texture_slot(
 	format: wgpu::TextureFormat,
 	width: u32,
 	height: u32,
+	reload_upload: SceneImageTextureUpload,
 ) -> (SceneImageTextureSlot, Duration) {
 	let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
 		payload,
@@ -4529,6 +4740,7 @@ fn upload_payload_texture_slot(
 	} else {
 		image_views.push(transparent_black_view.clone());
 	}
+	slot.set_upload(reload_upload);
 	(slot, upload_start.elapsed())
 }
 
@@ -4660,7 +4872,12 @@ fn create_mesh_draw_morph_resources(
 	draw: &MeshDraw,
 ) -> MorphGpuResources {
 	if draw.morph_target_count > 0 {
-		let morph_deltas = morph_delta_data(&draw.morph_pos, draw.morph_nrm.as_deref(), draw.buffer_upload.vertices.len());
+		let morph_deltas = morph_delta_data(
+			&draw.morph_pos,
+			draw.morph_nrm.as_deref(),
+			draw.morph_tan.as_deref(),
+			draw.buffer_upload.vertices.len(),
+		);
 		create_morph_resources(
 			device,
 			queue,
@@ -8565,7 +8782,416 @@ fn texture_slot_uv_offset_scale(liltoon_like: &un_avatar_core::UnaLilToonLikeMat
 	keys.iter().find_map(|key| liltoon_like.texture_uv_offset_scales.get(*key).copied())
 }
 
+fn morphed_vertex_position(vertex: &Vertex, draw: &MeshDraw, vertex_index: usize) -> Vec3 {
+	let mut position = Vec3::from_array(vertex.pos);
+	for (target_index, weight) in draw.morph_weights.iter().copied().enumerate() {
+		if weight.abs() <= 0.000001 {
+			continue;
+		}
+		let Some(delta) = draw.morph_pos.get(target_index).and_then(|target| target.get(vertex_index)) else {
+			continue;
+		};
+		position += Vec3::from_array(*delta) * weight;
+	}
+	position
+}
+
+fn skinned_vertex_position(local: Vec3, vertex: &Vertex, palette_matrices: &[Mat4]) -> Vec3 {
+	if palette_matrices.is_empty() {
+		return local;
+	}
+	let mut out = Vec3::ZERO;
+	for lane in 0..4 {
+		let weight = vertex.weights[lane];
+		if weight.abs() <= 0.000001 {
+			continue;
+		}
+		let matrix_index = (vertex.joints[lane] as usize).min(palette_matrices.len().saturating_sub(1));
+		out += palette_matrices[matrix_index].transform_point3(local) * weight;
+	}
+	out
+}
+
+fn scene_node_paths_by_index(scene: &UnaSceneSnapshot) -> Vec<String> {
+	fn visit(scene: &UnaSceneSnapshot, idx: usize, parent: &str, out: &mut [String]) {
+		let Some(node) = scene.nodes.get(idx) else { return };
+		let segment = node.name.as_deref().unwrap_or("");
+		let path = if parent.is_empty() {
+			segment.to_string()
+		} else if segment.is_empty() {
+			parent.to_string()
+		} else {
+			format!("{parent}/{segment}")
+		};
+		if let Some(slot) = out.get_mut(idx) {
+			*slot = path.clone();
+		}
+		for &child in &node.children {
+			visit(scene, child, &path, out);
+		}
+	}
+	let mut out = vec![String::new(); scene.nodes.len()];
+	for &root in scene.resolved_roots().iter() {
+		visit(scene, root, "", &mut out);
+	}
+	out
+}
+
+fn vertex_joint_diagnostics(scene: &UnaSceneSnapshot, draw: &MeshDraw, vertex: &Vertex) -> Vec<serde_json::Value> {
+	let skin = scene
+		.nodes
+		.get(draw.world_node_index)
+		.and_then(|node| node.skin)
+		.and_then(|skin_index| scene.skins.get(skin_index));
+	let node_paths = scene_node_paths_by_index(scene);
+	(0..4)
+		.map(|lane| {
+			let joint_index = vertex.joints[lane] as usize;
+			let node_index = skin.and_then(|skin| skin.joint_nodes.get(joint_index)).copied();
+			serde_json::json!({
+				"lane": lane,
+				"joint_index": joint_index,
+				"node_index": node_index,
+				"node_path": node_index.and_then(|index| node_paths.get(index)).map(String::as_str),
+				"weight": vertex.weights[lane],
+			})
+		})
+		.collect()
+}
+
+fn vertex_morph_diagnostics(draw: &MeshDraw, vertex_index: usize) -> Vec<serde_json::Value> {
+	let mut out = Vec::new();
+	for target_index in 0..draw.morph_target_count {
+		let weight = draw.morph_weights.get(target_index).copied().unwrap_or(0.0);
+		let delta = draw
+			.morph_pos
+			.get(target_index)
+			.and_then(|target| target.get(vertex_index))
+			.copied()
+			.unwrap_or([0.0, 0.0, 0.0]);
+		let delta_len = Vec3::from_array(delta).length();
+		if weight.abs() <= 0.000001 && delta_len <= 0.000001 {
+			continue;
+		}
+		out.push(serde_json::json!({
+			"target_index": target_index,
+			"source_index": draw.morph_source_indices.get(target_index).copied(),
+			"name": draw.morph_target_names.get(target_index),
+			"weight": weight,
+			"position_delta": delta,
+			"weighted_position_delta": [
+				delta[0] * weight,
+				delta[1] * weight,
+				delta[2] * weight,
+			],
+			"delta_length": delta_len,
+			"weighted_delta_length": delta_len * weight.abs(),
+		}));
+	}
+	out
+}
+
+#[derive(Clone)]
+struct VertexPickSample {
+	vertex_index: usize,
+	local: Vec3,
+	mesh_local: Vec3,
+	world_pos: Vec3,
+	screen_xy: [f32; 2],
+	screen_distance_px: f32,
+}
+
+fn vertex_pick_sample(
+	draw: &MeshDraw,
+	vertex_index: usize,
+	vertex: &Vertex,
+	mesh_world: Mat4,
+	palette_matrices: &[Mat4],
+	request: &VertexPickRequest,
+) -> Option<VertexPickSample> {
+	let width = request.viewport_width.max(1) as f32;
+	let height = request.viewport_height.max(1) as f32;
+	let local = morphed_vertex_position(vertex, draw, vertex_index);
+	let mesh_local = skinned_vertex_position(local, vertex, palette_matrices);
+	let world_pos = mesh_world.transform_point3(mesh_local);
+	let clip = request.view_proj * world_pos.extend(1.0);
+	if clip.w <= 0.000001 {
+		return None;
+	}
+	let ndc = clip.truncate() / clip.w;
+	if ndc.z < -1.0 || ndc.z > 1.0 {
+		return None;
+	}
+	let sx = (ndc.x * 0.5 + 0.5) * width;
+	let sy = (0.5 - ndc.y * 0.5) * height;
+	let dx = sx - request.cursor_x;
+	let dy = sy - request.cursor_y;
+	Some(VertexPickSample {
+		vertex_index,
+		local,
+		mesh_local,
+		world_pos,
+		screen_xy: [sx, sy],
+		screen_distance_px: (dx * dx + dy * dy).sqrt(),
+	})
+}
+
+fn ray_triangle_intersection(ray_origin: Vec3, ray_dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<(f32, [f32; 3])> {
+	let edge1 = v1 - v0;
+	let edge2 = v2 - v0;
+	let pvec = ray_dir.cross(edge2);
+	let det = edge1.dot(pvec);
+	if det.abs() <= 0.0000001 {
+		return None;
+	}
+	let inv_det = 1.0 / det;
+	let tvec = ray_origin - v0;
+	let u = tvec.dot(pvec) * inv_det;
+	if !(0.0..=1.0).contains(&u) {
+		return None;
+	}
+	let qvec = tvec.cross(edge1);
+	let v = ray_dir.dot(qvec) * inv_det;
+	if v < 0.0 || u + v > 1.0 {
+		return None;
+	}
+	let t = edge2.dot(qvec) * inv_det;
+	if t <= 0.000001 {
+		return None;
+	}
+	Some((t, [1.0 - u - v, u, v]))
+}
+
+fn vertex_pick_candidate_json(
+	scene: &UnaSceneSnapshot,
+	node_paths: &[String],
+	draw: &MeshDraw,
+	draw_index: usize,
+	vertex: &Vertex,
+	vertex_index: usize,
+	local: Vec3,
+	mesh_local: Vec3,
+	world_pos: Vec3,
+	screen_xy: [f32; 2],
+	screen_distance_px: f32,
+) -> serde_json::Value {
+	let node = scene.nodes.get(draw.world_node_index);
+	let material_index = draw.material_slot_index;
+	serde_json::json!({
+		"draw_index": draw_index,
+		"node_index": draw.world_node_index,
+		"node_name": node.and_then(|node| node.name.as_deref()),
+		"node_path": node_paths.get(draw.world_node_index).map(String::as_str),
+		"mesh_index": draw.mesh_index,
+		"primitive_index": draw.primitive_index,
+		"vertex_index": vertex_index,
+		"screen_xy": screen_xy,
+		"screen_distance_px": screen_distance_px,
+		"position": {
+			"source_local": vertex.pos,
+			"morphed_local": local.to_array(),
+			"skinned_mesh_local": mesh_local.to_array(),
+			"world": world_pos.to_array(),
+		},
+		"normal": vertex.norm,
+		"tangent": vertex.tangent,
+		"uv": {
+			"uv0": vertex.uv,
+			"uv1": vertex.uv1,
+			"uv2": vertex.uv2,
+			"uv3": vertex.uv3,
+		},
+		"color": vertex.color,
+		"skin": {
+			"joints": vertex.joints,
+			"weights": vertex.weights,
+			"influences": vertex_joint_diagnostics(scene, draw, vertex),
+		},
+		"morphs": vertex_morph_diagnostics(draw, vertex_index),
+		"material": {
+			"material_index": material_index,
+			"name": draw.material.name,
+			"shading": format!("{:?}", draw.shading),
+			"alpha_mode": format!("{:?}", draw.alpha_mode),
+			"normal_texture_index": draw.material.normal_texture_index,
+			"normal_texture_scale": draw.material.normal_texture_scale,
+			"base_color_texture_index": draw.material.base_color_texture_index,
+		},
+	})
+}
+
+fn vertex_pick_hit_json(
+	scene: &UnaSceneSnapshot,
+	node_paths: &[String],
+	draw: &MeshDraw,
+	draw_index: usize,
+	vertices: [&Vertex; 3],
+	samples: [&VertexPickSample; 3],
+	ray_t: f32,
+	barycentric: [f32; 3],
+	hit_world: Vec3,
+) -> serde_json::Value {
+	let nearest_lane = samples
+		.iter()
+		.enumerate()
+		.min_by(|(_, a), (_, b)| {
+			a.world_pos
+				.distance_squared(hit_world)
+				.total_cmp(&b.world_pos.distance_squared(hit_world))
+		})
+		.map(|(index, _)| index)
+		.unwrap_or(0);
+	let picked = vertex_pick_candidate_json(
+		scene,
+		node_paths,
+		draw,
+		draw_index,
+		vertices[nearest_lane],
+		samples[nearest_lane].vertex_index,
+		samples[nearest_lane].local,
+		samples[nearest_lane].mesh_local,
+		samples[nearest_lane].world_pos,
+		samples[nearest_lane].screen_xy,
+		samples[nearest_lane].screen_distance_px,
+	);
+	serde_json::json!({
+		"ray_t": ray_t,
+		"barycentric": barycentric,
+		"hit_world": hit_world.to_array(),
+		"nearest_vertex_lane": nearest_lane,
+		"triangle_vertex_indices": [
+			samples[0].vertex_index,
+			samples[1].vertex_index,
+			samples[2].vertex_index,
+		],
+		"triangle_screen_xy": [
+			samples[0].screen_xy,
+			samples[1].screen_xy,
+			samples[2].screen_xy,
+		],
+		"triangle_world": [
+			samples[0].world_pos.to_array(),
+			samples[1].world_pos.to_array(),
+			samples[2].world_pos.to_array(),
+		],
+		"picked_vertex": picked,
+	})
+}
+
 impl SceneMeshes {
+	pub(crate) fn pick_vertex_diagnostic(
+		&self,
+		scene: &UnaSceneSnapshot,
+		world: &[Mat4],
+		request: VertexPickRequest,
+	) -> Option<serde_json::Value> {
+		let node_paths = scene_node_paths_by_index(scene);
+		let mut candidates: Vec<(f32, serde_json::Value)> = Vec::new();
+		let mut hits: Vec<(f32, serde_json::Value)> = Vec::new();
+		for (draw_index, draw) in self.draws.iter().enumerate() {
+			if !draw.active() {
+				continue;
+			}
+			let mesh_world = world.get(draw.world_node_index).copied().unwrap_or(Mat4::IDENTITY);
+			let palette_matrices = self
+				.skin_palettes
+				.get(draw.skin_palette_index)
+				.map(|palette| palette.uploaded_matrices.as_slice())
+				.unwrap_or(&[]);
+			for (vertex_index, vertex) in draw.buffer_upload.vertices.iter().enumerate() {
+				let Some(sample) = vertex_pick_sample(draw, vertex_index, vertex, mesh_world, palette_matrices, &request) else {
+					continue;
+				};
+				if sample.screen_distance_px > 96.0 && candidates.len() >= 24 {
+					continue;
+				}
+				candidates.push((
+					sample.screen_distance_px,
+					vertex_pick_candidate_json(
+						scene,
+						&node_paths,
+						draw,
+						draw_index,
+						vertex,
+						vertex_index,
+						sample.local,
+						sample.mesh_local,
+						sample.world_pos,
+						sample.screen_xy,
+						sample.screen_distance_px,
+					),
+				));
+			}
+			draw.buffer_upload
+				.indices
+				.for_each_triangle(draw.buffer_upload.vertices.len(), |tri| {
+					let vertices = [
+						&draw.buffer_upload.vertices[tri[0]],
+						&draw.buffer_upload.vertices[tri[1]],
+						&draw.buffer_upload.vertices[tri[2]],
+					];
+					let samples = [
+						vertex_pick_sample(draw, tri[0], vertices[0], mesh_world, palette_matrices, &request),
+						vertex_pick_sample(draw, tri[1], vertices[1], mesh_world, palette_matrices, &request),
+						vertex_pick_sample(draw, tri[2], vertices[2], mesh_world, palette_matrices, &request),
+					];
+					let (Some(sample0), Some(sample1), Some(sample2)) = (&samples[0], &samples[1], &samples[2]) else {
+						return;
+					};
+					let Some((ray_t, barycentric)) = ray_triangle_intersection(
+						request.ray_origin,
+						request.ray_dir,
+						sample0.world_pos,
+						sample1.world_pos,
+						sample2.world_pos,
+					) else {
+						return;
+					};
+					let hit_world =
+						sample0.world_pos * barycentric[0] + sample1.world_pos * barycentric[1] + sample2.world_pos * barycentric[2];
+					hits.push((
+						ray_t,
+						vertex_pick_hit_json(
+							scene,
+							&node_paths,
+							draw,
+							draw_index,
+							vertices,
+							[sample0, sample1, sample2],
+							ray_t,
+							barycentric,
+							hit_world,
+						),
+					));
+				});
+		}
+		candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+		hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+		let hit = hits.first().map(|(_, value)| value.clone());
+		let picked = hit
+			.as_ref()
+			.and_then(|value| value.get("picked_vertex").cloned())
+			.or_else(|| candidates.first().map(|(_, value)| value.clone()))?;
+		let nearest = candidates.iter().take(12).map(|(_, value)| value.clone()).collect::<Vec<_>>();
+		let ray_hits = hits.iter().take(8).map(|(_, value)| value.clone()).collect::<Vec<_>>();
+		Some(serde_json::json!({
+			"cursor": {
+				"x": request.cursor_x,
+				"y": request.cursor_y,
+				"viewport_width": request.viewport_width,
+				"viewport_height": request.viewport_height,
+			},
+			"ray": {
+				"origin": request.ray_origin.to_array(),
+				"direction": request.ray_dir.to_array(),
+			},
+			"hit": hit,
+			"picked": picked,
+			"ray_hits": ray_hits,
+			"nearest": nearest,
+		}))
+	}
+
 	pub(crate) fn diagnostic_morph_state(&self, scene: &UnaSceneSnapshot, filter: Option<&str>, max_draws: usize) -> serde_json::Value {
 		let mut paths: Vec<Option<String>> = vec![None; scene.nodes.len()];
 		fn walk(scene: &UnaSceneSnapshot, node: usize, prefix: String, paths: &mut [Option<String>]) {
@@ -9662,6 +10288,19 @@ impl SceneMeshes {
 							image_views.push(transparent_black_view.clone());
 						}
 						image_prepare_timings.upload += upload_start.elapsed();
+						slot.set_upload(scene_image_texture_lazy_upload(
+							image_index,
+							role,
+							mipmap_filter,
+							texture_max_dimension,
+							texture_compression,
+							block_compression_encoder,
+							block_compression_cpu_threads,
+							processed_texture_cache,
+							texture_compression_advanced.clone(),
+							texture_compression_bc_supported,
+							gpu_texture_compression_enabled,
+						));
 					} else {
 						report(
 							"gpu-upload",
@@ -9773,6 +10412,19 @@ impl SceneMeshes {
 							texture_format,
 							processed_w,
 							processed_h,
+							scene_image_texture_lazy_upload(
+								image_index,
+								role,
+								mipmap_filter,
+								texture_max_dimension,
+								texture_compression,
+								block_compression_encoder,
+								block_compression_cpu_threads,
+								processed_texture_cache,
+								texture_compression_advanced.clone(),
+								texture_compression_bc_supported,
+								gpu_texture_compression_enabled,
+							),
 						);
 						image_prepare_timings.upload += upload_elapsed;
 						image_texture_slots.push(slot);
@@ -9855,6 +10507,19 @@ impl SceneMeshes {
 							texture_format,
 							w,
 							h,
+							scene_image_texture_lazy_upload(
+								image_index,
+								role,
+								mipmap_filter,
+								texture_max_dimension,
+								texture_compression,
+								block_compression_encoder,
+								block_compression_cpu_threads,
+								processed_texture_cache,
+								texture_compression_advanced.clone(),
+								texture_compression_bc_supported,
+								gpu_texture_compression_enabled,
+							),
 						);
 						image_prepare_timings.upload += upload_elapsed;
 						image_texture_slots.push(slot);
@@ -9969,6 +10634,19 @@ impl SceneMeshes {
 						texture_format,
 						w,
 						h,
+						scene_image_texture_lazy_upload(
+							image_index,
+							role,
+							mipmap_filter,
+							texture_max_dimension,
+							texture_compression,
+							block_compression_encoder,
+							block_compression_cpu_threads,
+							processed_texture_cache,
+							texture_compression_advanced.clone(),
+							texture_compression_bc_supported,
+							gpu_texture_compression_enabled,
+						),
 					);
 					image_prepare_timings.upload += upload_elapsed;
 					image_texture_slots.push(slot);
@@ -10295,17 +10973,37 @@ impl SceneMeshes {
 					texture_format,
 					w,
 					h,
+					scene_image_texture_lazy_upload(
+						image_index,
+						role,
+						mipmap_filter,
+						texture_max_dimension,
+						texture_compression,
+						block_compression_encoder,
+						block_compression_cpu_threads,
+						processed_texture_cache,
+						texture_compression_advanced.clone(),
+						texture_compression_bc_supported,
+						gpu_texture_compression_enabled,
+					),
 				);
 				image_prepare_timings.upload += upload_elapsed;
 				image_texture_slots.push(slot);
 			} else {
 				image_views.push(transparent_black_view.clone());
-				image_texture_slots.push(SceneImageTextureSlot::new(SceneImageTextureUpload::Payload {
-					payload,
-					format: texture_format,
-					width: w,
-					height: h,
-				}));
+				image_texture_slots.push(SceneImageTextureSlot::new(scene_image_texture_lazy_upload(
+					image_index,
+					role,
+					mipmap_filter,
+					texture_max_dimension,
+					texture_compression,
+					block_compression_encoder,
+					block_compression_cpu_threads,
+					processed_texture_cache,
+					texture_compression_advanced.clone(),
+					texture_compression_bc_supported,
+					gpu_texture_compression_enabled,
+				)));
 			}
 			texture_prepare_summary.record(
 				image_index,
@@ -10474,6 +11172,7 @@ impl SceneMeshes {
 					indices,
 					morph_pos,
 					morph_nrm,
+					morph_tan,
 					morph_source_indices,
 					default_morph_weights,
 				} = exp;
@@ -10623,6 +11322,7 @@ impl SceneMeshes {
 								fill_morph_delta_data(
 									&morph_pos,
 									morph_nrm.as_deref(),
+									morph_tan.as_deref(),
 									buffer_upload.vertices.len(),
 									&mut morph_delta_scratch,
 								);
@@ -10641,6 +11341,7 @@ impl SceneMeshes {
 							fill_morph_delta_data(
 								&morph_pos,
 								morph_nrm.as_deref(),
+								morph_tan.as_deref(),
 								buffer_upload.vertices.len(),
 								&mut morph_delta_scratch,
 							);
@@ -10715,6 +11416,7 @@ impl SceneMeshes {
 					morph_target_override_suffix_keys: morph_target_override_suffix_keys.into_boxed_slice(),
 					morph_pos,
 					morph_nrm,
+					morph_tan,
 					expression_bindings: compact_expression_bindings.into_boxed_slice(),
 					default_morph_weights,
 					morph_weights: Vec::with_capacity(morph_target_count),
@@ -11129,6 +11831,7 @@ impl SceneMeshes {
 				&[],
 				&active_gaps.inactive_cube_texture_indices,
 				&[],
+				false,
 			);
 			log_slow_gpu_scene_step("active image texture residency upload", texture_residency_start.elapsed());
 			report(
@@ -11533,7 +12236,7 @@ impl SceneMeshes {
 		rebuilt
 	}
 
-	pub fn refresh_draw_materials_from_scene(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
+	pub fn refresh_draw_materials_from_scene(&mut self, _device: &wgpu::Device, queue: &wgpu::Queue, scene: &UnaSceneSnapshot) -> usize {
 		let default_material = UnaMaterialPbr::default();
 		let mut changed = 0;
 		for draw_index in 0..self.draws.len() {
@@ -11569,12 +12272,7 @@ impl SceneMeshes {
 				let material_gpu = mesh_draw_material_gpu_runtime(&draw.material, &self.opts, draw.mesh_index, draw.primitive_index);
 				queue.write_buffer(&draw.draw_material, 0, bytemuck::bytes_of(&material_gpu));
 			}
-			if self.draws[draw_index].active() {
-				self.rebuild_draw_material_bind_groups(device, draw_index);
-			} else {
-				self.draws[draw_index].bind_material = None;
-				self.draws[draw_index].bind_outline_material = None;
-			}
+			self.draws[draw_index].drop_scoped_gpu_resources();
 			changed += 1;
 		}
 		if changed > 0 {
@@ -11597,6 +12295,62 @@ impl SceneMeshes {
 			}
 		}
 		ensured
+	}
+
+	pub(crate) fn ensure_active_draw_gpu_resources_limited(
+		&mut self,
+		device: &wgpu::Device,
+		queue: &wgpu::Queue,
+		scene: &UnaSceneSnapshot,
+		limit: usize,
+	) -> (usize, usize) {
+		let mut ensured = 0;
+		let mut remaining = 0;
+		for draw_index in self.active_draw_indices.clone() {
+			let Some(draw) = self.draws.get(draw_index) else {
+				continue;
+			};
+			if !draw.asset_resident {
+				continue;
+			}
+			let needs_resources = draw.bind_material.is_none()
+				|| draw.bind_outline_material.is_none()
+				|| draw.morph_resources.is_none()
+				|| (draw._compute_fur_cards.is_none() && material_has_fur(&draw.material, draw.shading, &self.opts));
+			if !needs_resources {
+				continue;
+			}
+			if ensured >= limit {
+				remaining += 1;
+				continue;
+			}
+			if self.ensure_draw_gpu_resources(device, queue, scene, draw_index) {
+				ensured += 1;
+			}
+		}
+		(ensured, remaining)
+	}
+
+	fn draw_mesh_buffer_upload_bytes(&self, draw_index: usize) -> u64 {
+		self.draws
+			.get(draw_index)
+			.map(|draw| {
+				if draw.mesh_buffers_resident() {
+					0
+				} else {
+					draw.vertex_buffer_bytes.saturating_add(draw.index_buffer_bytes)
+				}
+			})
+			.unwrap_or(1)
+			.max(1)
+	}
+
+	pub(crate) fn mesh_buffer_upload_work_bytes(&self, indices: &[usize]) -> u64 {
+		indices
+			.iter()
+			.copied()
+			.map(|draw_index| self.draw_mesh_buffer_upload_bytes(draw_index))
+			.fold(0u64, u64::saturating_add)
 	}
 
 	#[inline]
@@ -11959,6 +12713,9 @@ impl SceneMeshes {
 			let was_active = draw.active();
 			if draw.visible != next {
 				draw.visible = next;
+				if !next {
+					draw.drop_scoped_gpu_resources();
+				}
 			}
 			if draw.active() != was_active {
 				changed += 1;
@@ -12043,10 +12800,26 @@ impl SceneMeshes {
 		&mut self,
 		device: &wgpu::Device,
 		queue: &wgpu::Queue,
-		scene: &UnaSceneSnapshot,
+		_scene: &UnaSceneSnapshot,
 		load_indices: &[usize],
 		unload_indices: &[usize],
 	) -> (usize, usize) {
+		let mut unload_count = 0;
+		for draw_index in unload_indices.iter().copied() {
+			let Some(draw) = self.draws.get_mut(draw_index) else {
+				continue;
+			};
+			if !draw.asset_resident {
+				let dropped_buffers = draw.drop_mesh_buffers();
+				draw.drop_scoped_gpu_resources();
+				if dropped_buffers {
+					unload_count += 1;
+				}
+			}
+		}
+		if unload_count > 0 {
+			drain_dropped_gpu_resources(device, queue);
+		}
 		let mut load_count = 0;
 		for draw_index in load_indices.iter().copied() {
 			let loaded = self
@@ -12056,18 +12829,23 @@ impl SceneMeshes {
 			if loaded {
 				load_count += 1;
 			}
-			self.ensure_draw_gpu_resources(device, queue, scene, draw_index);
-		}
-		let mut unload_count = 0;
-		for draw_index in unload_indices.iter().copied() {
-			let Some(draw) = self.draws.get_mut(draw_index) else {
-				continue;
-			};
-			if !draw.asset_resident && draw.drop_mesh_buffers() {
-				unload_count += 1;
-			}
 		}
 		(load_count, unload_count)
+	}
+
+	pub(crate) fn drain_mesh_buffer_load_indices_by_budget(&self, indices: &mut Vec<usize>, byte_budget: u64) -> Vec<usize> {
+		let byte_budget = byte_budget.max(1);
+		let mut used = 0u64;
+		let mut take = 0usize;
+		for draw_index in indices.iter().copied() {
+			let bytes = self.draw_mesh_buffer_upload_bytes(draw_index);
+			if take > 0 && used.saturating_add(bytes) > byte_budget {
+				break;
+			}
+			used = used.saturating_add(bytes);
+			take += 1;
+		}
+		indices.drain(0..take).collect()
 	}
 
 	fn ensure_draw_gpu_resources(
@@ -12224,6 +13002,45 @@ impl SceneMeshes {
 		promote_residency_indices(&mut self.cube_texture_residency, cube_texture_indices)
 	}
 
+	pub(crate) fn drain_image_texture_load_indices_by_budget(
+		&self,
+		scene: &UnaSceneSnapshot,
+		indices: &mut Vec<usize>,
+		byte_budget: u64,
+	) -> Vec<usize> {
+		let byte_budget = byte_budget.max(1);
+		let mut used = 0u64;
+		let mut take = 0usize;
+		for index in indices.iter().copied() {
+			let bytes = self
+				.image_texture_slots
+				.get(index)
+				.map(|slot| slot.estimated_upload_work_bytes(scene))
+				.unwrap_or(1)
+				.max(1);
+			if take > 0 && used.saturating_add(bytes) > byte_budget {
+				break;
+			}
+			used = used.saturating_add(bytes);
+			take += 1;
+		}
+		indices.drain(0..take).collect()
+	}
+
+	pub(crate) fn image_texture_upload_work_bytes(&self, scene: &UnaSceneSnapshot, indices: &[usize]) -> u64 {
+		indices
+			.iter()
+			.copied()
+			.map(|index| {
+				self.image_texture_slots
+					.get(index)
+					.map(|slot| slot.estimated_upload_work_bytes(scene))
+					.unwrap_or(1)
+					.max(1)
+			})
+			.fold(0u64, u64::saturating_add)
+	}
+
 	pub(crate) fn apply_image_texture_view_residency(
 		&mut self,
 		device: &wgpu::Device,
@@ -12233,21 +13050,8 @@ impl SceneMeshes {
 		unload_indices: &[usize],
 		cube_load_indices: &[usize],
 		cube_unload_indices: &[usize],
-	) -> (usize, usize, usize, usize) {
-		let mut loaded = 0;
-		for index in load_indices {
-			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
-				continue;
-			};
-			let Some(source_view) = slot.ensure_uploaded(device, queue, Some(scene), &mut self.lazy_gpu_texture_compression) else {
-				continue;
-			};
-			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
-				continue;
-			};
-			*current_view = source_view;
-			loaded += 1;
-		}
+		split_lazy_upload: bool,
+	) -> (usize, usize, usize, usize, Vec<usize>) {
 		let mut unloaded = 0;
 		for index in unload_indices {
 			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
@@ -12261,13 +13065,6 @@ impl SceneMeshes {
 				unloaded += 1;
 			}
 		}
-		let mut cube_loaded = 0;
-		for index in cube_load_indices {
-			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
-				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue, Some(scene));
-				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
-			}
-		}
 		let mut cube_unloaded = 0;
 		for index in cube_unload_indices {
 			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
@@ -12279,7 +13076,35 @@ impl SceneMeshes {
 				}
 			}
 		}
-		(loaded, unloaded, cube_loaded, cube_unloaded)
+		if unloaded > 0 || cube_unloaded > 0 {
+			drain_dropped_gpu_resources(device, queue);
+		}
+		let mut loaded = 0;
+		let mut deferred_load_indices = Vec::new();
+		for index in load_indices {
+			let Some(slot) = self.image_texture_slots.get_mut(*index) else {
+				continue;
+			};
+			let Some(source_view) =
+				slot.advance_upload_step(device, queue, scene, &mut self.lazy_gpu_texture_compression, split_lazy_upload)
+			else {
+				deferred_load_indices.push(*index);
+				continue;
+			};
+			let Some(current_view) = self.texture_views.images.get_mut(*index) else {
+				continue;
+			};
+			*current_view = source_view;
+			loaded += 1;
+		}
+		let mut cube_loaded = 0;
+		for index in cube_load_indices {
+			if let Some(Some(cube_slot)) = self.cube_texture_slots.get_mut(*index) {
+				self.texture_views.cubes[*index] = cube_slot.ensure_uploaded(device, queue, Some(scene));
+				cube_loaded += usize::from(self.texture_views.cubes[*index].is_some());
+			}
+		}
+		(loaded, unloaded, cube_loaded, cube_unloaded, deferred_load_indices)
 	}
 
 	pub fn is_empty(&self) -> bool {
@@ -13704,10 +14529,12 @@ mod tests {
 					UnaMorphTargetDeltas {
 						position_deltas: vec![[0.0; 3]],
 						normal_deltas: None,
+						tangent_deltas: None,
 					},
 					UnaMorphTargetDeltas {
 						position_deltas: vec![[0.0; 3]],
 						normal_deltas: None,
+						tangent_deltas: None,
 					},
 				],
 				morph_target_names: vec!["A".to_string(), "B".to_string()],
@@ -13740,6 +14567,7 @@ mod tests {
 				morph_targets: vec![UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				}],
 				morph_target_names: vec!["A".to_string()],
 				default_morph_weights: vec![0.75],
@@ -13869,14 +14697,17 @@ mod tests {
 				UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 				UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 				UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 			],
 			morph_target_names: vec![
@@ -13925,10 +14756,12 @@ mod tests {
 				UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 				UnaMorphTargetDeltas {
 					position_deltas: vec![[0.0; 3]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 			],
 			morph_target_names: vec!["Unused".to_string(), "(Do not Modify)ArmPit_Fix_L".to_string()],
@@ -14491,6 +15324,7 @@ mod tests {
 			morph_targets: vec![UnaMorphTargetDeltas {
 				position_deltas: vec![[2.0, 0.0, -1.0]],
 				normal_deltas: Some(vec![[0.0, 1.0, 0.0]]),
+				tangent_deltas: None,
 			}],
 			morph_target_names: Vec::new(),
 			default_morph_weights: vec![0.5],
@@ -14505,6 +15339,54 @@ mod tests {
 		let dynamic = expand_primitive(&buf, None).expect("expanded primitive");
 		assert_eq!(dynamic.verts[0].pos, [1.0, 2.0, 3.0]);
 		assert_eq!(dynamic.default_morph_weights, vec![0.5]);
+	}
+
+	#[test]
+	fn morph_delta_data_packs_position_normal_and_tangent_deltas() {
+		let morph_pos = vec![vec![[1.0, 2.0, 3.0]]];
+		let morph_nrm = vec![vec![[0.0, 1.0, 0.0]]];
+		let morph_tan = vec![vec![[1.0, 0.0, 0.0]]];
+
+		let deltas = morph_delta_data(&morph_pos, Some(&morph_nrm), Some(&morph_tan), 1);
+
+		assert_eq!(deltas, vec![[1.0, 2.0, 3.0, 0.0], [0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]);
+	}
+
+	#[test]
+	fn ray_triangle_intersection_reports_front_hit_with_barycentric_weights() {
+		let hit = ray_triangle_intersection(
+			Vec3::new(0.25, 0.25, 1.0),
+			Vec3::new(0.0, 0.0, -1.0),
+			Vec3::new(0.0, 0.0, 0.0),
+			Vec3::new(1.0, 0.0, 0.0),
+			Vec3::new(0.0, 1.0, 0.0),
+		)
+		.expect("ray should hit triangle");
+
+		assert!((hit.0 - 1.0).abs() < 0.000001);
+		assert!((hit.1[0] - 0.5).abs() < 0.000001);
+		assert!((hit.1[1] - 0.25).abs() < 0.000001);
+		assert!((hit.1[2] - 0.25).abs() < 0.000001);
+	}
+
+	#[test]
+	fn ray_triangle_intersection_rejects_misses_and_hits_behind_origin() {
+		assert!(ray_triangle_intersection(
+			Vec3::new(1.5, 1.5, 1.0),
+			Vec3::new(0.0, 0.0, -1.0),
+			Vec3::new(0.0, 0.0, 0.0),
+			Vec3::new(1.0, 0.0, 0.0),
+			Vec3::new(0.0, 1.0, 0.0),
+		)
+		.is_none());
+		assert!(ray_triangle_intersection(
+			Vec3::new(0.25, 0.25, 1.0),
+			Vec3::new(0.0, 0.0, 1.0),
+			Vec3::new(0.0, 0.0, 0.0),
+			Vec3::new(1.0, 0.0, 0.0),
+			Vec3::new(0.0, 1.0, 0.0),
+		)
+		.is_none());
 	}
 
 	#[test]

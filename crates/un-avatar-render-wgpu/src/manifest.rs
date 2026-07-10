@@ -567,6 +567,8 @@ pub(crate) struct DebugManifest {
 	pub disable_normal_map: Option<bool>,
 	/// toon path を `base` のみで早期 return する診断 toggle（既定 false）。
 	pub base_texture_only: Option<bool>,
+	/// 左クリックで近傍頂点診断 JSON を出力する診断 toggle（既定 false）。
+	pub vertex_pick_diagnostics: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -697,6 +699,7 @@ impl RendererManifest {
 				&mut opts.debug_disable_shade_color,
 				&mut opts.debug_disable_normal_map,
 				&mut opts.debug_base_texture_only,
+				&mut opts.debug_vertex_pick_diagnostics,
 			);
 		}
 		if let Some(diagnostics) = self.diagnostics {
@@ -1445,6 +1448,7 @@ impl DebugManifest {
 		debug_disable_shade_color: &mut bool,
 		debug_disable_normal_map: &mut bool,
 		debug_base_texture_only: &mut bool,
+		debug_vertex_pick_diagnostics: &mut bool,
 	) {
 		if let Some(path) = self.log_path {
 			debug.log_path = Some(path);
@@ -1502,6 +1506,9 @@ impl DebugManifest {
 		}
 		if let Some(value) = self.base_texture_only {
 			*debug_base_texture_only = value;
+		}
+		if let Some(value) = self.vertex_pick_diagnostics {
+			*debug_vertex_pick_diagnostics = value;
 		}
 	}
 }

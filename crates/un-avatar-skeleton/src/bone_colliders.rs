@@ -85,6 +85,7 @@ pub enum BoneColliderPrimitive {
 		center: [f32; 3],
 		radius: f32,
 		inside_bounds: bool,
+		bones_as_sphere: bool,
 	},
 	LocalCapsule {
 		node: usize,
@@ -93,6 +94,7 @@ pub enum BoneColliderPrimitive {
 		half_length: f32,
 		radius: f32,
 		inside_bounds: bool,
+		bones_as_sphere: bool,
 	},
 	LocalPlane {
 		node: usize,
@@ -115,12 +117,14 @@ pub(crate) enum WorldBoneColliderPrimitive {
 		center: Vec3,
 		radius: f32,
 		inside_bounds: bool,
+		bones_as_sphere: bool,
 	},
 	Capsule {
 		a: Vec3,
 		b: Vec3,
 		radius: f32,
 		inside_bounds: bool,
+		bones_as_sphere: bool,
 	},
 	Plane {
 		point: Vec3,
@@ -243,6 +247,7 @@ pub fn build_dynamics_bone_colliders_with_sources(
 				center,
 				radius,
 				inside_bounds: collider.inside_bounds,
+				bones_as_sphere: collider.bones_as_sphere,
 			}),
 			UnaDynamicsColliderShape::Capsule => {
 				let axis = Quat::from_xyzw(
@@ -260,6 +265,7 @@ pub fn build_dynamics_bone_colliders_with_sources(
 					half_length,
 					radius,
 					inside_bounds: collider.inside_bounds,
+					bones_as_sphere: collider.bones_as_sphere,
 				})
 			}
 			UnaDynamicsColliderShape::Plane => {
@@ -336,6 +342,7 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 						center,
 						radius,
 						inside_bounds: false,
+						bones_as_sphere: true,
 					});
 				}
 			}
@@ -350,6 +357,7 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 						b,
 						radius,
 						inside_bounds: false,
+						bones_as_sphere: true,
 					});
 				}
 			}
@@ -358,12 +366,14 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 				center,
 				radius,
 				inside_bounds,
+				bones_as_sphere,
 			} => {
 				if let Some((center, radius)) = local_sphere_world(world, node, center, radius) {
 					out.push(WorldBoneColliderPrimitive::Sphere {
 						center,
 						radius,
 						inside_bounds,
+						bones_as_sphere,
 					});
 				}
 			}
@@ -374,6 +384,7 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 				half_length,
 				radius,
 				inside_bounds,
+				bones_as_sphere,
 			} => {
 				if let Some((a, b, radius)) = local_capsule_world(world, node, center, axis, half_length, radius) {
 					out.push(WorldBoneColliderPrimitive::Capsule {
@@ -381,6 +392,7 @@ pub(crate) fn resolve_world_colliders(world: &[Mat4], colliders: &[BoneColliderP
 						b,
 						radius,
 						inside_bounds,
+						bones_as_sphere,
 					});
 				}
 			}
@@ -418,6 +430,7 @@ pub(crate) fn push_out_of_world_collider(point: Vec3, collider: WorldBoneCollide
 			center,
 			radius,
 			inside_bounds,
+			..
 		} => {
 			if inside_bounds {
 				push_into_sphere(point, center, radius - extra_radius)
@@ -430,6 +443,7 @@ pub(crate) fn push_out_of_world_collider(point: Vec3, collider: WorldBoneCollide
 			b,
 			radius,
 			inside_bounds,
+			..
 		} => {
 			let center = closest_on_segment(point, a, b);
 			if inside_bounds {
@@ -443,6 +457,25 @@ pub(crate) fn push_out_of_world_collider(point: Vec3, collider: WorldBoneCollide
 			normal,
 			inside_bounds,
 		} => push_plane_half_space(point, plane_point, normal, extra_radius, inside_bounds),
+	}
+}
+
+pub(crate) fn push_tail_out_of_world_collider(anchor: Vec3, tail: Vec3, collider: WorldBoneColliderPrimitive, extra_radius: f32) -> Vec3 {
+	match collider {
+		WorldBoneColliderPrimitive::Sphere {
+			bones_as_sphere: false,
+			inside_bounds: false,
+			center,
+			radius,
+		} => push_segment_tail_out_of_sphere(anchor, tail, center, radius + extra_radius.max(0.0)),
+		WorldBoneColliderPrimitive::Capsule {
+			bones_as_sphere: false,
+			inside_bounds: false,
+			a,
+			b,
+			radius,
+		} => push_segment_tail_out_of_capsule(anchor, tail, a, b, radius + extra_radius.max(0.0)),
+		_ => push_out_of_world_collider(tail, collider, extra_radius.max(0.0)),
 	}
 }
 
@@ -463,6 +496,7 @@ pub(crate) fn push_segment_tail_out_of_world_colliders(
 					center,
 					radius,
 					inside_bounds: false,
+					bones_as_sphere: false,
 				} => {
 					tail = push_segment_tail_out_of_sphere(anchor, tail, center, radius + extra);
 				}
@@ -471,6 +505,7 @@ pub(crate) fn push_segment_tail_out_of_world_colliders(
 					b,
 					radius,
 					inside_bounds: false,
+					bones_as_sphere: false,
 				} => {
 					tail = push_segment_tail_out_of_capsule(anchor, tail, a, b, radius + extra);
 				}
@@ -599,7 +634,6 @@ fn closest_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
 	a + ab * t
 }
 
-#[cfg(test)]
 fn closest_on_segment_with_t(p: Vec3, a: Vec3, b: Vec3) -> (Vec3, f32) {
 	let ab = b - a;
 	let denom = ab.length_squared();
@@ -610,7 +644,6 @@ fn closest_on_segment_with_t(p: Vec3, a: Vec3, b: Vec3) -> (Vec3, f32) {
 	(a + ab * t, t)
 }
 
-#[cfg(test)]
 fn closest_segment_segment(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> (Vec3, Vec3, f32, f32) {
 	let d1 = a1 - a0;
 	let d2 = b1 - b0;
@@ -653,7 +686,6 @@ fn closest_segment_segment(a0: Vec3, a1: Vec3, b0: Vec3, b1: Vec3) -> (Vec3, Vec
 	(a0 + d1 * s, b0 + d2 * t, s, t)
 }
 
-#[cfg(test)]
 fn segment_push_direction(anchor: Vec3, tail: Vec3, delta: Vec3) -> Vec3 {
 	if delta.length_squared() > 1e-12 {
 		return delta.normalize();
@@ -667,7 +699,6 @@ fn segment_push_direction(anchor: Vec3, tail: Vec3, delta: Vec3) -> Vec3 {
 	}
 }
 
-#[cfg(test)]
 fn push_segment_tail_by_closest_delta(tail: Vec3, closest: Vec3, target: Vec3, segment_t: f32) -> Vec3 {
 	if !(0.0001..=1.0).contains(&segment_t) {
 		return tail;
@@ -679,7 +710,6 @@ fn push_segment_tail_by_closest_delta(tail: Vec3, closest: Vec3, target: Vec3, s
 	tail + delta / segment_t
 }
 
-#[cfg(test)]
 fn push_segment_tail_out_of_sphere(anchor: Vec3, tail: Vec3, center: Vec3, radius: f32) -> Vec3 {
 	if !radius.is_finite() || radius <= OFF_EPSILON {
 		return tail;
@@ -695,7 +725,6 @@ fn push_segment_tail_out_of_sphere(anchor: Vec3, tail: Vec3, center: Vec3, radiu
 	push_segment_tail_by_closest_delta(tail, closest, target, segment_t)
 }
 
-#[cfg(test)]
 fn push_segment_tail_out_of_capsule(anchor: Vec3, tail: Vec3, a: Vec3, b: Vec3, radius: f32) -> Vec3 {
 	if !radius.is_finite() || radius <= OFF_EPSILON {
 		return tail;
@@ -927,6 +956,7 @@ mod tests {
 				center: [0.2, 0.0, 0.0],
 				radius: 0.1,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			}]
 		);
 
@@ -974,6 +1004,7 @@ mod tests {
 				center: [0.2, 0.0, 0.0],
 				radius: 0.1,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			}]
 		);
 
@@ -1057,6 +1088,7 @@ mod tests {
 			half_length,
 			radius,
 			inside_bounds,
+			bones_as_sphere,
 		} = colliders[0]
 		else {
 			panic!("unexpected collider={:?}", colliders[0]);
@@ -1067,6 +1099,7 @@ mod tests {
 		assert!((half_length - 0.2).abs() < 1e-5, "half_length={half_length}");
 		assert!((radius - 0.1).abs() < 1e-5, "radius={radius}");
 		assert!(!inside_bounds);
+		assert!(bones_as_sphere);
 
 		let world = scene_world(&scene);
 		let pushed = push_out_of_colliders(Vec3::new(0.03, 0.0, 0.0), &world, &colliders, 0.0);
@@ -1079,6 +1112,7 @@ mod tests {
 			center: Vec3::ZERO,
 			radius: 0.25,
 			inside_bounds: false,
+			bones_as_sphere: false,
 		}];
 		let anchor = Vec3::new(-1.0, 0.0, 0.0);
 		let tail = Vec3::new(1.0, 0.0, 0.0);
@@ -1100,6 +1134,7 @@ mod tests {
 			center: Vec3::new(0.0, 0.24995, 0.0),
 			radius: 0.25,
 			inside_bounds: false,
+			bones_as_sphere: false,
 		};
 		let pushed = push_segment_tail_out_of_world_colliders(anchor, tail, &[collider], 0.0);
 		assert_eq!(pushed, tail);

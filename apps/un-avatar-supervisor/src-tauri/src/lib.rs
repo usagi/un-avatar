@@ -55,6 +55,7 @@ const MAX_UNAVATAR_METADATA_JSON_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_METADATA_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = MAX_METADATA_IMAGE_BYTES;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
+const SCENE_CACHE_PREWARM_SCHEMA_VERSION: u32 = 2;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -1603,6 +1604,10 @@ struct AvatarSetting {
 	debug_disable_normal_map: bool,
 	/// UNToon fragment path を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
 	debug_base_texture_only: bool,
+	/// すべての morph/blendshape を 0 に固定する診断 toggle。`[debug] zero_morphs` に対応。
+	debug_zero_morphs: bool,
+	/// Rendererで左クリックした位置の近傍頂点診断 JSON を出力する toggle。`[debug] vertex_pick_diagnostics` に対応。
+	debug_vertex_pick_diagnostics: bool,
 	/// UN Avatar silhouette outline の扱い。`[effects.avatar.outline] policy` に対応。
 	outline_policy: String,
 	/// UN Avatar silhouette outline の種類。v2 UI では固定。`ink` / `brush` / `double` は予約値。
@@ -1759,6 +1764,8 @@ struct DebugSettings {
 	disable_shade_color: bool,
 	disable_normal_map: bool,
 	base_texture_only: bool,
+	zero_morphs: bool,
+	vertex_pick_diagnostics: bool,
 }
 
 struct PhysicsSettings {
@@ -2165,6 +2172,8 @@ struct ManifestDebug {
 	disable_shade_color: Option<bool>,
 	disable_normal_map: Option<bool>,
 	base_texture_only: Option<bool>,
+	zero_morphs: Option<bool>,
+	vertex_pick_diagnostics: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -6831,6 +6840,8 @@ fn apply_debug_setting_value(manifest: &mut toml::Value, field: &str, value: ser
 		"debug.disable_shade_color" => "disable_shade_color",
 		"debug.disable_normal_map" => "disable_normal_map",
 		"debug.base_texture_only" => "base_texture_only",
+		"debug.zero_morphs" => "zero_morphs",
+		"debug.vertex_pick_diagnostics" => "vertex_pick_diagnostics",
 		_ => return Err(format!("unsupported setting field: {field}")),
 	};
 	set_nested_json_bool(manifest, &["debug", key], &value, field)
@@ -9323,7 +9334,7 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 }
 
 fn default_dynamics_surface_constraints_enabled_setting() -> bool {
-	true
+	false
 }
 
 fn default_dynamics_surface_constraint_topology_max_edge_distance_m_setting() -> f32 {
@@ -10192,6 +10203,8 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		debug_disable_shade_color: debug.disable_shade_color,
 		debug_disable_normal_map: debug.disable_normal_map,
 		debug_base_texture_only: debug.base_texture_only,
+		debug_zero_morphs: debug.zero_morphs,
+		debug_vertex_pick_diagnostics: debug.vertex_pick_diagnostics,
 		outline_policy: avatar_effects.outline_policy,
 		outline_type: avatar_effects.outline_type,
 		outline_width: avatar_effects.outline_width,
@@ -11104,6 +11117,8 @@ fn scene_cache_manifest_fingerprint_inner(manifest: &toml::Value, manifest_path:
 	}
 	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
 	let mut input = serialized.into_bytes();
+	input.extend_from_slice(b"\n# scene-cache-prewarm-schema\n");
+	input.extend_from_slice(SCENE_CACHE_PREWARM_SCHEMA_VERSION.to_string().as_bytes());
 	if let Some(manifest_path) = manifest_path {
 		if let Some(avatar_fingerprint) = scene_cache_avatar_file_fingerprint(manifest, manifest_path) {
 			input.extend_from_slice(b"\n# avatar-file\n");
@@ -12185,6 +12200,8 @@ fn debug_settings(debug: Option<&ManifestDebug>) -> DebugSettings {
 		disable_shade_color: debug.and_then(|d| d.disable_shade_color).unwrap_or(false),
 		disable_normal_map: debug.and_then(|d| d.disable_normal_map).unwrap_or(false),
 		base_texture_only: debug.and_then(|d| d.base_texture_only).unwrap_or(false),
+		zero_morphs: debug.and_then(|d| d.zero_morphs).unwrap_or(false),
+		vertex_pick_diagnostics: debug.and_then(|d| d.vertex_pick_diagnostics).unwrap_or(false),
 	}
 }
 

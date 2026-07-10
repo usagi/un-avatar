@@ -314,6 +314,8 @@
 	let startupAutoLaunchAttempted = false;
 
 	const deleteHoldDurationMs = 1200;
+	const runtimeRefreshIntervalMs = 250;
+	const wardrobeTransitionRuntimeRefreshIntervalMs = 1000;
 	const profileSettingUpdateCoalesceMs = 80;
 	const motionLookAtFields = ["motion.look_at.enabled", "motion.look_at.clamp_deg"] as const;
 	const motionReceiverFields = [
@@ -343,6 +345,9 @@
 			}
 			return byId;
 		})()
+	);
+	const wardrobeTransitionTelemetryActive = $derived(
+		Object.values(runtimeStatuses).some((status) => status.wardrobe_asset_upload?.transition_progress?.active === true)
 	);
 	const avatarSettingById = $derived(
 		(() => {
@@ -552,6 +557,8 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
+			debug_zero_morphs: false,
+			debug_vertex_pick_diagnostics: false,
 			outline_policy: "off",
 			outline_type: "silhouette",
 			outline_width: null,
@@ -684,6 +691,8 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
+			debug_zero_morphs: false,
+			debug_vertex_pick_diagnostics: false,
 			outline_policy: "off",
 			outline_type: "silhouette",
 			outline_width: null,
@@ -1345,7 +1354,8 @@
 	}
 
 	function startCacheDeleteHold(): void {
-		if (busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0) return;
+		if (busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0)
+			return;
 		cancelCacheDeleteHold();
 		cacheDeleteHoldProgress = 0;
 		cacheDeleteHoldStartedAt = performance.now();
@@ -3224,14 +3234,20 @@
 				await maybeAutoLaunchSelectedOnStartup();
 			}
 		})();
-		const timer = window.setInterval(() => {
-			if (activeTab === "renderers" || activeTab === "settings") {
-				refreshRendererRuntimeView();
-			}
-		}, 250);
+		let timer: number | null = null;
+		const scheduleRuntimeRefresh = () => {
+			const interval = wardrobeTransitionTelemetryActive ? wardrobeTransitionRuntimeRefreshIntervalMs : runtimeRefreshIntervalMs;
+			timer = window.setTimeout(() => {
+				if (activeTab === "renderers" || activeTab === "settings") {
+					refreshRendererRuntimeView();
+				}
+				if (!cancelled) scheduleRuntimeRefresh();
+			}, interval);
+		};
+		scheduleRuntimeRefresh();
 		return () => {
 			cancelled = true;
-			window.clearInterval(timer);
+			if (timer != null) window.clearTimeout(timer);
 		};
 	});
 
@@ -3382,7 +3398,11 @@
 							<button
 								class="icon-button danger-icon hold-delete"
 								title={visibleRenderers.length > 0 ? $_("app.cache_clear_blocked_running") : $_("app.cache_clear")}
-								disabled={busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0}
+								disabled={busy ||
+									rendererCacheBusy ||
+									visibleRenderers.length > 0 ||
+									!rendererCacheStatus ||
+									rendererCacheStatus.total_files === 0}
 								style={`--hold-progress: ${cacheDeleteHoldProgress}`}
 								onpointerdown={startCacheDeleteHold}
 								onpointerup={cancelCacheDeleteHold}

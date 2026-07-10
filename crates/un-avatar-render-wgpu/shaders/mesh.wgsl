@@ -419,20 +419,22 @@ fn object_negative_scale_sign() -> f32 {
 
 const DBG_BIND_POSE_RIGID: u32 = 1u;
 
-fn morphed_position_normal(pos_in: vec3<f32>, norm_in: vec3<f32>, vertex_index: u32) -> array<vec3<f32>, 2> {
+fn morphed_position_normal_tangent(pos_in: vec3<f32>, norm_in: vec3<f32>, tangent_in: vec3<f32>, vertex_index: u32) -> array<vec3<f32>, 3> {
 	var pos = pos_in;
 	var norm = norm_in;
+	var tangent = tangent_in;
 	if (vertex_index < morphu.vertex_count) {
 		for (var morph_target = 0u; morph_target < morphu.target_count; morph_target = morph_target + 1u) {
 			let weight = morph_weights[morph_target];
 			if (abs(weight) > 0.000001) {
-				let base = (morph_target * morphu.vertex_count + vertex_index) * 2u;
+				let base = (morph_target * morphu.vertex_count + vertex_index) * 3u;
 				pos = pos + morph_deltas[base].xyz * weight;
 				norm = norm + morph_deltas[base + 1u].xyz * weight;
+				tangent = tangent + morph_deltas[base + 2u].xyz * weight;
 			}
 		}
 	}
-	return array<vec3<f32>, 2>(pos, normalize(norm));
+	return array<vec3<f32>, 3>(pos, normalize(norm), normalize(tangent));
 }
 
 fn lil_texture_load_repeat(tex_in: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
@@ -492,10 +494,10 @@ fn lil_calc_audio_link_vertex_value(uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f3
 
 fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	var o: VsOut;
-	let morphed = morphed_position_normal(v.pos, v.norm, vertex_index);
+	let morphed = morphed_position_normal_tangent(v.pos, v.norm, v.tangent.xyz, vertex_index);
 	var pos = morphed[0];
 	let norm = morphed[1];
-	let tangent = v.tangent.xyz;
+	let tangent = morphed[2];
 	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0) * object_negative_scale_sign();
 	let j0 = v.joints.x;
 	let j1 = v.joints.y;

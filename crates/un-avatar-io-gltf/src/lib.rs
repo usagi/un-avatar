@@ -2329,6 +2329,7 @@ fn modular_avatar_global_colliders(
 				.unwrap_or([0.0, 0.0, 0.0, 1.0]),
 			),
 			inside_bounds: false,
+			bones_as_sphere: true,
 		});
 	}
 	colliders
@@ -2450,6 +2451,11 @@ fn unavatar_dynamics_collider_array(
 				.or_else(|| collider.get("inside_bounds"))
 				.and_then(Value::as_bool)
 				.unwrap_or(false);
+			let bones_as_sphere = collider
+				.get("bonesAsSphere")
+				.or_else(|| collider.get("bones_as_sphere"))
+				.and_then(Value::as_bool)
+				.unwrap_or(true);
 			let root = collider
 				.get("root")
 				.or_else(|| collider.get("node"))
@@ -2478,6 +2484,7 @@ fn unavatar_dynamics_collider_array(
 				),
 				rotation: unity_quat_to_unavatar_runtime(json_vec4(collider.get("rotation")).unwrap_or([0.0, 0.0, 0.0, 1.0])),
 				inside_bounds,
+				bones_as_sphere,
 			})
 		})
 		.collect()
@@ -2810,21 +2817,16 @@ fn append_unavatar_dynamics_endpoint_tail_children(
 	let Some(endpoint) = unavatar_dynamics_endpoint_position(item) else {
 		return 0;
 	};
-	let world = scene_world_matrices(scene);
-	if root_idx >= world.len() {
-		return 0;
-	}
-	let endpoint_world = world[root_idx].transform_point3(Vec3::from(endpoint));
+	let endpoint = Vec3::from(endpoint);
 	let mut added = 0usize;
 	for chain in chains {
 		let Some(&leaf_idx) = chain.last() else {
 			continue;
 		};
-		if leaf_idx >= scene.nodes.len() || leaf_idx >= world.len() {
+		if leaf_idx >= scene.nodes.len() {
 			continue;
 		}
-		let endpoint_local = world[leaf_idx].inverse().transform_point3(endpoint_world);
-		if endpoint_local.length_squared() <= 1e-12 {
+		if endpoint.length_squared() <= 1e-12 {
 			continue;
 		}
 		let endpoint_idx = scene.nodes.len();
@@ -2834,7 +2836,7 @@ fn append_unavatar_dynamics_endpoint_tail_children(
 			source_node_id: None,
 			resolved_node_id: None,
 			visible: true,
-			transform: Mat4::from_translation(endpoint_local).to_cols_array(),
+			transform: Mat4::from_translation(endpoint).to_cols_array(),
 			children: Vec::new(),
 			mesh: None,
 			skin: None,
@@ -3006,6 +3008,11 @@ fn unavatar_dynamics_limit(value: &Value) -> Option<UnaDynamicsLimit> {
 	let limit_rotation = unavatar_dynamics_source_value(value, source_params, "limitRotation", "limit_rotation")
 		.and_then(|value| json_vec3(Some(value)))
 		.unwrap_or([0.0, 0.0, 0.0]);
+	let limit_rotation = if unavatar_dynamics_source_kind(value) == UnaDynamicsSourceKind::VrcPhysBone {
+		[0.0, 0.0, 0.0]
+	} else {
+		limit_rotation
+	};
 	let max_stretch = unavatar_dynamics_source_value(value, source_params, "maxStretch", "max_stretch")
 		.and_then(|value| json_f32(Some(value)))
 		.unwrap_or(0.0);
@@ -3151,8 +3158,8 @@ fn unavatar_dynamics_settings(
 			.unwrap_or(pull);
 		let raw_momentum = unavatar_dynamics_source_value(item, source_params, "momentum", "momentum")
 			.and_then(|value| json_f32(Some(value)))
-			.filter(|value| value.is_finite() && *value > 0.0)
-			.unwrap_or(raw_spring);
+			.unwrap_or(raw_spring)
+			.max(0.0);
 		let is_advanced_physbone = source_kind == UnaDynamicsSourceKind::VrcPhysBone && integration_type.eq_ignore_ascii_case("advanced");
 		let integration_type = if source_kind == UnaDynamicsSourceKind::VrcPhysBone {
 			if is_advanced_physbone {
@@ -3287,7 +3294,12 @@ fn unavatar_dynamics_settings(
 				let stiffness_samples = unavatar_dynamics_curve_samples(item, stiffness, joint_count, "stiffnessCurve", "stiffness_curve");
 				let pull_samples = unavatar_dynamics_curve_samples(item, pull, joint_count, "pullCurve", "pull_curve");
 				let spring_samples = if is_advanced_physbone {
-					unavatar_dynamics_curve_samples(item, spring, joint_count, "momentumCurve", "momentum_curve")
+					let momentum_samples = unavatar_dynamics_curve_samples(item, spring, joint_count, "momentumCurve", "momentum_curve");
+					if momentum_samples.is_empty() {
+						unavatar_dynamics_curve_samples(item, spring, joint_count, "springCurve", "spring_curve")
+					} else {
+						momentum_samples
+					}
 				} else {
 					unavatar_dynamics_curve_samples(item, spring, joint_count, "springCurve", "spring_curve")
 				};
@@ -6607,9 +6619,6 @@ fn collect_merge_armature_retain_nodes(
 		if let Some(skeleton_node) = skin.skeleton_node {
 			retained_nodes.insert(skeleton_node);
 		}
-	}
-	for constraint in &scene.node_constraints {
-		retained_nodes.insert(constraint.target_node);
 	}
 	for component in components {
 		collect_modular_avatar_reference_indices(component, node_ids, registry_paths, paths, normalized_paths, &mut retained_nodes);
@@ -11558,7 +11567,7 @@ struct PrimitiveVertexPayloadKey {
 	colors_0: Option<usize>,
 	joints_0: Option<usize>,
 	weights_0: Option<usize>,
-	morph_targets: Vec<(Option<usize>, Option<usize>)>,
+	morph_targets: Vec<(Option<usize>, Option<usize>, Option<usize>)>,
 	mesh_weights: Vec<u32>,
 	mesh_target_names: Vec<String>,
 }
@@ -11648,7 +11657,13 @@ fn primitive_vertex_payload_key(
 		weights_0: accessor_index(prim.get(&gltf::Semantic::Weights(0))),
 		morph_targets: prim
 			.morph_targets()
-			.map(|target| (accessor_index(target.positions()), accessor_index(target.normals())))
+			.map(|target| {
+				(
+					accessor_index(target.positions()),
+					accessor_index(target.normals()),
+					accessor_index(target.tangents()),
+				)
+			})
 			.collect(),
 		mesh_weights: mesh_weights.unwrap_or_default().iter().map(|weight| weight.to_bits()).collect(),
 		mesh_target_names: mesh_target_names.to_vec(),
@@ -11814,7 +11829,7 @@ fn read_primitive(input: PrimitiveReadInput<'_>) -> Result<Option<(UnaMeshBuffer
 	let morph_target_iter = reader.read_morph_targets();
 	let (morph_target_lower, morph_target_upper) = morph_target_iter.size_hint();
 	let mut morph_targets: Vec<UnaMorphTargetDeltas> = Vec::with_capacity(morph_target_upper.unwrap_or(morph_target_lower));
-	for (pos_d, norm_d, _tan_d) in morph_target_iter {
+	for (pos_d, norm_d, tan_d) in morph_target_iter {
 		let position_deltas: Vec<[f32; 3]> = if let Some(iter) = pos_d {
 			let v: Vec<[f32; 3]> = iter.collect();
 			if v.len() != positions.len() {
@@ -11841,9 +11856,23 @@ fn read_primitive(input: PrimitiveReadInput<'_>) -> Result<Option<(UnaMeshBuffer
 		} else {
 			None
 		};
+		let tangent_deltas = if let Some(iter) = tan_d {
+			let v: Vec<[f32; 3]> = iter.collect();
+			if v.len() != positions.len() {
+				return Err(ImportError::Message(format!(
+					"モーフターゲットの TANGENT デルタ数 {} がベース頂点数 {} と一致しません",
+					v.len(),
+					positions.len()
+				)));
+			}
+			Some(v)
+		} else {
+			None
+		};
 		morph_targets.push(UnaMorphTargetDeltas {
 			position_deltas,
 			normal_deltas,
+			tangent_deltas,
 		});
 	}
 	let morphs_elapsed = morphs_started.elapsed();
@@ -12842,6 +12871,34 @@ mod tests {
 	}
 
 	#[test]
+	fn vrc_physbone_limit_rotation_is_source_metadata_only() {
+		let vrc_limit = serde_json::json!({
+			"source": "vrc_physbone",
+			"sourceParams": {
+				"integrationType": "Advanced",
+				"limitType": "Polar",
+				"limitRotation": [-45.0, 0.0, 0.0],
+				"maxAngleX": 45.0,
+				"maxAngleZ": 20.0
+			}
+		});
+		let limit = unavatar_dynamics_limit(&vrc_limit).expect("vrc limit");
+		assert_eq!(limit.limit_rotation, [0.0, 0.0, 0.0]);
+
+		let generic_limit = serde_json::json!({
+			"source": "unavatar",
+			"sourceParams": {
+				"limitType": "Polar",
+				"limitRotation": [-45.0, 0.0, 0.0],
+				"maxAngleX": 45.0,
+				"maxAngleZ": 20.0
+			}
+		});
+		let limit = unavatar_dynamics_limit(&generic_limit).expect("generic limit");
+		assert_eq!(limit.limit_rotation, [-45.0, 0.0, 0.0]);
+	}
+
+	#[test]
 	fn unavatar_dynamics_lowers_vrc_physbone_to_runtime_group() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_tip", Vec::new())],
@@ -12998,7 +13055,8 @@ mod tests {
 							"height": 0.3,
 							"position": [0.1, 0.2, 0.3],
 							"rotation": [0.0, 0.5, 0.0, 0.8660254],
-							"insideBounds": false
+							"insideBounds": false,
+							"bonesAsSphere": false
 						}, {
 							"root": {"nodeId": "node_root", "path": "Root"},
 							"shapeType": 0,
@@ -13068,7 +13126,7 @@ mod tests {
 		assert_eq!(settings.groups[0].gravity_dir, [0.0, -1.0, 0.0]);
 		let limit = settings.groups[0].limit.as_ref().expect("limit");
 		assert_eq!(limit.limit_type, "Angle");
-		assert_eq!(limit.limit_rotation, [10.0, 20.0, 30.0]);
+		assert_eq!(limit.limit_rotation, [0.0, 0.0, 0.0]);
 		assert_eq!(limit.max_angle_x, 45.0);
 		assert_eq!(limit.max_angle_z, 30.0);
 		assert_eq!(limit.max_stretch, 0.2);
@@ -13094,8 +13152,10 @@ mod tests {
 		assert_eq!(settings.colliders[1].position, [-0.1, 0.2, 0.3]);
 		assert_eq!(settings.colliders[1].rotation, [0.0, -0.5, -0.0, 0.8660254]);
 		assert!(!settings.colliders[1].inside_bounds);
+		assert!(!settings.colliders[1].bones_as_sphere);
 		assert_eq!(settings.colliders[2].radius, 0.2);
 		assert!(settings.colliders[2].inside_bounds);
+		assert!(settings.colliders[2].bones_as_sphere);
 		assert_eq!(settings.colliders[3].shape, UnaDynamicsColliderShape::Capsule);
 		assert_eq!(settings.colliders[3].radius, 0.06);
 		assert_eq!(settings.colliders[3].height, 0.4);
@@ -13118,6 +13178,84 @@ mod tests {
 		assert!(settings.groups[1].enabled);
 		assert_eq!(settings.groups[2].source_id, "disabled_tail");
 		assert!(!settings.groups[2].enabled);
+	}
+
+	#[test]
+	fn advanced_vrc_physbone_spring_curve_falls_back_when_momentum_curve_is_missing() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1]),
+				test_scene_node("node_mid", vec![2]),
+				test_scene_node("node_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"dynamics": [{
+					"id": "advanced_chain",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"integrationType": "Advanced",
+						"pull": 0.3,
+						"spring": 0.3,
+						"stiffness": 0.3,
+						"springCurve": {
+							"keys": [
+								{"time": 0.0, "value": 0.0},
+								{"time": 1.0, "value": 1.0}
+							]
+						}
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].integration_type, UnaDynamicsIntegrationType::VrcAdvanced);
+		assert_eq!(settings.groups[0].spring, 0.3);
+		assert_eq!(settings.groups[0].spring_samples, vec![0.15, 0.3]);
+	}
+
+	#[test]
+	fn advanced_vrc_physbone_zero_momentum_does_not_fall_back_to_spring_scalar() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1]),
+				test_scene_node("node_mid", vec![2]),
+				test_scene_node("node_tip", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"dynamics": [{
+					"id": "advanced_chain",
+					"source": "vrc_physbone",
+					"roots": [{"nodeId": "node_root", "path": "Root"}],
+					"sourceParams": {
+						"integrationType": "Advanced",
+						"pull": 0.3,
+						"spring": 0.7,
+						"momentum": 0.0,
+						"stiffness": 0.3
+					}
+				}]
+			}),
+		};
+		let mut report = ImportReport::default();
+		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
+
+		assert_eq!(settings.groups.len(), 1);
+		assert_eq!(settings.groups[0].integration_type, UnaDynamicsIntegrationType::VrcAdvanced);
+		assert_eq!(settings.groups[0].spring, 0.0);
 	}
 
 	#[test]
@@ -13695,7 +13833,7 @@ mod tests {
 		assert_eq!(scene.nodes.len(), 3);
 		assert_eq!(scene.nodes[1].children, vec![2]);
 		let (_, _, endpoint_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
-		let expected_endpoint = Vec3::new(-0.1, -0.8, 0.3);
+		let expected_endpoint = Vec3::new(-0.1, 0.2, 0.3);
 		assert!(
 			(endpoint_translation - expected_endpoint).length() < 1e-6,
 			"endpoint_translation={endpoint_translation:?}"
@@ -13710,7 +13848,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unavatar_dynamics_warns_when_non_leaf_endpoint_tail_is_degenerate() {
+	fn unavatar_dynamics_non_leaf_endpoint_tail_uses_leaf_local_offset() {
 		let mut scene = UnaSceneSnapshot {
 			nodes: vec![test_scene_node("node_root", vec![1]), test_scene_node("node_child", Vec::new())],
 			roots: vec![0],
@@ -13737,13 +13875,20 @@ mod tests {
 		let mut report = ImportReport::default();
 		let settings = unavatar_dynamics_settings(&mut scene, &unavatar, &mut report).expect("dynamics");
 
-		assert_eq!(scene.nodes.len(), 2);
+		assert_eq!(scene.nodes.len(), 3);
+		assert_eq!(scene.nodes[1].children, vec![2]);
+		let (_, _, endpoint_translation) = Mat4::from_cols_array(&scene.nodes[2].transform).to_scale_rotation_translation();
+		assert_eq!(endpoint_translation.to_array(), [-0.1, 0.2, 0.3]);
 		assert_eq!(settings.groups.len(), 1);
-		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
+		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 2]);
 		assert!(report
 			.messages
 			.iter()
-			.any(|message| message.contains("could not synthesize endpoint tail for 1 non-leaf dynamics root")));
+			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(!report
+			.messages
+			.iter()
+			.any(|message| message.contains("could not synthesize endpoint tail")));
 		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
@@ -14746,7 +14891,7 @@ mod tests {
 				"primitives": [{
 					"attributes": {"POSITION": 0},
 					"material": 0,
-					"targets": [{"POSITION": 1}]
+					"targets": [{"POSITION": 1, "NORMAL": 1, "TANGENT": 1}]
 				}]
 			}],
 			"materials": [{
@@ -14908,6 +15053,8 @@ mod tests {
 		assert!(!scene.nodes[2].visible);
 		assert_eq!(scene.meshes[0][0].morph_target_names, vec!["Shrink"]);
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
+		assert!(scene.meshes[0][0].morph_targets[0].normal_deltas.is_some());
+		assert!(scene.meshes[0][0].morph_targets[0].tangent_deltas.is_some());
 		assert!(got.document.expression_catalog.is_none());
 		assert!(got.document.expression_weights.is_none());
 		let runtime_actions = got.document.runtime_actions.as_ref().expect("runtime actions");
@@ -17801,14 +17948,17 @@ mod tests {
 					UnaMorphTargetDeltas {
 						position_deltas: vec![[0.0, 0.0, 0.0]],
 						normal_deltas: None,
+						tangent_deltas: None,
 					},
 					UnaMorphTargetDeltas {
 						position_deltas: vec![[0.0, 0.0, 0.0]],
 						normal_deltas: None,
+						tangent_deltas: None,
 					},
 					UnaMorphTargetDeltas {
 						position_deltas: vec![[0.0, 0.0, 0.0]],
 						normal_deltas: None,
+						tangent_deltas: None,
 					},
 				],
 				morph_target_names: vec!["jawOpen".to_string(), "MenuToggleMorph".to_string(), "BodySetupMorph".to_string()],
@@ -17895,6 +18045,7 @@ mod tests {
 			morph_targets: vec![UnaMorphTargetDeltas {
 				position_deltas: vec![[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.25, 0.0, 0.0]],
 				normal_deltas: None,
+				tangent_deltas: None,
 			}],
 			morph_target_names: vec!["DeleteMe".to_string()],
 			default_morph_weights: Vec::new(),
@@ -17920,6 +18071,7 @@ mod tests {
 			morph_targets: vec![UnaMorphTargetDeltas {
 				position_deltas: vec![[0.0, 0.0, 0.0]],
 				normal_deltas: None,
+				tangent_deltas: None,
 			}],
 			morph_target_names: vec![shape_name.to_string()],
 			default_morph_weights: vec![default_weight],
@@ -20144,6 +20296,78 @@ mod tests {
 		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
 		assert_eq!(scene.node_constraints[0].sources[0].source_node, 3);
 		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+	}
+
+	#[test]
+	fn modular_avatar_merge_armature_reparents_constraint_target_auxiliary_subtree() {
+		let target_world = Mat4::from_translation(Vec3::new(0.0, 3.0, 0.0));
+		let source_world = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0));
+		let cape_root_local = Mat4::from_translation(Vec3::new(0.0, 0.0, 5.0));
+		let cape_const_local = Mat4::from_translation(Vec3::new(0.25, 0.0, 0.0));
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 2]),
+				test_scene_node("node_target_chest", Vec::new()),
+				test_scene_node("node_source_chest", vec![3]),
+				test_scene_node("node_cape_root", vec![4]),
+				test_scene_node("node_cape_const", Vec::new()),
+			],
+			node_constraints: vec![UnaNodeConstraint {
+				target_node: 4,
+				source_node: 1,
+				weight: 1.0,
+				kind: UnaNodeConstraintKind::Parent {
+					translate_x: true,
+					translate_y: true,
+					translate_z: true,
+					rotate_x: true,
+					rotate_y: true,
+					rotate_z: true,
+					translation_at_rest: [0.0; 3],
+					rotation_at_rest: [0.0; 3],
+				},
+				sources: vec![UnaNodeConstraintSource {
+					source_node: 1,
+					weight: 1.0,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				}],
+			}],
+			roots: vec![0],
+			..Default::default()
+		};
+		scene.nodes[1].transform = target_world.to_cols_array();
+		scene.nodes[2].transform = source_world.to_cols_array();
+		scene.nodes[3].transform = cape_root_local.to_cols_array();
+		scene.nodes[4].transform = cape_const_local.to_cols_array();
+		let before = scene_world_matrices(&scene);
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"modularAvatar": {
+					"schemaVersion": "0.1-preview",
+					"components": [{
+						"shortType": "ModularAvatarMergeArmature",
+						"enabled": true,
+						"target": {"nodeId": "node_source_chest", "path": "Outfit/Armature/Chest"},
+						"boneMappings": [{
+							"sourceBone": {"nodeId": "node_source_chest", "path": "Outfit/Armature/Chest"},
+							"targetBone": {"nodeId": "node_target_chest", "path": "Armature/Chest"}
+						}]
+					}]
+				}
+			}),
+		};
+
+		let mut report = ImportReport::default();
+		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
+		let after = scene_world_matrices(&scene);
+
+		assert_eq!(scene.nodes[1].children, vec![3]);
+		assert_eq!(scene.nodes[2].children, Vec::<usize>::new());
+		assert_eq!(scene.node_constraints[0].target_node, 4);
+		assert_eq!(after[3].transform_point3(Vec3::ZERO), before[3].transform_point3(Vec3::ZERO));
+		assert_eq!(after[4].transform_point3(Vec3::ZERO), before[4].transform_point3(Vec3::ZERO));
 	}
 
 	#[test]
