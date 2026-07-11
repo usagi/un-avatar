@@ -13158,6 +13158,13 @@ impl SceneMeshes {
 		});
 	}
 
+	pub fn reset_screen_grab_view(&mut self, device: &wgpu::Device) {
+		let view = self
+			._screen_grab_fallback_texture
+			.create_view(&wgpu::TextureViewDescriptor::default());
+		self.set_screen_grab_view(device, &view);
+	}
+
 	pub fn upload_audio_link_texture(&mut self, queue: &wgpu::Queue, frame: &crate::audio_link::AudioLinkTextureFrame) {
 		if frame.sequence == self.audio_link_uploaded_sequence || frame.pixels.is_empty() {
 			return;

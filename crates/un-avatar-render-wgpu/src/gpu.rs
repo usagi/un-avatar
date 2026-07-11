@@ -983,6 +983,26 @@ fn runtime_action_parameter_values(
 	values
 }
 
+fn runtime_action_parameter_values_match(
+	actions: &un_avatar_core::UnaRuntimeActionSet,
+	parameter_values: &BTreeMap<String, f32>,
+	cached_values: &BTreeMap<String, f32>,
+) -> bool {
+	let references_match = actions.actions.iter().all(|action| {
+		action
+			.conditions
+			.iter()
+			.filter_map(|condition| condition.parameter_name.as_deref())
+			.chain(action.triggers.iter().filter_map(|trigger| match trigger {
+				UnaRuntimeActionTrigger::ParameterValue { name, .. } => Some(name.as_str()),
+				_ => None,
+			}))
+			.filter(|name| !name.is_empty())
+			.all(|name| parameter_values.get(name) == cached_values.get(name))
+	});
+	references_match && cached_values.keys().all(|name| runtime_actions_reference_parameter(actions, name))
+}
+
 fn insert_runtime_action_parameter_value(values: &mut BTreeMap<String, f32>, parameter_values: &BTreeMap<String, f32>, name: &str) {
 	if values.contains_key(name) {
 		return;
@@ -7655,11 +7675,11 @@ impl ScreenGrabTarget {
 		}
 	}
 
-	fn resize_to(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) {
+	fn resize_to(&mut self, device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> bool {
 		let width = width.max(1);
 		let height = height.max(1);
 		if self.width == width && self.height == height && self.format == format {
-			return;
+			return false;
 		}
 		self.texture.destroy();
 		let (texture, view) = create_screen_grab_texture(device, width, height, format);
@@ -7668,6 +7688,7 @@ impl ScreenGrabTarget {
 		self.format = format;
 		self.texture = texture;
 		self.view = view;
+		true
 	}
 
 	fn texture(&self) -> &wgpu::Texture {
@@ -9394,13 +9415,16 @@ impl GpuState {
 			post = Some(PostProcess::new(&self.device, w, h, format));
 		}
 		if needs_screen_refraction {
-			if let Some(grab) = &mut self.screen_grab_target {
-				grab.resize_to(&self.device, w, h, format);
+			let view_changed = if let Some(grab) = &mut self.screen_grab_target {
+				grab.resize_to(&self.device, w, h, format)
 			} else {
 				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, w, h, format));
-			}
-			if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
-				sm.set_screen_grab_view(&self.device, grab.view());
+				true
+			};
+			if view_changed {
+				if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
+					sm.set_screen_grab_view(&self.device, grab.view());
+				}
 			}
 		}
 		let (depth_tex, depth_view) = create_depth(&self.device, w, h);
@@ -9473,7 +9497,7 @@ impl GpuState {
 			}
 			drop(pass);
 
-			if let (Some(post), Some(grab), Some(sm)) = (&post, &self.screen_grab_target, &mut self.scene_meshes) {
+			if let (Some(post), Some(grab)) = (&post, &self.screen_grab_target) {
 				encoder.copy_texture_to_texture(
 					wgpu::TexelCopyTextureInfo {
 						texture: post.source_texture(),
@@ -9493,7 +9517,6 @@ impl GpuState {
 						depth_or_array_layers: 1,
 					},
 				);
-				sm.set_screen_grab_view(&self.device, grab.view());
 			}
 
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -10606,10 +10629,14 @@ impl GpuState {
 				self.last_runtime_parameter_action_values = BTreeMap::new();
 				return Ok(Vec::new());
 			};
-			let parameter_values = runtime_action_parameter_values(actions, runtime.runtime_parameter_values());
-			if parameter_values == self.last_runtime_parameter_action_values {
+			if runtime_action_parameter_values_match(
+				actions,
+				runtime.runtime_parameter_values(),
+				&self.last_runtime_parameter_action_values,
+			) {
 				return Ok(Vec::new());
 			}
+			let parameter_values = runtime_action_parameter_values(actions, runtime.runtime_parameter_values());
 			let action_ids = runtime_action_ids_for_parameter_values(actions, runtime.scene(), &parameter_values);
 			let actions_snapshot = actions.restore_effect_snapshot();
 			(parameter_values, action_ids, actions_snapshot)
@@ -11815,6 +11842,27 @@ impl GpuState {
 			&& (use_post_aa || use_avatar_outline || use_color_adjust || use_bloom || use_ssao || needs_screen_refraction);
 		let use_msaa = matches!(self.aa, AaMode::Msaa);
 		let t_target0 = Instant::now();
+		if !wardrobe_transition_only {
+			if let Some(post) = &mut self.post_process {
+				post.retain_targets(
+					matches!(self.aa, AaMode::Smaa),
+					use_bloom && self.bloom.quality.is_high_quality(),
+					use_avatar_outline,
+				);
+			}
+			if !use_post {
+				self.post_process = None;
+			}
+			if !use_msaa {
+				self.msaa_target = None;
+			}
+			if !needs_screen_refraction && self.screen_grab_target.is_some() {
+				if let Some(sm) = &mut self.scene_meshes {
+					sm.reset_screen_grab_view(&self.device);
+				}
+				self.screen_grab_target = None;
+			}
+		}
 		if use_post {
 			if let Some(post) = &mut self.post_process {
 				post.resize_to(&self.device, gw, gh, self.config.format);
@@ -11824,13 +11872,16 @@ impl GpuState {
 		}
 		let target_prepare_ms = t_target0.elapsed().as_secs_f32() * 1000.0;
 		if needs_screen_refraction {
-			if let Some(grab) = &mut self.screen_grab_target {
-				grab.resize_to(&self.device, gw, gh, self.config.format);
+			let view_changed = if let Some(grab) = &mut self.screen_grab_target {
+				grab.resize_to(&self.device, gw, gh, self.config.format)
 			} else {
 				self.screen_grab_target = Some(ScreenGrabTarget::new(&self.device, gw, gh, self.config.format));
-			}
-			if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
-				sm.set_screen_grab_view(&self.device, grab.view());
+				true
+			};
+			if view_changed {
+				if let (Some(grab), Some(sm)) = (&self.screen_grab_target, &mut self.scene_meshes) {
+					sm.set_screen_grab_view(&self.device, grab.view());
+				}
 			}
 		}
 		if use_msaa {
@@ -12004,7 +12055,7 @@ impl GpuState {
 			}
 			drop(pass);
 
-			if let (Some(post), Some(grab), Some(sm)) = (&self.post_process, &self.screen_grab_target, &mut self.scene_meshes) {
+			if let (Some(post), Some(grab)) = (&self.post_process, &self.screen_grab_target) {
 				encoder.copy_texture_to_texture(
 					wgpu::TexelCopyTextureInfo {
 						texture: post.source_texture(),
@@ -12024,7 +12075,6 @@ impl GpuState {
 						depth_or_array_layers: 1,
 					},
 				);
-				sm.set_screen_grab_view(&self.device, grab.view());
 			}
 
 			let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -12892,10 +12942,10 @@ mod tests {
 		mesh_shader_variant_tier_for_limits, modular_avatar_menu_components, prewarm_scene_cache_apply_wardrobe_set,
 		prewarm_scene_cache_wardrobe_set_ids, restore_runtime_scene_transforms_to_rest, runtime_action_id_for_parameter,
 		runtime_action_ids_for_parameter, runtime_action_ids_for_parameter_values, runtime_action_parameter_values,
-		runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference, sorted_unique_index_union, surface_color_format,
-		transparent_alpha_mode, wardrobe_action_statuses, wardrobe_asset_upload_plan_for_document,
-		wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps, DynamicsColliderShapeKind,
-		RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
+		runtime_action_parameter_values_match, runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference,
+		sorted_unique_index_union, surface_color_format, transparent_alpha_mode, wardrobe_action_statuses,
+		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
+		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
 		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
 		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
 		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
@@ -14402,6 +14452,14 @@ mod tests {
 			runtime_action_parameter_values(&actions, &parameter_values),
 			BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0)])
 		);
+		let cached = BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0)]);
+		assert!(runtime_action_parameter_values_match(&actions, &parameter_values, &cached));
+
+		let changed = BTreeMap::from([("Glow".to_string(), 0.0), ("Hat".to_string(), 1.0)]);
+		assert!(!runtime_action_parameter_values_match(&actions, &changed, &cached));
+
+		let stale = BTreeMap::from([("Glow".to_string(), 1.0), ("Hat".to_string(), 1.0), ("Removed".to_string(), 1.0)]);
+		assert!(!runtime_action_parameter_values_match(&actions, &parameter_values, &stale));
 	}
 
 	#[test]
