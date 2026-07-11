@@ -3536,11 +3536,18 @@ fn apply_parent_motion_to_joint(joint: &mut JointRuntime, child_pos: Vec3, targe
 }
 
 fn joint_damping(joint: &JointRuntime, dt: f32) -> f32 {
-	match joint.damping_half_life_ms {
+	let time_damping = match joint.damping_half_life_ms {
 		Some(half_life_ms) if half_life_ms > 0.0 => 1.0 - (-std::f32::consts::LN_2 * dt / (half_life_ms / 1000.0)).exp(),
-		_ => joint.drag_force,
+		_ => 0.0,
 	}
-	.clamp(0.0, 1.0)
+	.clamp(0.0, 1.0);
+	combine_independent_damping(joint.drag_force, time_damping)
+}
+
+fn combine_independent_damping(authored_drag: f32, time_damping: f32) -> f32 {
+	let authored_drag = authored_drag.clamp(0.0, 1.0);
+	let time_damping = time_damping.clamp(0.0, 1.0);
+	1.0 - (1.0 - authored_drag) * (1.0 - time_damping)
 }
 
 fn unphysics_inertia_retention(damping: f32, bounce_response: f32) -> f32 {
@@ -5478,6 +5485,17 @@ mod tests {
 			high_bounce < 1.0 && near_undamped < 1.0,
 			"bounce must not create energy by pushing inertia retention over 1: high={high_bounce} near={near_undamped}"
 		);
+	}
+
+	#[test]
+	fn unphysics_authored_drag_and_time_damping_compose_without_discarding_either() {
+		let authored_only = combine_independent_damping(0.4, 0.0);
+		let time_only = combine_independent_damping(0.0, 0.2);
+		let combined = combine_independent_damping(0.4, 0.2);
+		assert!((authored_only - 0.4).abs() < 1e-6);
+		assert!((time_only - 0.2).abs() < 1e-6);
+		assert!((combined - 0.52).abs() < 1e-6);
+		assert!(combined > authored_only && combined > time_only);
 	}
 
 	#[test]
