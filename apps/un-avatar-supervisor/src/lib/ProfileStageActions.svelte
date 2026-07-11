@@ -10,6 +10,7 @@
 	export let sceneCachePrewarmedAt: string | null = null;
 	export let liveRenderer: RendererRef | null;
 	export let pendingRestart: ProfilePendingRestart | null;
+	export let cacheProgress: { phase: string; current: number; total: number; detail: string; elapsed_secs: number } | null = null;
 	export let busy = false;
 	export let onRestartPending: () => void | Promise<void>;
 	export let onViewRenderer: (rendererId: number) => void;
@@ -36,7 +37,6 @@
 		: sceneCacheNeedsRefresh
 			? $_("profiles.actions.warm_cache_again")
 			: $_("profiles.actions.warm_cache");
-	$: actionGroupTitle = $_("profiles.action_groups.prepare");
 	$: sceneCacheActionHint = sceneCacheReady
 		? $_("profiles.actions.cache_ready_hint", { values: { at: sceneCachePrewarmedAt ?? "-" } })
 		: sceneCacheNeedsRefresh
@@ -66,37 +66,52 @@
 	<div class="profile-stage-action-group">
 		<div
 			class="profile-cache-callout"
-			class:profile-cache-callout-ready={sceneCacheReady}
-			class:profile-cache-callout-refresh={sceneCacheNeedsRefresh}
-			class:profile-cache-callout-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}
+			class:profile-cache-callout-ready={sceneCacheReady && !cacheProgress}
+			class:profile-cache-callout-refresh={sceneCacheNeedsRefresh && !cacheProgress}
+			class:profile-cache-callout-missing={!cacheProgress && !sceneCacheReady && !sceneCacheNeedsRefresh}
 		>
-			<div class="profile-stage-action-heading">
-				<DatabaseZap size={15} aria-hidden="true" />
-				<strong>{actionGroupTitle}</strong>
-				<span
-					class="profile-cache-state"
-					class:profile-cache-state-ready={sceneCacheReady}
-					class:profile-cache-state-refresh={sceneCacheNeedsRefresh}
-					class:profile-cache-state-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}
-					role="status"
-					aria-live="polite"
-					aria-label={sceneCacheActionHint}>{sceneCacheActionLabel}</span
-				>
+			<div class="profile-cache-copy">
+				{#if cacheProgress}
+					<div class="profile-stage-action-heading" role="status" aria-live="polite">
+						<DatabaseZap size={15} aria-hidden="true" />
+						<strong>{cacheProgress.total > 0 ? `${cacheProgress.current} / ${cacheProgress.total}` : $_("profiles.messages.cache_warming")}</strong>
+						<small>{cacheProgress.elapsed_secs.toFixed(1)}s</small>
+					</div>
+					<p>{cacheProgress.detail}</p>
+					{#if cacheProgress.total > 0}
+						<progress value={cacheProgress.current} max={cacheProgress.total}></progress>
+					{:else}
+						<progress></progress>
+					{/if}
+				{:else}
+					<div class="profile-stage-action-heading">
+						<DatabaseZap size={15} aria-hidden="true" />
+						<span
+							class="profile-cache-state"
+							class:profile-cache-state-ready={sceneCacheReady}
+							class:profile-cache-state-refresh={sceneCacheNeedsRefresh}
+							class:profile-cache-state-missing={!sceneCacheReady && !sceneCacheNeedsRefresh}
+							role="status"
+							aria-live="polite"
+							aria-label={sceneCacheActionHint}>{sceneCacheActionLabel}</span
+						>
+					</div>
+					<p>{sceneCacheActionHint}</p>
+				{/if}
 			</div>
-			<p>{sceneCacheActionHint}</p>
-		</div>
-		<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.prepare")}>
-			<button
+			{#if !cacheProgress}<button
 				type="button"
-				class:profile-stage-primary-action={!sceneCacheReady}
+				class="profile-cache-callout-action"
 				class:profile-cache-cta={!sceneCacheReady}
 				disabled={busy}
 				data-hint={sceneCacheActionHint}
 				title={sceneCacheActionHint}
 				aria-label={sceneCacheButtonLabel}
 				onclick={() => onPrewarmSceneCache(settingId)}
-				><DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span></button
-			>
+				>{#if sceneCacheReady}<RefreshCw size={14} />{:else}<DatabaseZap size={14} /><span>{sceneCacheButtonLabel}</span>{/if}</button
+			>{/if}
+		</div>
+		<div class="profile-stage-action-buttons" aria-label={$_("profiles.action_groups.prepare")}>
 			{#if liveRenderer}
 				<button type="button" class="profile-stage-primary-action" onclick={() => onViewRenderer(liveRenderer.id)}
 					><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
@@ -105,6 +120,7 @@
 				<button
 					type="button"
 					class="profile-stage-primary-action"
+					class:primary={sceneCacheReady}
 					disabled={busy}
 					data-hint={$_("profiles.actions.quick_run_hint")}
 					title={$_("profiles.actions.quick_run_hint")}
@@ -117,7 +133,7 @@
 				data-hint={$_("profiles.actions.desktop_shortcut_hint")}
 				title={$_("profiles.actions.desktop_shortcut_hint")}
 				aria-label={$_("profiles.actions.desktop_shortcut")}
-				onclick={() => onCreateDesktopShortcut(settingId)}><FilePlus2 size={14} /><span>{$_("profiles.actions.desktop_shortcut_short")}</span></button
+				onclick={() => onCreateDesktopShortcut(settingId)}><FilePlus2 size={14} /></button
 			>
 			<button
 				type="button"
@@ -127,7 +143,7 @@
 				title={$_(taskbarPinned ? "profiles.actions.taskbar_unpin_hint" : "profiles.actions.taskbar_launcher_hint")}
 				aria-label={$_("profiles.actions.taskbar_launcher")}
 				onclick={() => onSetTaskbarPinned(settingId, !taskbarPinned)}
-				>{#if taskbarPinned}<PinOff size={14} />{:else}<Pin size={14} />{/if}<span>{$_(taskbarPinned ? "profiles.actions.taskbar_unpin_short" : "profiles.actions.taskbar_launcher_short")}</span></button
+				>{#if taskbarPinned}<PinOff size={14} />{:else}<Pin size={14} />{/if}</button
 			>
 			{#if liveRenderer}
 				<button

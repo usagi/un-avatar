@@ -213,6 +213,14 @@
 		elapsed_secs: number;
 		detail: string | null;
 	};
+	type SceneCachePrewarmProgress = {
+		setting_id: string;
+		phase: string;
+		current: number;
+		total: number;
+		detail: string;
+		elapsed_secs: number;
+	};
 	type RendererCacheGroupStatus = {
 		label: string;
 		path: string;
@@ -245,6 +253,7 @@
 	let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
 	let rendererCacheStatus = $state<RendererCacheStatus | null>(null);
 	let rendererCacheBusy = $state(false);
+	let sceneCachePrewarmProgress = $state<SceneCachePrewarmProgress | null>(null);
 	let avatarSettings = $state<AvatarSetting[]>([]);
 	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
@@ -1345,6 +1354,7 @@
 		try {
 			const next = await invoke<RendererCacheStatus>("clear_renderer_cache");
 			rendererCacheStatus = next;
+			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
 			message = $_("app.cache_cleared");
 		} catch (error) {
 			message = String(error);
@@ -1570,6 +1580,14 @@
 			return;
 		}
 		busy = true;
+		sceneCachePrewarmProgress = {
+			setting_id: settingId,
+			phase: "starting",
+			current: 0,
+			total: 0,
+			detail: $_("profiles.messages.cache_warming"),
+			elapsed_secs: 0,
+		};
 		try {
 			message = $_("profiles.messages.cache_warming");
 			const result = await invoke<PrewarmSceneCacheResult>("prewarm_renderer_scene_cache", { settingId });
@@ -1587,6 +1605,7 @@
 			message = String(error);
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
 		} finally {
+			sceneCachePrewarmProgress = null;
 			busy = false;
 		}
 	}
@@ -3281,6 +3300,26 @@
 	});
 
 	$effect(() => {
+		if (!hasTauriRuntime()) return;
+		let cancelled = false;
+		let unlisten: (() => void) | null = null;
+		void listen<SceneCachePrewarmProgress>("scene-cache-prewarm-progress", (event) => {
+			if (!cancelled) sceneCachePrewarmProgress = event.payload;
+		})
+			.then((handler) => {
+				if (cancelled) handler();
+				else unlisten = handler;
+			})
+			.catch((error) => {
+				message = String(error);
+			});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	});
+
+	$effect(() => {
 		document.documentElement.dataset.theme = resolvedTheme;
 		document.documentElement.dataset.themeMode = appSettings.theme_mode;
 		syncAppSettingsToBackend(appSettings);
@@ -3674,6 +3713,7 @@
 						{liveRendererCount}
 						pendingRestart={profilePendingRestart}
 						activeSection={activeProfileSection}
+						cacheProgress={sceneCachePrewarmProgress?.setting_id === selectedSetting.id ? sceneCachePrewarmProgress : null}
 						{busy}
 						onRestartPending={() => restartPendingRenderer()}
 						onViewRenderer={(rendererId) => {

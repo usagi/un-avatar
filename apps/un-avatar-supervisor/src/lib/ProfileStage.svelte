@@ -15,6 +15,7 @@
 	export let liveRendererCount = 0;
 	export let pendingRestart: ProfilePendingRestart | null;
 	export let activeSection: ProfileSectionId;
+	export let cacheProgress: { phase: string; current: number; total: number; detail: string; elapsed_secs: number } | null = null;
 	export let busy = false;
 	export let onRestartPending: () => void | Promise<void>;
 	export let onViewRenderer: (rendererId: number) => void;
@@ -42,6 +43,7 @@
 				sceneCachePrewarmedAt={setting.scene_cache_prewarmed_at}
 				{liveRenderer}
 				{pendingRestart}
+				{cacheProgress}
 				{busy}
 				{onRestartPending}
 				{onViewRenderer}

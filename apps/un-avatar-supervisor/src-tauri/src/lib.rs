@@ -58,6 +58,8 @@ const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
 const SCENE_CACHE_PREWARM_SCHEMA_VERSION: u32 = 2;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 type DynamicsAuthoredParamsByCategory = BTreeMap<String, DynamicsCategoryAuthoredParams>;
 type DynamicsAuthoredParamsCache = BTreeMap<String, DynamicsAuthoredParamsByCategory>;
@@ -1002,6 +1004,16 @@ struct PrewarmSceneCacheResult {
 	profile_name: String,
 	elapsed_secs: f64,
 	detail: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct SceneCachePrewarmProgress {
+	setting_id: String,
+	phase: String,
+	current: u64,
+	total: u64,
+	detail: String,
+	elapsed_secs: f64,
 }
 
 #[derive(Serialize)]
@@ -5222,7 +5234,63 @@ fn clear_renderer_cache(state: State<'_, Mutex<SupervisorState>>) -> Result<Rend
 		}
 		fs::create_dir_all(&dir.path).map_err(|e| format!("create {}: {e}", dir.path.display()))?;
 	}
+	invalidate_scene_cache_prewarm_records()?;
 	renderer_cache_status()
+}
+
+fn invalidate_scene_cache_prewarm_records() -> Result<(), String> {
+	for (storage, dir) in profile_dirs() {
+		if !dir.is_dir() {
+			continue;
+		}
+		let entries = fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+				continue;
+			}
+			let mut manifest = match read_manifest_value(&path) {
+				Ok(manifest) => manifest,
+				Err(error) if storage == ProfileStorage::Seed => {
+					eprintln!(
+						"un-avatar-supervisor: skip seed cache marker invalidation {}: {error}",
+						path.display()
+					);
+					continue;
+				}
+				Err(error) => return Err(error),
+			};
+			if !clear_scene_cache_prewarm_record(&mut manifest) {
+				continue;
+			}
+			if let Err(error) = write_manifest_value(&path, &manifest) {
+				if storage == ProfileStorage::Seed {
+					eprintln!(
+						"un-avatar-supervisor: skip read-only seed cache marker invalidation {}: {error}",
+						path.display()
+					);
+					continue;
+				}
+				return Err(error);
+			}
+		}
+	}
+	Ok(())
+}
+
+fn clear_scene_cache_prewarm_record(manifest: &mut toml::Value) -> bool {
+	let Some(scene_cache) = manifest
+		.as_table_mut()
+		.and_then(|root| root.get_mut("profile"))
+		.and_then(toml::Value::as_table_mut)
+		.and_then(|profile| profile.get_mut("scene_cache"))
+		.and_then(toml::Value::as_table_mut)
+	else {
+		return false;
+	};
+	let fingerprint_removed = scene_cache.remove("fingerprint").is_some();
+	let timestamp_removed = scene_cache.remove("prewarmed_at").is_some();
+	fingerprint_removed || timestamp_removed
 }
 
 struct RendererCacheDir {
@@ -7496,22 +7564,35 @@ fn renderer_profile_app_user_model_ids(settings: &[AvatarSetting]) -> Vec<String
 }
 
 #[tauri::command]
-fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<PrewarmSceneCacheResult, String> {
+async fn prewarm_renderer_scene_cache(
+	setting_id: String,
+	state: State<'_, Mutex<SupervisorState>>,
+	app: tauri::AppHandle,
+) -> Result<PrewarmSceneCacheResult, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
-	let started = Instant::now();
-	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
-	configure_hidden_child(&mut command);
-	let output = command
-		.stdin(Stdio::null())
-		.output()
-		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
-	let elapsed = started.elapsed().as_secs_f64();
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	if output.status.success() {
-		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
+	let progress_setting_id = setting_id.clone();
+	let progress_app = app.clone();
+	let _ = app.emit(
+		"scene-cache-prewarm-progress",
+		SceneCachePrewarmProgress {
+			setting_id: setting_id.clone(),
+			phase: "starting".to_string(),
+			current: 0,
+			total: 0,
+			detail: "Starting cache preparation".to_string(),
+			elapsed_secs: 0.0,
+		},
+	);
+	let (success, stderr, elapsed) =
+		tauri::async_runtime::spawn_blocking(move || run_renderer_scene_cache_prewarm(&manifest_path, &progress_setting_id, &progress_app))
+			.await
+			.map_err(|e| format!("scene cache prewarm task failed: {e}"))??;
+	let stderr = stderr.as_str();
+	if success {
+		mark_scene_cache_prewarmed(Path::new(&setting.manifest_path), &setting.scene_cache_fingerprint)?;
 		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-		let detail = prewarm_renderer_scene_cache_detail(&stderr);
+		let detail = prewarm_renderer_scene_cache_detail(stderr);
 		let elapsed_secs = format!("{elapsed:.1}");
 		let message = detail
 			.as_ref()
@@ -7538,7 +7619,7 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		});
 	}
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-	let error_detail = prewarm_renderer_scene_cache_error_detail(&stderr).unwrap_or_else(|| "no stderr output".to_string());
+	let error_detail = prewarm_renderer_scene_cache_error_detail(stderr).unwrap_or_else(|| "no stderr output".to_string());
 	let elapsed_secs = format!("{elapsed:.1}");
 	let message = t!(
 		"notifications.cache.failed_body",
@@ -7554,6 +7635,50 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		message.clone(),
 	);
 	Err(message)
+}
+
+fn run_renderer_scene_cache_prewarm(manifest_path: &Path, setting_id: &str, app: &tauri::AppHandle) -> Result<(bool, String, f64), String> {
+	let started = Instant::now();
+	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
+	configure_cache_prewarm_child(&mut command);
+	let mut child = command
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
+	let stderr = child
+		.stderr
+		.take()
+		.ok_or_else(|| "scene cache prewarm stderr unavailable".to_string())?;
+	let mut captured = String::new();
+	for line in BufReader::new(stderr).lines() {
+		let line = line.map_err(|e| format!("scene cache prewarm stderr read failed: {e}"))?;
+		captured.push_str(&line);
+		captured.push('\n');
+		if let Some(progress) = scene_cache_prewarm_progress_from_line(setting_id, &line, started.elapsed().as_secs_f64()) {
+			let _ = app.emit("scene-cache-prewarm-progress", progress);
+		}
+	}
+	let status = child.wait().map_err(|e| format!("scene cache prewarm wait failed: {e}"))?;
+	Ok((status.success(), captured, started.elapsed().as_secs_f64()))
+}
+
+fn scene_cache_prewarm_progress_from_line(setting_id: &str, line: &str, elapsed_secs: f64) -> Option<SceneCachePrewarmProgress> {
+	let marker = "scene cache prewarm progress ";
+	let progress = line.split_once(marker)?.1;
+	let phase_start = progress.find("phase=")? + "phase=".len();
+	let (phase, rest) = progress[phase_start..].split_once(' ')?;
+	let (fraction, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+	let (current, total) = fraction.split_once('/')?;
+	Some(SceneCachePrewarmProgress {
+		setting_id: setting_id.to_string(),
+		phase: phase.to_string(),
+		current: current.parse().ok()?,
+		total: total.parse().ok()?,
+		detail: detail.trim().to_string(),
+		elapsed_secs,
+	})
 }
 
 fn prewarm_renderer_scene_cache_error_detail(stderr: &str) -> Option<String> {
@@ -11094,27 +11219,7 @@ fn scene_cache_manifest_fingerprint_for_path(manifest: &toml::Value, manifest_pa
 }
 
 fn scene_cache_manifest_fingerprint_inner(manifest: &toml::Value, manifest_path: Option<&Path>) -> String {
-	let mut normalized = manifest.clone();
-	if let Some(profile) = normalized
-		.as_table_mut()
-		.and_then(|table| table.get_mut("profile"))
-		.and_then(toml::Value::as_table_mut)
-	{
-		profile.remove("scene_cache");
-	}
-	if let Some(root) = normalized.as_table_mut() {
-		let runtime_empty = root
-			.get_mut("runtime")
-			.and_then(toml::Value::as_table_mut)
-			.map(|runtime| {
-				runtime.remove("target_fps");
-				runtime.is_empty()
-			})
-			.unwrap_or(false);
-		if runtime_empty {
-			root.remove("runtime");
-		}
-	}
+	let normalized = scene_cache_manifest_inputs(manifest);
 	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
 	let mut input = serialized.into_bytes();
 	input.extend_from_slice(b"\n# scene-cache-prewarm-schema\n");
@@ -11126,6 +11231,69 @@ fn scene_cache_manifest_fingerprint_inner(manifest: &toml::Value, manifest_path:
 		}
 	}
 	format!("{:016x}", fnv1a64(&input))
+}
+
+fn scene_cache_manifest_inputs(manifest: &toml::Value) -> toml::Value {
+	let Some(root) = manifest.as_table() else {
+		return toml::Value::Table(toml::map::Map::new());
+	};
+	let mut inputs = toml::map::Map::new();
+	copy_manifest_key(root, &mut inputs, "avatar_path");
+	copy_manifest_key(root, &mut inputs, "avatarPath");
+
+	copy_manifest_table_keys(
+		root,
+		&mut inputs,
+		"render_quality",
+		&[
+			"texture_resolution_limit",
+			"texture_compression",
+			"mipmap_filter",
+			"block_compression_encoder",
+			"processed_texture_cache",
+			"skin_tone_matching",
+			"texture_compression_advanced",
+		],
+	);
+	copy_manifest_table_keys(root, &mut inputs, "animator", &["action_ids", "actions"]);
+	copy_manifest_key(root, &mut inputs, "debug");
+
+	let auto_texture_limit = root
+		.get("render_quality")
+		.and_then(toml::Value::as_table)
+		.and_then(|quality| quality.get("texture_resolution_limit"))
+		.and_then(toml::Value::as_str)
+		.is_some_and(|value| value.eq_ignore_ascii_case("auto"));
+	if auto_texture_limit {
+		copy_manifest_table_keys(root, &mut inputs, "window", &["width", "height"]);
+		copy_manifest_table_keys(root, &mut inputs, "output", &["spout2"]);
+		copy_manifest_key(root, &mut inputs, "spout");
+	}
+	toml::Value::Table(inputs)
+}
+
+fn copy_manifest_key(source: &toml::map::Map<String, toml::Value>, target: &mut toml::map::Map<String, toml::Value>, key: &str) {
+	if let Some(value) = source.get(key) {
+		target.insert(key.to_string(), value.clone());
+	}
+}
+
+fn copy_manifest_table_keys(
+	source: &toml::map::Map<String, toml::Value>,
+	target: &mut toml::map::Map<String, toml::Value>,
+	table_key: &str,
+	keys: &[&str],
+) {
+	let Some(source_table) = source.get(table_key).and_then(toml::Value::as_table) else {
+		return;
+	};
+	let mut selected = toml::map::Map::new();
+	for key in keys {
+		copy_manifest_key(source_table, &mut selected, key);
+	}
+	if !selected.is_empty() {
+		target.insert(table_key.to_string(), toml::Value::Table(selected));
+	}
 }
 
 fn scene_cache_avatar_file_fingerprint(manifest: &toml::Value, manifest_path: &Path) -> Option<String> {
@@ -11198,6 +11366,13 @@ fn configure_hidden_child(command: &mut Command) {
 	#[cfg(windows)]
 	{
 		command.creation_flags(CREATE_NO_WINDOW);
+	}
+}
+
+fn configure_cache_prewarm_child(command: &mut Command) {
+	#[cfg(windows)]
+	{
+		command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
 	}
 }
 
@@ -16828,9 +17003,16 @@ display_name = "Mizuki"
 		);
 		assert!(
 			styles_css.contains(
-				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(86px, 1.1fr) minmax(64px, 0.8fr) minmax(104px, 1.25fr) minmax(64px, 0.8fr) 32px 32px;"
+				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(96px, 1fr) repeat(4, 32px);"
 			),
-			"profile stage action buttons should use stable slots instead of content-width flex sizing"
+			"profile stage action buttons should reserve stable launch and icon slots"
+		);
+		assert!(
+			styles_css.contains("@media (max-width: 960px) {")
+				&& styles_css
+					.contains(".profile-stage-title-row .profile-stage-action-buttons {\n\t\tdisplay: flex;\n\t\tflex-wrap: wrap;")
+				&& styles_css.contains(".profile-cache-callout {\n\t\tgrid-template-columns: minmax(0, 1fr) auto;"),
+			"narrow profile actions should keep the integrated cache control and wrap without clipping"
 		);
 		assert!(
 			styles_css.contains(".profile-pending-action-slot {\n\tdisplay: none;")
@@ -18532,6 +18714,45 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 	}
 
 	#[test]
+	fn scene_cache_prewarm_progress_parses_renderer_progress_line() {
+		let progress = crate::scene_cache_prewarm_progress_from_line(
+			"profile-1",
+			"un-avatar-renderer: scene cache prewarm progress phase=gpu-upload 115/515 Uploading cached source texture",
+			2.25,
+		)
+		.unwrap();
+		assert_eq!(progress.setting_id, "profile-1");
+		assert_eq!(progress.phase, "gpu-upload");
+		assert_eq!((progress.current, progress.total), (115, 515));
+		assert_eq!(progress.detail, "Uploading cached source texture");
+		assert_eq!(progress.elapsed_secs, 2.25);
+
+		let set_progress = crate::scene_cache_prewarm_progress_from_line(
+			"profile-1",
+			"un-avatar-renderer: scene cache prewarm progress set=wardrobe-1 phase=texture-cache 8/12 Preparing texture (12.0ms)",
+			3.0,
+		)
+		.unwrap();
+		assert_eq!(set_progress.phase, "texture-cache");
+		assert_eq!((set_progress.current, set_progress.total), (8, 12));
+	}
+
+	#[test]
+	fn clearing_cache_removes_prewarm_record_from_profile() {
+		let manifest_toml = r#"
+[profile.scene_cache]
+fingerprint = "abc"
+prewarmed_at = "20260711T120000Z"
+"#;
+		let mut manifest = toml::from_str::<toml::Value>(manifest_toml).unwrap();
+		assert!(crate::clear_scene_cache_prewarm_record(&mut manifest));
+		let scene_cache = manifest["profile"]["scene_cache"].as_table().unwrap();
+		assert!(!scene_cache.contains_key("fingerprint"));
+		assert!(!scene_cache.contains_key("prewarmed_at"));
+		assert!(!crate::clear_scene_cache_prewarm_record(&mut manifest));
+	}
+
+	#[test]
 	fn renderer_cache_directory_stats_count_nested_files() {
 		let root = std::env::temp_dir().join(format!("un-avatar-cache-stats-{}", std::process::id()));
 		let nested = root.join("nested");
@@ -18604,17 +18825,23 @@ target_fps = 300
 	}
 
 	#[test]
-	fn scene_cache_fingerprint_changes_with_output_mode() {
+	fn scene_cache_fingerprint_ignores_initial_wardrobe_and_runtime_only_settings() {
 		let window_preview: toml::Value = toml::from_str(
 			r#"
 title = "Main"
 avatar_path = "main.unavatar"
+wardrobe_set = "Base"
 
 [output.spout2]
 enabled = false
 
 [window]
 minimized = false
+x = 100
+y = 200
+
+[wardrobe]
+billboard_anchor = "head"
 "#,
 		)
 		.unwrap();
@@ -18622,19 +18849,90 @@ minimized = false
 			r#"
 title = "Main"
 avatar_path = "main.unavatar"
+wardrobe_set = "NoirLux"
 
 [output.spout2]
 enabled = true
 
 [window]
 minimized = true
+x = 900
+y = 700
+
+[wardrobe]
+billboard_anchor = "spine"
+"#,
+		)
+		.unwrap();
+
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&window_preview),
+			crate::scene_cache_manifest_fingerprint(&spout_only)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_changes_with_texture_processing_settings() {
+		let source: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "off"
+texture_compression = "source"
+"#,
+		)
+		.unwrap();
+		let compressed: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "4k"
+texture_compression = "balanced"
 "#,
 		)
 		.unwrap();
 
 		assert_ne!(
-			crate::scene_cache_manifest_fingerprint(&window_preview),
-			crate::scene_cache_manifest_fingerprint(&spout_only)
+			crate::scene_cache_manifest_fingerprint(&source),
+			crate::scene_cache_manifest_fingerprint(&compressed)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_tracks_output_size_only_for_auto_texture_limit() {
+		let window: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "auto"
+
+[window]
+width = 800
+height = 600
+"#,
+		)
+		.unwrap();
+		let spout: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "auto"
+
+[output.spout2]
+enabled = true
+width = 1920
+height = 1080
+"#,
+		)
+		.unwrap();
+
+		assert_ne!(
+			crate::scene_cache_manifest_fingerprint(&window),
+			crate::scene_cache_manifest_fingerprint(&spout)
 		);
 	}
 
