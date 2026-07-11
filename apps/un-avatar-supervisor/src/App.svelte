@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 	import { listen } from "@tauri-apps/api/event";
+	import { onMount } from "svelte";
 	import { _ } from "svelte-i18n";
 	import { setUiLocale } from "@usagi.network/un-i18n-svelte";
 	import ProfileAvatarSection from "./lib/ProfileAvatarSection.svelte";
@@ -3263,7 +3264,7 @@
 		traceFrontendEvent("activeTab:committed", { activeTab });
 	});
 
-	$effect(() => {
+	onMount(() => {
 		let cancelled = false;
 		void (async () => {
 			await loadBackendAppSettings();
@@ -3272,6 +3273,13 @@
 				await maybeAutoLaunchSelectedOnStartup();
 			}
 		})();
+		return () => {
+			cancelled = true;
+		};
+	});
+
+	$effect(() => {
+		let cancelled = false;
 		let timer: number | null = null;
 		const scheduleRuntimeRefresh = () => {
 			const interval =

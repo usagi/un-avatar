@@ -17104,6 +17104,32 @@ display_name = "Mizuki"
 	}
 
 	#[test]
+	fn static_supervisor_startup_is_separate_from_runtime_polling() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let startup = app_svelte
+			.split("onMount(() => {")
+			.nth(1)
+			.and_then(|rest| rest.split("\n\t$effect(() => {").next())
+			.expect("Supervisor startup onMount should exist");
+		assert!(
+			startup.contains("await loadBackendAppSettings();") && startup.contains("await refreshAll();"),
+			"Supervisor startup data load should run once from onMount"
+		);
+
+		let polling = app_svelte
+			.split("let timer: number | null = null;")
+			.nth(1)
+			.and_then(|rest| rest.split("\n\t$effect(() => {").next())
+			.expect("Supervisor runtime polling effect should exist");
+		assert!(polling.contains("scheduleRuntimeRefresh"));
+		assert!(
+			!polling.contains("refreshAll()") && !polling.contains("loadBackendAppSettings()"),
+			"reactive runtime polling must not repeat Supervisor startup initialization"
+		);
+	}
+
+	#[test]
 	fn static_unavatar_review_workflow_keeps_selected_wardrobe_and_icon_save_order() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");
