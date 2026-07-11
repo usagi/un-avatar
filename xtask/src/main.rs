@@ -4855,8 +4855,9 @@ fn verify_manual_release_checklist_candidate(
 		"`cargo xtask ci` result: passed".to_string(),
 		format!("`cargo xtask release-audit --version <version>` result: passed for `{version}`"),
 		"`release-audit` confirms release notes hashes: yes".to_string(),
-		"`cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
-		"`cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
+		"`cargo xtask package-render-smoke` result: passed".to_string(),
+		"`package-render-smoke` representative wardrobe `field_drape`: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
+		"`package-render-smoke` representative wardrobe `noble1`: passed; missing counts `0`, scoped missing groups `[]`".to_string(),
 	];
 	let missing = required_lines
 		.iter()
@@ -7548,8 +7549,9 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 			 - `cargo xtask ci` result: passed\n\
 			 - `cargo xtask release-audit --version <version>` result: passed for `2.0.0-beta-2`\n\
 			 - `release-audit` confirms release notes hashes: yes\n\
-			 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set field_drape` result: passed; missing counts `0`, scoped missing groups `[]`\n\
-			 - `cargo xtask package-render-smoke --manifest target/tmp/mizuki-split-data-bc7-unorm.toml --wardrobe-set noble1` result: passed; missing counts `0`, scoped missing groups `[]`\n",
+			 - `cargo xtask package-render-smoke` result: passed\n\
+			 - `package-render-smoke` representative wardrobe `field_drape`: passed; missing counts `0`, scoped missing groups `[]`\n\
+			 - `package-render-smoke` representative wardrobe `noble1`: passed; missing counts `0`, scoped missing groups `[]`\n",
 		)
 		.expect("write checklist");
 

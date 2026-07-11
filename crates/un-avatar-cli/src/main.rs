@@ -13480,9 +13480,9 @@ mod tests {
 		assert_eq!(report.enabled_group_count, 2);
 		assert_eq!(report.chain_joint_count, 4);
 		assert_eq!(report.response_group_count, 2);
-		assert_eq!(report.source_angle_limit_group_count, 2);
-		assert_eq!(report.active_angle_limit_group_count, 2);
-		assert_eq!(report.hard_angle_constraint_group_count, 1);
+		assert_eq!(report.source_angle_limit_group_count, 1);
+		assert_eq!(report.active_angle_limit_group_count, 1);
+		assert_eq!(report.hard_angle_constraint_group_count, 0);
 		assert_eq!(report.cloth_angle_limit_metadata_only_count, 1);
 		assert_eq!(report.node_constraint_count, 0);
 		assert_eq!(report.parent_node_constraint_count, 0);
@@ -15772,12 +15772,12 @@ mod tests {
 					local_bounds: None,
 				}],
 				meshes: vec![vec![
-					primitive(Some(vec![[600, 0, 0, 0]]), Some(vec![[1.0, 0.0, 0.0, 0.0]])),
+					primitive(Some(vec![[1200, 0, 0, 0]]), Some(vec![[1.0, 0.0, 0.0, 0.0]])),
 					primitive(Some(vec![[0, 0, 0, 0]]), None),
 				]],
 				skins: vec![un_avatar_core::UnaSkin {
-					joint_nodes: (0..513).collect(),
-					inverse_bind_matrices: vec![[0.0; 16]; 513],
+					joint_nodes: (0..1025).collect(),
+					inverse_bind_matrices: vec![[0.0; 16]; 1025],
 					skeleton_node: Some(0),
 				}],
 				..Default::default()
@@ -15801,9 +15801,9 @@ mod tests {
 		);
 
 		let skin = &report.scene.skins[0];
-		assert_eq!(skin.effective_joint_count, 513);
+		assert_eq!(skin.effective_joint_count, 1025);
 		assert!(skin.over_renderer_bone_limit);
-		assert_eq!(skin.max_joint_index, Some(600));
+		assert_eq!(skin.max_joint_index, Some(1200));
 		assert_eq!(skin.mismatched_joint_weight_attribute_count, 1);
 		assert_eq!(skin.out_of_range_joint_attribute_count, 1);
 		assert!(report.warnings.iter().any(|w| w.contains("renderer bone palette limit")));

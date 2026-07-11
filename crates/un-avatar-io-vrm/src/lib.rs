@@ -2397,6 +2397,7 @@ mod tests {
 				UnaMorphTargetDeltas {
 					position_deltas: vec![],
 					normal_deltas: None,
+					tangent_deltas: None,
 				};
 				4
 			],
@@ -2460,6 +2461,7 @@ mod tests {
 				UnaMorphTargetDeltas {
 					position_deltas: vec![],
 					normal_deltas: None,
+					tangent_deltas: None,
 				};
 				n
 			],
