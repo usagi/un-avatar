@@ -5518,7 +5518,7 @@ fn storage_bind_group_layout_entry(binding: u32, visibility: wgpu::ShaderStages,
 
 fn mesh_material_layout_entries(variant_tier: MeshShaderVariantTier) -> Vec<wgpu::BindGroupLayoutEntry> {
 	let mut entries = vec![
-		uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX),
+		uniform_bind_group_layout_entry(0, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 		texture_bind_group_layout_entry(1, wgpu::ShaderStages::FRAGMENT),
 		sampler_bind_group_layout_entry(2, wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT),
 		texture_bind_group_layout_entry(3, wgpu::ShaderStages::FRAGMENT),
@@ -7687,7 +7687,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 1.0]);
 	let shadow_ao_params = liltoon_like
-		.map(|u| [u.shadow.post_ao_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.map(|u| {
+			[
+				u.shadow.post_ao_factor.clamp(0.0, 1.0),
+				u.shadow.mask_type.min(2) as f32,
+				u.shadow.flat_border_factor,
+				u.shadow.flat_blur_factor.max(0.000001),
+			]
+		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let shadow_ao_shift = liltoon_like.map(|u| u.shadow.ao_shift_factor).unwrap_or([1.0, 0.0, 1.0, 0.0]);
 	let shadow_ao_shift2 = liltoon_like.map(|u| u.shadow.ao_shift2_factor).unwrap_or([1.0, 0.0, 0.0, 0.0]);
@@ -8061,7 +8068,14 @@ fn mesh_draw_material_gpu_with_profiles(
 		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let material_ext_params = liltoon_like
-		.map(|u| [u.flip_backface_normal_factor.clamp(0.0, 1.0), 0.0, 0.0, 0.0])
+		.map(|u| {
+			[
+				u.flip_backface_normal_factor.clamp(0.0, 1.0),
+				u.shadow.backface_force_shadow_factor.clamp(0.0, 1.0),
+				0.0,
+				0.0,
+			]
+		})
 		.unwrap_or([0.0, 0.0, 0.0, 0.0]);
 	let light_direction_override = liltoon_like
 		.map(|u| u.rendering.light_direction_override_factor)
@@ -17280,6 +17294,7 @@ mod tests {
 	fn liltoon_flip_backface_normal_reaches_draw_uniform() {
 		let mut liltoon_like = un_avatar_core::UnaLilToonLikeMaterial::default();
 		liltoon_like.flip_backface_normal_factor = 1.0;
+		liltoon_like.shadow.backface_force_shadow_factor = 0.62;
 		let mat = UnaMaterialPbr {
 			liltoon_like: Some(liltoon_like),
 			..Default::default()
@@ -17287,7 +17302,7 @@ mod tests {
 
 		let draw = mesh_draw_material_gpu(&mat, &SceneMeshLoadOpts::default(), 0, 0);
 
-		assert_eq!(draw.material_ext_params, [1.0, 0.0, 0.0, 0.0]);
+		assert_eq!(draw.material_ext_params, [1.0, 0.62, 0.0, 0.0]);
 	}
 
 	#[test]
@@ -17347,6 +17362,9 @@ mod tests {
 		liltoon_like.shadow.enabled_factor = 0.0;
 		liltoon_like.shadow.strength_factor = 1.0;
 		liltoon_like.shadow.post_ao_factor = 1.0;
+		liltoon_like.shadow.mask_type = 2;
+		liltoon_like.shadow.flat_border_factor = 0.9;
+		liltoon_like.shadow.flat_blur_factor = 0.02;
 		liltoon_like.shadow.ao_shift_factor = [3.0, 0.1, 2.0, 0.2];
 		liltoon_like.shadow.ao_shift2_factor = [1.5, 0.3, 0.0, 0.0];
 		let mat = UnaMaterialPbr {
@@ -17358,7 +17376,7 @@ mod tests {
 
 		assert_eq!(draw.shadow_params[0], 0.0);
 		assert_eq!(draw.shadow_params[1], 0.0);
-		assert_eq!(draw.shadow_ao_params, [1.0, 0.0, 0.0, 0.0]);
+		assert_eq!(draw.shadow_ao_params, [1.0, 2.0, 0.9, 0.02]);
 		assert_eq!(draw.shadow_ao_shift, [3.0, 0.1, 2.0, 0.2]);
 		assert_eq!(draw.shadow_ao_shift2, [1.5, 0.3, 0.0, 0.0]);
 	}

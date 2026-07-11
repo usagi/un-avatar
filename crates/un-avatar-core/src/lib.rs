@@ -5031,6 +5031,14 @@ pub struct UnaLilToonLikeShadow {
 	pub border_color_factor: [f32; 3],
 	#[serde(default)]
 	pub post_ao_factor: f32,
+	#[serde(default)]
+	pub backface_force_shadow_factor: f32,
+	#[serde(default)]
+	pub mask_type: u32,
+	#[serde(default = "one_f32")]
+	pub flat_border_factor: f32,
+	#[serde(default = "one_f32")]
+	pub flat_blur_factor: f32,
 	#[serde(default = "default_liltoon_shadow_ao_shift")]
 	pub ao_shift_factor: [f32; 4],
 	#[serde(default = "default_liltoon_shadow_ao_shift2")]
@@ -5932,6 +5940,10 @@ impl Default for UnaLilToonLikeShadow {
 			env_strength_factor: default_liltoon_shadow_env_strength(),
 			border_color_factor: default_liltoon_shadow_border_color(),
 			post_ao_factor: 0.0,
+			backface_force_shadow_factor: 0.0,
+			mask_type: 0,
+			flat_border_factor: 1.0,
+			flat_blur_factor: 1.0,
 			ao_shift_factor: default_liltoon_shadow_ao_shift(),
 			ao_shift2_factor: default_liltoon_shadow_ao_shift2(),
 			normal_strength_factor: 1.0,

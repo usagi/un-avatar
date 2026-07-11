@@ -10096,6 +10096,18 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 	if let Some(value) = unavatar_material_float_param(extras, "_ShadowPostAO") {
 		out.shadow.post_ao_factor = value.clamp(0.0, 1.0);
 	}
+	if let Some(value) = unavatar_material_float_param(extras, "_BackfaceForceShadow") {
+		out.shadow.backface_force_shadow_factor = value.clamp(0.0, 1.0);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ShadowMaskType") {
+		out.shadow.mask_type = float_to_u32_saturating(value).min(2);
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ShadowFlatBorder") {
+		out.shadow.flat_border_factor = value;
+	}
+	if let Some(value) = unavatar_material_float_param(extras, "_ShadowFlatBlur") {
+		out.shadow.flat_blur_factor = value.max(0.000001);
+	}
 	if let Some(value) = unavatar_material_vector_param(extras, "_ShadowAOShift") {
 		out.shadow.ao_shift_factor = value;
 	}
@@ -10146,13 +10158,19 @@ fn unavatar_liltoon_like_from_extras(extras: &Value) -> Option<UnaLilToonLikeMat
 		.or_else(|| unavatar_material_float_param(extras, "_UseMatCap"))
 		.unwrap_or_else(|| if untoon_matcap_texture_index.is_some() { 1.0 } else { 0.0 })
 		.clamp(0.0, 1.0);
+	let source_matcap_color = unavatar_material_color_param_rgba(extras, "_MatCapColor");
 	if let Some(value) = untoon
 		.and_then(|m| json_vec3(m.get("matcapFactor").or_else(|| m.get("matcap_factor"))))
-		.map(|value| [value[0], value[1], value[2], 1.0])
-		.or_else(|| unavatar_material_color_param_rgba(extras, "_MatCapColor"))
+		.map(|value| [value[0], value[1], value[2]])
+		.or_else(|| source_matcap_color.map(|value| [value[0], value[1], value[2]]))
 	{
-		out.matcap.color_factor = [value[0], value[1], value[2]];
-		out.matcap.color_alpha_factor = value[3].clamp(0.0, 1.0);
+		out.matcap.color_factor = value;
+	}
+	if let Some(value) = untoon
+		.and_then(|m| json_f32(m.get("matcapColorAlphaFactor").or_else(|| m.get("matcap_color_alpha_factor"))))
+		.or_else(|| source_matcap_color.map(|value| value[3]))
+	{
+		out.matcap.color_alpha_factor = value.clamp(0.0, 1.0);
 	}
 	if let Some(value) = unavatar_material_texture_param_index(extras, "_MatCapTex")
 		.or_else(|| unavatar_material_texture_param_index(extras, "_MatcapTex"))
@@ -16855,6 +16873,10 @@ mod tests {
 					"_ShadowMainStrength": 0.35,
 					"_ShadowEnvStrength": 0.45,
 					"_ShadowPostAO": 1.0,
+					"_BackfaceForceShadow": 0.62,
+					"_ShadowMaskType": 2.0,
+					"_ShadowFlatBorder": 0.9,
+					"_ShadowFlatBlur": 0.02,
 					"_ShadowNormalStrength": 0.55,
 					"_ShadowReceive": 0.65,
 					"_Shadow2ndBorder": 0.31,
@@ -17321,6 +17343,10 @@ mod tests {
 		assert_eq!(liltoon_like.shadow.env_strength_factor, 0.45);
 		assert_eq!(liltoon_like.shadow.border_color_factor, [0.2, 0.3, 0.4]);
 		assert_eq!(liltoon_like.shadow.post_ao_factor, 1.0);
+		assert_eq!(liltoon_like.shadow.backface_force_shadow_factor, 0.62);
+		assert_eq!(liltoon_like.shadow.mask_type, 2);
+		assert_eq!(liltoon_like.shadow.flat_border_factor, 0.9);
+		assert_eq!(liltoon_like.shadow.flat_blur_factor, 0.02);
 		assert_eq!(liltoon_like.shadow.ao_shift_factor, [3.0, 0.1, 2.0, 0.2]);
 		assert_eq!(liltoon_like.shadow.ao_shift2_factor, [1.5, 0.3, 0.0, 0.0]);
 		assert_eq!(liltoon_like.shadow.normal_strength_factor, 0.55);
@@ -17578,7 +17604,8 @@ mod tests {
 			"unMaterialModel": "UNToon",
 			"colorParams": {
 				"_ShadeColor": [0.7, 0.8, 0.9, 1.0],
-				"_ShadowColor": [0.6, 0.5, 0.4, 1.0]
+				"_ShadowColor": [0.6, 0.5, 0.4, 1.0],
+				"_MatCapColor": [0.9, 0.8, 0.7, 0.65]
 			},
 			"untoon": {
 				"shadeColorFactor": [0.2, 0.3, 0.4],
@@ -17617,6 +17644,7 @@ mod tests {
 		assert_eq!(liltoon_like.matcap.texture_index, Some(9));
 		assert_eq!(liltoon_like.matcap.enabled_factor, 1.0);
 		assert_eq!(liltoon_like.matcap.color_factor, [0.25, 0.5, 0.75]);
+		assert_eq!(liltoon_like.matcap.color_alpha_factor, 0.65);
 		assert_eq!(liltoon_like.matcap.main_strength_factor, 0.6);
 		assert_eq!(liltoon_like.matcap.blend_factor, 0.7);
 		assert_eq!(liltoon_like.matcap.enable_lighting_factor, 0.8);
@@ -17634,6 +17662,24 @@ mod tests {
 		assert_eq!(liltoon_like.rendering.vertex_light_strength_factor, 0.4);
 		assert_eq!(liltoon_like.rendering.aa_strength_factor, 1.5);
 		assert_eq!(liltoon_like.rendering.gsaa_strength_factor, 0.6);
+	}
+
+	#[test]
+	fn untoon_matcap_explicit_alpha_takes_precedence_over_legacy_source_color() {
+		let extras = serde_json::json!({
+			"sourceShader": "lilToon",
+			"colorParams": {
+				"_MatCapColor": [0.9, 0.8, 0.7, 0.65]
+			},
+			"untoon": {
+				"matcapFactor": [0.25, 0.5, 0.75],
+				"matcapColorAlphaFactor": 0.4
+			}
+		});
+
+		let liltoon_like = unavatar_liltoon_like_from_extras(&extras).expect("lilToon material");
+		assert_eq!(liltoon_like.matcap.color_factor, [0.25, 0.5, 0.75]);
+		assert_eq!(liltoon_like.matcap.color_alpha_factor, 0.4);
 	}
 
 	#[test]
