@@ -3,6 +3,25 @@ import { invoke } from "@tauri-apps/api/core";
 let seq = 0;
 let lastTick = typeof performance === "undefined" ? 0 : performance.now();
 const slowTraceThresholdMs = 150;
+const traceRingCapacity = 256;
+const traceRing: string[] = [];
+
+function keepTrace(payload: string): void {
+	traceRing.push(payload);
+	if (traceRing.length > traceRingCapacity) traceRing.splice(0, traceRing.length - traceRingCapacity);
+	if (typeof window !== "undefined") {
+		(window as unknown as { __unAvatarTrace?: readonly string[] }).__unAvatarTrace = traceRing;
+	}
+}
+
+function shouldPersistTrace(name: string, detail: Record<string, unknown>): boolean {
+	return (
+		name.endsWith(":error") ||
+		name === "event-loop-lag" ||
+		name === "native-startup-timing" ||
+		(typeof detail.elapsedMs === "number" && detail.elapsedMs >= slowTraceThresholdMs)
+	);
+}
 
 function targetSummary(target: EventTarget | null): string {
 	if (!(target instanceof HTMLElement)) return "";
@@ -20,7 +39,10 @@ export function traceFrontendEvent(name: string, detail: Record<string, unknown>
 	if (!("__TAURI_INTERNALS__" in window)) return;
 	const at = typeof performance === "undefined" ? 0 : Math.round(performance.now());
 	const payload = JSON.stringify({ seq: ++seq, at, name, ...detail });
-	void invoke("log_frontend_error", { message: `trace: ${payload}` }).catch(() => undefined);
+	keepTrace(payload);
+	if (shouldPersistTrace(name, detail)) {
+		void invoke("log_frontend_error", { message: `trace: ${payload}` }).catch(() => undefined);
+	}
 }
 
 export async function traceAsync<T>(name: string, run: () => Promise<T>, detail: Record<string, unknown> = {}): Promise<T> {

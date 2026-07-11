@@ -264,6 +264,7 @@
 	let rendererPaneTab = $state<RendererPaneTab>("overview");
 	let showStoppedRenderers = $state(false);
 	let selectedSettingId = $state<string | null>(null);
+	let loadedProfileDetailKey = $state("");
 	let draggedSettingId = $state<string | null>(null);
 	let profileHint = $state("");
 	let settingsHint = $state("");
@@ -325,6 +326,7 @@
 	const deleteHoldDurationMs = 1200;
 	const runtimeRefreshIntervalMs = 250;
 	const wardrobeTransitionRuntimeRefreshIntervalMs = 1000;
+	const idleRuntimeRefreshIntervalMs = 2000;
 	const profileSettingUpdateCoalesceMs = 80;
 	const motionLookAtFields = ["motion.look_at.enabled", "motion.look_at.clamp_deg"] as const;
 	const motionReceiverFields = [
@@ -822,6 +824,22 @@
 		launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, next);
 	}
 
+	async function loadSelectedProfileDetails(setting: AvatarSetting): Promise<void> {
+		if (!hasTauriRuntime()) return;
+		const key = `${setting.id}\n${setting.manifest_path}`;
+		if (loadedProfileDetailKey === key) return;
+		loadedProfileDetailKey = key;
+		try {
+			const detailed = await invoke<AvatarSetting>("get_avatar_setting_details", { settingId: setting.id });
+			if (selectedSetting?.id === setting.id && selectedSetting.manifest_path === setting.manifest_path) {
+				replaceAvatarSetting(detailed, false);
+			}
+		} catch (error) {
+			if (loadedProfileDetailKey === key) loadedProfileDetailKey = "";
+			message = String(error);
+		}
+	}
+
 	function bumpProfileIconRevision(path: string | null): void {
 		if (!path) return;
 		profileIconRevision = {
@@ -1312,6 +1330,7 @@
 				),
 			]);
 			renderers = instances;
+			loadedProfileDetailKey = "";
 			avatarSettings = settings;
 			await refreshRendererRuntimeStatuses(instances);
 			void refreshRendererCacheStatus();
@@ -3255,7 +3274,12 @@
 		})();
 		let timer: number | null = null;
 		const scheduleRuntimeRefresh = () => {
-			const interval = wardrobeTransitionTelemetryActive ? wardrobeTransitionRuntimeRefreshIntervalMs : runtimeRefreshIntervalMs;
+			const interval =
+				visibleRenderers.length === 0
+					? idleRuntimeRefreshIntervalMs
+					: wardrobeTransitionTelemetryActive
+						? wardrobeTransitionRuntimeRefreshIntervalMs
+						: runtimeRefreshIntervalMs;
 			timer = window.setTimeout(() => {
 				if (activeTab === "renderers" || activeTab === "settings") {
 					refreshRendererRuntimeView();
@@ -3349,6 +3373,10 @@
 
 	$effect(() => {
 		void refreshWardrobeOptionsForSetting(selectedSetting);
+	});
+
+	$effect(() => {
+		if (selectedSetting) void loadSelectedProfileDetails(selectedSetting);
 	});
 
 	/// selectedSettingId が変わるたびに Tauri 側へ保存し、次回起動時に復元できるようにする。

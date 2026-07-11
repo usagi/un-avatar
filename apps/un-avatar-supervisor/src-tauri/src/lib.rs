@@ -65,6 +65,8 @@ type DynamicsAuthoredParamsByCategory = BTreeMap<String, DynamicsCategoryAuthore
 type DynamicsAuthoredParamsCache = BTreeMap<String, DynamicsAuthoredParamsByCategory>;
 
 static DYNAMICS_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<DynamicsAuthoredParamsCache>> = OnceLock::new();
+type AvatarSettingCache = BTreeMap<String, (u64, u128, AvatarSetting)>;
+static AVATAR_SETTING_CACHE: OnceLock<Mutex<AvatarSettingCache>> = OnceLock::new();
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
@@ -77,6 +79,23 @@ struct SupervisorState {
 	next_notification_id: u32,
 	renderers: BTreeMap<u32, ManagedRenderer>,
 	notifications: Vec<AppNotification>,
+}
+
+struct StartupTimingState {
+	started: Instant,
+	entries: Vec<StartupTimingEntry>,
+}
+
+#[derive(Clone, Serialize)]
+struct StartupTimingEntry {
+	phase: String,
+	elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+struct StartupTimingSnapshot {
+	entries: Vec<StartupTimingEntry>,
+	total_ms: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -2787,6 +2806,11 @@ fn animator_action_mode_is_enabled(mode: &str) -> bool {
 }
 
 pub fn run() {
+	let startup_started = Instant::now();
+	let mut startup_entries = vec![StartupTimingEntry {
+		phase: "process-start".to_string(),
+		elapsed_ms: 0,
+	}];
 	if let Err(error) = set_process_app_user_model_id() {
 		eprintln!("un-avatar-supervisor: set AppUserModelID failed: {error}");
 	}
@@ -2795,10 +2819,12 @@ pub fn run() {
 		Ok(false) => {}
 		Err(error) => eprintln!("un-avatar-supervisor: startup proxy command failed: {error}"),
 	}
+	record_startup_timing(&mut startup_entries, startup_started, "startup-proxy-checked");
 	// Phase E settings policy (decision 1+2): user dir が空のとき限定で
 	// bundled テンプレートをコピーする。app builder 構築前 (Tauri 依存無し)
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
 	ensure_user_profiles_seeded();
+	record_startup_timing(&mut startup_entries, startup_started, "profiles-seeded");
 	let mut initial_settings = load_app_settings();
 	if prune_pinned_taskbar_profile_ids(&mut initial_settings).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: failed to prune taskbar profile pins: {error}");
@@ -2808,9 +2834,7 @@ pub fn run() {
 			eprintln!("un-avatar-supervisor: failed to save pruned taskbar profile pins: {error}");
 		}
 	}
-	if let Err(error) = update_taskbar_launcher_profile_tasks(&initial_settings) {
-		eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
-	}
+	record_startup_timing(&mut startup_entries, startup_started, "settings-ready");
 	let startup_open_profile_manifest = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
 		None
@@ -2830,6 +2854,7 @@ pub fn run() {
 		initial_settings.locale = resolved;
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
+	record_startup_timing(&mut startup_entries, startup_started, "tauri-build-start");
 	tauri::Builder::default()
 		.plugin(tauri_plugin_single_instance::init(
 			|app, args, _cwd| match startup_proxy_manifest_arg(args.clone()).and_then(|manifest_path| {
@@ -2856,21 +2881,29 @@ pub fn run() {
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))
 		.manage(Mutex::new(initial_settings.clone()))
+		.manage(Mutex::new(StartupTimingState {
+			started: startup_started,
+			entries: startup_entries,
+		}))
 		.setup(move |app| {
+			record_startup_timing_state(app.handle(), "tauri-setup-enter");
 			prewarm_runtime_control_session();
-			if initial_settings.system_tray_enabled {
-				setup_tray(app.handle())?;
-			}
 			if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
 				if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
 					let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
 				}
 			}
 			let window = setup_main_window(app)?;
+			record_startup_timing_state(app.handle(), "main-window-created");
+			refresh_taskbar_launcher_profile_tasks_in_background(initial_settings.clone());
 			if initial_settings.system_tray_enabled && initial_settings.start_minimized_to_tray {
 				let _ = window.hide();
 			}
 			attach_hide_on_close(window, app.handle().clone());
+			if initial_settings.system_tray_enabled {
+				setup_tray_after_window_ready(app.handle().clone());
+			}
+			record_startup_timing_state(app.handle(), "tauri-setup-ready");
 			Ok(())
 		})
 		.invoke_handler(tauri::generate_handler![
@@ -2883,6 +2916,8 @@ pub fn run() {
 			delete_avatar_setting,
 			export_diagnostics,
 			get_app_settings,
+			get_avatar_setting_details,
+			get_startup_timing,
 			get_renderer_cache_status,
 			get_renderer_runtime_status,
 			get_native_notification_status,
@@ -2961,6 +2996,57 @@ pub fn run() {
 		])
 		.run(tauri::generate_context!())
 		.expect("error while running UN Avatar Supervisor");
+}
+
+fn record_startup_timing(entries: &mut Vec<StartupTimingEntry>, started: Instant, phase: &str) {
+	entries.push(StartupTimingEntry {
+		phase: phase.to_string(),
+		elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+	});
+}
+
+fn record_startup_timing_state(app: &tauri::AppHandle, phase: &str) {
+	let Some(state) = app.try_state::<Mutex<StartupTimingState>>() else {
+		return;
+	};
+	if let Ok(mut state) = state.lock() {
+		let started = state.started;
+		record_startup_timing(&mut state.entries, started, phase);
+	};
+}
+
+#[tauri::command]
+fn get_startup_timing(state: State<'_, Mutex<StartupTimingState>>) -> Result<StartupTimingSnapshot, String> {
+	let state = state.lock().map_err(|_| "startup timing state poisoned".to_string())?;
+	Ok(StartupTimingSnapshot {
+		entries: state.entries.clone(),
+		total_ms: state.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+	})
+}
+
+fn refresh_taskbar_launcher_profile_tasks_in_background(settings: AppRuntimeSettings) {
+	let _ = std::thread::Builder::new()
+		.name("un-avatar-taskbar-refresh".to_string())
+		.spawn(move || {
+			std::thread::sleep(Duration::from_secs(1));
+			if let Err(error) = update_taskbar_launcher_profile_tasks(&settings) {
+				eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
+			}
+		});
+}
+
+fn setup_tray_after_window_ready(app: tauri::AppHandle) {
+	let _ = std::thread::Builder::new().name("un-avatar-tray-setup".to_string()).spawn(move || {
+		std::thread::sleep(Duration::from_millis(250));
+		let app_for_setup = app.clone();
+		if let Err(error) = app.run_on_main_thread(move || {
+			if let Err(error) = setup_tray(&app_for_setup) {
+				eprintln!("un-avatar-supervisor: delayed tray setup failed: {error}");
+			}
+		}) {
+			eprintln!("un-avatar-supervisor: schedule delayed tray setup failed: {error}");
+		}
+	});
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -3263,7 +3349,7 @@ fn list_avatar_settings() -> Result<Vec<AvatarSetting>, String> {
 			if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
 				continue;
 			}
-			if let Ok(setting) = read_avatar_setting(&path, storage) {
+			if let Ok(setting) = read_avatar_setting_summary(&path, storage) {
 				if storage == ProfileStorage::Seed && hidden_seed_ids.iter().any(|id| id == &setting.id) {
 					continue;
 				}
@@ -3280,6 +3366,12 @@ fn list_avatar_settings() -> Result<Vec<AvatarSetting>, String> {
 			.then(a.id.cmp(&b.id))
 	});
 	Ok(settings)
+}
+
+#[tauri::command]
+fn get_avatar_setting_details(setting_id: String) -> Result<AvatarSetting, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	read_avatar_setting(Path::new(&setting.manifest_path), setting.storage)
 }
 
 fn tray_launch_settings() -> Result<Vec<AvatarSetting>, String> {
@@ -7515,15 +7607,6 @@ fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Resul
 	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
 	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
 	let launcher_path = start_menu_dir.join("UN Avatar.lnk");
-	create_windows_shortcut(
-		&launcher_path,
-		&supervisor_exe,
-		"",
-		&supervisor_working_dir,
-		Some(&supervisor_exe),
-		Some(UN_AVATAR_LAUNCHER_APP_ID),
-	)?;
-	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
 	let visible_settings = list_avatar_settings()?;
 	let pinned_ids = settings
 		.pinned_taskbar_profile_ids
@@ -7535,8 +7618,53 @@ fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Resul
 		.filter(|setting| pinned_ids.contains(setting.id.as_str()))
 		.cloned()
 		.collect::<Vec<_>>();
+	let fingerprint = taskbar_launcher_profile_fingerprint(&supervisor_exe, &visible_settings, &pinned_settings);
+	let fingerprint_path = app_config_dir().join("taskbar-launcher.fingerprint");
+	if launcher_path.is_file() && fs::read_to_string(&fingerprint_path).ok().as_deref() == Some(fingerprint.as_str()) {
+		return Ok(start_menu_dir.display().to_string());
+	}
+	create_windows_shortcut(
+		&launcher_path,
+		&supervisor_exe,
+		"",
+		&supervisor_working_dir,
+		Some(&supervisor_exe),
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
+	)?;
+	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
 	update_windows_jump_lists(&supervisor_exe, &supervisor_working_dir, &visible_settings, &pinned_settings)?;
+	fs::write(&fingerprint_path, &fingerprint).map_err(|e| format!("write {}: {e}", fingerprint_path.display()))?;
 	Ok(start_menu_dir.display().to_string())
+}
+
+fn taskbar_launcher_profile_fingerprint(
+	supervisor_exe: &Path,
+	visible_settings: &[AvatarSetting],
+	pinned_settings: &[AvatarSetting],
+) -> String {
+	let mut input = format!("version={}\nexe={}\n", env!("CARGO_PKG_VERSION"), supervisor_exe.display());
+	if let Ok(metadata) = fs::metadata(supervisor_exe) {
+		let modified = metadata
+			.modified()
+			.ok()
+			.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+			.map(|duration| duration.as_nanos())
+			.unwrap_or_default();
+		input.push_str(&format!("exe_size={}\nexe_modified={}\n", metadata.len(), modified));
+	}
+	for setting in visible_settings {
+		input.push_str(&format!(
+			"profile={}\t{}\t{}\t{}\n",
+			setting.id,
+			setting.name,
+			setting.manifest_path,
+			setting.icon_path.as_deref().unwrap_or_default()
+		));
+	}
+	for setting in pinned_settings {
+		input.push_str(&format!("pinned={}\n", setting.id));
+	}
+	format!("{:016x}", fnv1a64(input.as_bytes()))
 }
 
 fn remove_legacy_profile_launcher_shortcuts(start_menu_dir: &Path) {
@@ -10204,6 +10332,37 @@ fn refresh_renderer_stderr(renderer: &mut ManagedRenderer) {
 }
 
 fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
+	read_avatar_setting_inner(path, storage, true)
+}
+
+fn read_avatar_setting_summary(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
+	read_avatar_setting_inner(path, storage, false)
+}
+
+fn read_avatar_setting_inner(path: &Path, storage: ProfileStorage, include_model_metadata: bool) -> Result<AvatarSetting, String> {
+	let metadata = fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+	let modified_nanos = metadata
+		.modified()
+		.ok()
+		.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+		.map(|duration| duration.as_nanos())
+		.unwrap_or_default();
+	let cache_key = format!(
+		"{}|{:?}|{}",
+		manifest_path_key(&path.display().to_string()),
+		storage,
+		if include_model_metadata { "detail" } else { "summary" }
+	);
+	if let Some(cached) = AVATAR_SETTING_CACHE
+		.get_or_init(|| Mutex::new(BTreeMap::new()))
+		.lock()
+		.ok()
+		.and_then(|cache| cache.get(&cache_key).cloned())
+		.filter(|(size, modified, _)| *size == metadata.len() && *modified == modified_nanos)
+		.map(|(_, _, setting)| setting)
+	{
+		return Ok(cached);
+	}
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let manifest_value: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let scene_cache_fingerprint = scene_cache_manifest_fingerprint_for_path(&manifest_value, path);
@@ -10235,12 +10394,16 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let color_adjustment = color_adjustment_settings(environment.color.unwrap_or_default());
 	let lighting = lighting_settings(environment.lighting.unwrap_or_default());
 	let debug = debug_settings(manifest.debug.as_ref());
-	let physics = physics_settings(manifest.physics.as_ref(), avatar_path_for_dynamics.as_ref(), path);
+	let physics = physics_settings(
+		manifest.physics.as_ref(),
+		include_model_metadata.then_some(avatar_path_for_dynamics.as_ref()).flatten(),
+		path,
+	);
 	let effects = manifest.effects.unwrap_or_default();
 	let avatar_effects = avatar_effect_settings(effects.avatar);
 	let post_effects = post_effect_settings(effects.post);
 	let camera = camera_settings(manifest.camera.as_ref());
-	Ok(AvatarSetting {
+	let setting = AvatarSetting {
 		id: profile.id.unwrap_or_else(|| path.display().to_string()),
 		name: profile.display_name.or(manifest.title).unwrap_or_else(|| file_stem.to_string()),
 		created_at: normalize_created_at(profile.created_at.as_deref().unwrap_or_default(), path),
@@ -10397,7 +10560,11 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		scene_cache_fingerprint,
 		scene_cache_prewarmed_fingerprint: scene_cache.and_then(|cache| cache.fingerprint.clone()),
 		scene_cache_prewarmed_at: scene_cache.and_then(|cache| cache.prewarmed_at.clone()),
-	})
+	};
+	if let Ok(mut cache) = AVATAR_SETTING_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+		cache.insert(cache_key, (metadata.len(), modified_nanos, setting.clone()));
+	}
+	Ok(setting)
 }
 
 fn resolve_avatar_setting(setting_id: &str) -> Result<AvatarSetting, String> {
@@ -12076,43 +12243,178 @@ fn model_dynamics_category_authored_params(avatar_path: &Path, manifest_path: &P
 	{
 		return Some(cached);
 	}
-	let result = if ext.eq_ignore_ascii_case("unavatar") {
-		let mut ctx = un_avatar_io::ImportContext::dummy();
-		un_avatar_io::AvatarImporter::import(
-			&un_avatar_io_gltf::GltfImporter,
-			&mut ctx,
-			un_avatar_io::ImportInput::Path(resolved.clone()),
-			un_avatar_io::ImportOptions,
-		)
-		.ok()?
-	} else {
-		let bytes = fs::read(&resolved).ok()?;
-		let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).ok();
-		un_avatar_io_vrm::import_vrm_bytes(Some(&resolved), &bytes, root).ok()?
-	};
-	let document = result.document;
-	let scene = document.scene.as_ref()?;
-	let dynamics = document.dynamics()?;
+	if ext.eq_ignore_ascii_case("unavatar") {
+		let (root, _) = read_gltf_metadata_root_and_source(&resolved).ok()?;
+		let out = unavatar_dynamics_category_authored_params(&root);
+		if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+			cache.insert(cache_key, out.clone());
+		}
+		return Some(out);
+	}
+	let root = un_avatar_io_vrm::gltf_root_json_from_path(&resolved).ok()?;
+	let out = vrm_dynamics_category_authored_params(&root);
+	if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+		cache.insert(cache_key, out.clone());
+	}
+	Some(out)
+}
+
+fn vrm_dynamics_category_authored_params(root: &serde_json::Value) -> DynamicsAuthoredParamsByCategory {
+	let nodes = root.get("nodes").and_then(serde_json::Value::as_array);
 	let mut sums = BTreeMap::<String, (f32, f32, usize)>::new();
-	for group in &dynamics.groups {
-		let category = classify_dynamics_group_for_profile(scene, group);
-		let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
-		let authored_pull = if group.pull.is_finite() && group.pull > 0.0 {
-			group.pull
-		} else {
-			group.stiffness
+	if let Some(groups) = root
+		.pointer("/extensions/VRM/secondaryAnimation/boneGroups")
+		.and_then(serde_json::Value::as_array)
+	{
+		for group in groups {
+			let stiffness = group
+				.get("stiffiness")
+				.or_else(|| group.get("stiffness"))
+				.and_then(serde_json::Value::as_f64)
+				.unwrap_or(1.0) as f32;
+			let comment = group.get("comment").and_then(serde_json::Value::as_str).unwrap_or_default();
+			for root_index in group
+				.get("bones")
+				.and_then(serde_json::Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(serde_json::Value::as_u64)
+			{
+				let Some(chain_names) = nodes.and_then(|nodes| vrm0_chain_names(nodes, root_index as usize)) else {
+					continue;
+				};
+				let text = normalize_dynamics_match_text(&format!("{comment} {chain_names}"));
+				let category = classify_dynamics_category_from_text(&text).unwrap_or_else(|| "other".to_string());
+				let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
+				entry.0 += stiffness.max(0.0);
+				entry.2 += 1;
+			}
+		}
+	}
+	if let Some(springs) = root
+		.pointer("/extensions/VRMC_springBone/springs")
+		.and_then(serde_json::Value::as_array)
+	{
+		for spring in springs {
+			let Some(joints) = spring.get("joints").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			if joints.len() < 2 {
+				continue;
+			}
+			let Some(first_joint) = joints.first() else {
+				continue;
+			};
+			let stiffness = first_joint.get("stiffness").and_then(serde_json::Value::as_f64).unwrap_or(1.0) as f32;
+			let mut text = spring
+				.get("name")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or_default()
+				.to_string();
+			for node_index in joints
+				.iter()
+				.filter_map(|joint| joint.get("node").and_then(serde_json::Value::as_u64))
+			{
+				if let Some(name) = nodes
+					.and_then(|nodes| nodes.get(node_index as usize))
+					.and_then(|node| node.get("name"))
+					.and_then(serde_json::Value::as_str)
+				{
+					text.push(' ');
+					text.push_str(name);
+				}
+			}
+			let category =
+				classify_dynamics_category_from_text(&normalize_dynamics_match_text(&text)).unwrap_or_else(|| "other".to_string());
+			let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
+			entry.0 += stiffness.max(0.0);
+			entry.2 += 1;
+		}
+	}
+	dynamics_authored_params_from_sums(sums)
+}
+
+fn vrm0_chain_names(nodes: &[serde_json::Value], root_index: usize) -> Option<String> {
+	let mut current = root_index;
+	let mut visited = BTreeSet::new();
+	let mut names = Vec::new();
+	loop {
+		if !visited.insert(current) {
+			break;
+		}
+		let node = nodes.get(current)?;
+		if let Some(name) = node.get("name").and_then(serde_json::Value::as_str) {
+			names.push(name);
+		}
+		let Some(next) = node
+			.get("children")
+			.and_then(serde_json::Value::as_array)
+			.and_then(|children| children.first())
+			.and_then(serde_json::Value::as_u64)
+		else {
+			break;
 		};
+		current = next as usize;
+	}
+	(visited.len() >= 2).then(|| names.join(" "))
+}
+
+fn unavatar_dynamics_category_authored_params(root: &serde_json::Value) -> DynamicsAuthoredParamsByCategory {
+	let Some(dynamics) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("dynamics"))
+	else {
+		return BTreeMap::new();
+	};
+	let groups = dynamics
+		.as_array()
+		.or_else(|| dynamics.get("groups").and_then(serde_json::Value::as_array));
+	let Some(groups) = groups else {
+		return BTreeMap::new();
+	};
+	let mut sums = BTreeMap::<String, (f32, f32, usize)>::new();
+	for group in groups {
+		let explicit = group
+			.get("category")
+			.and_then(serde_json::Value::as_str)
+			.map(normalize_dynamics_category_id)
+			.unwrap_or_else(|| "other".to_string());
+		let category = if explicit != "other" {
+			explicit
+		} else {
+			let text = [
+				group.get("id").and_then(serde_json::Value::as_str),
+				group.get("name").and_then(serde_json::Value::as_str),
+				group.get("comment").and_then(serde_json::Value::as_str),
+				group.pointer("/component/path").and_then(serde_json::Value::as_str),
+			]
+			.into_iter()
+			.flatten()
+			.map(normalize_dynamics_match_text)
+			.collect::<Vec<_>>()
+			.join(" ");
+			classify_dynamics_category_from_text(&text).unwrap_or_else(|| "other".to_string())
+		};
+		let pull = group.get("pull").and_then(serde_json::Value::as_f64).unwrap_or_default() as f32;
+		let stiffness = group.get("stiffness").and_then(serde_json::Value::as_f64).unwrap_or_default() as f32;
+		let authored_pull = if pull.is_finite() && pull > 0.0 { pull } else { stiffness };
+		let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
 		entry.0 += authored_pull.max(0.0);
-		entry.1 += group.stiffness.max(0.0);
+		entry.1 += stiffness.max(0.0);
 		entry.2 += 1;
 	}
+	dynamics_authored_params_from_sums(sums)
+}
+
+fn dynamics_authored_params_from_sums(sums: BTreeMap<String, (f32, f32, usize)>) -> DynamicsAuthoredParamsByCategory {
 	let mut out = BTreeMap::new();
 	for (category, (pull_sum, shape_sum, count)) in sums {
 		if count == 0 {
 			continue;
 		}
-		let rest_response = pull_sum / count as f32;
-		let shape_preservation = shape_sum / count as f32;
+		let rest_response = (pull_sum / count as f32).clamp(0.0, 1.0);
+		let shape_preservation = (shape_sum / count as f32).clamp(0.0, 1.0);
 		out.insert(
 			category,
 			DynamicsCategoryAuthoredParams {
@@ -12123,10 +12425,7 @@ fn model_dynamics_category_authored_params(avatar_path: &Path, manifest_path: &P
 			},
 		);
 	}
-	if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
-		cache.insert(cache_key, out.clone());
-	}
-	Some(out)
+	out
 }
 
 fn dynamics_authored_params_cache_key(path: &Path) -> Option<String> {
@@ -12139,31 +12438,6 @@ fn dynamics_authored_params_cache_key(path: &Path) -> Option<String> {
 		modified.as_secs(),
 		modified.subsec_nanos()
 	))
-}
-
-fn classify_dynamics_group_for_profile(scene: &un_avatar_core::UnaSceneSnapshot, group: &un_avatar_core::UnaSpringBoneGroup) -> String {
-	let explicit = normalize_dynamics_category_id(&group.category);
-	if explicit != "other" {
-		return explicit;
-	}
-	let mut primary = normalize_dynamics_match_text(&group.comment);
-	if let Some(leaf) = group.source_id.rsplit(['/', ':']).next() {
-		primary.push(' ');
-		primary.push_str(&normalize_dynamics_match_text(leaf));
-	}
-	for &node_index in &group.bone_node_indices {
-		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
-			primary.push(' ');
-			primary.push_str(&normalize_dynamics_match_text(name));
-		}
-	}
-	if let Some(category) = classify_dynamics_category_from_text(&primary) {
-		return category;
-	}
-	if let Some(category) = classify_dynamics_category_from_text(&normalize_dynamics_match_text(&group.source_id)) {
-		return category;
-	}
-	"other".to_string()
 }
 
 fn classify_dynamics_category_from_text(haystack: &str) -> Option<String> {
@@ -18185,6 +18459,34 @@ id = "test"
 		assert!((ears.rest_response - 0.36).abs() < 1e-6);
 		assert!((ears.shape_preservation - 0.2).abs() < 1e-6);
 		let _ = fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn authored_dynamics_params_read_vrm_json_without_binary_payload() {
+		let vrm0 = serde_json::json!({
+			"nodes": [{"name": "HairRoot", "children": [1]}, {"name": "HairTip"}],
+			"extensions": {"VRM": {"secondaryAnimation": {"boneGroups": [{
+				"comment": "hair",
+				"stiffiness": 0.42,
+				"bones": [0]
+			}]}}}
+		});
+		let authored = crate::vrm_dynamics_category_authored_params(&vrm0);
+		let hair = authored.get("hair").expect("hair category");
+		assert_eq!(hair.count, 1);
+		assert!((hair.rest_response - 0.42).abs() < 1e-6);
+
+		let vrm1 = serde_json::json!({
+			"nodes": [{"name": "TailRoot"}, {"name": "TailTip"}],
+			"extensions": {"VRMC_springBone": {"springs": [{
+				"name": "tail",
+				"joints": [{"node": 0, "stiffness": 0.25}, {"node": 1}]
+			}]}}
+		});
+		let authored = crate::vrm_dynamics_category_authored_params(&vrm1);
+		let tail = authored.get("tail").expect("tail category");
+		assert_eq!(tail.count, 1);
+		assert!((tail.rest_response - 0.25).abs() < 1e-6);
 	}
 
 	#[test]

@@ -11,6 +11,8 @@ commands.allow = [
 	"delete_avatar_setting",
 	"export_diagnostics",
 	"get_app_settings",
+	"get_avatar_setting_details",
+	"get_startup_timing",
 	"get_renderer_cache_status",
 	"get_renderer_runtime_status",
 	"get_native_notification_status",
