@@ -64,7 +64,91 @@ namespace UNAvatar.UnityExporter
                 result.sets.Add(set);
             }
 
+            CompleteImportedBaseVisibilityOperations(result);
             return result;
+        }
+
+        private static void CompleteImportedBaseVisibilityOperations(ImportedWardrobeDraft result)
+        {
+            if (result == null || !result.hasBaseOperations)
+            {
+                return;
+            }
+
+            var explicitBaseTargets = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var operation in result.baseOperations)
+            {
+                if (!IsVisibilityOperation(operation))
+                {
+                    continue;
+                }
+                AddTargetKeys(explicitBaseTargets, operation);
+            }
+
+            foreach (var set in result.sets)
+            {
+                if (set == null || set.operations == null)
+                {
+                    continue;
+                }
+                foreach (var operation in set.operations)
+                {
+                    if (!IsVisibilityOperation(operation) || HasAnyTargetKey(explicitBaseTargets, operation))
+                    {
+                        continue;
+                    }
+
+                    var inverse = WardrobeSnapshotCapture.CloneOperation(operation);
+                    inverse.boolValue = !operation.boolValue;
+                    result.baseOperations.Add(inverse);
+                    AddTargetKeys(explicitBaseTargets, inverse);
+                }
+            }
+        }
+
+        private static bool IsVisibilityOperation(WardrobeOperationDraft operation)
+        {
+            if (operation == null)
+            {
+                return false;
+            }
+            return operation.type == "subtreeEnabled" ||
+                operation.type == "subtreeVisibility" ||
+                operation.type == "nodeEnabled" ||
+                operation.type == "nodeVisibility" ||
+                operation.type == "rendererEnabled" ||
+                operation.type == "rendererVisibility";
+        }
+
+        private static bool HasAnyTargetKey(HashSet<string> keys, WardrobeOperationDraft operation)
+        {
+            if (keys == null || operation == null || operation.target == null)
+            {
+                return false;
+            }
+            if (!string.IsNullOrEmpty(operation.target.nodeId) && keys.Contains("id:" + operation.target.nodeId))
+            {
+                return true;
+            }
+            var path = WardrobeSnapshotCapture.NormalizePath(operation.target.path);
+            return !string.IsNullOrEmpty(path) && keys.Contains("path:" + path);
+        }
+
+        private static void AddTargetKeys(HashSet<string> keys, WardrobeOperationDraft operation)
+        {
+            if (keys == null || operation == null || operation.target == null)
+            {
+                return;
+            }
+            if (!string.IsNullOrEmpty(operation.target.nodeId))
+            {
+                keys.Add("id:" + operation.target.nodeId);
+            }
+            var path = WardrobeSnapshotCapture.NormalizePath(operation.target.path);
+            if (!string.IsNullOrEmpty(path))
+            {
+                keys.Add("path:" + path);
+            }
         }
 
         private static WardrobeSetDraft ReadSet(Dictionary<string, object> map, string glbPath)

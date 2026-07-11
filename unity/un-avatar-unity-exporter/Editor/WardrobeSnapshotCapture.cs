@@ -319,7 +319,11 @@ namespace UNAvatar.UnityExporter
             var baseNodes = ToFirstDictionary(baseline.nodes, n => n.nodeId);
             foreach (var node in current.nodes)
             {
-                if (baseNodes.TryGetValue(node.nodeId, out var baseNode) && baseNode.visible != node.visible)
+                var hasBaseNode = baseNodes.TryGetValue(node.nodeId, out var baseNode);
+                var visibilityChanged = hasBaseNode
+                    ? baseNode.visible != node.visible
+                    : node.visible && !string.IsNullOrWhiteSpace(NormalizePath(node.path));
+                if (visibilityChanged)
                 {
                     if (!currentVisibility.IsParentEffective(node.path))
                     {
@@ -935,4 +939,3 @@ namespace UNAvatar.UnityExporter
         }
     }
 }
-

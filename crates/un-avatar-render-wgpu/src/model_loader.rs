@@ -38,6 +38,29 @@ pub(crate) fn base_wardrobe_set_id(document: &UnaDocument) -> Option<String> {
 		.map(str::to_string)
 }
 
+pub(crate) fn wardrobe_set_ids(document: &UnaDocument) -> Vec<String> {
+	let Some(sets) = document
+		.unavatar
+		.as_ref()
+		.and_then(|unavatar| unavatar.source.get("wardrobe"))
+		.and_then(|wardrobe| wardrobe.get("sets"))
+		.and_then(serde_json::Value::as_array)
+	else {
+		return Vec::new();
+	};
+	let mut ids = Vec::new();
+	for set in sets {
+		let Some(id) = set.get("id").and_then(serde_json::Value::as_str) else {
+			continue;
+		};
+		let id = id.trim().to_string();
+		if !ids.iter().any(|known| known == &id) {
+			ids.push(id);
+		}
+	}
+	ids
+}
+
 fn wardrobe_apply_report_summary(set_id: &str, report: &WardrobeApplyReport) -> String {
 	format!(
 		"un-avatar-renderer: .unavatar wardrobe set `{set_id}` applied: visibility_applied={} visibility_missing={} blendshape_applied={} blendshape_missing={} dynamics_applied={} dynamics_missing={} material_applied={} material_missing={} material_slot_applied={} material_slot_missing={} active_asset_groups={:?} scoped_active_groups={} scoped_missing_groups={:?} scoped_resident=mesh:{} material:{} image:{} dynamics:{}",

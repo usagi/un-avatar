@@ -48,5 +48,10 @@ const app = mount(App, {
 	target: document.getElementById("app") as HTMLElement,
 });
 traceFrontendEvent("mount:ok");
+if ("__TAURI_INTERNALS__" in window) {
+	void invoke<{ entries: Array<{ phase: string; elapsed_ms: number }>; total_ms: number }>("get_startup_timing")
+		.then((timing) => traceFrontendEvent("native-startup-timing", timing))
+		.catch((error) => reportFrontendError("startup-timing", error));
+}
 
 export default app;

@@ -419,20 +419,22 @@ fn object_negative_scale_sign() -> f32 {
 
 const DBG_BIND_POSE_RIGID: u32 = 1u;
 
-fn morphed_position_normal(pos_in: vec3<f32>, norm_in: vec3<f32>, vertex_index: u32) -> array<vec3<f32>, 2> {
+fn morphed_position_normal_tangent(pos_in: vec3<f32>, norm_in: vec3<f32>, tangent_in: vec3<f32>, vertex_index: u32) -> array<vec3<f32>, 3> {
 	var pos = pos_in;
 	var norm = norm_in;
+	var tangent = tangent_in;
 	if (vertex_index < morphu.vertex_count) {
 		for (var morph_target = 0u; morph_target < morphu.target_count; morph_target = morph_target + 1u) {
 			let weight = morph_weights[morph_target];
 			if (abs(weight) > 0.000001) {
-				let base = (morph_target * morphu.vertex_count + vertex_index) * 2u;
+				let base = (morph_target * morphu.vertex_count + vertex_index) * 3u;
 				pos = pos + morph_deltas[base].xyz * weight;
 				norm = norm + morph_deltas[base + 1u].xyz * weight;
+				tangent = tangent + morph_deltas[base + 2u].xyz * weight;
 			}
 		}
 	}
-	return array<vec3<f32>, 2>(pos, normalize(norm));
+	return array<vec3<f32>, 3>(pos, normalize(norm), normalize(tangent));
 }
 
 fn lil_texture_load_repeat(tex_in: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
@@ -492,10 +494,10 @@ fn lil_calc_audio_link_vertex_value(uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f3
 
 fn skinned_position_normal(v: VsIn, vertex_index: u32) -> VsOut {
 	var o: VsOut;
-	let morphed = morphed_position_normal(v.pos, v.norm, vertex_index);
+	let morphed = morphed_position_normal_tangent(v.pos, v.norm, v.tangent.xyz, vertex_index);
 	var pos = morphed[0];
 	let norm = morphed[1];
-	let tangent = v.tangent.xyz;
+	let tangent = morphed[2];
 	let tangent_sign = select(1.0, -1.0, v.tangent.w < 0.0) * object_negative_scale_sign();
 	let j0 = v.joints.x;
 	let j1 = v.joints.y;
@@ -1098,8 +1100,14 @@ fn lil_tooning_scale_range(value: f32, border: f32, blur: f32, border_range: f32
 	return clamp((value - border_min) / width, 0.0, 1.0);
 }
 
-fn lil_tooning_no_saturate_scale_range(value: f32, border: f32, blur: f32, border_range: f32) -> f32 {
-	let aa_scale = max(drawu.alpha_ext_params.y, 0.0);
+fn lil_tooning_no_saturate_scale(value: f32, border: f32, blur: f32, aa_scale: f32) -> f32 {
+	let border_min = clamp(border - blur * 0.5, 0.0, 1.0);
+	let border_max = clamp(border + blur * 0.5, 0.0, 1.0);
+	let width = clamp(border_max - border_min + fwidth(value) * aa_scale, 0.0001, 1.0);
+	return (value - border_min) / width;
+}
+
+fn lil_tooning_no_saturate_scale_range(value: f32, border: f32, blur: f32, border_range: f32, aa_scale: f32) -> f32 {
 	let border_min = clamp(border - blur * 0.5 - border_range, 0.0, 1.0);
 	let border_max = clamp(border + blur * 0.5, 0.0, 1.0);
 	let width = clamp(border_max - border_min + fwidth(value) * aa_scale, 0.0001, 1.0);
@@ -2105,23 +2113,53 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 	let anisotropy_n = anisotropy_basis.normal;
 	let lil_indirect_light_color = liltoon_indirect_light_color(l);
 
+	let backface_shadow = select(1.0 - clamp(drawu.material_ext_params.y, 0.0, 1.0), 1.0, front_facing);
 	var shading: f32;
 	var lil_shadowmix = 1.0;
 	if (UNTOON_FEATURE_SHADOW_LAYERS > 0.5 && drawu.shadow_params.x > 0.5) {
 		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);
 		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;
 		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
-		let lil_shadow_value = lil_shadow_apply_pre_ao(dot(shadow_n, l) * 0.5 + 0.5, shadow_border_mask.r, shadow_post_ao);
 		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, uv);
-		let lil_shadow_raw = lil_tooning_no_saturate_scale_range(
+		let shadow_mask_type = drawu.shadow_ao_params.y;
+		var primary_value = dot(shadow_n, l) * 0.5 + 0.5;
+		if shadow_mask_type >= 1.5 {
+			let face_right = normalize_or((drawt.model * vec4<f32>(1.0, 0.0, 0.0, 0.0)).xyz, vec3<f32>(1.0, 0.0, 0.0));
+			var face_forward = (drawt.model * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz;
+			face_forward.y = face_forward.y * drawu.shadow_ao_params.w;
+			face_forward = normalize_or(face_forward, vec3<f32>(0.0, 0.0, 1.0));
+			var face_light = l;
+			face_light.y = face_light.y * drawu.shadow_ao_params.w;
+			face_light = normalize_or(face_light, l);
+			let sdf = select(shadow_strength_mask.r, shadow_strength_mask.g, dot(l.xz, face_right.xz) < 0.0);
+			let sdf_value = clamp(dot(face_light, face_forward) * 0.5 + sdf * 0.5 + 0.25, 0.0, 1.0);
+			primary_value = mix(sdf_value, primary_value, shadow_strength_mask.b);
+		}
+		let lil_shadow_value = lil_shadow_apply_pre_ao(primary_value, shadow_border_mask.r, shadow_post_ao);
+		let shadow_aa_scale = select(max(drawu.alpha_ext_params.y, 0.0), 0.0, shadow_mask_type >= 1.5);
+		let lil_shadow_raw = lil_tooning_no_saturate_scale(
 			lil_shadow_value,
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
 			clamp(drawu.shadow_params.w * shadow_blur_mask.r, 0.0, 1.0),
-			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+			shadow_aa_scale,
 		);
-		let lil_shadow = clamp(lil_shadow_apply_post_ao(lil_shadow_raw, shadow_border_mask.r, shadow_post_ao), 0.0, 1.0);
-		lil_shadowmix = lil_shadow;
-		shading = mix(1.0, lil_shadow, clamp(drawu.shadow_params.y * shadow_strength_mask.r, 0.0, 1.0));
+		let raw_lil_shadow = clamp(lil_shadow_apply_post_ao(lil_shadow_raw, shadow_border_mask.r, shadow_post_ao), 0.0, 1.0) * backface_shadow;
+		lil_shadowmix = raw_lil_shadow;
+		var lil_shadow = raw_lil_shadow;
+		var primary_strength_mask = shadow_strength_mask.r;
+		if shadow_mask_type >= 0.5 && shadow_mask_type < 1.5 {
+			let flat_normal = normalize_or((drawt.model * vec4<f32>(0.0, 0.25, 1.0, 0.0)).xyz, vec3<f32>(0.0, 0.25, 1.0));
+			let flat_shadow = clamp(
+				(dot(flat_normal, l) + drawu.shadow_ao_params.z) / max(drawu.shadow_ao_params.w, 0.000001),
+				0.0,
+				1.0,
+			);
+			lil_shadow = mix(flat_shadow, lil_shadow, shadow_strength_mask.r);
+			primary_strength_mask = 1.0;
+		} else if shadow_mask_type >= 1.5 {
+			primary_strength_mask = shadow_strength_mask.a;
+		}
+		shading = mix(1.0, lil_shadow, clamp(drawu.shadow_params.y * primary_strength_mask, 0.0, 1.0));
 	} else {
 		shading = 1.0;
 		lil_shadowmix = shading;
@@ -2137,29 +2175,67 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		var indirect_col = shade_term;
 		let shadow_border_mask = lil_shadow_border_ao_mask(textureSample(shadow_border_mask_tex, shadow_border_mask_samp, uv).rgb);
 		let shadow_blur_mask = textureSample(shadow_blur_mask_tex, shadow_blur_mask_samp, uv).rgb;
+		let shadow_strength_mask = textureSample(shading_shift_tex, shading_shift_samp, uv);
 		let shadow_post_ao = drawu.shadow_ao_params.x > 0.5;
-		let shadow2_value = lil_shadow_apply_pre_ao(dot(shadow2_n, l) * 0.5 + 0.5, shadow_border_mask.g, shadow_post_ao);
+		let shadow_mask_type = drawu.shadow_ao_params.y;
+		var primary_source = dot(shadow_n, l) * 0.5 + 0.5;
+		var shadow2_source = dot(shadow2_n, l) * 0.5 + 0.5;
+		var shadow3_source = dot(shadow3_n, l) * 0.5 + 0.5;
+		if shadow_mask_type >= 1.5 {
+			let face_right = normalize_or((drawt.model * vec4<f32>(1.0, 0.0, 0.0, 0.0)).xyz, vec3<f32>(1.0, 0.0, 0.0));
+			var face_forward = (drawt.model * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz;
+			face_forward.y = face_forward.y * drawu.shadow_ao_params.w;
+			face_forward = normalize_or(face_forward, vec3<f32>(0.0, 0.0, 1.0));
+			var face_light = l;
+			face_light.y = face_light.y * drawu.shadow_ao_params.w;
+			face_light = normalize_or(face_light, l);
+			let sdf = select(shadow_strength_mask.r, shadow_strength_mask.g, dot(l.xz, face_right.xz) < 0.0);
+			let sdf_value = clamp(dot(face_light, face_forward) * 0.5 + sdf * 0.5 + 0.25, 0.0, 1.0);
+			primary_source = mix(sdf_value, primary_source, shadow_strength_mask.b);
+			shadow2_source = mix(sdf_value, shadow2_source, shadow_strength_mask.b);
+			shadow3_source = mix(sdf_value, shadow3_source, shadow_strength_mask.b);
+		}
+		let shadow_aa_scale = select(max(drawu.alpha_ext_params.y, 0.0), 0.0, shadow_mask_type >= 1.5);
+		let shadow2_value = lil_shadow_apply_pre_ao(shadow2_source, shadow_border_mask.g, shadow_post_ao);
 		let shadow2_color_texel = textureSample(shadow2_color_tex, shade_samp, uv);
 		let shadow2_color = mix(base, shadow2_color_texel.rgb, clamp(shadow2_color_texel.a, 0.0, 1.0)) * drawu.shadow2_color.rgb;
-		let shadow2_raw = lil_tooning_no_saturate_scale_range(
+		let shadow2_raw = lil_tooning_no_saturate_scale(
 			shadow2_value,
 			clamp(drawu.shadow2_params.x, 0.0, 1.0),
 			clamp(drawu.shadow2_params.y * shadow_blur_mask.g, 0.0, 1.0),
-			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+			shadow_aa_scale,
 		);
-		let shadow2 = clamp(lil_shadow_apply_post_ao(shadow2_raw, shadow_border_mask.g, shadow_post_ao), 0.0, 1.0);
+		var shadow2 = clamp(lil_shadow_apply_post_ao(shadow2_raw, shadow_border_mask.g, shadow_post_ao), 0.0, 1.0) * backface_shadow;
+		if shadow_mask_type >= 0.5 && shadow_mask_type < 1.5 {
+			let flat_normal = normalize_or((drawt.model * vec4<f32>(0.0, 0.25, 1.0, 0.0)).xyz, vec3<f32>(0.0, 0.25, 1.0));
+			let flat_shadow = clamp(
+				(dot(flat_normal, l) + drawu.shadow_ao_params.z) / max(drawu.shadow_ao_params.w, 0.000001),
+				0.0,
+				1.0,
+			);
+			shadow2 = mix(flat_shadow, shadow2, shadow_strength_mask.r);
+		}
 		let shadow2_strength = clamp((1.0 - shadow2) * drawu.shadow2_color.a, 0.0, 1.0);
 		indirect_col = mix(indirect_col, shadow2_color, shadow2_strength);
-		let shadow3_value = lil_shadow_apply_pre_ao(dot(shadow3_n, l) * 0.5 + 0.5, shadow_border_mask.b, shadow_post_ao);
+		let shadow3_value = lil_shadow_apply_pre_ao(shadow3_source, shadow_border_mask.b, shadow_post_ao);
 		let shadow3_color_texel = textureSample(shadow3_color_tex, shade_samp, uv);
 		let shadow3_color = mix(base, shadow3_color_texel.rgb, clamp(shadow3_color_texel.a, 0.0, 1.0)) * drawu.shadow3_color.rgb;
-		let shadow3_raw = lil_tooning_no_saturate_scale_range(
+		let shadow3_raw = lil_tooning_no_saturate_scale(
 			shadow3_value,
 			clamp(drawu.shadow3_params.x, 0.0, 1.0),
 			clamp(drawu.shadow3_params.y * shadow_blur_mask.b, 0.0, 1.0),
-			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+			shadow_aa_scale,
 		);
-		let shadow3 = clamp(lil_shadow_apply_post_ao(shadow3_raw, shadow_border_mask.b, shadow_post_ao), 0.0, 1.0);
+		var shadow3 = clamp(lil_shadow_apply_post_ao(shadow3_raw, shadow_border_mask.b, shadow_post_ao), 0.0, 1.0) * backface_shadow;
+		if shadow_mask_type >= 0.5 && shadow_mask_type < 1.5 {
+			let flat_normal = normalize_or((drawt.model * vec4<f32>(0.0, 0.25, 1.0, 0.0)).xyz, vec3<f32>(0.0, 0.25, 1.0));
+			let flat_shadow = clamp(
+				(dot(flat_normal, l) + drawu.shadow_ao_params.z) / max(drawu.shadow_ao_params.w, 0.000001),
+				0.0,
+				1.0,
+			);
+			shadow3 = mix(flat_shadow, shadow3, shadow_strength_mask.r);
+		}
 		let shadow3_strength = clamp((1.0 - shadow3) * drawu.shadow3_color.a, 0.0, 1.0);
 		indirect_col = mix(indirect_col, shadow3_color, shadow3_strength);
 		indirect_col = mix(indirect_col, indirect_col * base, clamp(drawu.shadow_ext_params.y, 0.0, 1.0));
@@ -2171,12 +2247,22 @@ fn toon_fragment(i: VsOut, front_facing: bool, use_transparent_prepass: bool, fu
 		);
 		indirect_col = min(indirect_col, direct_col);
 		let border_mix_raw = lil_tooning_no_saturate_scale_range(
-			lil_shadow_apply_pre_ao(dot(shadow_n, l) * 0.5 + 0.5, shadow_border_mask.r, shadow_post_ao),
+			lil_shadow_apply_pre_ao(primary_source, shadow_border_mask.r, shadow_post_ao),
 			clamp(drawu.shadow_params.z, 0.0, 1.0),
 			clamp(drawu.shadow_params.w * shadow_blur_mask.r, 0.0, 1.0),
 			clamp(drawu.shadow_ext_params.x, 0.0, 1.0),
+			shadow_aa_scale,
 		);
-		let border_mix = clamp(lil_shadow_apply_post_ao(border_mix_raw, shadow_border_mask.r, shadow_post_ao), 0.0, 1.0);
+		var border_mix = clamp(lil_shadow_apply_post_ao(border_mix_raw, shadow_border_mask.r, shadow_post_ao), 0.0, 1.0) * backface_shadow;
+		if shadow_mask_type >= 0.5 && shadow_mask_type < 1.5 {
+			let flat_normal = normalize_or((drawt.model * vec4<f32>(0.0, 0.25, 1.0, 0.0)).xyz, vec3<f32>(0.0, 0.25, 1.0));
+			let flat_shadow = clamp(
+				(dot(flat_normal, l) + drawu.shadow_ao_params.z) / max(drawu.shadow_ao_params.w, 0.000001),
+				0.0,
+				1.0,
+			);
+			border_mix = mix(flat_shadow, border_mix, shadow_strength_mask.r);
+		}
 		indirect_col = mix(indirect_col, direct_col, border_mix * drawu.shadow_border_color.rgb);
 		lit = mix(indirect_col, direct_col, shading) * authored_occlusion(uv, dbg);
 	} else {

@@ -107,11 +107,34 @@ namespace UNAvatar.UnityExporter
 
         private GameObject CreateWardrobePreviewClone(string label)
         {
-            var previewClone = Instantiate(avatarRoot);
-            previewClone.name = avatarRoot.name + " (UNAvatar Preview Capture " + (label ?? "state") + ")";
-            previewClone.hideFlags = HideFlags.HideAndDontSave;
-            previewClone.SetActive(true);
-            return previewClone;
+            var inactiveHost = new GameObject("UNAvatar Preview Capture Host");
+            inactiveHost.hideFlags = HideFlags.HideAndDontSave;
+            inactiveHost.SetActive(false);
+            try
+            {
+                var previewClone = Instantiate(avatarRoot, inactiveHost.transform, true);
+                previewClone.name = avatarRoot.name + " (UNAvatar Preview Capture " + (label ?? "state") + ")";
+                previewClone.hideFlags = HideFlags.HideAndDontSave;
+                DisableWardrobePreviewBehaviours(previewClone);
+                previewClone.transform.SetParent(null, true);
+                previewClone.SetActive(true);
+                return previewClone;
+            }
+            finally
+            {
+                DestroyImmediate(inactiveHost);
+            }
+        }
+
+        private static void DisableWardrobePreviewBehaviours(GameObject root)
+        {
+            foreach (var behaviour in root.GetComponentsInChildren<MonoBehaviour>(true))
+            {
+                if (behaviour != null)
+                {
+                    behaviour.enabled = false;
+                }
+            }
         }
 
         private static void PrepareWardrobePreviewRenderers(GameObject root)
@@ -352,11 +375,6 @@ namespace UNAvatar.UnityExporter
 
             var referenceRoot = normalizeRoot != null ? normalizeRoot : avatarRoot;
             var rebased = WardrobeSnapshotCapture.Diff(exportBaseSnapshot, snapshot, set.displayName, referenceRoot);
-            var groupValidation = ValidateWardrobeSetAssetGroupsForUpdate(set, rebased);
-            if (!string.IsNullOrEmpty(groupValidation))
-            {
-                return CloneWardrobeSetForExport(set);
-            }
 
             rebased.id = WardrobeSnapshotCapture.NormalizeWardrobeSetId(set.id, set.displayName);
             rebased.displayName = set.displayName;

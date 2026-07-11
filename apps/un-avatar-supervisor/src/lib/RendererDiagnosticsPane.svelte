@@ -146,9 +146,7 @@
 			? `paths=${status.dynamics_collision_projection_collider_paths.join(",")}`
 			: "paths=-";
 		const counts = status.dynamics_collision_projection_collider_path_counts.length
-			? `counts=${status.dynamics_collision_projection_collider_path_counts
-					.map((entry) => `${entry.key}:${entry.count}`)
-					.join(",")}`
+			? `counts=${status.dynamics_collision_projection_collider_path_counts.map((entry) => `${entry.key}:${entry.count}`).join(",")}`
 			: "counts=-";
 		return `projections=${status.dynamics_collision_projection_count} ${top} ${sources} ${paths} ${counts}`;
 	}
@@ -285,10 +283,41 @@
 			`inactiveActive image=${upload.inactive_image_textures_used_by_active_draw_count}[${inactiveImages}${imagePreviewSuffix}]`,
 			`cube=${inactiveCube}`,
 			`material=${upload.inactive_material_slots_used_by_active_draw_count}[${inactiveMaterials}${materialPreviewSuffix}]`,
+			`visiblePromote=${upload.last_visible_draw_residency_promotion_count ?? 0}`,
 			`lastLoad mesh=${upload.last_mesh_buffer_scoped_load_count}/${upload.last_mesh_buffer_scoped_unload_count}`,
 			`image=${upload.last_image_texture_scoped_load_count}/${upload.last_image_texture_scoped_unload_count}`,
 			`cube=${upload.last_cubemap_scoped_load_count}/${upload.last_cubemap_scoped_unload_count}`,
 			`material=${upload.last_material_slot_scoped_upload_count}`,
+		].join(" ");
+	}
+
+	function formatBytes(bytes: number | null | undefined): string {
+		if (!Number.isFinite(bytes ?? NaN)) return "-";
+		const value = Math.max(0, bytes ?? 0);
+		if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GiB`;
+		if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(0)} MiB`;
+		if (value >= 1024) return `${(value / 1024).toFixed(0)} KiB`;
+		return `${value} B`;
+	}
+
+	function wardrobeTransitionProgressLabel(upload: NonNullable<RendererRuntimeDiagnosticsData["wardrobe_asset_upload"]>): string {
+		const progress = upload.transition_progress;
+		if (!progress?.active) return "inactive";
+		const total = progress.total_work_bytes || 0;
+		const remaining = progress.remaining_work_bytes || 0;
+		const percent = total > 0 ? Math.max(0, Math.min(100, (1 - remaining / total) * 100)) : 0;
+		return [
+			`${percent.toFixed(0)}%`,
+			`work=${formatBytes(remaining)}/${formatBytes(total)}`,
+			`tex=${progress.image_total - progress.image_remaining}/${progress.image_total}`,
+			`mesh=${progress.mesh_total - progress.mesh_remaining}/${progress.mesh_total}`,
+			`cube=${progress.cube_total - progress.cube_remaining}/${progress.cube_total}`,
+			`material=${progress.material_total - progress.material_remaining}/${progress.material_total}`,
+			`drawRemain=${progress.draw_resource_remaining}`,
+			`budget=${formatBytes(progress.image_upload_budget_bytes)}`,
+			`step=${progress.last_step_ms}ms`,
+			`ram=${progress.process_ram_mb ?? "-"}MB`,
+			`pressure=${progress.memory_pressure}`,
 		].join(" ");
 	}
 
@@ -433,6 +462,8 @@
 			{#if runtimeStatus.wardrobe_asset_upload}
 				<dt>{$_("renderers.details.diag_wardrobe_residency")}</dt>
 				<dd class="stderr-block">{wardrobeResidencyLabel(runtimeStatus.wardrobe_asset_upload)}</dd>
+				<dt>Wardrobe transition</dt>
+				<dd class="stderr-block">{wardrobeTransitionProgressLabel(runtimeStatus.wardrobe_asset_upload)}</dd>
 			{/if}
 			<dt>{$_("renderers.details.diag_scene_constraints")}</dt>
 			<dd>

@@ -496,6 +496,7 @@ export type RendererWardrobeAssetUploadPlan = {
 	last_residency_refresh_image_unload_count: number;
 	last_residency_refresh_material_load_count: number;
 	last_residency_refresh_material_unload_count: number;
+	last_visible_draw_residency_promotion_count?: number;
 	last_mesh_buffer_scoped_load_count: number;
 	last_mesh_buffer_scoped_unload_count: number;
 	last_image_texture_scoped_load_count: number;
@@ -503,6 +504,25 @@ export type RendererWardrobeAssetUploadPlan = {
 	last_cubemap_scoped_load_count: number;
 	last_cubemap_scoped_unload_count: number;
 	last_material_slot_scoped_upload_count: number;
+	transition_progress?: {
+		active: boolean;
+		revision: number;
+		mesh_total: number;
+		mesh_remaining: number;
+		image_total: number;
+		image_remaining: number;
+		cube_total: number;
+		cube_remaining: number;
+		material_total: number;
+		material_remaining: number;
+		draw_resource_remaining: number;
+		total_work_bytes: number;
+		remaining_work_bytes: number;
+		image_upload_budget_bytes: number;
+		process_ram_mb?: number | null;
+		memory_pressure: boolean;
+		last_step_ms: number;
+	};
 	missing_active_asset_groups?: string[];
 	inactive_owned_asset_group_count: number;
 	scoped_draw_supported: boolean;

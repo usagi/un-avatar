@@ -687,6 +687,9 @@ pub struct AvatarWindowOptions {
 	/// toon path を `base` のみで早期 return する診断フラグ（shading / rim / matcap / GI / emissive 全 skip）。
 	/// manifest `[debug] base_texture_only = true`。
 	pub debug_base_texture_only: bool,
+	/// 左クリックで近傍頂点診断 JSON を出力する診断モード。
+	/// manifest `[debug] vertex_pick_diagnostics = true`。
+	pub debug_vertex_pick_diagnostics: bool,
 	/// カメラ操作ロック。true の間はマウスドラッグ / ホイールでカメラ操作不可。
 	/// manifest `[camera] locked = true` / CLI `--lock-camera` / IPC `set_camera_lock` で切替。
 	pub camera_locked: bool,
@@ -821,6 +824,7 @@ impl Default for AvatarWindowOptions {
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
+			debug_vertex_pick_diagnostics: false,
 			camera_locked: false,
 			start_minimized: false,
 			initial_camera_state: None,

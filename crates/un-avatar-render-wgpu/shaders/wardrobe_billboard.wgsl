@@ -101,6 +101,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 	let p = in.local;
 	let t = billboard.time_params.x;
+	let progress = clamp(billboard.time_params.y, 0.0, 1.0);
 	let float_y = sin(t * 2.1) * 0.035;
 	let q = p - vec2<f32>(0.0, float_y);
 	let card = rounded_rect_fill(q, vec2<f32>(0.76, 0.62), 0.24);
@@ -134,6 +135,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 		+ soft_disc(q - vec2<f32>(0.44, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 1.8)) * 0.038), 0.030)
 		+ soft_disc(q - vec2<f32>(0.53, -0.43 + (0.5 + 0.5 * sin(t * 5.6 + 3.6)) * 0.038), 0.030);
 	let cloth_shadow = rounded_rect_fill(hp - vec2<f32>(0.0, -0.30), vec2<f32>(0.34, 0.08), 0.08) * card;
+	let progress_track = rounded_rect_fill(q - vec2<f32>(0.0, -0.53), vec2<f32>(0.48, 0.025), 0.025) * card;
+	let progress_center = -0.48 + progress * 0.48;
+	let progress_fill = rounded_rect_fill(q - vec2<f32>(progress_center, -0.53), vec2<f32>(max(progress * 0.48, 0.001), 0.025), 0.025) * card;
 	let grid = line_mask(fract((q.x + q.y * 0.22 + t * 0.045) * 9.0) - 0.5, 0.010) * card * 0.16;
 	let base = vec3<f32>(0.018, 0.026, 0.042) * card;
 	let glass = vec3<f32>(0.070, 0.095, 0.155);
@@ -141,14 +145,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 	let cyan = vec3<f32>(0.28, 1.00, 0.96);
 	let magenta = vec3<f32>(1.00, 0.34, 0.78);
 	let violet = vec3<f32>(0.50, 0.40, 0.92);
-	let glow = aura * 0.22 + edge * 0.95 + inner * 0.24 + garment * 1.30 + shine * 1.05 + flip_glow * 0.68 + sweep * 0.50 + dots * 0.95 + (stitch_a + stitch_b + stitch_c) * 0.82;
+	let glow = aura * 0.22 + edge * 0.95 + inner * 0.24 + garment * 1.30 + shine * 1.05 + flip_glow * 0.68 + sweep * 0.50 + dots * 0.95 + (stitch_a + stitch_b + stitch_c) * 0.82 + progress_fill * 0.70;
 	let color = base
 		+ glass * card * 0.92
 		+ violet * grid
 		+ white * (garment * 0.88 + cloth_shadow * 0.08)
-		+ cyan * (edge * 0.62 + inner * 0.34 + shine * 0.76 + dots * 0.78 + sweep * 0.44)
+		+ cyan * (edge * 0.62 + inner * 0.34 + shine * 0.76 + dots * 0.78 + sweep * 0.44 + progress_fill * 0.82)
+		+ glass * progress_track * 0.36
 		+ magenta * ((stitch_a + stitch_b + stitch_c) * 0.66 + flip_glow * 0.42)
 		+ cyan * aura * 0.055;
-	let alpha = clamp(aura * 0.08 + card * 0.76 + glow * 0.11, 0.0, 0.92);
+	let alpha = clamp(aura * 0.08 + card * 0.76 + glow * 0.11 + progress_track * 0.10, 0.0, 0.92);
 	return vec4<f32>(color, alpha);
 }

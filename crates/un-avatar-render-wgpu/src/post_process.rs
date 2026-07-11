@@ -155,6 +155,22 @@ struct OutlineTargets {
 }
 
 impl PostProcess {
+	pub(crate) fn retain_targets(&mut self, use_smaa: bool, use_bloom: bool, use_outline: bool) {
+		if !use_smaa {
+			self.smaa_targets = None;
+		} else if !use_bloom {
+			if let Some(targets) = &mut self.smaa_targets {
+				targets.neighborhood_bloom_bind_group = None;
+			}
+		}
+		if !use_bloom {
+			self.bloom_targets = None;
+		}
+		if !use_outline {
+			self.outline_targets = None;
+		}
+	}
+
 	pub(crate) fn new(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
 		let width = width.max(1);
 		let height = height.max(1);

@@ -48,7 +48,8 @@ use un_avatar_core::{
 };
 
 use crate::bone_colliders::{
-	push_out_of_world_collider, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive,
+	push_tail_out_of_world_collider, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive,
+	WorldBoneColliderPrimitive,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -769,7 +770,7 @@ fn default_spring_bone_substeps() -> u32 {
 }
 
 fn default_dynamics_surface_constraints_enabled() -> bool {
-	true
+	false
 }
 
 fn default_dynamics_surface_constraint_topology_max_edge_distance_m() -> f32 {
@@ -1164,6 +1165,10 @@ struct JointRuntime {
 	gravity_falloff: f32,
 	immobile: f32,
 	parent_motion_follow: f32,
+	limit_type: String,
+	limit_rotation: [f32; 3],
+	limit_max_angle_x: f32,
+	limit_max_angle_z: f32,
 	motion_frame_node: Option<usize>,
 	/// Whether this joint may later use translation writeback without moving a skinned deformation joint.
 	translation_writeback_allowed: bool,
@@ -1245,34 +1250,34 @@ impl<'a> WorldColliderSelection<'a> {
 		}
 	}
 
-	fn push_out(self, mut point: Vec3, extra_radius: f32) -> Vec3 {
+	fn push_tail_out(self, anchor: Vec3, mut tail: Vec3, extra_radius: f32) -> Vec3 {
 		let extra_radius = extra_radius.max(0.0);
 		match self {
 			Self::All { colliders, .. } => {
 				for &collider in colliders {
-					point = push_out_of_world_collider(point, collider, extra_radius);
+					tail = push_tail_out_of_world_collider(anchor, tail, collider, extra_radius);
 				}
 			}
 			Self::Selected { colliders, indices, .. } => {
 				for &index in indices {
 					if let Some(&collider) = colliders.get(index) {
-						point = push_out_of_world_collider(point, collider, extra_radius);
+						tail = push_tail_out_of_world_collider(anchor, tail, collider, extra_radius);
 					}
 				}
 			}
 		}
-		point
+		tail
 	}
 
-	fn projected_path(self, mut point: Vec3, extra_radius: f32) -> Option<&'a str> {
+	fn projected_tail_path(self, anchor: Vec3, mut tail: Vec3, extra_radius: f32) -> Option<&'a str> {
 		let extra_radius = extra_radius.max(0.0);
 		let mut projected_path = None;
 		match self {
 			Self::All { colliders, paths } => {
 				for (index, &collider) in colliders.iter().enumerate() {
-					let before = point;
-					point = push_out_of_world_collider(point, collider, extra_radius);
-					if (point - before).length_squared() > 1e-12 {
+					let before = tail;
+					tail = push_tail_out_of_world_collider(anchor, tail, collider, extra_radius);
+					if (tail - before).length_squared() > 1e-12 {
 						projected_path = paths.get(index).map(String::as_str).filter(|path| !path.is_empty());
 					}
 				}
@@ -1282,9 +1287,9 @@ impl<'a> WorldColliderSelection<'a> {
 					let Some(&collider) = colliders.get(index) else {
 						continue;
 					};
-					let before = point;
-					point = push_out_of_world_collider(point, collider, extra_radius);
-					if (point - before).length_squared() > 1e-12 {
+					let before = tail;
+					tail = push_tail_out_of_world_collider(anchor, tail, collider, extra_radius);
+					if (tail - before).length_squared() > 1e-12 {
 						projected_path = paths.get(index).map(String::as_str).filter(|path| !path.is_empty());
 					}
 				}
@@ -1652,9 +1657,21 @@ pub struct DynamicsTailSample {
 	pub rest_axis_world: [f32; 3],
 	pub current_axis_world: [f32; 3],
 	pub axis_angle_deg: f32,
+	pub limit_type: String,
+	pub limit_max_angle_x_deg: f32,
+	pub limit_max_angle_z_deg: f32,
+	pub limit_bend_x_deg: f32,
+	pub limit_bend_z_deg: f32,
 	pub prev_velocity: [f32; 3],
 	pub length: f32,
 	pub hit_radius: f32,
+	pub rest_response: f32,
+	pub shape_preservation: f32,
+	pub bounce_response: f32,
+	pub damping: f32,
+	pub gravity_power: f32,
+	pub gravity_falloff: f32,
+	pub parent_motion_follow: f32,
 	pub translation_writeback_target: String,
 }
 
@@ -1709,7 +1726,6 @@ struct ResolvedDynamicsPhysicsParams {
 	source_shape_preservation_scale: f32,
 	source_rest_response_scale: f32,
 	source_bounce_response_scale: f32,
-	source_motion_coupling_scale: f32,
 	shape_preservation: f32,
 	rest_response: f32,
 	bounce_response: f32,
@@ -1730,7 +1746,6 @@ struct DynamicsChainResponseScale {
 	pull_scale: f32,
 	stiffness_scale: f32,
 	spring_scale: f32,
-	motion_coupling_scale: f32,
 }
 
 impl Default for DynamicsChainResponseScale {
@@ -1739,7 +1754,6 @@ impl Default for DynamicsChainResponseScale {
 			pull_scale: 1.0,
 			stiffness_scale: 1.0,
 			spring_scale: 1.0,
-			motion_coupling_scale: 1.0,
 		}
 	}
 }
@@ -1754,7 +1768,6 @@ fn dynamics_chain_response_scale(joint_count: usize) -> DynamicsChainResponseSca
 		pull_scale: (1.0 - 0.055 * extra).max(0.68),
 		stiffness_scale: (1.0 - 0.10 * extra).max(0.50),
 		spring_scale: (1.0 + 0.025 * extra).min(1.12),
-		motion_coupling_scale: (1.0 - 0.06 * extra).max(0.65),
 	}
 }
 
@@ -1763,7 +1776,6 @@ struct DynamicsJointPositionResponseScale {
 	rest_response_scale: f32,
 	shape_preservation_scale: f32,
 	bounce_response_scale: f32,
-	motion_coupling_scale: f32,
 }
 
 impl Default for DynamicsJointPositionResponseScale {
@@ -1772,7 +1784,6 @@ impl Default for DynamicsJointPositionResponseScale {
 			rest_response_scale: 1.0,
 			shape_preservation_scale: 1.0,
 			bounce_response_scale: 1.0,
-			motion_coupling_scale: 1.0,
 		}
 	}
 }
@@ -1787,7 +1798,6 @@ fn dynamics_joint_position_response_scale(joint_index: usize, joint_count: usize
 		rest_response_scale: lerp(1.04, 0.86),
 		shape_preservation_scale: lerp(1.06, 0.68),
 		bounce_response_scale: lerp(0.92, 1.14),
-		motion_coupling_scale: lerp(1.04, 0.82),
 	}
 }
 
@@ -2196,7 +2206,6 @@ fn resolve_group_params(
 		source_shape_preservation_scale: chain_scale.stiffness_scale,
 		source_rest_response_scale: chain_scale.pull_scale,
 		source_bounce_response_scale: chain_scale.spring_scale,
-		source_motion_coupling_scale: chain_scale.motion_coupling_scale,
 		shape_preservation,
 		rest_response,
 		bounce_response: (converted.bounce_response * chain_scale.spring_scale * bounce_scale).max(0.0),
@@ -2272,18 +2281,17 @@ fn resolve_joint_response(
 		.unwrap_or(params.immobile)
 		.clamp(0.0, 1.0);
 	let source_motion_coupling = match params.immobile_type {
-		UnaDynamicsImmobileType::AllMotion => 0.25 + immobile * immobile * 0.65,
+		UnaDynamicsImmobileType::AllMotion => 0.25 + immobile * 0.65,
 		UnaDynamicsImmobileType::World => 0.5,
 	};
-	let parent_motion_follow = params
-		.motion_coupling_override
-		.unwrap_or(source_motion_coupling * params.source_motion_coupling_scale * position_scale.motion_coupling_scale)
-		.clamp(0.0, 1.0);
+	let parent_motion_follow = params.motion_coupling_override.unwrap_or(source_motion_coupling).clamp(0.0, 1.0);
 	ResolvedJointDynamicsResponse {
 		rest_response,
 		shape_preservation,
 		bounce_response: source_spring,
-		damping_half_life_ms: params.damping_half_life_ms,
+		damping_half_life_ms: params
+			.damping_half_life_ms
+			.or_else(|| (group.parameters.integration_type == un_avatar_core::UnaDynamicsIntegrationType::VrcAdvanced).then_some(80.0)),
 		drag_force,
 		gravity_power,
 		gravity_falloff,
@@ -2508,6 +2516,10 @@ impl DynamicsSimulator {
 				}
 				let (max_stretch_response, max_squish_response, stretch_motion_response) =
 					effective_stretch_response(sampled_limit.as_ref());
+				let limit_type = sampled_limit.as_ref().map(|limit| limit.limit_type.clone()).unwrap_or_default();
+				let limit_rotation = sampled_limit.as_ref().map(|limit| limit.limit_rotation).unwrap_or([0.0, 0.0, 0.0]);
+				let limit_max_angle_x = sampled_limit.as_ref().map(|limit| limit.max_angle_x).unwrap_or(0.0);
+				let limit_max_angle_z = sampled_limit.as_ref().map(|limit| limit.max_angle_z).unwrap_or(0.0);
 				let translation_writeback_allowed =
 					una_dynamics_translation_writeback_candidate_count(scene, g.writeback_mode, &[parent, child]) > 0;
 				let translation_writeback_target = tail_translation_writeback_target(scene, g, chain, i);
@@ -2546,6 +2558,10 @@ impl DynamicsSimulator {
 					gravity_falloff: response.gravity_falloff,
 					immobile: response.immobile,
 					parent_motion_follow: response.parent_motion_follow,
+					limit_type,
+					limit_rotation,
+					limit_max_angle_x,
+					limit_max_angle_z,
 					motion_frame_node,
 					translation_writeback_allowed,
 					translation_writeback_target,
@@ -2847,6 +2863,8 @@ impl DynamicsSimulator {
 					} else {
 						0.0
 					};
+					let (limit_bend_x_deg, limit_bend_z_deg) =
+						limit_frame_bend_degrees(current_axis_world, rest_axis_world, joint.limit_rotation);
 					DynamicsTailSample {
 						source_id: runtime.source_id.clone(),
 						runtime_index,
@@ -2859,9 +2877,21 @@ impl DynamicsSimulator {
 						rest_axis_world: rest_axis_world.to_array(),
 						current_axis_world: current_axis_world.to_array(),
 						axis_angle_deg,
+						limit_type: joint.limit_type.clone(),
+						limit_max_angle_x_deg: joint.limit_max_angle_x,
+						limit_max_angle_z_deg: joint.limit_max_angle_z,
+						limit_bend_x_deg,
+						limit_bend_z_deg,
 						prev_velocity: joint.prev_velocity.to_array(),
 						length: joint.length,
 						hit_radius: joint.hit_radius,
+						rest_response: joint.rest_response,
+						shape_preservation: joint.shape_preservation,
+						bounce_response: joint.bounce_response,
+						damping: joint_damping(joint, 1.0 / 60.0),
+						gravity_power: joint.gravity_power,
+						gravity_falloff: joint.gravity_falloff,
+						parent_motion_follow: joint.parent_motion_follow,
 						translation_writeback_target,
 					}
 				})
@@ -3412,6 +3442,7 @@ fn unphysics_displacement_boost(
 fn unphysics_gravity_rest_target(
 	child_pos: Vec3,
 	target_axis_world: Vec3,
+	current_axis_world: Vec3,
 	rest_length: f32,
 	max_length: f32,
 	gravity_dir: Vec3,
@@ -3429,7 +3460,7 @@ fn unphysics_gravity_rest_target(
 	if target_vector.length_squared() < 1e-12 {
 		return child_pos + target_axis_world * rest_length;
 	}
-	let gravity_amount = unphysics_gravity_falloff_amount(gravity_dir, gravity_power.abs(), target_axis_world, gravity_falloff);
+	let gravity_amount = unphysics_gravity_falloff_amount(gravity_power.abs(), target_axis_world, current_axis_world, gravity_falloff);
 	let allowed_length = if max_length.is_finite() {
 		max_length.max(rest_length)
 	} else {
@@ -3441,15 +3472,15 @@ fn unphysics_gravity_rest_target(
 	child_pos + bent_vector
 }
 
-fn unphysics_gravity_falloff_amount(gravity_dir: Vec3, gravity_power: f32, target_axis_world: Vec3, gravity_falloff: f32) -> f32 {
-	let gravity_dir = gravity_dir.normalize_or_zero();
+fn unphysics_gravity_falloff_amount(gravity_power: f32, target_axis_world: Vec3, current_axis_world: Vec3, gravity_falloff: f32) -> f32 {
 	let target_axis_world = target_axis_world.normalize_or_zero();
-	if gravity_dir.length_squared() < 1e-12 || target_axis_world.length_squared() < 1e-12 {
+	let current_axis_world = current_axis_world.normalize_or_zero();
+	if target_axis_world.length_squared() < 1e-12 || current_axis_world.length_squared() < 1e-12 {
 		return gravity_power.clamp(0.0, 1.0);
 	}
-	let perpendicularity = (1.0 - target_axis_world.dot(gravity_dir)).clamp(0.0, 1.0);
+	let rest_deviation = (1.0 - target_axis_world.dot(current_axis_world).clamp(0.0, 1.0)).clamp(0.0, 1.0);
 	let falloff_min = 1.0 - gravity_falloff.clamp(0.0, 1.0);
-	let falloff = falloff_min + (1.0 - falloff_min) * perpendicularity;
+	let falloff = falloff_min + (1.0 - falloff_min) * rest_deviation;
 	(gravity_power * falloff).clamp(0.0, 1.0)
 }
 
@@ -3505,11 +3536,18 @@ fn apply_parent_motion_to_joint(joint: &mut JointRuntime, child_pos: Vec3, targe
 }
 
 fn joint_damping(joint: &JointRuntime, dt: f32) -> f32 {
-	match joint.damping_half_life_ms {
+	let time_damping = match joint.damping_half_life_ms {
 		Some(half_life_ms) if half_life_ms > 0.0 => 1.0 - (-std::f32::consts::LN_2 * dt / (half_life_ms / 1000.0)).exp(),
-		_ => joint.drag_force,
+		_ => 0.0,
 	}
-	.clamp(0.0, 1.0)
+	.clamp(0.0, 1.0);
+	combine_independent_damping(joint.drag_force, time_damping)
+}
+
+fn combine_independent_damping(authored_drag: f32, time_damping: f32) -> f32 {
+	let authored_drag = authored_drag.clamp(0.0, 1.0);
+	let time_damping = time_damping.clamp(0.0, 1.0);
+	1.0 - (1.0 - authored_drag) * (1.0 - time_damping)
 }
 
 fn unphysics_inertia_retention(damping: f32, bounce_response: f32) -> f32 {
@@ -3577,19 +3615,15 @@ fn step_group_solver<const XPBD: bool>(
 		let target_tail = unphysics_gravity_rest_target(
 			solver_anchor_pos,
 			target_axis_world,
+			(joint.curr_tail - solver_anchor_pos).normalize_or_zero(),
 			joint.length,
 			max_tail_length,
 			gravity_dir,
 			joint.gravity_power,
 			joint.gravity_falloff,
 		);
-		let target_tail = constrain_tail_limit(
-			target_tail,
-			solver_anchor_pos,
-			limit_axis_world,
-			tail_distance_or(target_tail, solver_anchor_pos, joint.length),
-			effective_limit,
-		);
+		let target_length = tail_distance_or(target_tail, solver_anchor_pos, joint.length);
+		let target_tail = constrain_tail_limit(target_tail, solver_anchor_pos, limit_axis_world, target_length, effective_limit);
 		let rest_offset = target_tail - joint.curr_tail;
 		let rest_offset_len = rest_offset.length();
 		let displacement_boost = unphysics_displacement_boost(
@@ -3611,7 +3645,7 @@ fn step_group_solver<const XPBD: bool>(
 				joint.chain_joint_count,
 			);
 		let previous_orientation_tail = solver_anchor_pos + previous_orientation_vector.normalize_or_zero() * joint.length;
-		let shape_response = joint.shape_preservation * joint.parent_motion_follow;
+		let shape_response = joint.shape_preservation;
 		let orientation_response = (previous_orientation_tail - joint.curr_tail) * unphysics_response_gain(shape_response, dt);
 		let velocity = inertia + rest_response + orientation_response;
 		joint.prev_velocity = velocity;
@@ -3640,7 +3674,7 @@ fn step_group_solver<const XPBD: bool>(
 				collision_projected |= projected;
 				if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
 					if projected {
-						let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
+						let collider_path = bone_colliders.projected_tail_path(solver_anchor_pos, before_collision, joint.hit_radius);
 						profile.record_collision_projection(group.source_id, collider_path);
 					}
 					profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
@@ -3666,7 +3700,7 @@ fn step_group_solver<const XPBD: bool>(
 			collision_projected |= projected;
 			if let (Some(profile), Some(t_collision)) = (profile.as_deref_mut(), t_collision) {
 				if projected {
-					let collider_path = bone_colliders.projected_path(before_collision, joint.hit_radius);
+					let collider_path = bone_colliders.projected_tail_path(solver_anchor_pos, before_collision, joint.hit_radius);
 					profile.record_collision_projection(group.source_id, collider_path);
 				}
 				profile.solve_collision_ms += t_collision.elapsed().as_secs_f32() * 1000.0;
@@ -4107,6 +4141,32 @@ fn constrain_axis_by_limit_type(axis: Vec3, rest_axis: Vec3, limit: &UnaDynamics
 	axis
 }
 
+fn limit_frame_bend_degrees(axis: Vec3, rest_axis: Vec3, limit_rotation: [f32; 3]) -> (f32, f32) {
+	let axis = axis.normalize_or_zero();
+	let rest_axis = rest_axis.normalize_or_zero();
+	if axis.length_squared() < 1e-12 || rest_axis.length_squared() < 1e-12 {
+		return (0.0, 0.0);
+	}
+	let base_rotation = Quat::from_rotation_arc(Vec3::Y, rest_axis);
+	let authored_rotation = Quat::from_euler(
+		glam::EulerRot::XYZ,
+		limit_rotation[0].to_radians(),
+		limit_rotation[1].to_radians(),
+		limit_rotation[2].to_radians(),
+	);
+	let limit_rotation = (base_rotation * authored_rotation).normalize();
+	let limit_axis_x = (limit_rotation * Vec3::X).normalize_or_zero();
+	let limit_axis_y = (limit_rotation * Vec3::Y).normalize_or_zero();
+	let limit_axis_z = (limit_rotation * Vec3::Z).normalize_or_zero();
+	if limit_axis_x.length_squared() < 1e-12 || limit_axis_y.length_squared() < 1e-12 || limit_axis_z.length_squared() < 1e-12 {
+		return (0.0, 0.0);
+	}
+	let y = axis.dot(limit_axis_y).max(1e-6);
+	let bend_x = axis.dot(limit_axis_x).atan2(y).to_degrees();
+	let bend_z = axis.dot(limit_axis_z).atan2(y).to_degrees();
+	(bend_x, bend_z)
+}
+
 fn limit_hinge_axis(authored_x: Vec3, authored_z: Vec3, rest_axis: Vec3) -> Vec3 {
 	let rest_axis = rest_axis.normalize_or_zero();
 	let x = (authored_x - rest_axis * authored_x.dot(rest_axis)).normalize_or_zero();
@@ -4176,7 +4236,7 @@ fn constrain_tail_colliders(
 	if bone_colliders.is_empty() {
 		return next_tail;
 	}
-	let pushed = bone_colliders.push_out(next_tail, hit_radius);
+	let pushed = bone_colliders.push_tail_out(child_pos, next_tail, hit_radius);
 	if (pushed - next_tail).length_squared() <= 1e-12 {
 		return next_tail;
 	}
@@ -4698,16 +4758,19 @@ mod tests {
 				center: Vec3::ZERO,
 				radius: 1.0,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 			WorldBoneColliderPrimitive::Sphere {
 				center: Vec3::X,
 				radius: 1.0,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 			WorldBoneColliderPrimitive::Sphere {
 				center: Vec3::Y,
 				radius: 1.0,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 		];
 		let source_ids = vec![String::new(), "physbone:hair".to_string(), "physbone:skirt".to_string()];
@@ -4730,11 +4793,13 @@ mod tests {
 				center: Vec3::ZERO,
 				radius: 1.0,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 			WorldBoneColliderPrimitive::Sphere {
 				center: Vec3::Y,
 				radius: 1.0,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 		];
 		let source_ids = vec![String::new(), "physbone:hair".to_string()];
@@ -4754,16 +4819,22 @@ mod tests {
 				center: Vec3::ZERO,
 				radius: 0.05,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 			WorldBoneColliderPrimitive::Sphere {
 				center: Vec3::X,
 				radius: 0.25,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 		];
 		let paths = vec!["near_origin".to_string(), "right_col".to_string()];
 
-		let path = WorldColliderSelection::new(&colliders, &paths, true, &[]).projected_path(Vec3::new(0.9, 0.0, 0.0), 0.0);
+		let path = WorldColliderSelection::new(&colliders, &paths, true, &[]).projected_tail_path(
+			Vec3::new(0.5, 0.0, 0.0),
+			Vec3::new(0.9, 0.0, 0.0),
+			0.0,
+		);
 
 		assert_eq!(path, Some("right_col"));
 	}
@@ -4825,7 +4896,6 @@ mod tests {
 				source_shape_preservation_scale: 1.0,
 				source_rest_response_scale: 1.0,
 				source_bounce_response_scale: 1.0,
-				source_motion_coupling_scale: 1.0,
 				shape_preservation: 0.0,
 				rest_response: 0.0,
 				bounce_response: 0.0,
@@ -4859,6 +4929,7 @@ mod tests {
 			center: Vec3::ZERO,
 			radius: 0.25,
 			inside_bounds: false,
+			bones_as_sphere: true,
 		}];
 		let child_pos = Vec3::new(-1.0, 0.0, 0.0);
 		let next_tail = Vec3::new(1.0, 0.0, 0.0);
@@ -4871,6 +4942,28 @@ mod tests {
 			0.0,
 		);
 		assert_eq!(pushed, next_tail);
+	}
+
+	#[test]
+	fn tail_collision_uses_bone_segment_when_bones_as_sphere_is_disabled() {
+		let colliders = vec![WorldBoneColliderPrimitive::Sphere {
+			center: Vec3::ZERO,
+			radius: 0.25,
+			inside_bounds: false,
+			bones_as_sphere: false,
+		}];
+		let child_pos = Vec3::new(-1.0, 0.0, 0.0);
+		let next_tail = Vec3::new(1.0, 0.0, 0.0);
+		let pushed = constrain_tail_colliders(
+			next_tail,
+			child_pos,
+			Vec3::X,
+			2.0,
+			WorldColliderSelection::new(&colliders, &[], true, &[]),
+			0.0,
+		);
+		assert_ne!(pushed, next_tail);
+		assert!((pushed - child_pos).length() - 2.0 < 1e-5, "pushed={pushed:?}");
 	}
 
 	#[test]
@@ -4996,6 +5089,7 @@ mod tests {
 				center: sphere_center.to_array(),
 				radius: sphere_radius,
 				inside_bounds: false,
+				bones_as_sphere: true,
 			},
 			source_id: String::new(),
 			collider_path: "global/sphere".to_string(),
@@ -5391,6 +5485,17 @@ mod tests {
 			high_bounce < 1.0 && near_undamped < 1.0,
 			"bounce must not create energy by pushing inertia retention over 1: high={high_bounce} near={near_undamped}"
 		);
+	}
+
+	#[test]
+	fn unphysics_authored_drag_and_time_damping_compose_without_discarding_either() {
+		let authored_only = combine_independent_damping(0.4, 0.0);
+		let time_only = combine_independent_damping(0.0, 0.2);
+		let combined = combine_independent_damping(0.4, 0.2);
+		assert!((authored_only - 0.4).abs() < 1e-6);
+		assert!((time_only - 0.2).abs() < 1e-6);
+		assert!((combined - 0.52).abs() < 1e-6);
+		assert!(combined > authored_only && combined > time_only);
 	}
 
 	#[test]
@@ -5817,12 +5922,17 @@ mod tests {
 	fn unphysics_gravity_falloff_reduces_aligned_rest_gravity() {
 		let child = Vec3::ZERO;
 		let axis = Vec3::Y;
-		let gravity = Vec3::Y;
-		let full = unphysics_gravity_rest_target(child, axis, 1.0, 1.0, gravity, 1.0, 0.0);
-		let fallen_off = unphysics_gravity_rest_target(child, axis, 1.0, 1.0, gravity, 1.0, 1.0);
+		let gravity = Vec3::NEG_Y;
+		let full = unphysics_gravity_rest_target(child, axis, axis, 1.0, 1.0, gravity, 1.0, 0.0);
+		let fallen_off = unphysics_gravity_rest_target(child, axis, axis, 1.0, 1.0, gravity, 1.0, 1.0);
+		let deflected = unphysics_gravity_rest_target(child, axis, Vec3::X, 1.0, 1.0, gravity, 1.0, 1.0);
 		assert!(
 			fallen_off.distance(axis) < full.distance(axis) + 1e-6,
 			"falloff should not increase aligned gravity displacement: full={full:?} fallen_off={fallen_off:?}"
+		);
+		assert!(
+			deflected.distance(full) < 1e-6,
+			"gravity should return when the current axis is perpendicular to rest: full={full:?} deflected={deflected:?}"
 		);
 	}
 
@@ -5895,6 +6005,89 @@ mod tests {
 		let axis = (tip - joint).normalize_or_zero();
 		let angle = Vec3::Y.angle_between(axis).to_degrees();
 		assert!(angle <= 10.5, "angle={angle} axis={axis:?}");
+	}
+
+	#[test]
+	fn dynamics_gravity_target_is_constrained_before_rest_response() {
+		let mut scene = UnaSceneSnapshot {
+			nodes: vec![
+				node(0.0, Vec3::ZERO, vec![1]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![2]),
+				node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![]),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				interaction_chain_start_index: 0,
+				source_kind: UnaDynamicsSourceKind::VrcPhysBone,
+				enabled: true,
+				source_id: "limited-gravity".to_string(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 0.0,
+				pull: 0.30,
+				spring: 0.0,
+				integration_type: UnaDynamicsIntegrationType::VrcAdvanced,
+				gravity_power: 1.0,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: Default::default(),
+				gravity_dir: [1.0, 0.0, 0.0],
+				drag_force: 0.4,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				stiffness_samples: Vec::new(),
+				pull_samples: Vec::new(),
+				spring_samples: Vec::new(),
+				gravity_power_samples: Vec::new(),
+				gravity_falloff_samples: Vec::new(),
+				immobile_samples: Vec::new(),
+				max_angle_x_samples: Vec::new(),
+				max_angle_z_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: Some(UnaDynamicsLimit {
+					limit_type: "Polar".to_string(),
+					limit_rotation: [0.0, 0.0, 0.0],
+					max_angle_x: 5.0,
+					max_angle_z: 5.0,
+					max_stretch: 0.0,
+					max_squish: 0.0,
+					stretch_motion: None,
+					max_stretch_samples: Vec::new(),
+					max_squish_samples: Vec::new(),
+					stretch_motion_samples: Vec::new(),
+				}),
+				interaction: None,
+				bone_node_indices: vec![0, 1, 2],
+			}],
+			..Default::default()
+		};
+		let physics = DynamicsPhysicsConfig {
+			simulation_hz: 60.0,
+			..Default::default()
+		}
+		.normalized();
+		let mut sim = DynamicsSimulator::new_with_config(&scene, &settings, Vec::new(), physics).expect("sim");
+		for _ in 0..180 {
+			sim.step(&mut scene, &settings, 1.0 / 60.0);
+		}
+		let sample = sim
+			.tail_samples()
+			.into_iter()
+			.find(|sample| sample.source_id == "limited-gravity" && sample.joint_index == 0)
+			.expect("tail sample");
+		let velocity = Vec3::from_array(sample.prev_velocity).length();
+		assert!(
+			velocity < 1e-5,
+			"constrained gravity target should not inject persistent velocity at the angular limit: velocity={velocity} sample={sample:?}"
+		);
+		assert!(
+			sample.limit_bend_z_deg.abs() <= sample.limit_max_angle_z_deg + 1e-3,
+			"tail should remain inside the authored polar limit: sample={sample:?}"
+		);
 	}
 
 	#[test]
@@ -6305,8 +6498,8 @@ mod tests {
 		assert!((runtime.joints[1].gravity_power - 0.6).abs() < 1e-6);
 		assert!((runtime.joints[0].gravity_falloff - 0.7).abs() < 1e-6);
 		assert!((runtime.joints[1].gravity_falloff - 0.8).abs() < 1e-6);
-		assert!((runtime.joints[0].parent_motion_follow - 0.80756).abs() < 1e-6);
-		assert!((runtime.joints[1].parent_motion_follow - 0.738).abs() < 1e-6);
+		assert!((runtime.joints[0].parent_motion_follow - 0.835).abs() < 1e-6);
+		assert!((runtime.joints[1].parent_motion_follow - 0.9).abs() < 1e-6);
 	}
 
 	#[test]
@@ -6470,7 +6663,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unphysics_moderate_immobile_keeps_parent_motion_follow_loose() {
+	fn unphysics_moderate_immobile_preserves_authored_parent_motion_follow() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
 			roots: vec![0],
@@ -6516,12 +6709,7 @@ mod tests {
 		let runtime = sim.runtimes[0].as_ref().expect("runtime");
 		let joint = &runtime.joints[0];
 		assert_eq!(runtime.category, "cloth");
-		assert!(
-			joint.parent_motion_follow < 0.45,
-			"cloth should keep parent motion coupling loose enough for inertia: follow={}",
-			joint.parent_motion_follow
-		);
-		assert!((joint.parent_motion_follow - 0.4125).abs() < 1e-6);
+		assert!((joint.parent_motion_follow - 0.575).abs() < 1e-6);
 	}
 
 	#[test]
@@ -6765,7 +6953,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unphysics_long_chain_source_intent_is_softened_without_scaling_profile_override() {
+	fn unphysics_long_chain_source_intent_keeps_authored_immobile_without_scaling_profile_override() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![
 				node(0.0, Vec3::ZERO, vec![1, 8]),
@@ -6843,12 +7031,8 @@ mod tests {
 			long_runtime.params.shape_preservation,
 			short_runtime.params.shape_preservation
 		);
-		assert!(
-			long_runtime.joints[0].parent_motion_follow < short_runtime.joints[0].parent_motion_follow,
-			"long cloth should keep more inertia than short cloth: long={} short={}",
-			long_runtime.joints[0].parent_motion_follow,
-			short_runtime.joints[0].parent_motion_follow
-		);
+		assert!((long_runtime.joints[0].parent_motion_follow - 0.575).abs() < 1e-6);
+		assert!((short_runtime.joints[0].parent_motion_follow - 0.575).abs() < 1e-6);
 
 		let config = DynamicsPhysicsConfig {
 			overrides: vec![DynamicsCategoryOverride {
@@ -6873,7 +7057,7 @@ mod tests {
 	}
 
 	#[test]
-	fn unphysics_long_cloth_without_curves_gets_tip_softness_distribution() {
+	fn unphysics_long_cloth_without_curves_keeps_authored_immobile_distribution() {
 		let scene = UnaSceneSnapshot {
 			nodes: vec![
 				node(0.0, Vec3::ZERO, vec![1]),
@@ -6937,12 +7121,8 @@ mod tests {
 			root.shape_preservation,
 			tip.shape_preservation
 		);
-		assert!(
-			tip.parent_motion_follow < root.parent_motion_follow,
-			"long cloth tip should keep more local inertia than root: root={} tip={}",
-			root.parent_motion_follow,
-			tip.parent_motion_follow
-		);
+		assert!((root.parent_motion_follow - 0.575).abs() < 1e-6);
+		assert!((tip.parent_motion_follow - 0.575).abs() < 1e-6);
 		assert!(
 			tip.bounce_response > root.bounce_response,
 			"long cloth tip should retain more residual motion than root: root={} tip={}",
@@ -7682,7 +7862,6 @@ mod tests {
 			source_shape_preservation_scale: 1.0,
 			source_rest_response_scale: 1.0,
 			source_bounce_response_scale: 1.0,
-			source_motion_coupling_scale: 1.0,
 			shape_preservation: 0.0,
 			rest_response: 0.0,
 			bounce_response: 0.0,
@@ -8519,15 +8698,8 @@ mod tests {
 		let sim = DynamicsSimulator::new(&scene, &settings).expect("sim");
 		let runtime = sim.runtimes[0].as_ref().expect("runtime");
 		assert_eq!(runtime.category, "soft_body");
-		assert!(
-			runtime.joints[0].parent_motion_follow < 0.70,
-			"soft body should keep a general chain-based motion distribution: follow={}",
-			runtime.joints[0].parent_motion_follow
-		);
-		assert!(
-			runtime.joints.last().expect("tip").parent_motion_follow < runtime.joints[0].parent_motion_follow,
-			"soft body should get root-to-tip motion distribution"
-		);
+		assert!((runtime.joints[0].parent_motion_follow - 0.77).abs() < 1e-6);
+		assert!((runtime.joints.last().expect("tip").parent_motion_follow - 0.77).abs() < 1e-6);
 		assert!(
 			runtime.joints.last().expect("tip").bounce_response < 0.60,
 			"soft body should keep bounce below a saturated inertia-retention response: bounce={}",
@@ -9459,6 +9631,69 @@ mod tests {
 		assert_eq!(rt.params.gravity_falloff, 0.0);
 		assert_eq!(rt.params.immobile, 0.0);
 		assert_eq!(rt.params.drag_scale, 1.0);
+	}
+
+	#[test]
+	fn vrc_advanced_uses_default_damping_without_overriding_explicit_profile() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![node(0.0, Vec3::ZERO, vec![1]), node(0.0, Vec3::new(0.0, 1.0, 0.0), vec![])],
+			roots: vec![0],
+			..Default::default()
+		};
+		let settings = UnaSpringBoneSettings {
+			groups: vec![UnaSpringBoneGroup {
+				interaction_chain_start_index: 0,
+				source_kind: un_avatar_core::UnaDynamicsSourceKind::VrcPhysBone,
+				enabled: true,
+				source_id: "physbone:test/advanced".to_string(),
+				comment: String::new(),
+				category: String::new(),
+				stiffness: 0.1,
+				pull: 0.1,
+				spring: 0.0,
+				integration_type: UnaDynamicsIntegrationType::VrcAdvanced,
+				gravity_power: 1.0,
+				gravity_falloff: 0.0,
+				immobile: 0.0,
+				immobile_type: Default::default(),
+				gravity_dir: [0.0, -1.0, 0.0],
+				drag_force: 0.3,
+				center_node: None,
+				hit_radius: 0.0,
+				hit_radius_samples: Vec::new(),
+				stiffness_samples: Vec::new(),
+				pull_samples: Vec::new(),
+				spring_samples: Vec::new(),
+				gravity_power_samples: Vec::new(),
+				gravity_falloff_samples: Vec::new(),
+				immobile_samples: Vec::new(),
+				max_angle_x_samples: Vec::new(),
+				max_angle_z_samples: Vec::new(),
+				writeback_mode: Default::default(),
+				limit: None,
+				interaction: None,
+				bone_node_indices: vec![0, 1],
+			}],
+			..Default::default()
+		};
+
+		let sim = DynamicsSimulator::new(&scene, &settings).expect("sim");
+		let rt = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(rt.joints[0].damping_half_life_ms, Some(80.0));
+
+		let config = DynamicsPhysicsConfig {
+			group_overrides: vec![DynamicsGroupOverride {
+				source_id: "physbone:test/advanced".to_string(),
+				params: DynamicsPhysicsParams {
+					damping_half_life_ms: Some(140.0),
+					..Default::default()
+				},
+			}],
+			..Default::default()
+		};
+		let sim = DynamicsSimulator::new_with_config(&scene, &settings, Vec::new(), config).expect("sim");
+		let rt = sim.runtimes[0].as_ref().expect("runtime");
+		assert_eq!(rt.joints[0].damping_half_life_ms, Some(140.0));
 	}
 
 	#[test]

@@ -1525,11 +1525,12 @@ fn apply_parent_constraint(
 		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
 		.and_then(|parent| world.get(parent).copied())
 		.unwrap_or(Mat4::IDENTITY);
-	let target_rest_local = rest_nodes
-		.get(c.target_node)
-		.map(|node| Mat4::from_cols_array(&node.transform))
-		.unwrap_or(Mat4::IDENTITY);
-	let target_rest_world = current_parent_world * target_rest_local;
+	let target_rest_world = rest_world.get(c.target_node).copied().unwrap_or_else(|| {
+		rest_nodes
+			.get(c.target_node)
+			.map(|node| Mat4::from_cols_array(&node.transform))
+			.unwrap_or(Mat4::IDENTITY)
+	});
 	let source_iter = if c.sources.is_empty() { None } else { Some(c.sources.as_slice()) };
 	let mut total_weight = 0.0_f32;
 	let mut blended_translation = Vec3::ZERO;
@@ -2088,6 +2089,12 @@ mod tests {
 
 	fn apply_left_upper_arm_sample(mut document: UnaDocument, rest_nodes: Vec<UnaSceneNode>, source_rotation: Quat) -> UnaSceneSnapshot {
 		let frame = unmotion_body_frame(HumanoidBone::LeftUpperArm, source_rotation);
+		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
+		document.scene.unwrap()
+	}
+
+	fn apply_right_upper_arm_sample(mut document: UnaDocument, rest_nodes: Vec<UnaSceneNode>, source_rotation: Quat) -> UnaSceneSnapshot {
+		let frame = unmotion_body_frame(HumanoidBone::RightUpperArm, source_rotation);
 		apply_un_motion_frame_to_document_with_rest(&mut document, &frame, ApplyUnMotionFrameOpts::default(), Some(&rest_nodes));
 		document.scene.unwrap()
 	}
@@ -3690,6 +3697,96 @@ mod tests {
 	}
 
 	#[test]
+	fn unmotion_right_upper_arm_matches_vrm1_and_equivalent_unavatar_world_axis() {
+		let source_rotation = Quat::from_rotation_arc(Vec3::X, Vec3::Z);
+
+		let vrm1_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(-Vec3::X).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(-Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let vrm1_document = UnaDocument {
+			vrm: Some(un_avatar_core::UnaVrmExtension {
+				spec_version: "1.0".to_string(),
+				meta: serde_json::Value::Null,
+				humanoid_bones: Default::default(),
+				mtoon_materials_v0: vec![],
+				mtoon_material_indices_v1: vec![],
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: vrm1_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("rightupperarm".to_string(), 1)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let vrm1_scene = apply_right_upper_arm_sample(vrm1_document, vrm1_rest_nodes, source_rotation);
+		let vrm1_axis = normalized_world_bone_axis(&vrm1_scene, 1, 2);
+
+		let unavatar_rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				children: vec![3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::Y).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let unavatar_document = UnaDocument {
+			unavatar: Some(un_avatar_core::UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::Value::Null,
+			}),
+			scene: Some(UnaSceneSnapshot {
+				nodes: unavatar_rest_nodes.clone(),
+				roots: vec![0],
+				..Default::default()
+			}),
+			humanoid_profile: Some(HumanoidProfile {
+				bone_node_indices: [("rightupperarm".to_string(), 2)].into_iter().collect(),
+			}),
+			..Default::default()
+		};
+		let unavatar_scene = apply_right_upper_arm_sample(unavatar_document, unavatar_rest_nodes, source_rotation);
+		let unavatar_axis = normalized_world_bone_axis(&unavatar_scene, 2, 3);
+
+		assert!(
+			(unavatar_axis - vrm1_axis).length() < 1e-5,
+			".unavatar +Y right upper-arm chain equivalent to VRM1 -X should produce the same world axis: unavatar={:?} vrm1={:?}",
+			unavatar_axis,
+			vrm1_axis
+		);
+		assert!((vrm1_axis - Vec3::Z).length() < 1e-5);
+	}
+
+	#[test]
 	fn unavatar_unmotion_hand_axis_uses_middle_finger_not_first_decoration_child() {
 		let rest_nodes = vec![
 			unknown_node(),
@@ -4543,6 +4640,63 @@ mod tests {
 		let (_, expected_rotation, expected_translation) = expected.to_scale_rotation_translation();
 		assert!((translation - expected_translation).length() < 1e-5);
 		assert!(applied_rotation.abs_diff_eq(expected_rotation, 1e-5) || applied_rotation.abs_diff_eq(-expected_rotation, 1e-5));
+	}
+
+	#[test]
+	fn node_parent_constraint_uses_target_rest_world_when_parent_moves() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 1.0, 0.0)).to_cols_array(),
+				children: vec![2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		nodes[1].transform = Mat4::from_translation(Vec3::new(0.0, 10.0, 0.0)).to_cols_array();
+		nodes[3].transform = Mat4::from_translation(Vec3::new(2.0, 0.0, 0.0)).to_cols_array();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 2,
+			source_node: 3,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::Parent {
+				translate_x: true,
+				translate_y: true,
+				translate_z: true,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				translation_at_rest: [0.0; 3],
+				rotation_at_rest: [0.0; 3],
+			},
+			sources: vec![un_avatar_core::UnaNodeConstraintSource {
+				source_node: 3,
+				weight: 1.0,
+				translation_offset: [0.0; 3],
+				rotation_offset: [0.0; 3],
+			}],
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let world = scene_world_matrices(&nodes, &[0]);
+		let target_world_translation = world[2].transform_point3(Vec3::ZERO);
+		assert!(
+			(target_world_translation - Vec3::new(3.0, 1.0, 0.0)).length() < 1e-5,
+			"target_world_translation={target_world_translation:?}"
+		);
 	}
 
 	#[test]

@@ -11,7 +11,7 @@ use std::{
 };
 
 use image::imageops::FilterType;
-use pic_scale::{ImageSize, ImageStore, ImageStoreMut, ResamplingFunction, Scaler, ThreadingPolicy};
+use pic_scale::{BufferStore, ImageSize, ImageStore, ImageStoreMut, ResamplingFunction, Scaler, ThreadingPolicy};
 use serde::Serialize;
 use un_avatar_core::{UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata};
 
@@ -717,7 +717,11 @@ fn resize_rgba_pic_scale(
 		)
 		.expect("pic-scale rgba resampling plan");
 	plan.resample(&src_store, &mut dst_store).expect("pic-scale rgba resampling");
-	(dst_width as u32, dst_height as u32, dst_store.as_bytes().to_vec())
+	let rgba = match dst_store.buffer {
+		BufferStore::Owned(rgba) => rgba,
+		BufferStore::Borrowed(_) => unreachable!("ImageStoreMut::alloc must own its buffer"),
+	};
+	(dst_width as u32, dst_height as u32, rgba)
 }
 
 fn downsample_rgba_mip(
@@ -999,6 +1003,10 @@ fn processed_texture_cache_dir() -> Option<PathBuf> {
 			.or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
 			.map(|p| p.join("un-avatar").join("texture-cache").join("v1"))
 	}
+}
+
+pub(crate) fn processed_texture_cache_path_from_key(key: u64) -> Option<PathBuf> {
+	processed_texture_cache_dir().map(|cache_dir| cache_dir.join(format!("{key:016x}.utxc")))
 }
 
 fn read_exact_array<const N: usize>(reader: &mut impl Read) -> Option<[u8; N]> {

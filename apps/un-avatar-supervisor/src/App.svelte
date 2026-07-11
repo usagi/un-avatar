@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 	import { listen } from "@tauri-apps/api/event";
+	import { onMount } from "svelte";
 	import { _ } from "svelte-i18n";
 	import { setUiLocale } from "@usagi.network/un-i18n-svelte";
 	import ProfileAvatarSection from "./lib/ProfileAvatarSection.svelte";
@@ -126,7 +127,18 @@
 	} from "./lib/storageState";
 	import { animatorItemCount } from "./lib/rendererAnimator";
 	import { spoutSenderLabel, spoutTimingLabel, textureCacheLabel, texturePolicyLabel, textureSummaryLabel } from "./lib/runtimeLabels";
-	import { Activity, AlertTriangle, Camera, FileCog, FolderOpen, Monitor, Play, Settings, TerminalSquare } from "lucide-svelte";
+	import {
+		Activity,
+		AlertTriangle,
+		Database,
+		FileCog,
+		FolderOpen,
+		Monitor,
+		RefreshCw,
+		Settings,
+		TerminalSquare,
+		Trash2,
+	} from "lucide-svelte";
 	import ThemeModeSwitch from "./lib/ThemeModeSwitch.svelte";
 
 	const COLOR_DISPLAY_MODE_KEY = "un-avatar-supervisor.colorDisplayMode";
@@ -202,6 +214,26 @@
 		elapsed_secs: number;
 		detail: string | null;
 	};
+	type SceneCachePrewarmProgress = {
+		setting_id: string;
+		phase: string;
+		current: number;
+		total: number;
+		detail: string;
+		elapsed_secs: number;
+	};
+	type RendererCacheGroupStatus = {
+		label: string;
+		path: string;
+		bytes: number;
+		files: number;
+	};
+	type RendererCacheStatus = {
+		texture: RendererCacheGroupStatus;
+		pipeline: RendererCacheGroupStatus;
+		total_bytes: number;
+		total_files: number;
+	};
 	const launchTargetStorageKey = "un-avatar-supervisor.launch-target-id";
 	const defaultIconSrc = DEFAULT_PROFILE_ICON_SRC;
 
@@ -220,6 +252,9 @@
 	let rendererActivationSeq = new Map<number, number>();
 	let notifications = $state<AppNotification[]>([]);
 	let nativeNotificationStatus = $state<NativeNotificationStatus | null>(null);
+	let rendererCacheStatus = $state<RendererCacheStatus | null>(null);
+	let rendererCacheBusy = $state(false);
+	let sceneCachePrewarmProgress = $state<SceneCachePrewarmProgress | null>(null);
 	let avatarSettings = $state<AvatarSetting[]>([]);
 	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
@@ -230,6 +265,7 @@
 	let rendererPaneTab = $state<RendererPaneTab>("overview");
 	let showStoppedRenderers = $state(false);
 	let selectedSettingId = $state<string | null>(null);
+	let loadedProfileDetailKey = $state("");
 	let draggedSettingId = $state<string | null>(null);
 	let profileHint = $state("");
 	let settingsHint = $state("");
@@ -280,12 +316,18 @@
 	let deleteHoldProgress = $state(0);
 	let deleteHoldTimer: number | null = null;
 	let deleteHoldStartedAt = 0;
+	let cacheDeleteHoldProgress = $state(0);
+	let cacheDeleteHoldTimer: number | null = null;
+	let cacheDeleteHoldStartedAt = 0;
 	let runtimeRefreshBusy = false;
 	let runtimeRefreshPending = false;
 	let runtimeRefreshTraceSeq = 0;
 	let startupAutoLaunchAttempted = false;
 
 	const deleteHoldDurationMs = 1200;
+	const runtimeRefreshIntervalMs = 250;
+	const wardrobeTransitionRuntimeRefreshIntervalMs = 1000;
+	const idleRuntimeRefreshIntervalMs = 2000;
 	const profileSettingUpdateCoalesceMs = 80;
 	const motionLookAtFields = ["motion.look_at.enabled", "motion.look_at.clamp_deg"] as const;
 	const motionReceiverFields = [
@@ -315,6 +357,9 @@
 			}
 			return byId;
 		})()
+	);
+	const wardrobeTransitionTelemetryActive = $derived(
+		Object.values(runtimeStatuses).some((status) => status.wardrobe_asset_upload?.transition_progress?.active === true)
 	);
 	const avatarSettingById = $derived(
 		(() => {
@@ -382,6 +427,13 @@
 	const runningCount = $derived(rendererStatusCounts.running);
 	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
+	const rendererCacheTotalLabel = $derived(
+		rendererCacheStatus
+			? `${formatCacheBytes(rendererCacheStatus.total_bytes)} / ${$_("app.cache_files", {
+					values: { count: rendererCacheStatus.total_files },
+				})}`
+			: "--"
+	);
 	$effect(() => {
 		reconcileSelectedRendererId(renderers);
 	});
@@ -416,6 +468,20 @@
 	function updateSettingsHintFromEvent(event: Event): void {
 		const hint = hintFromEventTarget(event);
 		if (hint) settingsHint = hint;
+	}
+
+	function formatCacheBytes(bytes: number | null | undefined): string {
+		if (bytes == null) return "--";
+		if (bytes < 1024) return `${bytes} B`;
+		const units = ["KiB", "MiB", "GiB", "TiB"];
+		let value = bytes / 1024;
+		let unitIndex = 0;
+		while (value >= 1024 && unitIndex < units.length - 1) {
+			value /= 1024;
+			unitIndex += 1;
+		}
+		const decimals = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+		return `${value.toFixed(decimals)} ${units[unitIndex]}`;
 	}
 
 	function clearSettingsHint(): void {
@@ -488,7 +554,7 @@
 			minimized: false,
 			show_axes: false,
 			show_bone_colliders: false,
-			bone_colliders_enabled: true,
+			bone_colliders_enabled: false,
 			bone_collider_head: 120,
 			bone_collider_neck_chest: 80,
 			bone_collider_torso: 140,
@@ -503,6 +569,8 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
+			debug_zero_morphs: false,
+			debug_vertex_pick_diagnostics: false,
 			outline_policy: "off",
 			outline_type: "silhouette",
 			outline_width: null,
@@ -620,7 +688,7 @@
 			minimized: false,
 			show_axes: true,
 			show_bone_colliders: true,
-			bone_colliders_enabled: true,
+			bone_colliders_enabled: false,
 			bone_collider_head: 120,
 			bone_collider_neck_chest: 80,
 			bone_collider_torso: 140,
@@ -635,6 +703,8 @@
 			debug_disable_shade_color: false,
 			debug_disable_normal_map: false,
 			debug_base_texture_only: false,
+			debug_zero_morphs: false,
+			debug_vertex_pick_diagnostics: false,
 			outline_policy: "off",
 			outline_type: "silhouette",
 			outline_width: null,
@@ -753,6 +823,22 @@
 			selectedSettingId = setting.id;
 		}
 		launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, next);
+	}
+
+	async function loadSelectedProfileDetails(setting: AvatarSetting): Promise<void> {
+		if (!hasTauriRuntime()) return;
+		const key = `${setting.id}\n${setting.manifest_path}`;
+		if (loadedProfileDetailKey === key) return;
+		loadedProfileDetailKey = key;
+		try {
+			const detailed = await invoke<AvatarSetting>("get_avatar_setting_details", { settingId: setting.id });
+			if (selectedSetting?.id === setting.id && selectedSetting.manifest_path === setting.manifest_path) {
+				replaceAvatarSetting(detailed, false);
+			}
+		} catch (error) {
+			if (loadedProfileDetailKey === key) loadedProfileDetailKey = "";
+			message = String(error);
+		}
 	}
 
 	function bumpProfileIconRevision(path: string | null): void {
@@ -1216,6 +1302,7 @@
 			runtimeStatuses = {};
 			notifications = [];
 			nativeNotificationStatus = null;
+			rendererCacheStatus = null;
 			avatarSettings = browserPreviewSettings;
 			selectedSettingId = pickInitialSelectedSettingId(
 				selectedSettingId,
@@ -1244,8 +1331,10 @@
 				),
 			]);
 			renderers = instances;
+			loadedProfileDetailKey = "";
 			avatarSettings = settings;
 			await refreshRendererRuntimeStatuses(instances);
+			void refreshRendererCacheStatus();
 			notifications = appNotifications;
 			nativeNotificationStatus = nativeNotifications;
 			reconcileSelectedRendererId(instances);
@@ -1256,6 +1345,68 @@
 			message = String(error);
 			traceFrontendEvent("refreshAll:error", { error: String(error) });
 		}
+	}
+
+	async function refreshRendererCacheStatus(): Promise<void> {
+		if (!hasTauriRuntime()) {
+			rendererCacheStatus = null;
+			return;
+		}
+		try {
+			rendererCacheStatus = await invoke<RendererCacheStatus>("get_renderer_cache_status");
+		} catch (error) {
+			message = String(error);
+		}
+	}
+
+	async function clearRendererCache(): Promise<void> {
+		if (!hasTauriRuntime()) {
+			message = $_("app.cache_clear_requires_tauri");
+			return;
+		}
+		if (visibleRenderers.length > 0) {
+			message = $_("app.cache_clear_blocked_running");
+			return;
+		}
+		const status = rendererCacheStatus;
+		if (!status || status.total_files === 0) return;
+		rendererCacheBusy = true;
+		try {
+			const next = await invoke<RendererCacheStatus>("clear_renderer_cache");
+			rendererCacheStatus = next;
+			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
+			message = $_("app.cache_cleared");
+		} catch (error) {
+			message = String(error);
+		} finally {
+			rendererCacheBusy = false;
+		}
+	}
+
+	function startCacheDeleteHold(): void {
+		if (busy || rendererCacheBusy || visibleRenderers.length > 0 || !rendererCacheStatus || rendererCacheStatus.total_files === 0)
+			return;
+		cancelCacheDeleteHold();
+		cacheDeleteHoldProgress = 0;
+		cacheDeleteHoldStartedAt = performance.now();
+		const tick = () => {
+			cacheDeleteHoldProgress = Math.min(1, (performance.now() - cacheDeleteHoldStartedAt) / deleteHoldDurationMs);
+			if (cacheDeleteHoldProgress >= 1) {
+				cancelCacheDeleteHold();
+				void clearRendererCache();
+				return;
+			}
+			cacheDeleteHoldTimer = window.requestAnimationFrame(tick);
+		};
+		cacheDeleteHoldTimer = window.requestAnimationFrame(tick);
+	}
+
+	function cancelCacheDeleteHold(): void {
+		if (cacheDeleteHoldTimer != null) {
+			window.cancelAnimationFrame(cacheDeleteHoldTimer);
+			cacheDeleteHoldTimer = null;
+		}
+		cacheDeleteHoldProgress = 0;
 	}
 
 	async function refreshRendererRuntimeStatuses(instances: RendererInstance[] = renderers): Promise<void> {
@@ -1449,6 +1600,14 @@
 			return;
 		}
 		busy = true;
+		sceneCachePrewarmProgress = {
+			setting_id: settingId,
+			phase: "starting",
+			current: 0,
+			total: 0,
+			detail: $_("profiles.messages.cache_warming"),
+			elapsed_secs: 0,
+		};
 		try {
 			message = $_("profiles.messages.cache_warming");
 			const result = await invoke<PrewarmSceneCacheResult>("prewarm_renderer_scene_cache", { settingId });
@@ -1461,10 +1620,12 @@
 					});
 			avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings");
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
+			await refreshRendererCacheStatus();
 		} catch (error) {
 			message = String(error);
 			notifications = await invoke<AppNotification[]>("list_app_notifications");
 		} finally {
+			sceneCachePrewarmProgress = null;
 			busy = false;
 		}
 	}
@@ -3103,7 +3264,7 @@
 		traceFrontendEvent("activeTab:committed", { activeTab });
 	});
 
-	$effect(() => {
+	onMount(() => {
 		let cancelled = false;
 		void (async () => {
 			await loadBackendAppSettings();
@@ -3112,14 +3273,32 @@
 				await maybeAutoLaunchSelectedOnStartup();
 			}
 		})();
-		const timer = window.setInterval(() => {
-			if (activeTab === "renderers" || activeTab === "settings") {
-				refreshRendererRuntimeView();
-			}
-		}, 250);
 		return () => {
 			cancelled = true;
-			window.clearInterval(timer);
+		};
+	});
+
+	$effect(() => {
+		let cancelled = false;
+		let timer: number | null = null;
+		const scheduleRuntimeRefresh = () => {
+			const interval =
+				visibleRenderers.length === 0
+					? idleRuntimeRefreshIntervalMs
+					: wardrobeTransitionTelemetryActive
+						? wardrobeTransitionRuntimeRefreshIntervalMs
+						: runtimeRefreshIntervalMs;
+			timer = window.setTimeout(() => {
+				if (activeTab === "renderers" || activeTab === "settings") {
+					refreshRendererRuntimeView();
+				}
+				if (!cancelled) scheduleRuntimeRefresh();
+			}, interval);
+		};
+		scheduleRuntimeRefresh();
+		return () => {
+			cancelled = true;
+			if (timer != null) window.clearTimeout(timer);
 		};
 	});
 
@@ -3153,6 +3332,26 @@
 	});
 
 	$effect(() => {
+		if (!hasTauriRuntime()) return;
+		let cancelled = false;
+		let unlisten: (() => void) | null = null;
+		void listen<SceneCachePrewarmProgress>("scene-cache-prewarm-progress", (event) => {
+			if (!cancelled) sceneCachePrewarmProgress = event.payload;
+		})
+			.then((handler) => {
+				if (cancelled) handler();
+				else unlisten = handler;
+			})
+			.catch((error) => {
+				message = String(error);
+			});
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	});
+
+	$effect(() => {
 		document.documentElement.dataset.theme = resolvedTheme;
 		document.documentElement.dataset.themeMode = appSettings.theme_mode;
 		syncAppSettingsToBackend(appSettings);
@@ -3168,6 +3367,7 @@
 
 	$effect(() => () => {
 		cancelDeleteHold();
+		cancelCacheDeleteHold();
 		cancelSettingPointerDrag();
 	});
 
@@ -3181,6 +3381,10 @@
 
 	$effect(() => {
 		void refreshWardrobeOptionsForSetting(selectedSetting);
+	});
+
+	$effect(() => {
+		if (selectedSetting) void loadSelectedProfileDetails(selectedSetting);
 	});
 
 	/// selectedSettingId が変わるたびに Tauri 側へ保存し、次回起動時に復元できるようにする。
@@ -3256,6 +3460,51 @@
 				><Settings size={17} />{$_("sidebar.settings")}</button
 			>
 			<div class="rail-footer">
+				<div class="cache-panel" aria-label={$_("app.cache_panel_aria")}>
+					<div class="cache-panel-head">
+						<span><Database size={14} />{$_("app.cache_title")}</span>
+						<div class="cache-panel-actions">
+							<button
+								class="icon-button"
+								title={$_("app.cache_refresh")}
+								disabled={rendererCacheBusy}
+								onclick={() => void refreshRendererCacheStatus()}><RefreshCw size={14} /></button
+							>
+							<button
+								class="icon-button danger-icon hold-delete"
+								title={visibleRenderers.length > 0 ? $_("app.cache_clear_blocked_running") : $_("app.cache_clear")}
+								disabled={busy ||
+									rendererCacheBusy ||
+									visibleRenderers.length > 0 ||
+									!rendererCacheStatus ||
+									rendererCacheStatus.total_files === 0}
+								style={`--hold-progress: ${cacheDeleteHoldProgress}`}
+								onpointerdown={startCacheDeleteHold}
+								onpointerup={cancelCacheDeleteHold}
+								onpointercancel={cancelCacheDeleteHold}
+								onpointerleave={cancelCacheDeleteHold}
+								onkeydown={(event) => {
+									if (event.key === " " || event.key === "Enter") {
+										event.preventDefault();
+										startCacheDeleteHold();
+									}
+								}}
+								onkeyup={cancelCacheDeleteHold}><span class="hold-fill"></span><Trash2 size={14} /></button
+							>
+						</div>
+					</div>
+					<div class="cache-total">{rendererCacheTotalLabel}</div>
+					<div class="cache-groups">
+						<div title={rendererCacheStatus?.texture.path ?? ""}>
+							<span>{$_("app.cache_texture")}</span>
+							<strong>{formatCacheBytes(rendererCacheStatus?.texture.bytes)}</strong>
+						</div>
+						<div title={rendererCacheStatus?.pipeline.path ?? ""}>
+							<span>{$_("app.cache_pipeline")}</span>
+							<strong>{formatCacheBytes(rendererCacheStatus?.pipeline.bytes)}</strong>
+						</div>
+					</div>
+				</div>
 				<button class="danger" disabled={busy || visibleRenderers.length === 0} onclick={stopAll}
 					><AlertTriangle size={16} />{$_("app.stop_all")}</button
 				>
@@ -3500,6 +3749,7 @@
 						{liveRendererCount}
 						pendingRestart={profilePendingRestart}
 						activeSection={activeProfileSection}
+						cacheProgress={sceneCachePrewarmProgress?.setting_id === selectedSetting.id ? sceneCachePrewarmProgress : null}
 						{busy}
 						onRestartPending={() => restartPendingRenderer()}
 						onViewRenderer={(rendererId) => {

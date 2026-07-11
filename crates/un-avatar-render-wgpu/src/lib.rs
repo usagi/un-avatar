@@ -35,7 +35,6 @@ use std::{
 	path::{Path, PathBuf},
 	sync::{
 		atomic::{AtomicBool, AtomicU64, Ordering},
-		mpsc::{self, Receiver, TryRecvError},
 		Arc, Mutex,
 	},
 	thread,
@@ -366,11 +365,6 @@ struct WardrobeApplyFrameResult {
 	active_set_id: Option<String>,
 	active_asset_groups: Vec<String>,
 	asset_upload_plan: WardrobeAssetUploadPlan,
-}
-
-struct WardrobeAsyncApplyResult {
-	set_id: String,
-	scene: Result<(PreparedDocumentScene, DocumentAttachOptions), String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1679,7 +1673,6 @@ struct AvatarApp {
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
 	wardrobe_transition: Option<WardrobeTransitionState>,
-	wardrobe_apply_rx: Option<Receiver<WardrobeAsyncApplyResult>>,
 	#[cfg(windows)]
 	renderer_tray: Option<renderer_tray::RendererTray>,
 	#[cfg(windows)]
@@ -1829,6 +1822,13 @@ struct FrameTraceEntry {
 	contact_eval_ms: f32,
 	runtime_action_eval_ms: f32,
 	gpu_ms: f32,
+	wardrobe_transition_active: bool,
+	wardrobe_transition_remaining_work_bytes: u64,
+	wardrobe_transition_total_work_bytes: u64,
+	wardrobe_transition_image_budget_bytes: u64,
+	wardrobe_transition_step_ms: u32,
+	wardrobe_transition_ram_mb: Option<u64>,
+	wardrobe_transition_memory_pressure: bool,
 	unmotion_received_frames_total: u64,
 	unmotion_received_frames_delta: u64,
 	motion_applied_frames_total: u64,
@@ -1875,9 +1875,11 @@ impl FrameTraceState {
 		pacing: FramePacingSnapshot,
 		unmotion_received_frames: u64,
 		motion_applied_frames: u64,
+		wardrobe_asset_upload: Option<&WardrobeAssetUploadPlan>,
 	) {
 		let unmotion_received_frames_delta = unmotion_received_frames.saturating_sub(self.last_unmotion_received_frames);
 		let motion_applied_frames_delta = motion_applied_frames.saturating_sub(self.last_motion_applied_frames);
+		let wardrobe_progress = wardrobe_asset_upload.map(|plan| &plan.transition_progress);
 		self.last_unmotion_received_frames = unmotion_received_frames;
 		self.last_motion_applied_frames = motion_applied_frames;
 		self.frames.push_back(FrameTraceEntry {
@@ -1919,6 +1921,13 @@ impl FrameTraceState {
 			contact_eval_ms: timings.contact_eval_ms,
 			runtime_action_eval_ms: timings.runtime_action_eval_ms,
 			gpu_ms: timings.gpu_ms,
+			wardrobe_transition_active: wardrobe_progress.is_some_and(|progress| progress.active),
+			wardrobe_transition_remaining_work_bytes: wardrobe_progress.map_or(0, |progress| progress.remaining_work_bytes),
+			wardrobe_transition_total_work_bytes: wardrobe_progress.map_or(0, |progress| progress.total_work_bytes),
+			wardrobe_transition_image_budget_bytes: wardrobe_progress.map_or(0, |progress| progress.image_upload_budget_bytes),
+			wardrobe_transition_step_ms: wardrobe_progress.map_or(0, |progress| progress.last_step_ms),
+			wardrobe_transition_ram_mb: wardrobe_progress.and_then(|progress| progress.process_ram_mb),
+			wardrobe_transition_memory_pressure: wardrobe_progress.is_some_and(|progress| progress.memory_pressure),
 			unmotion_received_frames_total: unmotion_received_frames,
 			unmotion_received_frames_delta,
 			motion_applied_frames_total: motion_applied_frames,
@@ -2212,7 +2221,6 @@ impl AvatarApp {
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
 			wardrobe_transition: None,
-			wardrobe_apply_rx: None,
 			#[cfg(windows)]
 			renderer_tray: None,
 			#[cfg(windows)]
@@ -2724,7 +2732,6 @@ impl AvatarApp {
 	}
 
 	fn update_wardrobe_transition_before_frame(&mut self, now: Instant) {
-		self.poll_wardrobe_apply_worker();
 		let Some(transition) = self.wardrobe_transition.as_mut() else {
 			return;
 		};
@@ -2770,12 +2777,14 @@ impl AvatarApp {
 		let billboard = transition
 			.saved_camera
 			.wardrobe_billboard_camera(self.wardrobe_transition_aspect_wh(), transition.billboard_center);
+		let progress = self.wardrobe_transition_progress_fraction(transition.phase);
 		matches!(
 			transition.phase,
 			WardrobeTransitionPhase::BillboardPrimed | WardrobeTransitionPhase::Applying | WardrobeTransitionPhase::BillboardHold
 		)
 		.then_some(gpu::WardrobeChangingBillboardFrame {
 			time_secs: now.saturating_duration_since(transition.started_at).as_secs_f32(),
+			progress,
 			billboard_center: billboard.center,
 			billboard_size: billboard.size,
 			billboard_view_proj: billboard.view_proj,
@@ -2783,13 +2792,70 @@ impl AvatarApp {
 		})
 	}
 
+	fn wardrobe_transition_progress_fraction(&self, phase: WardrobeTransitionPhase) -> f32 {
+		match phase {
+			WardrobeTransitionPhase::BillboardPrimed => 0.0,
+			WardrobeTransitionPhase::BillboardHold | WardrobeTransitionPhase::Enter => 1.0,
+			WardrobeTransitionPhase::Applying => {
+				let Some(gpu) = self.gpu.as_ref() else {
+					return 0.0;
+				};
+				let progress = gpu.wardrobe_asset_upload_plan().transition_progress;
+				if progress.total_work_bytes > 0 {
+					return (1.0 - progress.remaining_work_bytes as f32 / progress.total_work_bytes as f32).clamp(0.0, 1.0);
+				}
+				let total = progress
+					.mesh_total
+					.saturating_add(progress.image_total)
+					.saturating_add(progress.cube_total)
+					.saturating_add(progress.material_total)
+					.saturating_add(progress.draw_resource_remaining);
+				if total == 0 {
+					return 0.5;
+				}
+				let remaining = progress
+					.mesh_remaining
+					.saturating_add(progress.image_remaining)
+					.saturating_add(progress.cube_remaining)
+					.saturating_add(progress.material_remaining)
+					.saturating_add(progress.draw_resource_remaining);
+				(1.0 - remaining as f32 / total as f32).clamp(0.0, 1.0)
+			}
+			WardrobeTransitionPhase::Exit => 0.0,
+		}
+	}
+
 	fn wardrobe_apply_after_render_set_id(&self) -> Option<String> {
 		let transition = self.wardrobe_transition.as_ref()?;
 		matches!(transition.phase, WardrobeTransitionPhase::BillboardPrimed).then(|| transition.set_id.clone())
 	}
 
-	fn start_wardrobe_apply_worker_after_render(&mut self, set_id: String) {
-		if self.wardrobe_apply_rx.is_some() {
+	fn start_wardrobe_apply_after_render(&mut self, set_id: String) {
+		if let Some(transition) = self.wardrobe_transition.as_mut() {
+			transition.phase = WardrobeTransitionPhase::Applying;
+			transition.phase_started_at = Instant::now();
+		}
+		let outcome = match self.gpu.as_mut() {
+			Some(gpu) => gpu.apply_wardrobe_set(&set_id),
+			None => Err("renderer is not initialized".to_string()),
+		};
+		if let Err(error) = outcome {
+			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
+				outcome: Err(error),
+				active_set_id: None,
+				active_asset_groups: Vec::new(),
+				asset_upload_plan: WardrobeAssetUploadPlan::default(),
+			});
+		}
+		self.request_redraw();
+	}
+
+	fn finish_wardrobe_apply_after_gpu_ready(&mut self) {
+		if !self
+			.wardrobe_transition
+			.as_ref()
+			.is_some_and(|transition| matches!(transition.phase, WardrobeTransitionPhase::Applying))
+		{
 			return;
 		}
 		let Some(gpu) = self.gpu.as_ref() else {
@@ -2801,95 +2867,14 @@ impl AvatarApp {
 			});
 			return;
 		};
-		let Some(doc_arc) = gpu.document_arc() else {
-			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
-				outcome: Err("document is not attached".to_string()),
-				active_set_id: None,
-				active_asset_groups: Vec::new(),
-				asset_upload_plan: WardrobeAssetUploadPlan::default(),
-			});
+		if !gpu.document_state_applied() {
 			return;
-		};
-		let context = gpu.scene_build_context();
-		let rest_nodes = gpu.rest_nodes_for_scene_prepare();
-		let options = self.document_attach_options();
-		if let Some(transition) = self.wardrobe_transition.as_mut() {
-			transition.phase = WardrobeTransitionPhase::Applying;
-			transition.phase_started_at = Instant::now();
 		}
-		let (tx, rx) = mpsc::channel();
-		self.wardrobe_apply_rx = Some(rx);
-		let thread_set_id = set_id.clone();
-		let spawn_result = thread::Builder::new().name("un-avatar-wardrobe-apply".to_string()).spawn(move || {
-			let scene = (|| {
-				let doc = doc_arc.read().map_err(|_| "document: RwLock poisoned".to_string())?;
-				let mut cloned = (*doc).clone();
-				drop(doc);
-				if let Some(rest_nodes) = rest_nodes.as_ref() {
-					gpu::restore_runtime_scene_transforms_to_rest(&mut cloned, rest_nodes.as_slice())?;
-				}
-				crate::model_loader::apply_required_wardrobe_set(&mut cloned, &thread_set_id)?;
-				let prepared = context.prepare_document_scene(Arc::new(cloned), &options, |_| {})?;
-				Ok((prepared, options))
-			})();
-			let _ = tx.send(WardrobeAsyncApplyResult {
-				set_id: thread_set_id,
-				scene,
-			});
-		});
-		if let Err(err) = spawn_result {
-			self.wardrobe_apply_rx = None;
-			self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
-				outcome: Err(format!("spawn wardrobe apply worker failed: {err}")),
-				active_set_id: None,
-				active_asset_groups: Vec::new(),
-				asset_upload_plan: WardrobeAssetUploadPlan::default(),
-			});
-		}
-	}
-
-	fn poll_wardrobe_apply_worker(&mut self) {
-		let Some(rx) = self.wardrobe_apply_rx.as_ref() else {
-			return;
-		};
-		let result = match rx.try_recv() {
-			Ok(result) => result,
-			Err(TryRecvError::Empty) => return,
-			Err(TryRecvError::Disconnected) => {
-				self.wardrobe_apply_rx = None;
-				self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
-					outcome: Err("wardrobe apply worker disconnected before reporting a result".to_string()),
-					active_set_id: None,
-					active_asset_groups: Vec::new(),
-					asset_upload_plan: WardrobeAssetUploadPlan::default(),
-				});
-				return;
-			}
-		};
-		self.wardrobe_apply_rx = None;
-		let outcome = match result.scene {
-			Ok((prepared, options)) => match self.gpu.as_mut() {
-				Some(gpu) => gpu.attach_prepared_document(prepared, options),
-				None => Err("renderer is not initialized".to_string()),
-			},
-			Err(err) => Err(err),
-		};
-		let (active_set_id, active_asset_groups, asset_upload_plan) = if outcome.is_ok() {
-			if let Some(gpu) = self.gpu.as_ref() {
-				(
-					gpu.active_wardrobe_set(),
-					gpu.active_asset_groups(),
-					gpu.wardrobe_asset_upload_plan(),
-				)
-			} else {
-				(None, Vec::new(), WardrobeAssetUploadPlan::default())
-			}
-		} else {
-			(None, Vec::new(), WardrobeAssetUploadPlan::default())
-		};
-		let _ = result.set_id;
+		let active_set_id = gpu.active_wardrobe_set();
+		let active_asset_groups = gpu.active_asset_groups();
+		let asset_upload_plan = gpu.wardrobe_asset_upload_plan();
 		self.finish_wardrobe_apply_after_render(WardrobeApplyFrameResult {
-			outcome,
+			outcome: Ok(()),
 			active_set_id,
 			active_asset_groups,
 			asset_upload_plan,
@@ -2912,6 +2897,7 @@ impl AvatarApp {
 		}
 		if saved_camera.is_some() {
 			if let Some(transition) = self.wardrobe_transition.as_mut() {
+				transition.billboard_started_at = Some(Instant::now());
 				transition.phase = WardrobeTransitionPhase::BillboardHold;
 				transition.phase_started_at = Instant::now();
 			}
@@ -3864,6 +3850,9 @@ impl AvatarApp {
 		if opts.debug_zero_morphs {
 			push_diagnostic("zero morphs");
 		}
+		if self.opts.debug_vertex_pick_diagnostics {
+			push_diagnostic("vertex pick");
+		}
 		if opts.debug_bind_pose {
 			push_diagnostic("bind pose");
 		}
@@ -4202,6 +4191,10 @@ impl AvatarApp {
 		let frame_role_label = rendered_frame_role_label(&frame_role);
 		let evaluate_runtime_actions = should_evaluate_runtime_actions_for_frame(&frame_role);
 		let wardrobe_apply_after_render_set_id = self.wardrobe_apply_after_render_set_id();
+		let wardrobe_transition_applying = self
+			.wardrobe_transition
+			.as_ref()
+			.is_some_and(|transition| matches!(transition.phase, WardrobeTransitionPhase::Applying));
 		let render_work = {
 			let Some(gpu) = self.gpu.as_mut() else {
 				return false;
@@ -4248,18 +4241,37 @@ impl AvatarApp {
 					(BTreeMap::new(), Vec::new())
 				}
 			};
+			let wardrobe_transition_progress_plan = if wardrobe_transition_applying {
+				let t_draw_state0 = Instant::now();
+				let _ = gpu.advance_wardrobe_transition_gpu_update();
+				timings.draw_state_refresh_ms += t_draw_state0.elapsed().as_secs_f32() * 1000.0;
+				Some(gpu.wardrobe_asset_upload_plan())
+			} else {
+				None
+			};
 			(
 				timings,
 				parameter_updates,
 				runtime_parameter_activations,
 				wardrobe_apply_after_render_set_id,
+				wardrobe_transition_progress_plan,
 			)
 		};
-		let (mut timings, parameter_updates, runtime_parameter_activations, wardrobe_apply_after_render_set_id) = render_work;
+		let (
+			mut timings,
+			parameter_updates,
+			runtime_parameter_activations,
+			wardrobe_apply_after_render_set_id,
+			wardrobe_transition_progress_plan,
+		) = render_work;
 		timings.cpu_total_ms = now.elapsed().as_secs_f32() * 1000.0;
 		if let Some(set_id) = wardrobe_apply_after_render_set_id {
-			self.start_wardrobe_apply_worker_after_render(set_id);
+			self.start_wardrobe_apply_after_render(set_id);
 		}
+		if let Some(plan) = wardrobe_transition_progress_plan.as_ref() {
+			self.update_runtime_wardrobe_asset_upload(plan.clone());
+		}
+		self.finish_wardrobe_apply_after_gpu_ready();
 		if !parameter_updates.is_empty() {
 			self.update_runtime_parameters(parameter_updates);
 		}
@@ -4280,7 +4292,14 @@ impl AvatarApp {
 				.gpu
 				.as_ref()
 				.map_or((0, 0), |gpu| (gpu.unmotion_zenoh_received_frames(), gpu.motion_applied_frames()));
-			trace.push(frame_role_label, &timings, pacing, unmotion_received_frames, motion_applied_frames);
+			trace.push(
+				frame_role_label,
+				&timings,
+				pacing,
+				unmotion_received_frames,
+				motion_applied_frames,
+				wardrobe_transition_progress_plan.as_ref(),
+			);
 		}
 		self.update_runtime_frame(&timings, pacing);
 		self.update_runtime_spout_stats();
@@ -4403,6 +4422,43 @@ fn renderer_tray_output_events(action: &renderer_tray::RendererTrayAction) -> Op
 			height: Some(*height),
 		}]),
 		_ => None,
+	}
+}
+
+impl AvatarApp {
+	fn write_vertex_pick_diagnostic(&mut self, position: PhysicalPosition<f64>) {
+		let Some(window) = self.window.as_ref() else {
+			return;
+		};
+		let Some(gpu) = self.gpu.as_mut() else {
+			eprintln!("un-avatar-renderer: vertex pick diagnostics failed: renderer is not initialized");
+			return;
+		};
+		let size = window.inner_size();
+		let value = match gpu.pick_vertex_diagnostic(position.x as f32, position.y as f32, size.width, size.height) {
+			Ok(value) => value,
+			Err(error) => {
+				eprintln!("un-avatar-renderer: vertex pick diagnostics failed: {error}");
+				return;
+			}
+		};
+		let millis = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.map(|duration| duration.as_millis())
+			.unwrap_or_default();
+		let path = std::path::PathBuf::from("target")
+			.join("tmp")
+			.join(format!("renderer-picked-vertex-{millis}.json"));
+		if let Some(parent) = path.parent() {
+			if let Err(error) = std::fs::create_dir_all(parent) {
+				eprintln!("un-avatar-renderer: vertex pick diagnostics create dir failed: {error}");
+				return;
+			}
+		}
+		match serde_json::to_vec_pretty(&value).and_then(|bytes| std::fs::write(&path, bytes).map_err(serde_json::Error::io)) {
+			Ok(()) => eprintln!("un-avatar-renderer: vertex pick diagnostics wrote {}", path.display()),
+			Err(error) => eprintln!("un-avatar-renderer: vertex pick diagnostics write failed: {error}"),
+		}
 	}
 }
 
@@ -4582,6 +4638,14 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				}
 			}
 			WindowEvent::MouseInput { state, button, .. } => {
+				if self.opts.debug_vertex_pick_diagnostics && button == MouseButton::Left && state == ElementState::Pressed {
+					if let Some(position) = self.last_cursor_pos {
+						self.write_vertex_pick_diagnostic(position);
+					} else {
+						eprintln!("un-avatar-renderer: vertex pick diagnostics failed: cursor position is unknown");
+					}
+					return;
+				}
 				if button == MouseButton::Left && state == ElementState::Pressed && !self.opts.decorations {
 					if let (Some(window), Some(position)) = (&self.window, self.last_cursor_pos) {
 						if let Some(direction) = borderless_resize_direction(position, window.inner_size()) {
@@ -6886,7 +6950,7 @@ fn start_runtime_bus(
 
 fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRuntimeSnapshot>>) {
 	use zenoh::Wait as _;
-	const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
+	const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 	const STATUS_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 	let session = match zenoh::open(zenoh::Config::default()).wait() {
 		Ok(session) => session,
@@ -7793,6 +7857,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		debug_disable_shade_color: cli.debug_disable_shade_color,
 		debug_disable_normal_map: cli.debug_disable_normal_map,
 		debug_base_texture_only: cli.debug_base_texture_only,
+		debug_vertex_pick_diagnostics: false,
 		initial_camera_state: None,
 		mesh_diagnostics: SceneMeshLoadOpts {
 			force_simple_basecolor: false,
@@ -8256,6 +8321,7 @@ mod tests {
 	fn test_wardrobe_billboard() -> gpu::WardrobeChangingBillboardFrame {
 		gpu::WardrobeChangingBillboardFrame {
 			time_secs: 0.0,
+			progress: 0.0,
 			billboard_center: [0.0, 1.0, 0.0],
 			billboard_size: 0.5,
 			billboard_view_proj: [[0.0; 4]; 4],

@@ -113,6 +113,7 @@ namespace UNAvatar.UnityExporter
                 var matcapColor = useMatCap ? ReadColor(material, "_MatCapColor", Color.white) : Color.white;
                 untoon["matcapEnabledFactor"] = useMatCap ? 1.0f : 0.0f;
                 untoon["matcapFactor"] = FloatArray(matcapColor.r, matcapColor.g, matcapColor.b);
+                untoon["matcapColorAlphaFactor"] = matcapColor.a;
                 untoon["matcapMainStrengthFactor"] = useMatCap ? matcapMainStrength : 0.0f;
                 AddTextureIndex(untoon, "matcapTextureIndex", useMatCap ? ReadTexture(material, "_MatCapTex") ?? ReadTexture(material, "_MatcapTex") : null);
                 AddTextureIndex(untoon, "matcapBlendMaskTextureIndex", useMatCap ? ReadTexture(material, "_MatCapBlendMask") : null);

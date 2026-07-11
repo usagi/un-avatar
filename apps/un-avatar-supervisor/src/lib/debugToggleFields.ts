@@ -41,6 +41,18 @@ export const debugToggleFields = [
 		label: "Base texture only",
 		hint: "UNToon fragment output を base (alb × base_color) のみに固定。shading / GI / rim / matcap / emissive / shade term を全部スキップ。",
 	},
+	{
+		key: "debug_zero_morphs",
+		field: "debug.zero_morphs",
+		label: "Zero morphs",
+		hint: "すべての morph/blendshape weight を 0 に固定。補正 morph が形状破綻の原因か切り分ける診断用。",
+	},
+	{
+		key: "debug_vertex_pick_diagnostics",
+		field: "debug.vertex_pick_diagnostics",
+		label: "Vertex pick diagnostics",
+		hint: "Renderer上の左クリック位置に最も近い表示頂点の診断 JSON を target/tmp へ出力。起動前にONにする診断用。",
+	},
 ] as const;
 
 export type DebugToggleFieldKey = (typeof debugToggleFields)[number]["key"];

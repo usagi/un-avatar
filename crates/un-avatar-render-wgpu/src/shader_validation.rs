@@ -314,6 +314,53 @@ mod tests {
 	}
 
 	#[test]
+	fn liltoon_shadow_border_range_only_affects_border_color_gradation() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert_eq!(
+			mesh.matches("lil_tooning_no_saturate_scale(").count(),
+			4,
+			"the helper plus primary, second, and third shadows must use the four-argument lilToon overload"
+		);
+		assert_eq!(
+			mesh.matches("lil_tooning_no_saturate_scale_range(").count(),
+			2,
+			"_ShadowBorderRange belongs only to its helper and lns.w border-color gradation"
+		);
+		let border_mix = mesh.find("let border_mix_raw = lil_tooning_no_saturate_scale_range(").unwrap();
+		assert!(
+			mesh[border_mix..].contains("clamp(drawu.shadow_ext_params.x, 0.0, 1.0)"),
+			"lilToon _ShadowBorderRange must reach only the border-color gradation"
+		);
+	}
+
+	#[test]
+	fn liltoon_sdf_shadow_matches_authored_mask_channels_and_face_axes() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let shadow_mask_type = drawu.shadow_ao_params.y;")
+				&& mesh.contains("dot(l.xz, face_right.xz) < 0.0")
+				&& mesh.contains("select(shadow_strength_mask.r, shadow_strength_mask.g")
+				&& mesh.contains("mix(sdf_value, primary_value, shadow_strength_mask.b)")
+				&& mesh.contains("primary_strength_mask = shadow_strength_mask.a")
+				&& mesh.contains("shadow_aa_scale = select(max(drawu.alpha_ext_params.y, 0.0), 0.0, shadow_mask_type >= 1.5)"),
+			"lilToon _ShadowMaskType=2 must use RG for mirrored SDF, B for normal/SDF blend, A for strength, and disable derivative AA"
+		);
+	}
+
+	#[test]
+	fn liltoon_flat_shadow_uses_authored_flat_axis_and_strength_mask() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("shadow_mask_type >= 0.5 && shadow_mask_type < 1.5")
+				&& mesh.contains("drawt.model * vec4<f32>(0.0, 0.25, 1.0, 0.0)")
+				&& mesh.contains("(dot(flat_normal, l) + drawu.shadow_ao_params.z) / max(drawu.shadow_ao_params.w, 0.000001)")
+				&& mesh.contains("lil_shadow = mix(flat_shadow, lil_shadow, shadow_strength_mask.r)")
+				&& mesh.contains("primary_strength_mask = 1.0"),
+			"lilToon _ShadowMaskType=1 must mix its flat shadow into all lns channels before applying unmasked _ShadowStrength"
+		);
+	}
+
+	#[test]
 	fn liltoon_shadow_extra_colors_mix_before_light_color() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		let start = mesh
@@ -779,13 +826,28 @@ mod tests {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
 			mesh.contains("var lil_shadowmix = 1.0;")
-				&& mesh.contains("lil_shadowmix = lil_shadow;")
+				&& mesh.contains("lil_shadowmix = raw_lil_shadow;")
 				&& mesh.contains("let lil_effect_shadowmix = select(lil_shadowmix, clamp(dot(n, l), 0.0, 1.0), is_untoon_gem_profile);"),
 			"lilToon effect masks must use fd.shadowmix before _ShadowStrength is applied"
 		);
 		assert!(
 			mesh.contains("specular_reflect = specular_reflect * lil_shadowmix;"),
 			"lilToon screen-shadow specular path attenuates specular by fd.shadowmix"
+		);
+	}
+
+	#[test]
+	fn liltoon_backface_force_shadow_applies_to_all_shadow_channels() {
+		let mesh = include_str!("../shaders/mesh.wgsl");
+		assert!(
+			mesh.contains("let backface_shadow = select(1.0 - clamp(drawu.material_ext_params.y, 0.0, 1.0), 1.0, front_facing);")
+				&& mesh.contains("shadow_post_ao), 0.0, 1.0) * backface_shadow;"),
+			"lilToon _BackfaceForceShadow must attenuate the primary shadow before fd.shadowmix is copied"
+		);
+		assert_eq!(
+			mesh.matches("* backface_shadow;").count(),
+			4,
+			"lilToon _BackfaceForceShadow must attenuate primary, second, third, and border shadow channels"
 		);
 	}
 

@@ -59,6 +59,530 @@ namespace UNAvatar.UnityExporter
             return string.Join("\n", lines);
         }
 
+        private string BuildSkinExportDiagnostics()
+        {
+            if (avatarRoot == null)
+            {
+                return "Avatar Root is missing.";
+            }
+
+            var rootTransform = avatarRoot.transform;
+            var exportNodes = new HashSet<Transform>();
+            foreach (var transform in avatarRoot.GetComponentsInChildren<Transform>(true))
+            {
+                exportNodes.Add(transform);
+            }
+
+            var skinnedRenderers = avatarRoot.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            var riskyRenderers = 0;
+            var missingBoneReferences = 0;
+            var lines = new List<string>
+            {
+                "Skin export diagnostics",
+                "Avatar Root: " + avatarRoot.name,
+                "Export node count: " + exportNodes.Count.ToString(CultureInfo.InvariantCulture),
+                "SkinnedMeshRenderer count: " + skinnedRenderers.Length.ToString(CultureInfo.InvariantCulture),
+                "",
+                "ExportSkin writes node.skin only when every SkinnedMeshRenderer.bones entry is inside Avatar Root."
+            };
+
+            foreach (var renderer in skinnedRenderers)
+            {
+                if (renderer == null)
+                {
+                    continue;
+                }
+
+                var bones = renderer.bones;
+                var mesh = renderer.sharedMesh;
+                var bindposes = mesh != null ? mesh.bindposes : null;
+                var boneWeights = mesh != null ? mesh.boneWeights : null;
+                var usedBoneIndices = UsedBoneIndicesForDiagnostics(boneWeights, mesh != null ? mesh.vertexCount : 0, bones != null ? bones.Length : 0, out var invalidUsedBoneIndices);
+                var missing = new List<string>();
+                var outside = new List<string>();
+                var usedMissing = new List<string>();
+                var nullBones = 0;
+
+                if (bones == null || bones.Length == 0)
+                {
+                    missing.Add("bones array is empty");
+                    usedMissing.Add("bones array is empty");
+                }
+                else
+                {
+                    for (var i = 0; i < bones.Length; i++)
+                    {
+                        var bone = bones[i];
+                        if (bone == null)
+                        {
+                            nullBones++;
+                            missing.Add("bone[" + i.ToString(CultureInfo.InvariantCulture) + "] is <null>");
+                            if (usedBoneIndices.Contains(i))
+                            {
+                                usedMissing.Add("used bone[" + i.ToString(CultureInfo.InvariantCulture) + "] is <null>");
+                            }
+                            continue;
+                        }
+                        if (!exportNodes.Contains(bone))
+                        {
+                            missingBoneReferences++;
+                            outside.Add(FormatBoneExportMiss(i, bone, rootTransform));
+                            if (usedBoneIndices.Contains(i))
+                            {
+                                usedMissing.Add("used " + FormatBoneExportMiss(i, bone, rootTransform));
+                            }
+                        }
+                    }
+                }
+
+                var hasWeightedMesh = boneWeights != null && boneWeights.Length == (mesh != null ? mesh.vertexCount : 0) && HasAnyBoneWeight(boneWeights);
+                var bindposeMismatch = bones != null && bindposes != null && bindposes.Length > 0 && bindposes.Length != bones.Length;
+                var rootBoneOutside = renderer.rootBone != null && !exportNodes.Contains(renderer.rootBone);
+                var legacyExportSkinWillFail = missing.Count > 0 || outside.Count > 0;
+                var compactedExportSkinWillFail = invalidUsedBoneIndices.Count > 0 || usedMissing.Count > 0;
+                var shouldPrint = legacyExportSkinWillFail || compactedExportSkinWillFail || bindposeMismatch || rootBoneOutside;
+                if (!shouldPrint)
+                {
+                    continue;
+                }
+
+                riskyRenderers++;
+                lines.Add("");
+                lines.Add("Renderer: " + BuildTransformPathForProbe(renderer.transform));
+                lines.Add("  activeSelf: " + renderer.gameObject.activeSelf + ", activeInHierarchy: " + renderer.gameObject.activeInHierarchy + ", enabled: " + renderer.enabled);
+                lines.Add("  sharedMesh: " + (mesh != null ? mesh.name : "<null>"));
+                lines.Add("  vertices: " + (mesh != null ? mesh.vertexCount.ToString(CultureInfo.InvariantCulture) : "0"));
+                lines.Add("  boneWeights: " + (boneWeights != null ? boneWeights.Length.ToString(CultureInfo.InvariantCulture) : "0") + ", hasWeightedMesh: " + hasWeightedMesh);
+                lines.Add("  bones: " + (bones != null ? bones.Length.ToString(CultureInfo.InvariantCulture) : "0") + ", nullBones: " + nullBones.ToString(CultureInfo.InvariantCulture));
+                lines.Add("  usedBones: " + usedBoneIndices.Count.ToString(CultureInfo.InvariantCulture) + ", invalidUsedBones: " + invalidUsedBoneIndices.Count.ToString(CultureInfo.InvariantCulture));
+                lines.Add("  bindposes: " + (bindposes != null ? bindposes.Length.ToString(CultureInfo.InvariantCulture) : "0") + (bindposeMismatch ? " (mismatch)" : ""));
+                lines.Add("  rootBone: " + FormatTransformPath(renderer.rootBone) + (rootBoneOutside ? " (outside Avatar Root)" : ""));
+                if (legacyExportSkinWillFail)
+                {
+                    lines.Add("  Legacy ExportSkin result: FAIL - node.skin would be omitted");
+                }
+                else
+                {
+                    lines.Add("  Legacy ExportSkin result: OK");
+                }
+                if (compactedExportSkinWillFail)
+                {
+                    lines.Add("  Compacted ExportSkin result: FAIL - a used bone cannot be exported");
+                }
+                else
+                {
+                    lines.Add("  Compacted ExportSkin result: OK");
+                }
+                foreach (var reason in missing)
+                {
+                    lines.Add("  reason: " + reason);
+                }
+                foreach (var reason in usedMissing)
+                {
+                    lines.Add("  used reason: " + reason);
+                }
+                foreach (var index in invalidUsedBoneIndices)
+                {
+                    lines.Add("  used reason: bone[" + index.ToString(CultureInfo.InvariantCulture) + "] is outside bones array");
+                }
+                if (outside.Count > 0)
+                {
+                    lines.Add("  bones outside Avatar Root:");
+                    lines.AddRange(IndentLines(string.Join("\n", outside), "    "));
+                }
+            }
+
+            lines.Insert(4, "Renderers with skin export risk: " + riskyRenderers.ToString(CultureInfo.InvariantCulture));
+            lines.Insert(5, "Bone references outside Avatar Root: " + missingBoneReferences.ToString(CultureInfo.InvariantCulture));
+            if (riskyRenderers == 0)
+            {
+                lines.Add("");
+                lines.Add("No SkinnedMeshRenderer matched the current ExportSkin failure conditions.");
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private string BuildPhysBoneExportDiagnostics()
+        {
+            if (avatarRoot == null)
+            {
+                return "Avatar Root is missing.";
+            }
+
+            var components = avatarRoot.GetComponentsInChildren<Component>(true);
+            var physBones = new List<Component>();
+            var colliders = new List<Component>();
+            foreach (var component in components)
+            {
+                if (IsVrcPhysBoneComponent(component))
+                {
+                    physBones.Add(component);
+                }
+                else if (IsVrcPhysBoneColliderComponent(component))
+                {
+                    colliders.Add(component);
+                }
+            }
+
+            var lines = new List<string>
+            {
+                "PhysBone export diagnostics",
+                "Avatar Root: " + avatarRoot.name,
+                "VRCPhysBone count: " + physBones.Count.ToString(CultureInfo.InvariantCulture),
+                "VRCPhysBoneCollider count: " + colliders.Count.ToString(CultureInfo.InvariantCulture),
+                "",
+                "Potentially relevant members are listed below before normalization.",
+                "Raw members are reflection dumps from the Unity component instance, not normalized UNAvatar values."
+            };
+
+            foreach (var physBone in physBones)
+            {
+                AppendPhysBoneComponentDiagnostics(lines, physBone);
+            }
+            foreach (var collider in colliders)
+            {
+                AppendPhysBoneColliderDiagnostics(lines, collider);
+            }
+
+            if (physBones.Count == 0 && colliders.Count == 0)
+            {
+                lines.Add("");
+                lines.Add("No VRC PhysBone components were found under Avatar Root.");
+            }
+
+            return string.Join("\n", lines);
+        }
+
+        private static void AppendPhysBoneComponentDiagnostics(List<string> lines, Component component)
+        {
+            var type = component.GetType();
+            lines.Add("");
+            lines.Add("PhysBone: " + BuildTransformPathForProbe(component.transform));
+            lines.Add("  type: " + type.FullName);
+            lines.Add("  enabled: " + (!(component is Behaviour behaviour) || behaviour.enabled));
+            lines.Add("  interesting members:");
+            AppendNamedMemberDiagnostic(lines, type, component, "version", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "ignoreOtherPhysBones", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "isAnimated", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "rootTransform", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "integrationType", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "endpointPosition", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "gravity", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "gravityFalloff", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "pull", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "spring", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "stiffness", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "colliders", "    ");
+            lines.Add("  raw members:");
+            lines.AddRange(IndentLines(BuildReflectionMemberDump(type, component), "    "));
+        }
+
+        private static void AppendPhysBoneColliderDiagnostics(List<string> lines, Component component)
+        {
+            var type = component.GetType();
+            lines.Add("");
+            lines.Add("PhysBoneCollider: " + BuildTransformPathForProbe(component.transform));
+            lines.Add("  type: " + type.FullName);
+            lines.Add("  enabled: " + (!(component is Behaviour behaviour) || behaviour.enabled));
+            lines.Add("  interesting members:");
+            AppendNamedMemberDiagnostic(lines, type, component, "globalCollision", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "rootTransform", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "shapeType", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "radius", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "height", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "position", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "rotation", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "insideBounds", "    ");
+            AppendNamedMemberDiagnostic(lines, type, component, "bonesAsSphere", "    ");
+            lines.Add("  raw members:");
+            lines.AddRange(IndentLines(BuildReflectionMemberDump(type, component), "    "));
+        }
+
+        private static void AppendNamedMemberDiagnostic(List<string> lines, Type type, object instance, string name, string indent)
+        {
+            var member = FindReadableMember(type, name);
+            if (member == null)
+            {
+                lines.Add(indent + name + ": <missing>");
+                return;
+            }
+            lines.Add(indent + name + ": " + FormatDiagnosticValue(ReadMemberValue(member, instance), 8));
+        }
+
+        private static string BuildReflectionMemberDump(Type type, object instance)
+        {
+            var members = CollectReadableMembers(type);
+            if (members.Count == 0)
+            {
+                return "<none>";
+            }
+
+            var lines = new List<string>(members.Count);
+            foreach (var member in members)
+            {
+                lines.Add(member.Name + " (" + MemberKind(member) + "): " + FormatDiagnosticValue(ReadMemberValue(member, instance), 12));
+            }
+            return string.Join("\n", lines);
+        }
+
+        private static List<MemberInfo> CollectReadableMembers(Type type)
+        {
+            var membersByName = new Dictionary<string, MemberInfo>();
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                foreach (var property in current.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (property.GetIndexParameters().Length == 0 && property.GetGetMethod(true) != null && !membersByName.ContainsKey(property.Name))
+                    {
+                        membersByName[property.Name] = property;
+                    }
+                }
+                foreach (var field in current.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (!membersByName.ContainsKey(field.Name))
+                    {
+                        membersByName[field.Name] = field;
+                    }
+                }
+            }
+
+            var members = new List<MemberInfo>(membersByName.Values);
+            members.Sort((left, right) => string.Compare(left.Name, right.Name, StringComparison.Ordinal));
+            return members;
+        }
+
+        private static MemberInfo FindReadableMember(Type type, string name)
+        {
+            for (var current = type; current != null; current = current.BaseType)
+            {
+                var property = current.GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (property != null && property.GetIndexParameters().Length == 0 && property.GetGetMethod(true) != null)
+                {
+                    return property;
+                }
+                var field = current.GetField(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+                if (field != null)
+                {
+                    return field;
+                }
+            }
+            return null;
+        }
+
+        private static object ReadMemberValue(MemberInfo member, object instance)
+        {
+            try
+            {
+                if (member is PropertyInfo property)
+                {
+                    return property.GetValue(instance);
+                }
+                if (member is FieldInfo field)
+                {
+                    return field.GetValue(instance);
+                }
+            }
+            catch
+            {
+                return "<unreadable>";
+            }
+            return null;
+        }
+
+        private static string MemberKind(MemberInfo member)
+        {
+            if (member is PropertyInfo)
+            {
+                return "property";
+            }
+            if (member is FieldInfo)
+            {
+                return "field";
+            }
+            return member.MemberType.ToString();
+        }
+
+        private static string FormatDiagnosticValue(object value, int collectionLimit)
+        {
+            if (value == null)
+            {
+                return "<null>";
+            }
+            if (value is string text)
+            {
+                return "\"" + TruncateDiagnosticText(text, 300) + "\"";
+            }
+            if (value is float f)
+            {
+                return f.ToString("R", CultureInfo.InvariantCulture);
+            }
+            if (value is double d)
+            {
+                return d.ToString("R", CultureInfo.InvariantCulture);
+            }
+            if (value is int || value is long || value is short || value is byte || value is bool || value.GetType().IsEnum)
+            {
+                return value.ToString();
+            }
+            if (value is Vector2 vector2)
+            {
+                return "(" + vector2.x.ToString("R", CultureInfo.InvariantCulture) + ", " + vector2.y.ToString("R", CultureInfo.InvariantCulture) + ")";
+            }
+            if (value is Vector3 vector3)
+            {
+                return "(" + vector3.x.ToString("R", CultureInfo.InvariantCulture) + ", " + vector3.y.ToString("R", CultureInfo.InvariantCulture) + ", " + vector3.z.ToString("R", CultureInfo.InvariantCulture) + ")";
+            }
+            if (value is Vector4 vector4)
+            {
+                return "(" + vector4.x.ToString("R", CultureInfo.InvariantCulture) + ", " + vector4.y.ToString("R", CultureInfo.InvariantCulture) + ", " + vector4.z.ToString("R", CultureInfo.InvariantCulture) + ", " + vector4.w.ToString("R", CultureInfo.InvariantCulture) + ")";
+            }
+            if (value is Quaternion quaternion)
+            {
+                return "(" + quaternion.x.ToString("R", CultureInfo.InvariantCulture) + ", " + quaternion.y.ToString("R", CultureInfo.InvariantCulture) + ", " + quaternion.z.ToString("R", CultureInfo.InvariantCulture) + ", " + quaternion.w.ToString("R", CultureInfo.InvariantCulture) + ")";
+            }
+            if (value is Transform transform)
+            {
+                return "Transform:" + BuildTransformPathForProbe(transform);
+            }
+            if (value is Component component)
+            {
+                return "Component:" + component.GetType().Name + "@" + BuildTransformPathForProbe(component.transform);
+            }
+            if (value is UnityEngine.Object unityObject)
+            {
+                return unityObject.GetType().Name + ":" + unityObject.name;
+            }
+            if (value is IEnumerable enumerable)
+            {
+                var parts = new List<string>();
+                var count = 0;
+                foreach (var item in enumerable)
+                {
+                    if (count >= collectionLimit)
+                    {
+                        parts.Add("...");
+                        break;
+                    }
+                    parts.Add(FormatDiagnosticValue(item, 4));
+                    count++;
+                }
+                return "[" + string.Join(", ", parts) + "]";
+            }
+            return TruncateDiagnosticText(value.ToString(), 300);
+        }
+
+        private static HashSet<int> UsedBoneIndicesForDiagnostics(BoneWeight[] boneWeights, int vertexCount, int boneCount, out List<int> invalidUsedBoneIndices)
+        {
+            var used = new HashSet<int>();
+            invalidUsedBoneIndices = new List<int>();
+            if (boneWeights == null || boneWeights.Length != vertexCount || vertexCount <= 0)
+            {
+                for (var i = 0; i < boneCount; i++)
+                {
+                    used.Add(i);
+                }
+                return used;
+            }
+            foreach (var weight in boneWeights)
+            {
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex0, weight.weight0, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex1, weight.weight1, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex2, weight.weight2, boneCount);
+                AddUsedBoneIndexForDiagnostics(used, invalidUsedBoneIndices, weight.boneIndex3, weight.weight3, boneCount);
+            }
+            if (used.Count == 0)
+            {
+                for (var i = 0; i < boneCount; i++)
+                {
+                    used.Add(i);
+                }
+            }
+            return used;
+        }
+
+        private static void AddUsedBoneIndexForDiagnostics(HashSet<int> used, List<int> invalid, int boneIndex, float weight, int boneCount)
+        {
+            if (weight <= 0.0f)
+            {
+                return;
+            }
+            if (boneIndex >= 0 && boneIndex < boneCount)
+            {
+                used.Add(boneIndex);
+                return;
+            }
+            if (!invalid.Contains(boneIndex))
+            {
+                invalid.Add(boneIndex);
+            }
+        }
+
+        private static string FormatBoneExportMiss(int index, Transform bone, Transform rootTransform)
+        {
+            var line = "bone[" + index.ToString(CultureInfo.InvariantCulture) + "]: " + FormatTransformPath(bone);
+            if (rootTransform != null)
+            {
+                var candidates = FindTransformsByName(rootTransform, bone != null ? bone.name : "");
+                if (candidates.Count > 0)
+                {
+                    line += " | same-name inside Avatar Root: " + FormatTransformCandidates(candidates, 5);
+                }
+            }
+            return line;
+        }
+
+        private static List<Transform> FindTransformsByName(Transform rootTransform, string name)
+        {
+            var result = new List<Transform>();
+            if (rootTransform == null || string.IsNullOrEmpty(name))
+            {
+                return result;
+            }
+            foreach (var transform in rootTransform.GetComponentsInChildren<Transform>(true))
+            {
+                if (transform != null && string.Equals(transform.name, name, StringComparison.Ordinal))
+                {
+                    result.Add(transform);
+                }
+            }
+            return result;
+        }
+
+        private static string FormatTransformCandidates(List<Transform> candidates, int limit)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return "<none>";
+            }
+            var parts = new List<string>(Math.Min(candidates.Count, limit));
+            for (var i = 0; i < candidates.Count && i < limit; i++)
+            {
+                parts.Add(FormatTransformPath(candidates[i]));
+            }
+            if (candidates.Count > limit)
+            {
+                parts.Add("...+" + (candidates.Count - limit).ToString(CultureInfo.InvariantCulture));
+            }
+            return string.Join(" | ", parts);
+        }
+
+        private static bool HasAnyBoneWeight(BoneWeight[] boneWeights)
+        {
+            if (boneWeights == null)
+            {
+                return false;
+            }
+            foreach (var weight in boneWeights)
+            {
+                if (weight.weight0 > 0.0f || weight.weight1 > 0.0f || weight.weight2 > 0.0f || weight.weight3 > 0.0f)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         private string BuildSelectedGameObjectProbe()
         {
             if (Selection.activeGameObject == null)

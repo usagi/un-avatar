@@ -55,13 +55,18 @@ const MAX_UNAVATAR_METADATA_JSON_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_METADATA_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_UNAVATAR_PREVIEW_IMAGE_BYTES: u64 = MAX_METADATA_IMAGE_BYTES;
 const RENDERER_STOP_GRACE_NORMAL: Duration = Duration::from_millis(900);
+const SCENE_CACHE_PREWARM_SCHEMA_VERSION: u32 = 2;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 type DynamicsAuthoredParamsByCategory = BTreeMap<String, DynamicsCategoryAuthoredParams>;
 type DynamicsAuthoredParamsCache = BTreeMap<String, DynamicsAuthoredParamsByCategory>;
 
 static DYNAMICS_AUTHORED_PARAMS_CACHE: OnceLock<Mutex<DynamicsAuthoredParamsCache>> = OnceLock::new();
+type AvatarSettingCache = BTreeMap<String, (u64, u128, AvatarSetting)>;
+static AVATAR_SETTING_CACHE: OnceLock<Mutex<AvatarSettingCache>> = OnceLock::new();
 static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
@@ -74,6 +79,23 @@ struct SupervisorState {
 	next_notification_id: u32,
 	renderers: BTreeMap<u32, ManagedRenderer>,
 	notifications: Vec<AppNotification>,
+}
+
+struct StartupTimingState {
+	started: Instant,
+	entries: Vec<StartupTimingEntry>,
+}
+
+#[derive(Clone, Serialize)]
+struct StartupTimingEntry {
+	phase: String,
+	elapsed_ms: u64,
+}
+
+#[derive(Serialize)]
+struct StartupTimingSnapshot {
+	entries: Vec<StartupTimingEntry>,
+	total_ms: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -187,6 +209,22 @@ struct AppNotification {
 #[derive(Serialize)]
 struct NativeNotificationStatus {
 	permission_state: String,
+}
+
+#[derive(Clone, Serialize)]
+struct RendererCacheStatus {
+	texture: RendererCacheGroupStatus,
+	pipeline: RendererCacheGroupStatus,
+	total_bytes: u64,
+	total_files: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct RendererCacheGroupStatus {
+	label: String,
+	path: String,
+	bytes: u64,
+	files: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -987,6 +1025,16 @@ struct PrewarmSceneCacheResult {
 	detail: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+struct SceneCachePrewarmProgress {
+	setting_id: String,
+	phase: String,
+	current: u64,
+	total: u64,
+	detail: String,
+	elapsed_secs: f64,
+}
+
 #[derive(Serialize)]
 struct SupervisorBuildInfo {
 	supervisor_version: &'static str,
@@ -1587,6 +1635,10 @@ struct AvatarSetting {
 	debug_disable_normal_map: bool,
 	/// UNToon fragment path を base のみで早期 return する診断 toggle。`[debug] base_texture_only` に対応。
 	debug_base_texture_only: bool,
+	/// すべての morph/blendshape を 0 に固定する診断 toggle。`[debug] zero_morphs` に対応。
+	debug_zero_morphs: bool,
+	/// Rendererで左クリックした位置の近傍頂点診断 JSON を出力する toggle。`[debug] vertex_pick_diagnostics` に対応。
+	debug_vertex_pick_diagnostics: bool,
 	/// UN Avatar silhouette outline の扱い。`[effects.avatar.outline] policy` に対応。
 	outline_policy: String,
 	/// UN Avatar silhouette outline の種類。v2 UI では固定。`ink` / `brush` / `double` は予約値。
@@ -1743,6 +1795,8 @@ struct DebugSettings {
 	disable_shade_color: bool,
 	disable_normal_map: bool,
 	base_texture_only: bool,
+	zero_morphs: bool,
+	vertex_pick_diagnostics: bool,
 }
 
 struct PhysicsSettings {
@@ -2149,6 +2203,8 @@ struct ManifestDebug {
 	disable_shade_color: Option<bool>,
 	disable_normal_map: Option<bool>,
 	base_texture_only: Option<bool>,
+	zero_morphs: Option<bool>,
+	vertex_pick_diagnostics: Option<bool>,
 }
 
 #[derive(Default, Deserialize)]
@@ -2750,6 +2806,11 @@ fn animator_action_mode_is_enabled(mode: &str) -> bool {
 }
 
 pub fn run() {
+	let startup_started = Instant::now();
+	let mut startup_entries = vec![StartupTimingEntry {
+		phase: "process-start".to_string(),
+		elapsed_ms: 0,
+	}];
 	if let Err(error) = set_process_app_user_model_id() {
 		eprintln!("un-avatar-supervisor: set AppUserModelID failed: {error}");
 	}
@@ -2758,10 +2819,12 @@ pub fn run() {
 		Ok(false) => {}
 		Err(error) => eprintln!("un-avatar-supervisor: startup proxy command failed: {error}"),
 	}
+	record_startup_timing(&mut startup_entries, startup_started, "startup-proxy-checked");
 	// Phase E settings policy (decision 1+2): user dir が空のとき限定で
 	// bundled テンプレートをコピーする。app builder 構築前 (Tauri 依存無し)
 	// に実行することで、setup callback 内のどの順序で何が走るかに依存しない。
 	ensure_user_profiles_seeded();
+	record_startup_timing(&mut startup_entries, startup_started, "profiles-seeded");
 	let mut initial_settings = load_app_settings();
 	if prune_pinned_taskbar_profile_ids(&mut initial_settings).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: failed to prune taskbar profile pins: {error}");
@@ -2771,9 +2834,7 @@ pub fn run() {
 			eprintln!("un-avatar-supervisor: failed to save pruned taskbar profile pins: {error}");
 		}
 	}
-	if let Err(error) = update_taskbar_launcher_profile_tasks(&initial_settings) {
-		eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
-	}
+	record_startup_timing(&mut startup_entries, startup_started, "settings-ready");
 	let startup_open_profile_manifest = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
 		None
@@ -2793,6 +2854,7 @@ pub fn run() {
 		initial_settings.locale = resolved;
 	}
 	crate::i18n::apply_locale(&initial_settings.locale);
+	record_startup_timing(&mut startup_entries, startup_started, "tauri-build-start");
 	tauri::Builder::default()
 		.plugin(tauri_plugin_single_instance::init(
 			|app, args, _cwd| match startup_proxy_manifest_arg(args.clone()).and_then(|manifest_path| {
@@ -2819,21 +2881,29 @@ pub fn run() {
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))
 		.manage(Mutex::new(initial_settings.clone()))
+		.manage(Mutex::new(StartupTimingState {
+			started: startup_started,
+			entries: startup_entries,
+		}))
 		.setup(move |app| {
+			record_startup_timing_state(app.handle(), "tauri-setup-enter");
 			prewarm_runtime_control_session();
-			if initial_settings.system_tray_enabled {
-				setup_tray(app.handle())?;
-			}
 			if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
 				if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
 					let _ = attach_standalone_renderer_manifest_in_state(manifest_path, state.inner());
 				}
 			}
 			let window = setup_main_window(app)?;
+			record_startup_timing_state(app.handle(), "main-window-created");
+			refresh_taskbar_launcher_profile_tasks_in_background(initial_settings.clone());
 			if initial_settings.system_tray_enabled && initial_settings.start_minimized_to_tray {
 				let _ = window.hide();
 			}
 			attach_hide_on_close(window, app.handle().clone());
+			if initial_settings.system_tray_enabled {
+				setup_tray_after_window_ready(app.handle().clone());
+			}
+			record_startup_timing_state(app.handle(), "tauri-setup-ready");
 			Ok(())
 		})
 		.invoke_handler(tauri::generate_handler![
@@ -2846,6 +2916,9 @@ pub fn run() {
 			delete_avatar_setting,
 			export_diagnostics,
 			get_app_settings,
+			get_avatar_setting_details,
+			get_startup_timing,
+			get_renderer_cache_status,
 			get_renderer_runtime_status,
 			get_native_notification_status,
 			list_app_notifications,
@@ -2909,6 +2982,7 @@ pub fn run() {
 			send_test_native_notification,
 			stop_renderer,
 			stop_all_renderers,
+			clear_renderer_cache,
 			sync_app_settings,
 			read_unavatar_wardrobe_options,
 			read_unavatar_animator_action_page,
@@ -2922,6 +2996,57 @@ pub fn run() {
 		])
 		.run(tauri::generate_context!())
 		.expect("error while running UN Avatar Supervisor");
+}
+
+fn record_startup_timing(entries: &mut Vec<StartupTimingEntry>, started: Instant, phase: &str) {
+	entries.push(StartupTimingEntry {
+		phase: phase.to_string(),
+		elapsed_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+	});
+}
+
+fn record_startup_timing_state(app: &tauri::AppHandle, phase: &str) {
+	let Some(state) = app.try_state::<Mutex<StartupTimingState>>() else {
+		return;
+	};
+	if let Ok(mut state) = state.lock() {
+		let started = state.started;
+		record_startup_timing(&mut state.entries, started, phase);
+	};
+}
+
+#[tauri::command]
+fn get_startup_timing(state: State<'_, Mutex<StartupTimingState>>) -> Result<StartupTimingSnapshot, String> {
+	let state = state.lock().map_err(|_| "startup timing state poisoned".to_string())?;
+	Ok(StartupTimingSnapshot {
+		entries: state.entries.clone(),
+		total_ms: state.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+	})
+}
+
+fn refresh_taskbar_launcher_profile_tasks_in_background(settings: AppRuntimeSettings) {
+	let _ = std::thread::Builder::new()
+		.name("un-avatar-taskbar-refresh".to_string())
+		.spawn(move || {
+			std::thread::sleep(Duration::from_secs(1));
+			if let Err(error) = update_taskbar_launcher_profile_tasks(&settings) {
+				eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
+			}
+		});
+}
+
+fn setup_tray_after_window_ready(app: tauri::AppHandle) {
+	let _ = std::thread::Builder::new().name("un-avatar-tray-setup".to_string()).spawn(move || {
+		std::thread::sleep(Duration::from_millis(250));
+		let app_for_setup = app.clone();
+		if let Err(error) = app.run_on_main_thread(move || {
+			if let Err(error) = setup_tray(&app_for_setup) {
+				eprintln!("un-avatar-supervisor: delayed tray setup failed: {error}");
+			}
+		}) {
+			eprintln!("un-avatar-supervisor: schedule delayed tray setup failed: {error}");
+		}
+	});
 }
 
 fn setup_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -3224,7 +3349,7 @@ fn list_avatar_settings() -> Result<Vec<AvatarSetting>, String> {
 			if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
 				continue;
 			}
-			if let Ok(setting) = read_avatar_setting(&path, storage) {
+			if let Ok(setting) = read_avatar_setting_summary(&path, storage) {
 				if storage == ProfileStorage::Seed && hidden_seed_ids.iter().any(|id| id == &setting.id) {
 					continue;
 				}
@@ -3241,6 +3366,12 @@ fn list_avatar_settings() -> Result<Vec<AvatarSetting>, String> {
 			.then(a.id.cmp(&b.id))
 	});
 	Ok(settings)
+}
+
+#[tauri::command]
+fn get_avatar_setting_details(setting_id: String) -> Result<AvatarSetting, String> {
+	let setting = resolve_avatar_setting(&setting_id)?;
+	read_avatar_setting(Path::new(&setting.manifest_path), setting.storage)
 }
 
 fn tray_launch_settings() -> Result<Vec<AvatarSetting>, String> {
@@ -5169,6 +5300,183 @@ fn encode_profile_icon_crop_webp(bytes: &[u8], crop: ProfileIconCropRequest) -> 
 	Ok(output)
 }
 
+#[tauri::command]
+fn get_renderer_cache_status() -> Result<RendererCacheStatus, String> {
+	renderer_cache_status()
+}
+
+#[tauri::command]
+fn clear_renderer_cache(state: State<'_, Mutex<SupervisorState>>) -> Result<RendererCacheStatus, String> {
+	let live_count = {
+		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+		state
+			.renderers
+			.values()
+			.filter(|renderer| !matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed))
+			.count()
+	};
+	if live_count > 0 {
+		return Err(format!(
+			"renderer cache cannot be cleared while {live_count} renderer(s) are active"
+		));
+	}
+	for dir in renderer_cache_dirs()? {
+		if dir.path.exists() {
+			remove_renderer_cache_dir(&dir.path)?;
+		}
+		fs::create_dir_all(&dir.path).map_err(|e| format!("create {}: {e}", dir.path.display()))?;
+	}
+	invalidate_scene_cache_prewarm_records()?;
+	renderer_cache_status()
+}
+
+fn invalidate_scene_cache_prewarm_records() -> Result<(), String> {
+	for (storage, dir) in profile_dirs() {
+		if !dir.is_dir() {
+			continue;
+		}
+		let entries = fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+				continue;
+			}
+			let mut manifest = match read_manifest_value(&path) {
+				Ok(manifest) => manifest,
+				Err(error) if storage == ProfileStorage::Seed => {
+					eprintln!(
+						"un-avatar-supervisor: skip seed cache marker invalidation {}: {error}",
+						path.display()
+					);
+					continue;
+				}
+				Err(error) => return Err(error),
+			};
+			if !clear_scene_cache_prewarm_record(&mut manifest) {
+				continue;
+			}
+			if let Err(error) = write_manifest_value(&path, &manifest) {
+				if storage == ProfileStorage::Seed {
+					eprintln!(
+						"un-avatar-supervisor: skip read-only seed cache marker invalidation {}: {error}",
+						path.display()
+					);
+					continue;
+				}
+				return Err(error);
+			}
+		}
+	}
+	Ok(())
+}
+
+fn clear_scene_cache_prewarm_record(manifest: &mut toml::Value) -> bool {
+	let Some(scene_cache) = manifest
+		.as_table_mut()
+		.and_then(|root| root.get_mut("profile"))
+		.and_then(toml::Value::as_table_mut)
+		.and_then(|profile| profile.get_mut("scene_cache"))
+		.and_then(toml::Value::as_table_mut)
+	else {
+		return false;
+	};
+	let fingerprint_removed = scene_cache.remove("fingerprint").is_some();
+	let timestamp_removed = scene_cache.remove("prewarmed_at").is_some();
+	fingerprint_removed || timestamp_removed
+}
+
+struct RendererCacheDir {
+	label: &'static str,
+	path: PathBuf,
+}
+
+fn renderer_cache_dirs() -> Result<[RendererCacheDir; 2], String> {
+	let base = renderer_cache_base_dir()?;
+	Ok([
+		RendererCacheDir {
+			label: "Texture",
+			path: base.join("texture-cache").join("v1"),
+		},
+		RendererCacheDir {
+			label: "Pipeline",
+			path: base.join("pipeline-cache").join("v1"),
+		},
+	])
+}
+
+fn renderer_cache_base_dir() -> Result<PathBuf, String> {
+	#[cfg(windows)]
+	{
+		env::var_os("LOCALAPPDATA")
+			.map(PathBuf::from)
+			.map(|path| path.join("UN Avatar"))
+			.ok_or_else(|| "LOCALAPPDATA is not set".to_string())
+	}
+	#[cfg(not(windows))]
+	{
+		env::var_os("XDG_CACHE_HOME")
+			.map(PathBuf::from)
+			.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+			.map(|path| path.join("un-avatar"))
+			.ok_or_else(|| "XDG_CACHE_HOME and HOME are not set".to_string())
+	}
+}
+
+fn renderer_cache_status() -> Result<RendererCacheStatus, String> {
+	let dirs = renderer_cache_dirs()?;
+	let texture = renderer_cache_group_status(&dirs[0])?;
+	let pipeline = renderer_cache_group_status(&dirs[1])?;
+	Ok(RendererCacheStatus {
+		total_bytes: texture.bytes.saturating_add(pipeline.bytes),
+		total_files: texture.files.saturating_add(pipeline.files),
+		texture,
+		pipeline,
+	})
+}
+
+fn renderer_cache_group_status(dir: &RendererCacheDir) -> Result<RendererCacheGroupStatus, String> {
+	let (files, bytes) = directory_file_count_and_bytes(&dir.path)?;
+	Ok(RendererCacheGroupStatus {
+		label: dir.label.to_string(),
+		path: dir.path.display().to_string(),
+		bytes,
+		files,
+	})
+}
+
+fn directory_file_count_and_bytes(path: &Path) -> Result<(u64, u64), String> {
+	if !path.exists() {
+		return Ok((0, 0));
+	}
+	let mut files = 0u64;
+	let mut bytes = 0u64;
+	let mut stack = vec![path.to_path_buf()];
+	while let Some(dir) = stack.pop() {
+		let entries = fs::read_dir(&dir).map_err(|e| format!("read {}: {e}", dir.display()))?;
+		for entry in entries {
+			let entry = entry.map_err(|e| format!("read {} entry: {e}", dir.display()))?;
+			let metadata = entry.metadata().map_err(|e| format!("metadata {}: {e}", entry.path().display()))?;
+			if metadata.is_dir() {
+				stack.push(entry.path());
+			} else if metadata.is_file() {
+				files = files.saturating_add(1);
+				bytes = bytes.saturating_add(metadata.len());
+			}
+		}
+	}
+	Ok((files, bytes))
+}
+
+fn remove_renderer_cache_dir(path: &Path) -> Result<(), String> {
+	let base = renderer_cache_base_dir()?;
+	let full = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+	let base = base.canonicalize().unwrap_or(base);
+	if !full.starts_with(&base) {
+		return Err(format!("refusing to clear cache outside {}: {}", base.display(), full.display()));
+	}
+	fs::remove_dir_all(&full).map_err(|e| format!("remove {}: {e}", full.display()))
+}
+
 fn remove_profile_icon_thumbnail_files(cache_dir: &Path, stem: &str) {
 	for extension in ["webp", "png", "jpg", "jpeg"] {
 		let _ = fs::remove_file(cache_dir.join(format!("{stem}.{extension}")));
@@ -6692,6 +7000,8 @@ fn apply_debug_setting_value(manifest: &mut toml::Value, field: &str, value: ser
 		"debug.disable_shade_color" => "disable_shade_color",
 		"debug.disable_normal_map" => "disable_normal_map",
 		"debug.base_texture_only" => "base_texture_only",
+		"debug.zero_morphs" => "zero_morphs",
+		"debug.vertex_pick_diagnostics" => "vertex_pick_diagnostics",
 		_ => return Err(format!("unsupported setting field: {field}")),
 	};
 	set_nested_json_bool(manifest, &["debug", key], &value, field)
@@ -7297,15 +7607,6 @@ fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Resul
 	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
 	let supervisor_working_dir = supervisor_exe.parent().map(Path::to_path_buf).unwrap_or_else(repo_root);
 	let launcher_path = start_menu_dir.join("UN Avatar.lnk");
-	create_windows_shortcut(
-		&launcher_path,
-		&supervisor_exe,
-		"",
-		&supervisor_working_dir,
-		Some(&supervisor_exe),
-		Some(UN_AVATAR_LAUNCHER_APP_ID),
-	)?;
-	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
 	let visible_settings = list_avatar_settings()?;
 	let pinned_ids = settings
 		.pinned_taskbar_profile_ids
@@ -7317,8 +7618,53 @@ fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Resul
 		.filter(|setting| pinned_ids.contains(setting.id.as_str()))
 		.cloned()
 		.collect::<Vec<_>>();
+	let fingerprint = taskbar_launcher_profile_fingerprint(&supervisor_exe, &visible_settings, &pinned_settings);
+	let fingerprint_path = app_config_dir().join("taskbar-launcher.fingerprint");
+	if launcher_path.is_file() && fs::read_to_string(&fingerprint_path).ok().as_deref() == Some(fingerprint.as_str()) {
+		return Ok(start_menu_dir.display().to_string());
+	}
+	create_windows_shortcut(
+		&launcher_path,
+		&supervisor_exe,
+		"",
+		&supervisor_working_dir,
+		Some(&supervisor_exe),
+		Some(UN_AVATAR_LAUNCHER_APP_ID),
+	)?;
+	remove_legacy_profile_launcher_shortcuts(&start_menu_dir);
 	update_windows_jump_lists(&supervisor_exe, &supervisor_working_dir, &visible_settings, &pinned_settings)?;
+	fs::write(&fingerprint_path, &fingerprint).map_err(|e| format!("write {}: {e}", fingerprint_path.display()))?;
 	Ok(start_menu_dir.display().to_string())
+}
+
+fn taskbar_launcher_profile_fingerprint(
+	supervisor_exe: &Path,
+	visible_settings: &[AvatarSetting],
+	pinned_settings: &[AvatarSetting],
+) -> String {
+	let mut input = format!("version={}\nexe={}\n", env!("CARGO_PKG_VERSION"), supervisor_exe.display());
+	if let Ok(metadata) = fs::metadata(supervisor_exe) {
+		let modified = metadata
+			.modified()
+			.ok()
+			.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+			.map(|duration| duration.as_nanos())
+			.unwrap_or_default();
+		input.push_str(&format!("exe_size={}\nexe_modified={}\n", metadata.len(), modified));
+	}
+	for setting in visible_settings {
+		input.push_str(&format!(
+			"profile={}\t{}\t{}\t{}\n",
+			setting.id,
+			setting.name,
+			setting.manifest_path,
+			setting.icon_path.as_deref().unwrap_or_default()
+		));
+	}
+	for setting in pinned_settings {
+		input.push_str(&format!("pinned={}\n", setting.id));
+	}
+	format!("{:016x}", fnv1a64(input.as_bytes()))
 }
 
 fn remove_legacy_profile_launcher_shortcuts(start_menu_dir: &Path) {
@@ -7346,22 +7692,35 @@ fn renderer_profile_app_user_model_ids(settings: &[AvatarSetting]) -> Vec<String
 }
 
 #[tauri::command]
-fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<SupervisorState>>) -> Result<PrewarmSceneCacheResult, String> {
+async fn prewarm_renderer_scene_cache(
+	setting_id: String,
+	state: State<'_, Mutex<SupervisorState>>,
+	app: tauri::AppHandle,
+) -> Result<PrewarmSceneCacheResult, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
-	let started = Instant::now();
-	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
-	configure_hidden_child(&mut command);
-	let output = command
-		.stdin(Stdio::null())
-		.output()
-		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
-	let elapsed = started.elapsed().as_secs_f64();
-	let stderr = String::from_utf8_lossy(&output.stderr);
-	if output.status.success() {
-		mark_scene_cache_prewarmed(&manifest_path, &setting.scene_cache_fingerprint)?;
+	let progress_setting_id = setting_id.clone();
+	let progress_app = app.clone();
+	let _ = app.emit(
+		"scene-cache-prewarm-progress",
+		SceneCachePrewarmProgress {
+			setting_id: setting_id.clone(),
+			phase: "starting".to_string(),
+			current: 0,
+			total: 0,
+			detail: "Starting cache preparation".to_string(),
+			elapsed_secs: 0.0,
+		},
+	);
+	let (success, stderr, elapsed) =
+		tauri::async_runtime::spawn_blocking(move || run_renderer_scene_cache_prewarm(&manifest_path, &progress_setting_id, &progress_app))
+			.await
+			.map_err(|e| format!("scene cache prewarm task failed: {e}"))??;
+	let stderr = stderr.as_str();
+	if success {
+		mark_scene_cache_prewarmed(Path::new(&setting.manifest_path), &setting.scene_cache_fingerprint)?;
 		let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-		let detail = prewarm_renderer_scene_cache_detail(&stderr);
+		let detail = prewarm_renderer_scene_cache_detail(stderr);
 		let elapsed_secs = format!("{elapsed:.1}");
 		let message = detail
 			.as_ref()
@@ -7388,17 +7747,13 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 		});
 	}
 	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-	let last_line = stderr
-		.lines()
-		.rev()
-		.find(|line| !line.trim().is_empty())
-		.unwrap_or("no stderr output");
+	let error_detail = prewarm_renderer_scene_cache_error_detail(stderr).unwrap_or_else(|| "no stderr output".to_string());
 	let elapsed_secs = format!("{elapsed:.1}");
 	let message = t!(
 		"notifications.cache.failed_body",
 		name = &setting.name,
 		seconds = &elapsed_secs,
-		error = last_line
+		error = &error_detail
 	)
 	.to_string();
 	push_notification(
@@ -7410,13 +7765,87 @@ fn prewarm_renderer_scene_cache(setting_id: String, state: State<'_, Mutex<Super
 	Err(message)
 }
 
+fn run_renderer_scene_cache_prewarm(manifest_path: &Path, setting_id: &str, app: &tauri::AppHandle) -> Result<(bool, String, f64), String> {
+	let started = Instant::now();
+	let mut command = renderer_scene_cache_prewarm_command(&manifest_path)?;
+	configure_cache_prewarm_child(&mut command);
+	let mut child = command
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::piped())
+		.spawn()
+		.map_err(|e| format!("scene cache prewarm launch failed: {e}"))?;
+	let stderr = child
+		.stderr
+		.take()
+		.ok_or_else(|| "scene cache prewarm stderr unavailable".to_string())?;
+	let mut captured = String::new();
+	for line in BufReader::new(stderr).lines() {
+		let line = line.map_err(|e| format!("scene cache prewarm stderr read failed: {e}"))?;
+		captured.push_str(&line);
+		captured.push('\n');
+		if let Some(progress) = scene_cache_prewarm_progress_from_line(setting_id, &line, started.elapsed().as_secs_f64()) {
+			let _ = app.emit("scene-cache-prewarm-progress", progress);
+		}
+	}
+	let status = child.wait().map_err(|e| format!("scene cache prewarm wait failed: {e}"))?;
+	Ok((status.success(), captured, started.elapsed().as_secs_f64()))
+}
+
+fn scene_cache_prewarm_progress_from_line(setting_id: &str, line: &str, elapsed_secs: f64) -> Option<SceneCachePrewarmProgress> {
+	let marker = "scene cache prewarm progress ";
+	let progress = line.split_once(marker)?.1;
+	let phase_start = progress.find("phase=")? + "phase=".len();
+	let (phase, rest) = progress[phase_start..].split_once(' ')?;
+	let (fraction, detail) = rest.split_once(' ').unwrap_or((rest, ""));
+	let (current, total) = fraction.split_once('/')?;
+	Some(SceneCachePrewarmProgress {
+		setting_id: setting_id.to_string(),
+		phase: phase.to_string(),
+		current: current.parse().ok()?,
+		total: total.parse().ok()?,
+		detail: detail.trim().to_string(),
+		elapsed_secs,
+	})
+}
+
+fn prewarm_renderer_scene_cache_error_detail(stderr: &str) -> Option<String> {
+	let mut last_nonempty = None;
+	for line in stderr.lines() {
+		let line = line.trim();
+		if line.is_empty() {
+			continue;
+		}
+		last_nonempty = Some(line);
+		if line.starts_with("memory allocation of ") && line.ends_with(" failed") {
+			return Some(line.to_string());
+		}
+		if line.contains("panicked at ") {
+			return Some(line.to_string());
+		}
+		if line.starts_with("error:") {
+			return Some(line.to_string());
+		}
+		if line.contains(": error:") {
+			return Some(line.to_string());
+		}
+	}
+	last_nonempty.map(str::to_string)
+}
+
 fn prewarm_renderer_scene_cache_detail(stderr: &str) -> Option<String> {
 	let texture_line = stderr
 		.lines()
 		.rev()
-		.find(|line| line.contains("gpu scene texture prepare summary:"));
+		.find(|line| line.contains("texture cache prewarm summary") || line.contains("gpu scene texture prepare summary:"));
 	let mut parts = Vec::new();
 	if let Some(line) = texture_line {
+		if let Some(resident) = metric_token(line, "resident=") {
+			parts.push(format!("resident {resident}"));
+		}
+		if let Some(ready) = metric_token(line, "ready=") {
+			parts.push(format!("ready {ready}"));
+		}
 		if let Some(processed) = metric_token(line, "processed_cache=") {
 			parts.push(format!("processed {processed}"));
 		}
@@ -9158,7 +9587,7 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 }
 
 fn default_dynamics_surface_constraints_enabled_setting() -> bool {
-	true
+	false
 }
 
 fn default_dynamics_surface_constraint_topology_max_edge_distance_m_setting() -> f32 {
@@ -9903,9 +10332,40 @@ fn refresh_renderer_stderr(renderer: &mut ManagedRenderer) {
 }
 
 fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
+	read_avatar_setting_inner(path, storage, true)
+}
+
+fn read_avatar_setting_summary(path: &Path, storage: ProfileStorage) -> Result<AvatarSetting, String> {
+	read_avatar_setting_inner(path, storage, false)
+}
+
+fn read_avatar_setting_inner(path: &Path, storage: ProfileStorage, include_model_metadata: bool) -> Result<AvatarSetting, String> {
+	let metadata = fs::metadata(path).map_err(|e| format!("stat {}: {e}", path.display()))?;
+	let modified_nanos = metadata
+		.modified()
+		.ok()
+		.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+		.map(|duration| duration.as_nanos())
+		.unwrap_or_default();
+	let cache_key = format!(
+		"{}|{:?}|{}",
+		manifest_path_key(&path.display().to_string()),
+		storage,
+		if include_model_metadata { "detail" } else { "summary" }
+	);
+	if let Some(cached) = AVATAR_SETTING_CACHE
+		.get_or_init(|| Mutex::new(BTreeMap::new()))
+		.lock()
+		.ok()
+		.and_then(|cache| cache.get(&cache_key).cloned())
+		.filter(|(size, modified, _)| *size == metadata.len() && *modified == modified_nanos)
+		.map(|(_, _, setting)| setting)
+	{
+		return Ok(cached);
+	}
 	let text = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
 	let manifest_value: toml::Value = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
-	let scene_cache_fingerprint = scene_cache_manifest_fingerprint(&manifest_value);
+	let scene_cache_fingerprint = scene_cache_manifest_fingerprint_for_path(&manifest_value, path);
 	let manifest: AvatarManifestSummary = toml::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
 	let background_color = manifest_background_color(&manifest);
 	let animator_actions = manifest_animator_action_settings(manifest.animator.as_ref());
@@ -9934,12 +10394,16 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 	let color_adjustment = color_adjustment_settings(environment.color.unwrap_or_default());
 	let lighting = lighting_settings(environment.lighting.unwrap_or_default());
 	let debug = debug_settings(manifest.debug.as_ref());
-	let physics = physics_settings(manifest.physics.as_ref(), avatar_path_for_dynamics.as_ref(), path);
+	let physics = physics_settings(
+		manifest.physics.as_ref(),
+		include_model_metadata.then_some(avatar_path_for_dynamics.as_ref()).flatten(),
+		path,
+	);
 	let effects = manifest.effects.unwrap_or_default();
 	let avatar_effects = avatar_effect_settings(effects.avatar);
 	let post_effects = post_effect_settings(effects.post);
 	let camera = camera_settings(manifest.camera.as_ref());
-	Ok(AvatarSetting {
+	let setting = AvatarSetting {
 		id: profile.id.unwrap_or_else(|| path.display().to_string()),
 		name: profile.display_name.or(manifest.title).unwrap_or_else(|| file_stem.to_string()),
 		created_at: normalize_created_at(profile.created_at.as_deref().unwrap_or_default(), path),
@@ -10027,6 +10491,8 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		debug_disable_shade_color: debug.disable_shade_color,
 		debug_disable_normal_map: debug.disable_normal_map,
 		debug_base_texture_only: debug.base_texture_only,
+		debug_zero_morphs: debug.zero_morphs,
+		debug_vertex_pick_diagnostics: debug.vertex_pick_diagnostics,
 		outline_policy: avatar_effects.outline_policy,
 		outline_type: avatar_effects.outline_type,
 		outline_width: avatar_effects.outline_width,
@@ -10094,7 +10560,11 @@ fn read_avatar_setting(path: &Path, storage: ProfileStorage) -> Result<AvatarSet
 		scene_cache_fingerprint,
 		scene_cache_prewarmed_fingerprint: scene_cache.and_then(|cache| cache.fingerprint.clone()),
 		scene_cache_prewarmed_at: scene_cache.and_then(|cache| cache.prewarmed_at.clone()),
-	})
+	};
+	if let Ok(mut cache) = AVATAR_SETTING_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+		cache.insert(cache_key, (metadata.len(), modified_nanos, setting.clone()));
+	}
+	Ok(setting)
 }
 
 fn resolve_avatar_setting(setting_id: &str) -> Result<AvatarSetting, String> {
@@ -10906,30 +11376,114 @@ fn ensure_avatar_profile_metadata(manifest: &mut toml::Value, path: &Path, sort_
 	Ok(())
 }
 
+#[cfg(test)]
 fn scene_cache_manifest_fingerprint(manifest: &toml::Value) -> String {
-	let mut normalized = manifest.clone();
-	if let Some(profile) = normalized
-		.as_table_mut()
-		.and_then(|table| table.get_mut("profile"))
-		.and_then(toml::Value::as_table_mut)
-	{
-		profile.remove("scene_cache");
-	}
-	if let Some(root) = normalized.as_table_mut() {
-		let runtime_empty = root
-			.get_mut("runtime")
-			.and_then(toml::Value::as_table_mut)
-			.map(|runtime| {
-				runtime.remove("target_fps");
-				runtime.is_empty()
-			})
-			.unwrap_or(false);
-		if runtime_empty {
-			root.remove("runtime");
+	scene_cache_manifest_fingerprint_inner(manifest, None)
+}
+
+fn scene_cache_manifest_fingerprint_for_path(manifest: &toml::Value, manifest_path: &Path) -> String {
+	scene_cache_manifest_fingerprint_inner(manifest, Some(manifest_path))
+}
+
+fn scene_cache_manifest_fingerprint_inner(manifest: &toml::Value, manifest_path: Option<&Path>) -> String {
+	let normalized = scene_cache_manifest_inputs(manifest);
+	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
+	let mut input = serialized.into_bytes();
+	input.extend_from_slice(b"\n# scene-cache-prewarm-schema\n");
+	input.extend_from_slice(SCENE_CACHE_PREWARM_SCHEMA_VERSION.to_string().as_bytes());
+	if let Some(manifest_path) = manifest_path {
+		if let Some(avatar_fingerprint) = scene_cache_avatar_file_fingerprint(manifest, manifest_path) {
+			input.extend_from_slice(b"\n# avatar-file\n");
+			input.extend_from_slice(avatar_fingerprint.as_bytes());
 		}
 	}
-	let serialized = toml::to_string(&normalized).unwrap_or_else(|_| normalized.to_string());
-	format!("{:016x}", fnv1a64(serialized.as_bytes()))
+	format!("{:016x}", fnv1a64(&input))
+}
+
+fn scene_cache_manifest_inputs(manifest: &toml::Value) -> toml::Value {
+	let Some(root) = manifest.as_table() else {
+		return toml::Value::Table(toml::map::Map::new());
+	};
+	let mut inputs = toml::map::Map::new();
+	copy_manifest_key(root, &mut inputs, "avatar_path");
+	copy_manifest_key(root, &mut inputs, "avatarPath");
+
+	copy_manifest_table_keys(
+		root,
+		&mut inputs,
+		"render_quality",
+		&[
+			"texture_resolution_limit",
+			"texture_compression",
+			"mipmap_filter",
+			"block_compression_encoder",
+			"processed_texture_cache",
+			"skin_tone_matching",
+			"texture_compression_advanced",
+		],
+	);
+	copy_manifest_table_keys(root, &mut inputs, "animator", &["action_ids", "actions"]);
+	copy_manifest_key(root, &mut inputs, "debug");
+
+	let auto_texture_limit = root
+		.get("render_quality")
+		.and_then(toml::Value::as_table)
+		.and_then(|quality| quality.get("texture_resolution_limit"))
+		.and_then(toml::Value::as_str)
+		.is_some_and(|value| value.eq_ignore_ascii_case("auto"));
+	if auto_texture_limit {
+		copy_manifest_table_keys(root, &mut inputs, "window", &["width", "height"]);
+		copy_manifest_table_keys(root, &mut inputs, "output", &["spout2"]);
+		copy_manifest_key(root, &mut inputs, "spout");
+	}
+	toml::Value::Table(inputs)
+}
+
+fn copy_manifest_key(source: &toml::map::Map<String, toml::Value>, target: &mut toml::map::Map<String, toml::Value>, key: &str) {
+	if let Some(value) = source.get(key) {
+		target.insert(key.to_string(), value.clone());
+	}
+}
+
+fn copy_manifest_table_keys(
+	source: &toml::map::Map<String, toml::Value>,
+	target: &mut toml::map::Map<String, toml::Value>,
+	table_key: &str,
+	keys: &[&str],
+) {
+	let Some(source_table) = source.get(table_key).and_then(toml::Value::as_table) else {
+		return;
+	};
+	let mut selected = toml::map::Map::new();
+	for key in keys {
+		copy_manifest_key(source_table, &mut selected, key);
+	}
+	if !selected.is_empty() {
+		target.insert(table_key.to_string(), toml::Value::Table(selected));
+	}
+}
+
+fn scene_cache_avatar_file_fingerprint(manifest: &toml::Value, manifest_path: &Path) -> Option<String> {
+	let avatar_path = manifest
+		.as_table()
+		.and_then(|table| table.get("avatar_path").or_else(|| table.get("avatarPath")))
+		.and_then(toml::Value::as_str)
+		.map(str::trim)
+		.filter(|path| !path.is_empty())?;
+	let resolved = PathBuf::from(avatar_path_for_manifest_value(avatar_path, manifest_path));
+	let metadata = fs::metadata(&resolved).ok()?;
+	let modified_nanos = metadata
+		.modified()
+		.ok()
+		.and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+		.map(|duration| duration.as_nanos())
+		.unwrap_or_default();
+	Some(format!(
+		"path={};size={};modified_nanos={}",
+		resolved.display(),
+		metadata.len(),
+		modified_nanos
+	))
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -10979,6 +11533,13 @@ fn configure_hidden_child(command: &mut Command) {
 	#[cfg(windows)]
 	{
 		command.creation_flags(CREATE_NO_WINDOW);
+	}
+}
+
+fn configure_cache_prewarm_child(command: &mut Command) {
+	#[cfg(windows)]
+	{
+		command.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS);
 	}
 }
 
@@ -11682,43 +12243,178 @@ fn model_dynamics_category_authored_params(avatar_path: &Path, manifest_path: &P
 	{
 		return Some(cached);
 	}
-	let result = if ext.eq_ignore_ascii_case("unavatar") {
-		let mut ctx = un_avatar_io::ImportContext::dummy();
-		un_avatar_io::AvatarImporter::import(
-			&un_avatar_io_gltf::GltfImporter,
-			&mut ctx,
-			un_avatar_io::ImportInput::Path(resolved.clone()),
-			un_avatar_io::ImportOptions,
-		)
-		.ok()?
-	} else {
-		let bytes = fs::read(&resolved).ok()?;
-		let root = un_avatar_io_vrm::gltf_root_json_from_bytes(&bytes).ok();
-		un_avatar_io_vrm::import_vrm_bytes(Some(&resolved), &bytes, root).ok()?
-	};
-	let document = result.document;
-	let scene = document.scene.as_ref()?;
-	let dynamics = document.dynamics()?;
+	if ext.eq_ignore_ascii_case("unavatar") {
+		let (root, _) = read_gltf_metadata_root_and_source(&resolved).ok()?;
+		let out = unavatar_dynamics_category_authored_params(&root);
+		if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+			cache.insert(cache_key, out.clone());
+		}
+		return Some(out);
+	}
+	let root = un_avatar_io_vrm::gltf_root_json_from_path(&resolved).ok()?;
+	let out = vrm_dynamics_category_authored_params(&root);
+	if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
+		cache.insert(cache_key, out.clone());
+	}
+	Some(out)
+}
+
+fn vrm_dynamics_category_authored_params(root: &serde_json::Value) -> DynamicsAuthoredParamsByCategory {
+	let nodes = root.get("nodes").and_then(serde_json::Value::as_array);
 	let mut sums = BTreeMap::<String, (f32, f32, usize)>::new();
-	for group in &dynamics.groups {
-		let category = classify_dynamics_group_for_profile(scene, group);
-		let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
-		let authored_pull = if group.pull.is_finite() && group.pull > 0.0 {
-			group.pull
-		} else {
-			group.stiffness
+	if let Some(groups) = root
+		.pointer("/extensions/VRM/secondaryAnimation/boneGroups")
+		.and_then(serde_json::Value::as_array)
+	{
+		for group in groups {
+			let stiffness = group
+				.get("stiffiness")
+				.or_else(|| group.get("stiffness"))
+				.and_then(serde_json::Value::as_f64)
+				.unwrap_or(1.0) as f32;
+			let comment = group.get("comment").and_then(serde_json::Value::as_str).unwrap_or_default();
+			for root_index in group
+				.get("bones")
+				.and_then(serde_json::Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(serde_json::Value::as_u64)
+			{
+				let Some(chain_names) = nodes.and_then(|nodes| vrm0_chain_names(nodes, root_index as usize)) else {
+					continue;
+				};
+				let text = normalize_dynamics_match_text(&format!("{comment} {chain_names}"));
+				let category = classify_dynamics_category_from_text(&text).unwrap_or_else(|| "other".to_string());
+				let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
+				entry.0 += stiffness.max(0.0);
+				entry.2 += 1;
+			}
+		}
+	}
+	if let Some(springs) = root
+		.pointer("/extensions/VRMC_springBone/springs")
+		.and_then(serde_json::Value::as_array)
+	{
+		for spring in springs {
+			let Some(joints) = spring.get("joints").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			if joints.len() < 2 {
+				continue;
+			}
+			let Some(first_joint) = joints.first() else {
+				continue;
+			};
+			let stiffness = first_joint.get("stiffness").and_then(serde_json::Value::as_f64).unwrap_or(1.0) as f32;
+			let mut text = spring
+				.get("name")
+				.and_then(serde_json::Value::as_str)
+				.unwrap_or_default()
+				.to_string();
+			for node_index in joints
+				.iter()
+				.filter_map(|joint| joint.get("node").and_then(serde_json::Value::as_u64))
+			{
+				if let Some(name) = nodes
+					.and_then(|nodes| nodes.get(node_index as usize))
+					.and_then(|node| node.get("name"))
+					.and_then(serde_json::Value::as_str)
+				{
+					text.push(' ');
+					text.push_str(name);
+				}
+			}
+			let category =
+				classify_dynamics_category_from_text(&normalize_dynamics_match_text(&text)).unwrap_or_else(|| "other".to_string());
+			let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
+			entry.0 += stiffness.max(0.0);
+			entry.2 += 1;
+		}
+	}
+	dynamics_authored_params_from_sums(sums)
+}
+
+fn vrm0_chain_names(nodes: &[serde_json::Value], root_index: usize) -> Option<String> {
+	let mut current = root_index;
+	let mut visited = BTreeSet::new();
+	let mut names = Vec::new();
+	loop {
+		if !visited.insert(current) {
+			break;
+		}
+		let node = nodes.get(current)?;
+		if let Some(name) = node.get("name").and_then(serde_json::Value::as_str) {
+			names.push(name);
+		}
+		let Some(next) = node
+			.get("children")
+			.and_then(serde_json::Value::as_array)
+			.and_then(|children| children.first())
+			.and_then(serde_json::Value::as_u64)
+		else {
+			break;
 		};
+		current = next as usize;
+	}
+	(visited.len() >= 2).then(|| names.join(" "))
+}
+
+fn unavatar_dynamics_category_authored_params(root: &serde_json::Value) -> DynamicsAuthoredParamsByCategory {
+	let Some(dynamics) = root
+		.get("extensions")
+		.and_then(|extensions| extensions.get("UN_avatar"))
+		.and_then(|unavatar| unavatar.get("dynamics"))
+	else {
+		return BTreeMap::new();
+	};
+	let groups = dynamics
+		.as_array()
+		.or_else(|| dynamics.get("groups").and_then(serde_json::Value::as_array));
+	let Some(groups) = groups else {
+		return BTreeMap::new();
+	};
+	let mut sums = BTreeMap::<String, (f32, f32, usize)>::new();
+	for group in groups {
+		let explicit = group
+			.get("category")
+			.and_then(serde_json::Value::as_str)
+			.map(normalize_dynamics_category_id)
+			.unwrap_or_else(|| "other".to_string());
+		let category = if explicit != "other" {
+			explicit
+		} else {
+			let text = [
+				group.get("id").and_then(serde_json::Value::as_str),
+				group.get("name").and_then(serde_json::Value::as_str),
+				group.get("comment").and_then(serde_json::Value::as_str),
+				group.pointer("/component/path").and_then(serde_json::Value::as_str),
+			]
+			.into_iter()
+			.flatten()
+			.map(normalize_dynamics_match_text)
+			.collect::<Vec<_>>()
+			.join(" ");
+			classify_dynamics_category_from_text(&text).unwrap_or_else(|| "other".to_string())
+		};
+		let pull = group.get("pull").and_then(serde_json::Value::as_f64).unwrap_or_default() as f32;
+		let stiffness = group.get("stiffness").and_then(serde_json::Value::as_f64).unwrap_or_default() as f32;
+		let authored_pull = if pull.is_finite() && pull > 0.0 { pull } else { stiffness };
+		let entry = sums.entry(category).or_insert((0.0, 0.0, 0));
 		entry.0 += authored_pull.max(0.0);
-		entry.1 += group.stiffness.max(0.0);
+		entry.1 += stiffness.max(0.0);
 		entry.2 += 1;
 	}
+	dynamics_authored_params_from_sums(sums)
+}
+
+fn dynamics_authored_params_from_sums(sums: BTreeMap<String, (f32, f32, usize)>) -> DynamicsAuthoredParamsByCategory {
 	let mut out = BTreeMap::new();
 	for (category, (pull_sum, shape_sum, count)) in sums {
 		if count == 0 {
 			continue;
 		}
-		let rest_response = pull_sum / count as f32;
-		let shape_preservation = shape_sum / count as f32;
+		let rest_response = (pull_sum / count as f32).clamp(0.0, 1.0);
+		let shape_preservation = (shape_sum / count as f32).clamp(0.0, 1.0);
 		out.insert(
 			category,
 			DynamicsCategoryAuthoredParams {
@@ -11729,10 +12425,7 @@ fn model_dynamics_category_authored_params(avatar_path: &Path, manifest_path: &P
 			},
 		);
 	}
-	if let Ok(mut cache) = DYNAMICS_AUTHORED_PARAMS_CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock() {
-		cache.insert(cache_key, out.clone());
-	}
-	Some(out)
+	out
 }
 
 fn dynamics_authored_params_cache_key(path: &Path) -> Option<String> {
@@ -11745,31 +12438,6 @@ fn dynamics_authored_params_cache_key(path: &Path) -> Option<String> {
 		modified.as_secs(),
 		modified.subsec_nanos()
 	))
-}
-
-fn classify_dynamics_group_for_profile(scene: &un_avatar_core::UnaSceneSnapshot, group: &un_avatar_core::UnaSpringBoneGroup) -> String {
-	let explicit = normalize_dynamics_category_id(&group.category);
-	if explicit != "other" {
-		return explicit;
-	}
-	let mut primary = normalize_dynamics_match_text(&group.comment);
-	if let Some(leaf) = group.source_id.rsplit(['/', ':']).next() {
-		primary.push(' ');
-		primary.push_str(&normalize_dynamics_match_text(leaf));
-	}
-	for &node_index in &group.bone_node_indices {
-		if let Some(name) = scene.nodes.get(node_index).and_then(|node| node.name.as_deref()) {
-			primary.push(' ');
-			primary.push_str(&normalize_dynamics_match_text(name));
-		}
-	}
-	if let Some(category) = classify_dynamics_category_from_text(&primary) {
-		return category;
-	}
-	if let Some(category) = classify_dynamics_category_from_text(&normalize_dynamics_match_text(&group.source_id)) {
-		return category;
-	}
-	"other".to_string()
 }
 
 fn classify_dynamics_category_from_text(haystack: &str) -> Option<String> {
@@ -11981,6 +12649,8 @@ fn debug_settings(debug: Option<&ManifestDebug>) -> DebugSettings {
 		disable_shade_color: debug.and_then(|d| d.disable_shade_color).unwrap_or(false),
 		disable_normal_map: debug.and_then(|d| d.disable_normal_map).unwrap_or(false),
 		base_texture_only: debug.and_then(|d| d.base_texture_only).unwrap_or(false),
+		zero_morphs: debug.and_then(|d| d.zero_morphs).unwrap_or(false),
+		vertex_pick_diagnostics: debug.and_then(|d| d.vertex_pick_diagnostics).unwrap_or(false),
 	}
 }
 
@@ -12050,7 +12720,7 @@ fn physics_settings(physics: Option<&ManifestPhysics>, avatar_path: Option<&Path
 		dynamics_match_overrides: dynamics_match_override_settings(dynamics_solver),
 		dynamics_collider_augment_overrides: dynamics_collider_augment_override_settings(dynamics_solver),
 		dynamics_group_overrides: dynamics_group_override_settings(dynamics_solver),
-		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(true),
+		bone_colliders_enabled: bone_colliders.and_then(|bone_colliders| bone_colliders.enabled).unwrap_or(false),
 		bone_collider_head: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.head), 120.0),
 		bone_collider_neck_chest: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.neck_chest), 80.0),
 		bone_collider_torso: collider_radius_mm_value(bone_collider_radius_mm.and_then(|parts| parts.torso), 140.0),
@@ -13915,17 +14585,39 @@ mod tests {
 		build_launcher_task_specs, classify_dynamics_category_from_text, data_image_base64_parts, diagnostics_archive_path,
 		diagnostics_generated_at_secs, encode_profile_icon_crop_webp, encode_profile_icon_thumbnail_webp,
 		manifest_wardrobe_shortcut_settings, midi_note_on_event, migrate_avatar_manifest_to_v2, model_dynamics_category_authored_params,
-		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, read_avatar_setting, read_runtime_telemetry,
-		read_unavatar_wardrobe_options, read_vrm_metadata, renderer_dynamics_physics_config, repo_root, resolve_renderer_window_icon_path,
-		resolve_screenshot_path, runtime_status_from_renderer, screenshot_profile_filename_stem, send_renderer_control,
-		send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note, standalone_renderer_runtime_bus_key,
-		startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note, thumbnail_protocol_file_name,
-		unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates, vrm_expression_is_user_action_candidate,
-		write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting, AvatarSettingFieldDomain, LauncherTaskProfile,
-		ManagedRenderer, ProfileIconCropRequest, ProfileStorage, RendererControlCommand, RendererDynamicsSetting, RendererInstance,
-		RendererRuntimeTelemetry, RendererRuntimeTelemetryCache, RendererSpoutProfileState, RendererState, RuntimeCountEntry,
-		SupervisorState, TextureRuntimeSummary, PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
+		parse_manifest_value, path_for_manifest, percent_decode_utf8, perfect_sync_hit_count, physics_settings, read_avatar_setting,
+		read_runtime_telemetry, read_unavatar_wardrobe_options, read_vrm_metadata, renderer_dynamics_physics_config, repo_root,
+		resolve_renderer_window_icon_path, resolve_screenshot_path, runtime_status_from_renderer, screenshot_profile_filename_stem,
+		send_renderer_control, send_renderer_control_session, spawn_runtime_status_stream, spout_runtime_note,
+		standalone_renderer_runtime_bus_key, startup_open_profile_manifest_arg, startup_proxy_manifest_arg, texture_runtime_note,
+		thumbnail_protocol_file_name, unique_profile_id, validate_spout_dimension, vrm0_expression_action_candidates,
+		vrm_expression_is_user_action_candidate, write_spout_state_to_manifest, AvatarManifestSummary, AvatarSetting,
+		AvatarSettingFieldDomain, LauncherTaskProfile, ManagedRenderer, ManifestBoneColliders, ManifestPhysics, ProfileIconCropRequest,
+		ProfileStorage, RendererControlCommand, RendererDynamicsSetting, RendererInstance, RendererRuntimeTelemetry,
+		RendererRuntimeTelemetryCache, RendererSpoutProfileState, RendererState, RuntimeCountEntry, SupervisorState, TextureRuntimeSummary,
+		PROFILE_ICON_THUMBNAIL_MAX_DIMENSION,
 	};
+
+	#[test]
+	fn physics_settings_default_bone_colliders_disabled() {
+		let manifest_path = Path::new("target/tmp/profile.toml");
+		let settings = physics_settings(None, None, manifest_path);
+		assert!(!settings.bone_colliders_enabled);
+	}
+
+	#[test]
+	fn physics_settings_preserves_explicit_bone_colliders_enabled() {
+		let manifest_path = Path::new("target/tmp/profile.toml");
+		let physics = ManifestPhysics {
+			bone_colliders: Some(ManifestBoneColliders {
+				enabled: Some(true),
+				..ManifestBoneColliders::default()
+			}),
+			..ManifestPhysics::default()
+		};
+		let settings = physics_settings(Some(&physics), None, manifest_path);
+		assert!(settings.bone_colliders_enabled);
+	}
 
 	fn runtime_telemetry_fixture() -> RendererRuntimeTelemetry {
 		RendererRuntimeTelemetry {
@@ -16412,6 +17104,32 @@ display_name = "Mizuki"
 	}
 
 	#[test]
+	fn static_supervisor_startup_is_separate_from_runtime_polling() {
+		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
+			.expect("App.svelte should be readable");
+		let startup = app_svelte
+			.split("onMount(() => {")
+			.nth(1)
+			.and_then(|rest| rest.split("\n\t$effect(() => {").next())
+			.expect("Supervisor startup onMount should exist");
+		assert!(
+			startup.contains("await loadBackendAppSettings();") && startup.contains("await refreshAll();"),
+			"Supervisor startup data load should run once from onMount"
+		);
+
+		let polling = app_svelte
+			.split("let timer: number | null = null;")
+			.nth(1)
+			.and_then(|rest| rest.split("\n\t$effect(() => {").next())
+			.expect("Supervisor runtime polling effect should exist");
+		assert!(polling.contains("scheduleRuntimeRefresh"));
+		assert!(
+			!polling.contains("refreshAll()") && !polling.contains("loadBackendAppSettings()"),
+			"reactive runtime polling must not repeat Supervisor startup initialization"
+		);
+	}
+
+	#[test]
 	fn static_unavatar_review_workflow_keeps_selected_wardrobe_and_icon_save_order() {
 		let app_svelte = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("App.svelte"))
 			.expect("App.svelte should be readable");
@@ -16585,9 +17303,16 @@ display_name = "Mizuki"
 		);
 		assert!(
 			styles_css.contains(
-				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(86px, 1.1fr) minmax(64px, 0.8fr) minmax(104px, 1.25fr) minmax(64px, 0.8fr) 32px 32px;"
+				".profile-stage-title-row .profile-stage-action-buttons {\n\tdisplay: grid;\n\tgrid-template-columns: minmax(96px, 1fr) repeat(4, 32px);"
 			),
-			"profile stage action buttons should use stable slots instead of content-width flex sizing"
+			"profile stage action buttons should reserve stable launch and icon slots"
+		);
+		assert!(
+			styles_css.contains("@media (max-width: 960px) {")
+				&& styles_css
+					.contains(".profile-stage-title-row .profile-stage-action-buttons {\n\t\tdisplay: flex;\n\t\tflex-wrap: wrap;")
+				&& styles_css.contains(".profile-cache-callout {\n\t\tgrid-template-columns: minmax(0, 1fr) auto;"),
+			"narrow profile actions should keep the integrated cache control and wrap without clipping"
 		);
 		assert!(
 			styles_css.contains(".profile-pending-action-slot {\n\tdisplay: none;")
@@ -17763,6 +18488,34 @@ id = "test"
 	}
 
 	#[test]
+	fn authored_dynamics_params_read_vrm_json_without_binary_payload() {
+		let vrm0 = serde_json::json!({
+			"nodes": [{"name": "HairRoot", "children": [1]}, {"name": "HairTip"}],
+			"extensions": {"VRM": {"secondaryAnimation": {"boneGroups": [{
+				"comment": "hair",
+				"stiffiness": 0.42,
+				"bones": [0]
+			}]}}}
+		});
+		let authored = crate::vrm_dynamics_category_authored_params(&vrm0);
+		let hair = authored.get("hair").expect("hair category");
+		assert_eq!(hair.count, 1);
+		assert!((hair.rest_response - 0.42).abs() < 1e-6);
+
+		let vrm1 = serde_json::json!({
+			"nodes": [{"name": "TailRoot"}, {"name": "TailTip"}],
+			"extensions": {"VRMC_springBone": {"springs": [{
+				"name": "tail",
+				"joints": [{"node": 0, "stiffness": 0.25}, {"node": 1}]
+			}]}}
+		});
+		let authored = crate::vrm_dynamics_category_authored_params(&vrm1);
+		let tail = authored.get("tail").expect("tail category");
+		assert_eq!(tail.count, 1);
+		assert!((tail.rest_response - 0.25).abs() < 1e-6);
+	}
+
+	#[test]
 	fn dynamics_authored_category_classification_matches_runtime_leaf_priority() {
 		let dir = std::env::temp_dir().join(format!("un-avatar-authored-category-priority-{}", std::process::id()));
 		let _ = fs::remove_dir_all(&dir);
@@ -18258,8 +19011,88 @@ un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\
 
 		assert_eq!(
 			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
-			Some("processed 0/0/0, compressed 59/0/0, pipeline cache stored")
+			Some("resident 59, processed 0/0/0, compressed 59/0/0, pipeline cache stored")
 		);
+	}
+
+	#[test]
+	fn prewarm_renderer_scene_cache_detail_reports_sequential_texture_cache() {
+		let stderr = r#"
+un-avatar-renderer: scene cache prewarm texture cache prewarm summary resident=72 ready=66
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_detail(stderr).as_deref(),
+			Some("resident 72, ready 66")
+		);
+	}
+
+	#[test]
+	fn prewarm_renderer_scene_cache_error_detail_prefers_allocation_failure_over_backtrace_hint() {
+		let stderr = r#"
+un-avatar-renderer: scene cache prewarm progress phase=gpu-upload 115/515 Uploading cached source texture
+memory allocation of 67108864 bytes failed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"#;
+
+		assert_eq!(
+			crate::prewarm_renderer_scene_cache_error_detail(stderr).as_deref(),
+			Some("memory allocation of 67108864 bytes failed")
+		);
+	}
+
+	#[test]
+	fn scene_cache_prewarm_progress_parses_renderer_progress_line() {
+		let progress = crate::scene_cache_prewarm_progress_from_line(
+			"profile-1",
+			"un-avatar-renderer: scene cache prewarm progress phase=gpu-upload 115/515 Uploading cached source texture",
+			2.25,
+		)
+		.unwrap();
+		assert_eq!(progress.setting_id, "profile-1");
+		assert_eq!(progress.phase, "gpu-upload");
+		assert_eq!((progress.current, progress.total), (115, 515));
+		assert_eq!(progress.detail, "Uploading cached source texture");
+		assert_eq!(progress.elapsed_secs, 2.25);
+
+		let set_progress = crate::scene_cache_prewarm_progress_from_line(
+			"profile-1",
+			"un-avatar-renderer: scene cache prewarm progress set=wardrobe-1 phase=texture-cache 8/12 Preparing texture (12.0ms)",
+			3.0,
+		)
+		.unwrap();
+		assert_eq!(set_progress.phase, "texture-cache");
+		assert_eq!((set_progress.current, set_progress.total), (8, 12));
+	}
+
+	#[test]
+	fn clearing_cache_removes_prewarm_record_from_profile() {
+		let manifest_toml = r#"
+[profile.scene_cache]
+fingerprint = "abc"
+prewarmed_at = "20260711T120000Z"
+"#;
+		let mut manifest = toml::from_str::<toml::Value>(manifest_toml).unwrap();
+		assert!(crate::clear_scene_cache_prewarm_record(&mut manifest));
+		let scene_cache = manifest["profile"]["scene_cache"].as_table().unwrap();
+		assert!(!scene_cache.contains_key("fingerprint"));
+		assert!(!scene_cache.contains_key("prewarmed_at"));
+		assert!(!crate::clear_scene_cache_prewarm_record(&mut manifest));
+	}
+
+	#[test]
+	fn renderer_cache_directory_stats_count_nested_files() {
+		let root = std::env::temp_dir().join(format!("un-avatar-cache-stats-{}", std::process::id()));
+		let nested = root.join("nested");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&nested).unwrap();
+		fs::write(root.join("a.utxc"), [1u8; 3]).unwrap();
+		fs::write(nested.join("b.utbc"), [2u8; 5]).unwrap();
+
+		let stats = crate::directory_file_count_and_bytes(&root).unwrap();
+		let _ = fs::remove_dir_all(&root);
+
+		assert_eq!(stats, (2, 8));
 	}
 
 	#[test]
@@ -18320,17 +19153,23 @@ target_fps = 300
 	}
 
 	#[test]
-	fn scene_cache_fingerprint_changes_with_output_mode() {
+	fn scene_cache_fingerprint_ignores_initial_wardrobe_and_runtime_only_settings() {
 		let window_preview: toml::Value = toml::from_str(
 			r#"
 title = "Main"
 avatar_path = "main.unavatar"
+wardrobe_set = "Base"
 
 [output.spout2]
 enabled = false
 
 [window]
 minimized = false
+x = 100
+y = 200
+
+[wardrobe]
+billboard_anchor = "head"
 "#,
 		)
 		.unwrap();
@@ -18338,20 +19177,115 @@ minimized = false
 			r#"
 title = "Main"
 avatar_path = "main.unavatar"
+wardrobe_set = "NoirLux"
 
 [output.spout2]
 enabled = true
 
 [window]
 minimized = true
+x = 900
+y = 700
+
+[wardrobe]
+billboard_anchor = "spine"
+"#,
+		)
+		.unwrap();
+
+		assert_eq!(
+			crate::scene_cache_manifest_fingerprint(&window_preview),
+			crate::scene_cache_manifest_fingerprint(&spout_only)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_changes_with_texture_processing_settings() {
+		let source: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "off"
+texture_compression = "source"
+"#,
+		)
+		.unwrap();
+		let compressed: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "4k"
+texture_compression = "balanced"
 "#,
 		)
 		.unwrap();
 
 		assert_ne!(
-			crate::scene_cache_manifest_fingerprint(&window_preview),
-			crate::scene_cache_manifest_fingerprint(&spout_only)
+			crate::scene_cache_manifest_fingerprint(&source),
+			crate::scene_cache_manifest_fingerprint(&compressed)
 		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_tracks_output_size_only_for_auto_texture_limit() {
+		let window: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "auto"
+
+[window]
+width = 800
+height = 600
+"#,
+		)
+		.unwrap();
+		let spout: toml::Value = toml::from_str(
+			r#"
+avatar_path = "main.unavatar"
+
+[render_quality]
+texture_resolution_limit = "auto"
+
+[output.spout2]
+enabled = true
+width = 1920
+height = 1080
+"#,
+		)
+		.unwrap();
+
+		assert_ne!(
+			crate::scene_cache_manifest_fingerprint(&window),
+			crate::scene_cache_manifest_fingerprint(&spout)
+		);
+	}
+
+	#[test]
+	fn scene_cache_fingerprint_changes_when_avatar_file_changes() {
+		let root = std::env::temp_dir().join(format!("un-avatar-scene-cache-fingerprint-{}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).unwrap();
+		let manifest_path = root.join("profile.toml");
+		let avatar_path = root.join("main.unavatar");
+		fs::write(&avatar_path, b"first").unwrap();
+		let manifest: toml::Value = toml::from_str(
+			r#"
+title = "Main"
+avatar_path = "main.unavatar"
+"#,
+		)
+		.unwrap();
+
+		let first = crate::scene_cache_manifest_fingerprint_for_path(&manifest, &manifest_path);
+		fs::write(&avatar_path, b"second export with more bytes").unwrap();
+		let second = crate::scene_cache_manifest_fingerprint_for_path(&manifest, &manifest_path);
+		let _ = fs::remove_dir_all(&root);
+
+		assert_ne!(first, second);
 	}
 
 	#[test]

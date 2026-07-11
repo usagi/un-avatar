@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use clap::{Parser, Subcommand};
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
 	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count,
@@ -30,8 +30,7 @@ use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
 use un_avatar_skeleton::{
 	annotate_dynamics_response_group_visibility, apply_dynamics_mesh_cloth_assist_to_vertices, build_dynamics_bone_colliders_with_sources,
-	classify_dynamics_group_category, distance_point_segment, dynamics_mesh_cloth_assist_deforming_nodes,
-	dynamics_mesh_cloth_assist_joint_roles,
+	classify_dynamics_group_category, dynamics_mesh_cloth_assist_deforming_nodes, dynamics_mesh_cloth_assist_joint_roles,
 	dynamics_mesh_cloth_assist_mesh_matches_with_categories as skeleton_mesh_cloth_assist_mesh_matches_with_categories,
 	dynamics_mesh_cloth_assist_transfer_candidate, for_each_dynamics_mesh_cloth_assist_neighbor, local_capsule_world, local_plane_world,
 	local_sphere_world, BoneColliderConfig, BoneColliderPrimitive, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig,
@@ -381,6 +380,11 @@ struct DynamicsVertexProbeReport {
 	mesh_index: usize,
 	skin_index: Option<usize>,
 	settle_frames: usize,
+	pose_left_upper_arm_z_deg: Option<f32>,
+	pose_right_upper_arm_z_deg: Option<f32>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	unmotion_frame_json: Option<String>,
+	node_constraints_ignored: bool,
 	authored_colliders_ignored: bool,
 	runtime_collider_count: usize,
 	solve_collision_projection_count: u32,
@@ -400,8 +404,54 @@ struct DynamicsVertexProbeReport {
 	mesh_cloth_assist_applied: bool,
 	mesh_cloth_assist_changed_vertices: usize,
 	node_samples: Vec<DynamicsVertexProbeNodeSample>,
+	constraint_node_samples: Vec<DynamicsVertexProbeNodeSample>,
+	probe_tail_samples: Vec<DynamicsTailSample>,
+	interaction_parameters: Vec<DynamicsVertexProbeInteractionParameter>,
+	animator_morph_overrides: Vec<DynamicsVertexProbeAnimatorMorphOverride>,
+	animator_morph_override_regions: Vec<DynamicsVertexProbeRegionReport>,
 	joint_weight_summaries: Vec<DynamicsVertexProbeJointWeightSummary>,
 	regions: Vec<DynamicsVertexProbeRegionReport>,
+	mirror_symmetry: Vec<DynamicsVertexProbeMirrorSymmetryReport>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeInteractionParameter {
+	parameter: String,
+	angle_parameter: String,
+	source_id: String,
+	angle_value: f32,
+	angle_norm: f32,
+	angle_deg: f32,
+	shape_angle_deg: f32,
+	gravity_angle_deg: f32,
+	dominant: String,
+	max_angle_deg: f32,
+	center_peak_scaled: bool,
+	chain: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeAnimatorMorphOverride {
+	key: String,
+	target_path: Option<String>,
+	morph_name: String,
+	value: f32,
+}
+
+#[derive(Clone)]
+struct DynamicsVertexProbeInteractionValue {
+	parameter: String,
+	angle_parameter: String,
+	source_id: String,
+	angle_value: f32,
+	angle_norm: f32,
+	angle_deg: f32,
+	shape_angle_deg: f32,
+	gravity_angle_deg: f32,
+	dominant: String,
+	max_angle_deg: f32,
+	center_peak_scaled: bool,
+	chain: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -416,7 +466,22 @@ struct DynamicsVertexProbeColliderPathSummary {
 	min_margin: f32,
 	min_distance: f32,
 	min_threshold: f32,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	min_margin_tail: Option<DynamicsVertexProbeColliderTailContact>,
 	sample_source_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeColliderTailContact {
+	source_id: String,
+	runtime_index: usize,
+	joint_index: usize,
+	anchor_pos: [f32; 3],
+	tail_pos: [f32; 3],
+	closest_pos: [f32; 3],
+	collider_a: Option<[f32; 3]>,
+	collider_b: Option<[f32; 3]>,
+	push_dir: [f32; 3],
 }
 
 #[derive(Serialize)]
@@ -488,6 +553,32 @@ struct DynamicsVertexProbeVertexSample {
 struct DynamicsVertexProbeInfluence {
 	joint: String,
 	weight: f32,
+}
+
+#[derive(Serialize)]
+struct DynamicsVertexProbeMirrorSymmetryReport {
+	name: String,
+	left_vertex_count: usize,
+	right_vertex_count: usize,
+	average_left_to_right_distance: f32,
+	max_left_to_right_distance: f32,
+	average_right_to_left_distance: f32,
+	max_right_to_left_distance: f32,
+	worst_left_samples: Vec<DynamicsVertexProbeMirrorSample>,
+	worst_right_samples: Vec<DynamicsVertexProbeMirrorSample>,
+}
+
+#[derive(Clone, Serialize)]
+struct DynamicsVertexProbeMirrorSample {
+	vertex_index: usize,
+	position: [f32; 3],
+	mirrored_position: [f32; 3],
+	nearest_vertex_index: usize,
+	nearest_position: [f32; 3],
+	mirror_distance: f32,
+	dominant_joint: String,
+	dominant_weight: f32,
+	influences: Vec<DynamicsVertexProbeInfluence>,
 }
 
 #[derive(Serialize, Clone)]
@@ -2015,6 +2106,18 @@ enum Commands {
 		/// Authored PhysBone collider を外して settle する
 		#[arg(long)]
 		ignore_authored_colliders: bool,
+		/// 診断用: Probe 前に node constraints を無効化する
+		#[arg(long)]
+		ignore_node_constraints: bool,
+		/// Probe 前に UNMotion の LeftUpperArm Z 回転を適用する（度）
+		#[arg(long)]
+		pose_left_upper_arm_z_deg: Option<f32>,
+		/// Probe 前に UNMotion の RightUpperArm Z 回転を適用する（度）
+		#[arg(long)]
+		pose_right_upper_arm_z_deg: Option<f32>,
+		/// Probe 前に UNMotionFrame JSON を適用する（UNMotion の native-image-pipeline-probe 出力など）
+		#[arg(long, value_name = "PATH")]
+		unmotion_frame_json: Option<PathBuf>,
 		/// 監査時だけ適用する物理tuning。dynamics-motion-trace-audit と同じ値
 		#[arg(
 			long,
@@ -2245,6 +2348,10 @@ fn run(cli: Cli) -> Result<(), String> {
 			settle_frames,
 			apply_mesh_cloth_assist,
 			ignore_authored_colliders,
+			ignore_node_constraints,
+			pose_left_upper_arm_z_deg,
+			pose_right_upper_arm_z_deg,
+			unmotion_frame_json,
 			tuning,
 			json,
 		} => run_dynamics_vertex_probe(
@@ -2256,6 +2363,10 @@ fn run(cli: Cli) -> Result<(), String> {
 			settle_frames,
 			apply_mesh_cloth_assist,
 			ignore_authored_colliders,
+			ignore_node_constraints,
+			pose_left_upper_arm_z_deg,
+			pose_right_upper_arm_z_deg,
+			unmotion_frame_json,
 			&tuning,
 			json,
 		),
@@ -5085,6 +5196,646 @@ fn push_bounded_unique_string(out: &mut Vec<String>, value: String, limit: usize
 	}
 }
 
+fn dynamics_vertex_probe_motion_pose_frame(
+	left_upper_arm_z_deg: Option<f32>,
+	right_upper_arm_z_deg: Option<f32>,
+) -> un_motion_frame::UNMotionFrame {
+	fn quatf(q: Quat) -> un_motion_frame::Quatf {
+		un_motion_frame::Quatf {
+			x: q.x,
+			y: q.y,
+			z: q.z,
+			w: q.w,
+		}
+	}
+	fn bone_sample(bone: un_motion_frame::HumanoidBone, z_deg: f32) -> un_motion_frame::BoneSample {
+		un_motion_frame::BoneSample {
+			bone,
+			transform: un_motion_frame::TransformSample {
+				translation: None,
+				rotation: Some(quatf(Quat::from_rotation_z(z_deg.to_radians()))),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			},
+			confidence: 1.0,
+			source_index: Some(0),
+			state: un_motion_frame::SampleState::Valid,
+		}
+	}
+	let mut bones = Vec::new();
+	if let Some(z_deg) = left_upper_arm_z_deg.filter(|value| value.is_finite()) {
+		bones.push(bone_sample(un_motion_frame::HumanoidBone::LeftUpperArm, z_deg));
+	}
+	if let Some(z_deg) = right_upper_arm_z_deg.filter(|value| value.is_finite()) {
+		bones.push(bone_sample(un_motion_frame::HumanoidBone::RightUpperArm, z_deg));
+	}
+	let mut frame = un_motion_frame::UNMotionFrame::new(0);
+	frame.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+	frame.body = Some(un_motion_frame::BodyMotion {
+		tracking_state: un_motion_frame::TrackingState::Valid,
+		confidence: 1.0,
+		humanoid: Some(un_motion_frame::HumanoidPose { root: None, bones }),
+	});
+	frame
+}
+
+fn dynamics_vertex_probe_unmotion_frame_from_json_slice(data: &[u8], path: &Path) -> Result<un_motion_frame::UNMotionFrame, String> {
+	if let Ok(frame) = serde_json::from_slice::<un_motion_frame::UNMotionFrame>(data) {
+		return Ok(frame);
+	}
+	let value: serde_json::Value =
+		serde_json::from_slice(data).map_err(|err| format!("failed to parse UNMotionFrame JSON `{}`: {err}", path.display()))?;
+	let Some(body) = value.get("body") else {
+		return Err(format!("UNMotionFrame JSON `{}` has no body", path.display()));
+	};
+	if !body.get("present").and_then(serde_json::Value::as_bool).unwrap_or(true) {
+		return Err(format!("UNMotionFrame JSON `{}` body is not present", path.display()));
+	}
+	let bones = body
+		.get("bones")
+		.and_then(serde_json::Value::as_array)
+		.ok_or_else(|| format!("UNMotionFrame JSON `{}` body has no bones array", path.display()))?;
+	let mut samples = Vec::new();
+	for bone in bones {
+		let bone_name = bone
+			.get("bone")
+			.and_then(serde_json::Value::as_str)
+			.ok_or_else(|| format!("UNMotionFrame JSON `{}` body bone has no name", path.display()))?;
+		let humanoid_bone = serde_json::from_value::<un_motion_frame::HumanoidBone>(serde_json::Value::String(bone_name.to_string()))
+			.map_err(|err| {
+				format!(
+					"UNMotionFrame JSON `{}` has unsupported humanoid bone `{bone_name}`: {err}",
+					path.display()
+				)
+			})?;
+		let rotation = bone
+			.get("rotation")
+			.ok_or_else(|| format!("UNMotionFrame JSON `{}` body bone `{bone_name}` has no rotation", path.display()))?;
+		let quat = serde_json::from_value::<un_motion_frame::Quatf>(rotation.clone()).map_err(|err| {
+			format!(
+				"UNMotionFrame JSON `{}` body bone `{bone_name}` rotation is invalid: {err}",
+				path.display()
+			)
+		})?;
+		samples.push(un_motion_frame::BoneSample {
+			bone: humanoid_bone,
+			transform: un_motion_frame::TransformSample {
+				translation: None,
+				rotation: Some(quat),
+				scale: None,
+				linear_velocity: None,
+				angular_velocity: None,
+			},
+			confidence: 1.0,
+			source_index: Some(0),
+			state: un_motion_frame::SampleState::Valid,
+		});
+	}
+	let mut frame = un_motion_frame::UNMotionFrame::new(value.get("outputSequence").and_then(serde_json::Value::as_u64).unwrap_or(0));
+	frame.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+	frame.body = Some(un_motion_frame::BodyMotion {
+		tracking_state: un_motion_frame::TrackingState::Valid,
+		confidence: value
+			.get("sourceConfidence")
+			.and_then(serde_json::Value::as_f64)
+			.unwrap_or(1.0)
+			.clamp(0.0, 1.0) as f32,
+		humanoid: Some(un_motion_frame::HumanoidPose {
+			root: None,
+			bones: samples,
+		}),
+	});
+	Ok(frame)
+}
+
+fn dynamics_vertex_probe_interaction_values(
+	doc: &UnaDocument,
+	rest_nodes: &[un_avatar_core::UnaSceneNode],
+	scene: &UnaSceneSnapshot,
+	node_paths: &[Option<String>],
+) -> Vec<DynamicsVertexProbeInteractionValue> {
+	let runtime = doc.runtime_model();
+	let dynamics = runtime.dynamics();
+	let world = cli_scene_world_matrices(scene);
+	let center_peak_angle_parameters = dynamics_vertex_probe_center_peak_angle_parameters(doc);
+	let mut out = Vec::new();
+	for group in dynamics.dynamics_groups() {
+		if !group.effective_enabled || !dynamics.source_id_resident_in_scene(scene, group.source_id) {
+			continue;
+		}
+		let Some(interaction) = group.interaction else {
+			continue;
+		};
+		if interaction.parameter.is_empty() {
+			continue;
+		}
+		let shape_angle = dynamics_vertex_probe_group_shape_angle(rest_nodes, &scene.nodes, group).unwrap_or(0.0);
+		let gravity_angle = dynamics_vertex_probe_group_gravity_sensor_angle(rest_nodes, &world, group, node_paths).unwrap_or(0.0);
+		let angle = shape_angle.max(gravity_angle);
+		let max_angle = dynamics_vertex_probe_interaction_angle_normalizer(group.limit);
+		let angle_norm = (angle.to_degrees() / max_angle).clamp(0.0, 1.0);
+		let angle_parameter = format!("{}_Angle", interaction.parameter);
+		let center_peak_scaled = center_peak_angle_parameters.binary_search(&angle_parameter).is_ok();
+		let angle_value = if center_peak_scaled {
+			(angle_norm * 0.5).clamp(0.0, 1.0)
+		} else {
+			angle_norm
+		};
+		let chain = dynamics_vertex_probe_interaction_chain(group, node_paths)
+			.iter()
+			.filter_map(|node| node_paths.get(*node).and_then(|path| path.clone()))
+			.collect::<Vec<_>>();
+		out.push(DynamicsVertexProbeInteractionValue {
+			parameter: interaction.parameter.clone(),
+			angle_parameter,
+			source_id: group.source_id.to_string(),
+			angle_value,
+			angle_norm,
+			angle_deg: angle.to_degrees(),
+			shape_angle_deg: shape_angle.to_degrees(),
+			gravity_angle_deg: gravity_angle.to_degrees(),
+			dominant: if gravity_angle > shape_angle { "gravity" } else { "shape" }.to_string(),
+			max_angle_deg: max_angle,
+			center_peak_scaled,
+			chain,
+		});
+	}
+	out.sort_by(|a, b| a.parameter.cmp(&b.parameter).then_with(|| a.source_id.cmp(&b.source_id)));
+	out
+}
+
+fn dynamics_vertex_probe_animator_morph_overrides(
+	doc: &UnaDocument,
+	interaction_values: &[DynamicsVertexProbeInteractionValue],
+	node_path: &str,
+) -> Vec<DynamicsVertexProbeAnimatorMorphOverride> {
+	let mut parameter_values = doc.runtime_model().runtime_parameter_values().clone();
+	for value in interaction_values {
+		parameter_values.insert(value.angle_parameter.clone(), value.angle_value);
+		parameter_values.insert(format!("{}_IsGrabbed", value.parameter), 0.0);
+		parameter_values.insert(format!("{}_IsPosed", value.parameter), 0.0);
+		parameter_values.insert(format!("{}_Stretch", value.parameter), 0.0);
+		parameter_values.insert(format!("{}_Squish", value.parameter), 0.0);
+	}
+	let mut overrides = BTreeMap::new();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return Vec::new();
+	};
+	let Some(controllers) = animator.get("controllers").and_then(serde_json::Value::as_array) else {
+		return Vec::new();
+	};
+	for controller in controllers {
+		if controller.get("source").and_then(serde_json::Value::as_str) != Some("modularAvatarMergeAnimator") {
+			continue;
+		}
+		let motion_base_path = controller
+			.get("motionBasePath")
+			.or_else(|| controller.get("motion_base_path"))
+			.and_then(serde_json::Value::as_str)
+			.unwrap_or("");
+		let defaults = dynamics_vertex_probe_animator_parameter_defaults(controller);
+		let Some(layers) = controller.get("layers").and_then(serde_json::Value::as_array) else {
+			continue;
+		};
+		for (layer_index, layer) in layers.iter().enumerate() {
+			let layer_weight = if layer_index == 0 {
+				1.0
+			} else {
+				layer.get("defaultWeight").and_then(serde_json::Value::as_f64).unwrap_or(1.0) as f32
+			};
+			let Some(states) = layer.get("states").and_then(serde_json::Value::as_array) else {
+				continue;
+			};
+			if layer_weight <= 0.0001 || states.len() != 1 {
+				continue;
+			}
+			if let Some(motion) = states[0].get("motion") {
+				dynamics_vertex_probe_accumulate_animator_motion_overrides(
+					motion,
+					motion_base_path,
+					&parameter_values,
+					&defaults,
+					layer_weight,
+					&mut overrides,
+				);
+			}
+		}
+	}
+	let node_suffix = node_path.split_once('/').map(|(_, suffix)| suffix).unwrap_or(node_path);
+	let node_leaf = node_path.rsplit('/').next().unwrap_or(node_path);
+	let mut out = overrides
+		.into_iter()
+		.filter(|(key, value)| {
+			*value > 0.0001
+				&& (key.contains("ArmPit") || key.starts_with(node_path) || key.starts_with(node_suffix) || key.contains(node_leaf))
+		})
+		.map(|(key, value)| {
+			let (target_path, morph_name) = key
+				.split_once('\0')
+				.map(|(path, morph)| (Some(path.to_string()), morph.to_string()))
+				.unwrap_or((None, key.clone()));
+			DynamicsVertexProbeAnimatorMorphOverride {
+				key,
+				target_path,
+				morph_name,
+				value,
+			}
+		})
+		.collect::<Vec<_>>();
+	out.sort_by(|a, b| a.key.cmp(&b.key));
+	out
+}
+
+fn dynamics_vertex_probe_apply_morph_overrides_to_primitive(
+	primitive: &mut un_avatar_core::UnaMeshBuffers,
+	overrides: &[DynamicsVertexProbeAnimatorMorphOverride],
+	node_path: &str,
+) {
+	let node_suffix = node_path.split_once('/').map(|(_, suffix)| suffix).unwrap_or(node_path);
+	let mut weights = BTreeMap::<String, f32>::new();
+	for override_value in overrides {
+		let path_matches = override_value.target_path.as_deref().is_none_or(|target_path| {
+			target_path == node_path || target_path == node_suffix || node_path.ends_with(&format!("/{target_path}"))
+		});
+		if path_matches {
+			weights.insert(override_value.morph_name.clone(), override_value.value);
+		}
+	}
+	for (target_index, target) in primitive.morph_targets.iter().enumerate() {
+		let Some(name) = primitive.morph_target_names.get(target_index) else {
+			continue;
+		};
+		let Some(weight) = weights.get(name).copied().filter(|weight| weight.abs() > 0.0001) else {
+			continue;
+		};
+		for (position, delta) in primitive.positions.iter_mut().zip(target.position_deltas.iter()) {
+			position[0] += delta[0] * weight;
+			position[1] += delta[1] * weight;
+			position[2] += delta[2] * weight;
+		}
+	}
+}
+
+fn dynamics_vertex_probe_animator_parameter_defaults(value: &serde_json::Value) -> BTreeMap<String, f32> {
+	let mut out = BTreeMap::new();
+	let Some(parameters) = value.get("parameters").and_then(serde_json::Value::as_array) else {
+		return out;
+	};
+	for parameter in parameters {
+		let Some(name) = parameter
+			.get("name")
+			.and_then(serde_json::Value::as_str)
+			.filter(|name| !name.is_empty())
+		else {
+			continue;
+		};
+		let value = parameter
+			.get("defaultFloat")
+			.or_else(|| parameter.get("default_float"))
+			.and_then(serde_json::Value::as_f64)
+			.map(|value| value as f32)
+			.unwrap_or(0.0);
+		out.insert(name.to_string(), value);
+	}
+	out
+}
+
+fn dynamics_vertex_probe_accumulate_animator_motion_overrides(
+	motion: &serde_json::Value,
+	motion_base_path: &str,
+	parameter_values: &BTreeMap<String, f32>,
+	parameter_defaults: &BTreeMap<String, f32>,
+	weight: f32,
+	out: &mut BTreeMap<String, f32>,
+) {
+	if weight <= 0.0001 {
+		return;
+	}
+	match motion.get("motionType").and_then(serde_json::Value::as_str) {
+		Some("AnimationClip") => {
+			let Some(bindings) = motion.get("curveBindings").and_then(serde_json::Value::as_array) else {
+				return;
+			};
+			for binding in bindings {
+				let Some(property) = binding.get("propertyName").and_then(serde_json::Value::as_str) else {
+					continue;
+				};
+				let Some(name) = property.strip_prefix("blendShape.").map(str::trim).filter(|name| !name.is_empty()) else {
+					continue;
+				};
+				let Some(raw_value) = binding
+					.get("constantValue")
+					.or_else(|| binding.get("constant_value"))
+					.or_else(|| binding.get("lastValue"))
+					.or_else(|| binding.get("last_value"))
+					.or_else(|| binding.get("firstValue"))
+					.or_else(|| binding.get("first_value"))
+					.and_then(serde_json::Value::as_f64)
+					.map(|value| value as f32)
+				else {
+					continue;
+				};
+				let binding_path = binding.get("path").and_then(serde_json::Value::as_str).unwrap_or("");
+				let target_path = dynamics_vertex_probe_animator_resolve_binding_path(motion_base_path, binding_path);
+				let key = if target_path.is_empty() {
+					name.to_string()
+				} else {
+					format!("{target_path}\0{name}")
+				};
+				let value = if raw_value > 1.0 { raw_value / 100.0 } else { raw_value };
+				let entry = out.entry(key).or_insert(0.0);
+				*entry = (*entry + value * weight).clamp(0.0, 1.0);
+			}
+		}
+		Some("BlendTree") => {
+			let blend_type = motion.get("blendType").and_then(serde_json::Value::as_str).unwrap_or("");
+			if blend_type != "Simple1D" && blend_type != "1D" {
+				return;
+			}
+			let parameter = motion.get("blendParameter").and_then(serde_json::Value::as_str).unwrap_or("");
+			let Some(children) = motion.get("children").and_then(serde_json::Value::as_array) else {
+				return;
+			};
+			let value = parameter_values
+				.get(parameter)
+				.or_else(|| parameter_defaults.get(parameter))
+				.copied()
+				.unwrap_or(0.0);
+			let thresholds = dynamics_vertex_probe_simple_1d_thresholds(children);
+			for (child_index, child) in children.iter().enumerate() {
+				let child_weight = dynamics_vertex_probe_simple_1d_child_weight(&thresholds, child_index, value);
+				if child_weight > 0.0001 {
+					dynamics_vertex_probe_accumulate_animator_motion_overrides(
+						child,
+						motion_base_path,
+						parameter_values,
+						parameter_defaults,
+						weight * child_weight,
+						out,
+					);
+				}
+			}
+		}
+		_ => {}
+	}
+}
+
+fn dynamics_vertex_probe_animator_resolve_binding_path(motion_base_path: &str, binding_path: &str) -> String {
+	let binding_path = binding_path.trim_matches('/');
+	if binding_path.is_empty() {
+		return motion_base_path.trim_matches('/').to_string();
+	}
+	let motion_base_path = motion_base_path.trim_matches('/');
+	if motion_base_path.is_empty() || binding_path.starts_with(motion_base_path) {
+		binding_path.to_string()
+	} else {
+		format!("{motion_base_path}/{binding_path}")
+	}
+}
+
+fn dynamics_vertex_probe_simple_1d_thresholds(children: &[serde_json::Value]) -> Vec<(usize, f32)> {
+	let mut out = children
+		.iter()
+		.enumerate()
+		.map(|(index, child)| {
+			(
+				index,
+				child
+					.get("threshold")
+					.and_then(serde_json::Value::as_f64)
+					.map(|value| value as f32)
+					.unwrap_or(0.0),
+			)
+		})
+		.collect::<Vec<_>>();
+	out.sort_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal));
+	out
+}
+
+fn dynamics_vertex_probe_simple_1d_child_weight(sorted: &[(usize, f32)], index: usize, value: f32) -> f32 {
+	let Some(rank) = sorted.iter().position(|(child_index, _)| *child_index == index) else {
+		return 0.0;
+	};
+	let current = sorted[rank].1;
+	if sorted.len() == 1 {
+		return 1.0;
+	}
+	if rank == 0 {
+		let next = sorted[1].1;
+		if value <= current {
+			return 1.0;
+		}
+		return if next > current {
+			((next - value) / (next - current)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		};
+	}
+	if rank + 1 == sorted.len() {
+		let prev = sorted[rank - 1].1;
+		if value >= current {
+			return 1.0;
+		}
+		return if current > prev {
+			((value - prev) / (current - prev)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		};
+	}
+	let prev = sorted[rank - 1].1;
+	let next = sorted[rank + 1].1;
+	if value <= current {
+		if current > prev {
+			((value - prev) / (current - prev)).clamp(0.0, 1.0)
+		} else {
+			0.0
+		}
+	} else if next > current {
+		((next - value) / (next - current)).clamp(0.0, 1.0)
+	} else {
+		0.0
+	}
+}
+
+fn dynamics_vertex_probe_center_peak_angle_parameters(doc: &UnaDocument) -> Vec<String> {
+	let mut out = Vec::new();
+	let Some(animator) = doc.unavatar.as_ref().and_then(|unavatar| unavatar.source.get("animator")) else {
+		return out;
+	};
+	dynamics_vertex_probe_collect_center_peak_angle_parameters(animator, &mut out);
+	out.sort_unstable();
+	out.dedup();
+	out
+}
+
+fn dynamics_vertex_probe_collect_center_peak_angle_parameters(value: &serde_json::Value, out: &mut Vec<String>) {
+	if value.get("motionType").and_then(serde_json::Value::as_str) == Some("BlendTree") {
+		let blend_type = value.get("blendType").and_then(serde_json::Value::as_str).unwrap_or("");
+		if (blend_type == "Simple1D" || blend_type == "1D")
+			&& value
+				.get("blendParameter")
+				.and_then(serde_json::Value::as_str)
+				.is_some_and(|parameter| parameter.ends_with("_Angle") && dynamics_vertex_probe_blend_tree_has_center_peak(value))
+		{
+			if let Some(parameter) = value.get("blendParameter").and_then(serde_json::Value::as_str) {
+				out.push(parameter.to_string());
+			}
+		}
+	}
+	for key in ["children", "controllers", "layers", "states"] {
+		if let Some(values) = value.get(key).and_then(serde_json::Value::as_array) {
+			for child in values {
+				dynamics_vertex_probe_collect_center_peak_angle_parameters(child, out);
+			}
+		}
+	}
+	if let Some(motion) = value.get("motion") {
+		dynamics_vertex_probe_collect_center_peak_angle_parameters(motion, out);
+	}
+}
+
+fn dynamics_vertex_probe_blend_tree_has_center_peak(value: &serde_json::Value) -> bool {
+	let Some(children) = value.get("children").and_then(serde_json::Value::as_array) else {
+		return false;
+	};
+	let mut has_low = false;
+	let mut has_center = false;
+	let mut has_high = false;
+	for child in children {
+		let Some(threshold) = child.get("threshold").and_then(serde_json::Value::as_f64) else {
+			continue;
+		};
+		has_low |= (threshold - 0.0).abs() <= 0.001;
+		has_center |= (threshold - 0.5).abs() <= 0.001;
+		has_high |= (threshold - 1.0).abs() <= 0.001;
+	}
+	has_low && has_center && has_high
+}
+
+fn dynamics_vertex_probe_interaction_angle_normalizer(limit: Option<&un_avatar_core::UnaDynamicsLimit>) -> f32 {
+	let Some(limit) = limit else {
+		return 90.0;
+	};
+	let x = limit.max_angle_x.max(0.0);
+	let z = limit.max_angle_z.max(0.0);
+	if limit.limit_type.to_ascii_lowercase().contains("hinge") {
+		x.max(1.0)
+	} else {
+		x.max(z).max(1.0)
+	}
+}
+
+fn dynamics_vertex_probe_interaction_chain<'a>(group: un_avatar_core::UnaDynamicsGroup<'a>, node_paths: &[Option<String>]) -> &'a [usize] {
+	let chain = group.chain.bone_node_indices;
+	let start = group.chain.interaction_start_index.min(chain.len());
+	if start == 0 && dynamics_vertex_probe_legacy_interaction_anchor(group, node_paths) {
+		return &chain[1..];
+	}
+	&chain[start..]
+}
+
+fn dynamics_vertex_probe_legacy_interaction_anchor(group: un_avatar_core::UnaDynamicsGroup<'_>, node_paths: &[Option<String>]) -> bool {
+	if group.interaction.is_none() || group.chain.bone_node_indices.len() < 3 {
+		return false;
+	}
+	let Some(source_path) = group
+		.source_id
+		.split_once(':')
+		.map(|(_, path)| path)
+		.filter(|path| !path.is_empty())
+	else {
+		return false;
+	};
+	let Some(authored_root_path) = group
+		.chain
+		.bone_node_indices
+		.get(1)
+		.and_then(|node| node_paths.get(*node))
+		.and_then(|path| path.as_deref())
+	else {
+		return false;
+	};
+	authored_root_path == source_path || authored_root_path.ends_with(&format!("/{source_path}"))
+}
+
+fn dynamics_vertex_probe_group_shape_angle(
+	rest_nodes: &[un_avatar_core::UnaSceneNode],
+	nodes: &[un_avatar_core::UnaSceneNode],
+	group: un_avatar_core::UnaDynamicsGroup<'_>,
+) -> Option<f32> {
+	let chain = group.chain.bone_node_indices;
+	if chain.len() < 2 {
+		return Some(0.0);
+	}
+	let mut max_angle = 0.0f32;
+	let mut measured = false;
+	for segment in chain.windows(2) {
+		let parent = segment[0];
+		let child = segment[1];
+		let rest_parent = rest_nodes.get(parent)?;
+		let rest_child = rest_nodes.get(child)?;
+		let current_parent = nodes.get(parent)?;
+		let current_child = nodes.get(child)?;
+		let rest_axis = (Mat4::from_cols_array(&rest_parent.transform).inverse() * Mat4::from_cols_array(&rest_child.transform))
+			.transform_point3(Vec3::ZERO);
+		let current_axis = (Mat4::from_cols_array(&current_parent.transform).inverse() * Mat4::from_cols_array(&current_child.transform))
+			.transform_point3(Vec3::ZERO);
+		let Some(rest_axis) = rest_axis.try_normalize() else {
+			continue;
+		};
+		let Some(current_axis) = current_axis.try_normalize() else {
+			continue;
+		};
+		max_angle = max_angle.max(rest_axis.angle_between(current_axis));
+		measured = true;
+	}
+	measured.then_some(max_angle)
+}
+
+fn dynamics_vertex_probe_group_gravity_sensor_angle(
+	rest_nodes: &[un_avatar_core::UnaSceneNode],
+	world: &[Mat4],
+	group: un_avatar_core::UnaDynamicsGroup<'_>,
+	node_paths: &[Option<String>],
+) -> Option<f32> {
+	if group.parameters.gravity_power.abs() <= f32::EPSILON {
+		return Some(0.0);
+	}
+	let gravity_dir = Vec3::from_array(group.parameters.gravity_dir)
+		.try_normalize()
+		.unwrap_or(Vec3::NEG_Y);
+	let chain = dynamics_vertex_probe_interaction_chain(group, node_paths);
+	if chain.len() < 2 {
+		return Some(0.0);
+	}
+	let mut max_angle = 0.0f32;
+	let mut measured = false;
+	for segment in chain.windows(2) {
+		let parent = segment[0];
+		let child = segment[1];
+		let Some(parent_world) = world.get(parent).copied() else {
+			continue;
+		};
+		let Some(rest_child) = rest_nodes.get(child) else {
+			continue;
+		};
+		let (_, parent_rot, _) = parent_world.to_scale_rotation_translation();
+		let (_, _, rest_child_translation) = Mat4::from_cols_array(&rest_child.transform).to_scale_rotation_translation();
+		let Some(axis) = (parent_rot.normalize() * rest_child_translation).try_normalize() else {
+			continue;
+		};
+		let gravity_amount = group.parameters.gravity_power.abs().clamp(0.0, 1.0);
+		let gravity_target = axis.lerp(gravity_dir * group.parameters.gravity_power.signum(), gravity_amount);
+		let Some(gravity_axis) = gravity_target.try_normalize() else {
+			continue;
+		};
+		max_angle = max_angle.max(axis.angle_between(gravity_axis));
+		measured = true;
+	}
+	measured.then_some(max_angle)
+}
+
 fn run_dynamics_vertex_probe(
 	plugin_dirs: &[PathBuf],
 	path: PathBuf,
@@ -5094,6 +5845,10 @@ fn run_dynamics_vertex_probe(
 	settle_frames: usize,
 	apply_mesh_cloth_assist: bool,
 	ignore_authored_colliders: bool,
+	ignore_node_constraints: bool,
+	pose_left_upper_arm_z_deg: Option<f32>,
+	pose_right_upper_arm_z_deg: Option<f32>,
+	unmotion_frame_json: Option<PathBuf>,
 	tuning: &str,
 	json: bool,
 ) -> Result<(), String> {
@@ -5106,17 +5861,24 @@ fn run_dynamics_vertex_probe(
 		settle_frames,
 		apply_mesh_cloth_assist,
 		ignore_authored_colliders,
+		ignore_node_constraints,
+		pose_left_upper_arm_z_deg,
+		pose_right_upper_arm_z_deg,
+		unmotion_frame_json.as_deref(),
 		tuning,
 	)?;
 	if json {
 		write_json_stdout(&report)?;
 	} else {
 		println!(
-			"vertex_probe: node={} mesh={} skin={:?} settle_frames={} tuning={} mesh_cloth_assist={} changed_vertices={} ignore_authored_colliders={} runtime_colliders={} collision_projections={} probe_collision_projections={} probe_dynamic_sources={} projection_collider_paths={}",
+			"vertex_probe: node={} mesh={} skin={:?} settle_frames={}{} tuning={} mesh_cloth_assist={} changed_vertices={} ignore_authored_colliders={} runtime_colliders={} collision_projections={} probe_collision_projections={} probe_dynamic_sources={} projection_collider_paths={}",
 			report.node_path,
 			report.mesh_index,
 			report.skin_index,
 			report.settle_frames,
+			report.pose_left_upper_arm_z_deg
+				.map(|value| format!(" left_upper_arm_z={value:.1}deg"))
+				.unwrap_or_default(),
 			report.tuning,
 			report.mesh_cloth_assist_applied,
 			report.mesh_cloth_assist_changed_vertices,
@@ -5157,6 +5919,34 @@ fn run_dynamics_vertex_probe(
 				);
 			}
 		}
+		for symmetry in &report.mirror_symmetry {
+			println!(
+				"mirror {}: left={} right={} avg_l2r={:.5} max_l2r={:.5} avg_r2l={:.5} max_r2l={:.5}",
+				symmetry.name,
+				symmetry.left_vertex_count,
+				symmetry.right_vertex_count,
+				symmetry.average_left_to_right_distance,
+				symmetry.max_left_to_right_distance,
+				symmetry.average_right_to_left_distance,
+				symmetry.max_right_to_left_distance
+			);
+			for sample in symmetry.worst_right_samples.iter().take(6) {
+				println!(
+					"  right v{} dist={:.5} pos=({:.5},{:.5},{:.5}) nearest=v{} ({:.5},{:.5},{:.5}) joint={} w={:.3}",
+					sample.vertex_index,
+					sample.mirror_distance,
+					sample.position[0],
+					sample.position[1],
+					sample.position[2],
+					sample.nearest_vertex_index,
+					sample.nearest_position[0],
+					sample.nearest_position[1],
+					sample.nearest_position[2],
+					sample.dominant_joint,
+					sample.dominant_weight
+				);
+			}
+		}
 		for summary in report.collider_path_summaries.iter().take(12) {
 			println!(
 				"collider_path {:?}: shape={} inside_bounds={} candidates={} penetrating={} projections={} sources={} min_margin={:.5} min_distance={:.5} threshold={:.5}",
@@ -5185,11 +5975,46 @@ fn dynamics_vertex_probe_report(
 	settle_frames: usize,
 	apply_mesh_cloth_assist: bool,
 	ignore_authored_colliders: bool,
+	ignore_node_constraints: bool,
+	pose_left_upper_arm_z_deg: Option<f32>,
+	pose_right_upper_arm_z_deg: Option<f32>,
+	unmotion_frame_json: Option<&Path>,
 	tuning: &str,
 ) -> Result<DynamicsVertexProbeReport, String> {
 	let (mut doc, _import_report, _desc) = import_document_for_cli(plugin_dirs, path, input_format)?;
 	if let Some(set_id) = wardrobe_set.filter(|set_id| !set_id.trim().is_empty()) {
 		apply_unavatar_wardrobe_set(&mut doc, set_id)?;
+	}
+	let compare_scene = doc.scene.clone();
+	let rest_nodes_for_motion = doc.scene.as_ref().map(|scene| scene.nodes.clone());
+	if ignore_node_constraints {
+		if let Some(scene) = doc.scene.as_mut() {
+			scene.node_constraints.clear();
+		}
+	}
+	if let Some(frame_path) = unmotion_frame_json {
+		let rest_nodes = rest_nodes_for_motion
+			.as_deref()
+			.ok_or_else(|| "document has no scene nodes for motion pose".to_string())?;
+		let data = fs::read(frame_path).map_err(|err| format!("failed to read UNMotionFrame JSON `{}`: {err}", frame_path.display()))?;
+		let frame = dynamics_vertex_probe_unmotion_frame_from_json_slice(&data, frame_path)?;
+		un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(
+			&mut doc,
+			&frame,
+			un_avatar_skeleton::ApplyUnMotionFrameOpts::default(),
+			Some(rest_nodes),
+		);
+	} else if pose_left_upper_arm_z_deg.is_some() || pose_right_upper_arm_z_deg.is_some() {
+		let rest_nodes = rest_nodes_for_motion
+			.as_deref()
+			.ok_or_else(|| "document has no scene nodes for motion pose".to_string())?;
+		let frame = dynamics_vertex_probe_motion_pose_frame(pose_left_upper_arm_z_deg, pose_right_upper_arm_z_deg);
+		un_avatar_skeleton::apply_un_motion_frame_to_document_with_rest(
+			&mut doc,
+			&frame,
+			un_avatar_skeleton::ApplyUnMotionFrameOpts::default(),
+			Some(rest_nodes),
+		);
 	}
 	let scene = doc.scene.as_ref().ok_or_else(|| "document has no scene".to_string())?;
 	let settings = doc.dynamics().ok_or_else(|| "document has no dynamics settings".to_string())?;
@@ -5291,7 +6116,7 @@ fn dynamics_vertex_probe_report(
 		physics_config,
 	)
 	.ok_or_else(|| "UNPhysics simulator could not be created".to_string())?;
-	let settle_frames = settle_frames.clamp(1, 1200);
+	let settle_frames = settle_frames.min(1200);
 	let mut step_profile = DynamicsStepProfile::default();
 	for _ in 0..settle_frames {
 		let frame_profile = sim.step_runtime_dynamics_profiled(&mut settled_scene, runtime_dynamics, 1.0 / 60.0);
@@ -5335,12 +6160,52 @@ fn dynamics_vertex_probe_report(
 		step_profile.solve_propagate_ms += frame_profile.solve_propagate_ms;
 	}
 
-	let rest_world = cli_scene_world_matrices(scene);
+	let compare_scene = compare_scene.as_ref().unwrap_or(scene);
+	let rest_world = cli_scene_world_matrices(compare_scene);
+	let motion_world = cli_scene_world_matrices(scene);
+	let constraint_node_samples = dynamics_vertex_probe_constraint_node_samples(scene, &node_paths, &rest_world, &motion_world);
 	let settled_world = cli_scene_world_matrices(&settled_scene);
-	let rest_positions = skinned_positions_for_primitive(scene, node_index, skin, primitive, &rest_world)?;
+	let rest_positions = skinned_positions_for_primitive(compare_scene, node_index, skin, primitive, &rest_world)?;
 	let settled_positions = skinned_positions_for_primitive(&settled_scene, node_index, skin, primitive, &settled_world)?;
 	let node_samples = dynamics_vertex_probe_node_samples(&node_paths, &rest_world, &settled_world);
 	let joint_weight_summaries = dynamics_vertex_probe_joint_weight_summaries(scene, skin, primitive, &node_paths);
+	let rest_nodes_for_interaction = rest_nodes_for_motion.as_deref().unwrap_or(compare_scene.nodes.as_slice());
+	let interaction_values = dynamics_vertex_probe_interaction_values(&doc, rest_nodes_for_interaction, &settled_scene, &node_paths);
+	let interaction_parameters = interaction_values
+		.iter()
+		.cloned()
+		.map(|value| DynamicsVertexProbeInteractionParameter {
+			parameter: value.parameter,
+			angle_parameter: value.angle_parameter,
+			source_id: value.source_id,
+			angle_value: value.angle_value,
+			angle_norm: value.angle_norm,
+			angle_deg: value.angle_deg,
+			shape_angle_deg: value.shape_angle_deg,
+			gravity_angle_deg: value.gravity_angle_deg,
+			dominant: value.dominant,
+			max_angle_deg: value.max_angle_deg,
+			center_peak_scaled: value.center_peak_scaled,
+			chain: value.chain,
+		})
+		.collect::<Vec<_>>();
+	let animator_morph_overrides = dynamics_vertex_probe_animator_morph_overrides(&doc, &interaction_values, &node_path);
+	let animator_morph_override_regions = if animator_morph_overrides.is_empty() {
+		Vec::new()
+	} else {
+		let mut morphed_primitive = primitive.clone();
+		dynamics_vertex_probe_apply_morph_overrides_to_primitive(&mut morphed_primitive, &animator_morph_overrides, &node_path);
+		let morphed_settled_positions =
+			skinned_positions_for_primitive(&settled_scene, node_index, skin, &morphed_primitive, &settled_world)?;
+		dynamics_vertex_probe_regions(
+			scene,
+			skin,
+			&morphed_primitive,
+			&node_paths,
+			&rest_positions,
+			&morphed_settled_positions,
+		)
+	};
 	let probe_dynamic_source_weight_sums =
 		dynamics_vertex_probe_dynamic_source_weight_sums(runtime_dynamics, skin, primitive, &dynamic_nodes);
 	let probe_dynamic_source_ids = probe_dynamic_source_weight_sums.keys().take(16).cloned().collect::<Vec<_>>();
@@ -5357,6 +6222,7 @@ fn dynamics_vertex_probe_report(
 		&probe_dynamic_source_weight_sums,
 	);
 	let regions = dynamics_vertex_probe_regions(scene, skin, primitive, &node_paths, &rest_positions, &settled_positions);
+	let mirror_symmetry = dynamics_vertex_probe_mirror_symmetry(scene, skin, primitive, &node_paths, &settled_positions);
 	let collider_summary_world = cli_scene_world_matrices(&settled_scene);
 	let collider_tail_samples = sim.tail_samples();
 	let collider_path_summaries = dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
@@ -5384,6 +6250,15 @@ fn dynamics_vertex_probe_report(
 			&probe_collision_projection_collider_path_counts,
 		)
 	};
+	let probe_tail_samples = if probe_dynamic_source_weight_sums.is_empty() {
+		collider_tail_samples.clone()
+	} else {
+		collider_tail_samples
+			.iter()
+			.filter(|sample| probe_dynamic_source_weight_sums.contains_key(&sample.source_id))
+			.cloned()
+			.collect()
+	};
 	Ok(DynamicsVertexProbeReport {
 		path: path.display().to_string(),
 		wardrobe_set: wardrobe_set.map(str::to_string),
@@ -5393,6 +6268,10 @@ fn dynamics_vertex_probe_report(
 		mesh_index,
 		skin_index,
 		settle_frames,
+		pose_left_upper_arm_z_deg,
+		pose_right_upper_arm_z_deg,
+		unmotion_frame_json: unmotion_frame_json.map(|path| path.display().to_string()),
+		node_constraints_ignored: ignore_node_constraints,
 		authored_colliders_ignored: ignore_authored_colliders,
 		runtime_collider_count,
 		solve_collision_projection_count: step_profile.collision_projection_count,
@@ -5412,8 +6291,14 @@ fn dynamics_vertex_probe_report(
 		mesh_cloth_assist_applied: apply_mesh_cloth_assist,
 		mesh_cloth_assist_changed_vertices,
 		node_samples,
+		constraint_node_samples,
+		probe_tail_samples,
+		interaction_parameters,
+		animator_morph_overrides,
+		animator_morph_override_regions,
 		joint_weight_summaries,
 		regions,
+		mirror_symmetry,
 	})
 }
 
@@ -5491,6 +6376,7 @@ fn dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
 				min_margin: contact.margin,
 				min_distance: contact.distance,
 				min_threshold: contact.threshold,
+				min_margin_tail: Some(dynamics_vertex_probe_collider_tail_contact(tail, &contact)),
 				sample_source_ids: Vec::new(),
 			});
 			summary.candidate_count += 1;
@@ -5501,8 +6387,9 @@ fn dynamics_vertex_probe_collider_path_summaries_for_samples_with_world(
 				summary.min_margin = contact.margin;
 				summary.min_distance = contact.distance;
 				summary.min_threshold = contact.threshold;
-				summary.collider_shape = contact.collider_shape;
+				summary.collider_shape = contact.collider_shape.clone();
 				summary.inside_bounds = contact.inside_bounds;
+				summary.min_margin_tail = Some(dynamics_vertex_probe_collider_tail_contact(tail, &contact));
 			}
 			if accum.source_ids.insert(tail.source_id.clone()) && summary.sample_source_ids.len() < 8 {
 				summary.sample_source_ids.push(tail.source_id.clone());
@@ -5550,6 +6437,39 @@ struct DynamicsVertexProbeColliderContact {
 	distance: f32,
 	threshold: f32,
 	margin: f32,
+	closest_pos: [f32; 3],
+	collider_a: Option<[f32; 3]>,
+	collider_b: Option<[f32; 3]>,
+}
+
+fn dynamics_vertex_probe_collider_tail_contact(
+	tail: &DynamicsTailSample,
+	contact: &DynamicsVertexProbeColliderContact,
+) -> DynamicsVertexProbeColliderTailContact {
+	let tail_pos = Vec3::from_array(tail.curr_tail);
+	let closest = Vec3::from_array(contact.closest_pos);
+	let push_dir = (tail_pos - closest).normalize_or_zero();
+	DynamicsVertexProbeColliderTailContact {
+		source_id: tail.source_id.clone(),
+		runtime_index: tail.runtime_index,
+		joint_index: tail.joint_index,
+		anchor_pos: tail.anchor_pos,
+		tail_pos: tail.curr_tail,
+		closest_pos: contact.closest_pos,
+		collider_a: contact.collider_a,
+		collider_b: contact.collider_b,
+		push_dir: push_dir.to_array(),
+	}
+}
+
+fn closest_point_segment(point: Vec3, a: Vec3, b: Vec3) -> Vec3 {
+	let ab = b - a;
+	let denom = ab.length_squared();
+	if denom <= 1e-12 {
+		return a;
+	}
+	let t = ((point - a).dot(ab) / denom).clamp(0.0, 1.0);
+	a + ab * t
 }
 
 fn dynamics_vertex_probe_collider_contact(
@@ -5558,11 +6478,12 @@ fn dynamics_vertex_probe_collider_contact(
 	tail_point: Vec3,
 	collider: &BoneColliderPrimitive,
 ) -> Option<DynamicsVertexProbeColliderContact> {
-	let (collider_shape, inside_bounds, distance, threshold, margin) = match *collider {
+	let (collider_shape, inside_bounds, distance, threshold, margin, closest_pos, collider_a, collider_b) = match *collider {
 		BoneColliderPrimitive::Sphere { node, radius } => {
-			let distance = tail_point.distance(world.get(node)?.transform_point3(Vec3::ZERO));
+			let closest = world.get(node)?.transform_point3(Vec3::ZERO);
+			let distance = tail_point.distance(closest);
 			let threshold = radius.max(0.0) + tail.hit_radius.max(0.0);
-			("sphere", false, distance, threshold, distance - threshold)
+			("sphere", false, distance, threshold, distance - threshold, closest, None, None)
 		}
 		BoneColliderPrimitive::Capsule {
 			start_node,
@@ -5571,15 +6492,26 @@ fn dynamics_vertex_probe_collider_contact(
 		} => {
 			let a = world.get(start_node)?.transform_point3(Vec3::ZERO);
 			let b = world.get(end_node)?.transform_point3(Vec3::ZERO);
-			let distance = distance_point_segment(tail_point, a, b);
+			let closest = closest_point_segment(tail_point, a, b);
+			let distance = tail_point.distance(closest);
 			let threshold = radius.max(0.0) + tail.hit_radius.max(0.0);
-			("capsule", false, distance, threshold, distance - threshold)
+			(
+				"capsule",
+				false,
+				distance,
+				threshold,
+				distance - threshold,
+				closest,
+				Some(a),
+				Some(b),
+			)
 		}
 		BoneColliderPrimitive::LocalSphere {
 			node,
 			center,
 			radius,
 			inside_bounds,
+			bones_as_sphere: _,
 		} => {
 			let (center, radius) = local_sphere_world(world, node, center, radius)?;
 			let distance = tail_point.distance(center);
@@ -5594,7 +6526,7 @@ fn dynamics_vertex_probe_collider_contact(
 			} else {
 				distance - threshold
 			};
-			("local_sphere", inside_bounds, distance, threshold, margin)
+			("local_sphere", inside_bounds, distance, threshold, margin, center, None, None)
 		}
 		BoneColliderPrimitive::LocalCapsule {
 			node,
@@ -5603,9 +6535,11 @@ fn dynamics_vertex_probe_collider_contact(
 			half_length,
 			radius,
 			inside_bounds,
+			bones_as_sphere: _,
 		} => {
 			let (a, b, radius) = local_capsule_world(world, node, center, axis, half_length, radius)?;
-			let distance = distance_point_segment(tail_point, a, b);
+			let closest = closest_point_segment(tail_point, a, b);
+			let distance = tail_point.distance(closest);
 			let hit_radius = tail.hit_radius.max(0.0);
 			let threshold = if inside_bounds {
 				(radius - hit_radius).max(0.0)
@@ -5617,7 +6551,16 @@ fn dynamics_vertex_probe_collider_contact(
 			} else {
 				distance - threshold
 			};
-			("local_capsule", inside_bounds, distance, threshold, margin)
+			(
+				"local_capsule",
+				inside_bounds,
+				distance,
+				threshold,
+				margin,
+				closest,
+				Some(a),
+				Some(b),
+			)
 		}
 		BoneColliderPrimitive::LocalPlane {
 			node,
@@ -5633,7 +6576,7 @@ fn dynamics_vertex_probe_collider_contact(
 			} else {
 				signed_distance - hit_radius
 			};
-			("local_plane", inside_bounds, signed_distance, hit_radius, margin)
+			("local_plane", inside_bounds, signed_distance, hit_radius, margin, point, None, None)
 		}
 	};
 	if !distance.is_finite() {
@@ -5645,6 +6588,9 @@ fn dynamics_vertex_probe_collider_contact(
 		distance,
 		threshold,
 		margin,
+		closest_pos: closest_pos.to_array(),
+		collider_a: collider_a.map(|value| value.to_array()),
+		collider_b: collider_b.map(|value| value.to_array()),
 	})
 }
 
@@ -5687,6 +6633,49 @@ fn dynamics_vertex_probe_node_samples(
 			.then_with(|| a.node_index.cmp(&b.node_index))
 	});
 	out.truncate(96);
+	out
+}
+
+fn dynamics_vertex_probe_constraint_node_samples(
+	scene: &UnaSceneSnapshot,
+	node_paths: &[Option<String>],
+	rest_world: &[Mat4],
+	motion_world: &[Mat4],
+) -> Vec<DynamicsVertexProbeNodeSample> {
+	let mut node_indices = BTreeSet::new();
+	for constraint in &scene.node_constraints {
+		node_indices.insert(constraint.target_node);
+		node_indices.insert(constraint.source_node);
+		for source in &constraint.sources {
+			node_indices.insert(source.source_node);
+		}
+	}
+	let mut out = Vec::new();
+	for node_index in node_indices {
+		let path = node_paths
+			.get(node_index)
+			.and_then(|path| path.as_ref())
+			.cloned()
+			.unwrap_or_else(|| format!("#{node_index}"));
+		let Some(rest) = rest_world.get(node_index).copied() else {
+			continue;
+		};
+		let Some(motion) = motion_world.get(node_index).copied() else {
+			continue;
+		};
+		let rest_translation = rest.transform_point3(Vec3::ZERO);
+		let motion_translation = motion.transform_point3(Vec3::ZERO);
+		let delta = motion_translation - rest_translation;
+		out.push(DynamicsVertexProbeNodeSample {
+			node_index,
+			path,
+			rest_translation: rest_translation.to_array(),
+			settled_translation: motion_translation.to_array(),
+			delta: delta.to_array(),
+			displacement: delta.length(),
+		});
+	}
+	out.sort_by(|a, b| a.node_index.cmp(&b.node_index));
 	out
 }
 
@@ -6007,7 +6996,7 @@ fn dynamics_vertex_probe_regions(
 			)
 		})
 		.collect::<Vec<_>>();
-	let focused_regions: [(&str, fn([f32; 3]) -> bool); 5] = [
+	let focused_regions: [(&str, fn([f32; 3]) -> bool); 9] = [
 		("front_upper_center", |p| {
 			p[0].abs() < 0.08 && p[2] > 0.08 && p[1] > 1.12 && p[1] < 1.20
 		}),
@@ -6023,6 +7012,18 @@ fn dynamics_vertex_probe_regions(
 		("front_lower_right", |p| {
 			p[0] < -0.08 && p[0] > -0.16 && p[2] > 0.08 && p[1] > 0.98 && p[1] < 1.08
 		}),
+		("upper_side_left", |p| {
+			p[0] > 0.14 && p[0] < 0.28 && p[2] > -0.02 && p[2] < 0.12 && p[1] > 1.08 && p[1] < 1.26
+		}),
+		("upper_side_right", |p| {
+			p[0] < -0.14 && p[0] > -0.28 && p[2] > -0.02 && p[2] < 0.12 && p[1] > 1.08 && p[1] < 1.26
+		}),
+		("upper_back_left", |p| {
+			p[0] > 0.12 && p[0] < 0.28 && p[2] > -0.14 && p[2] < 0.02 && p[1] > 1.04 && p[1] < 1.24
+		}),
+		("upper_back_right", |p| {
+			p[0] < -0.12 && p[0] > -0.28 && p[2] > -0.14 && p[2] < 0.02 && p[1] > 1.04 && p[1] < 1.24
+		}),
 	];
 	reports.extend(focused_regions.into_iter().map(|(name, predicate)| {
 		dynamics_vertex_probe_region(
@@ -6037,6 +7038,137 @@ fn dynamics_vertex_probe_regions(
 		)
 	}));
 	reports
+}
+
+fn dynamics_vertex_probe_mirror_symmetry(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+	positions: &[[f32; 3]],
+) -> Vec<DynamicsVertexProbeMirrorSymmetryReport> {
+	let regions: [(&str, fn([f32; 3]) -> bool); 5] = [
+		("all_vertices", |_| true),
+		("cape_shoulders_broad", |p| {
+			p[0].abs() > 0.08 && p[0].abs() < 0.42 && p[1] > 0.96 && p[1] < 1.34 && p[2] > -0.24 && p[2] < 0.18
+		}),
+		("cape_upper_shoulders", |p| {
+			p[0].abs() > 0.10 && p[0].abs() < 0.36 && p[1] > 1.08 && p[1] < 1.30 && p[2] > -0.20 && p[2] < 0.14
+		}),
+		("cape_front_shoulders", |p| {
+			p[0].abs() > 0.10 && p[0].abs() < 0.36 && p[1] > 1.00 && p[1] < 1.30 && p[2] > -0.02 && p[2] < 0.18
+		}),
+		("cape_back_shoulders", |p| {
+			p[0].abs() > 0.10 && p[0].abs() < 0.36 && p[1] > 1.00 && p[1] < 1.30 && p[2] > -0.24 && p[2] < 0.02
+		}),
+	];
+	regions
+		.into_iter()
+		.map(|(name, predicate)| {
+			dynamics_vertex_probe_mirror_symmetry_region(scene, skin, primitive, node_paths, positions, name, predicate)
+		})
+		.collect()
+}
+
+fn dynamics_vertex_probe_mirror_symmetry_region(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+	positions: &[[f32; 3]],
+	name: &str,
+	predicate: fn([f32; 3]) -> bool,
+) -> DynamicsVertexProbeMirrorSymmetryReport {
+	let left_indices = positions
+		.iter()
+		.enumerate()
+		.filter_map(|(index, &position)| (position[0] > 0.002 && predicate(position)).then_some(index))
+		.collect::<Vec<_>>();
+	let right_indices = positions
+		.iter()
+		.enumerate()
+		.filter_map(|(index, &position)| (position[0] < -0.002 && predicate(position)).then_some(index))
+		.collect::<Vec<_>>();
+	let left_samples = dynamics_vertex_probe_mirror_samples(scene, skin, primitive, node_paths, positions, &left_indices, &right_indices);
+	let right_samples = dynamics_vertex_probe_mirror_samples(scene, skin, primitive, node_paths, positions, &right_indices, &left_indices);
+	let (average_left_to_right_distance, max_left_to_right_distance) = dynamics_vertex_probe_mirror_distance_summary(&left_samples);
+	let (average_right_to_left_distance, max_right_to_left_distance) = dynamics_vertex_probe_mirror_distance_summary(&right_samples);
+	DynamicsVertexProbeMirrorSymmetryReport {
+		name: name.to_string(),
+		left_vertex_count: left_indices.len(),
+		right_vertex_count: right_indices.len(),
+		average_left_to_right_distance,
+		max_left_to_right_distance,
+		average_right_to_left_distance,
+		max_right_to_left_distance,
+		worst_left_samples: dynamics_vertex_probe_worst_mirror_samples(left_samples),
+		worst_right_samples: dynamics_vertex_probe_worst_mirror_samples(right_samples),
+	}
+}
+
+fn dynamics_vertex_probe_mirror_samples(
+	scene: &UnaSceneSnapshot,
+	skin: Option<&un_avatar_core::UnaSkin>,
+	primitive: &un_avatar_core::UnaMeshBuffers,
+	node_paths: &[Option<String>],
+	positions: &[[f32; 3]],
+	source_indices: &[usize],
+	target_indices: &[usize],
+) -> Vec<DynamicsVertexProbeMirrorSample> {
+	let joints = primitive.joints.as_ref();
+	let weights = primitive.weights.as_ref();
+	source_indices
+		.iter()
+		.filter_map(|&source_index| {
+			let &position = positions.get(source_index)?;
+			let mirrored = Vec3::new(-position[0], position[1], position[2]);
+			let (nearest_index, nearest_position, nearest_distance) = target_indices
+				.iter()
+				.filter_map(|&target_index| {
+					let target = Vec3::from_array(*positions.get(target_index)?);
+					Some((target_index, target, (target - mirrored).length()))
+				})
+				.min_by(|a, b| a.2.total_cmp(&b.2))?;
+			let (dominant_joint, dominant_weight, influences) = dynamics_vertex_probe_influences(
+				scene,
+				skin,
+				node_paths,
+				joints.and_then(|j| j.get(source_index)),
+				weights.and_then(|w| w.get(source_index)),
+			);
+			Some(DynamicsVertexProbeMirrorSample {
+				vertex_index: source_index,
+				position,
+				mirrored_position: mirrored.to_array(),
+				nearest_vertex_index: nearest_index,
+				nearest_position: nearest_position.to_array(),
+				mirror_distance: nearest_distance,
+				dominant_joint,
+				dominant_weight,
+				influences,
+			})
+		})
+		.collect()
+}
+
+fn dynamics_vertex_probe_mirror_distance_summary(samples: &[DynamicsVertexProbeMirrorSample]) -> (f32, f32) {
+	let mut sum = 0.0_f32;
+	let mut max = 0.0_f32;
+	for sample in samples {
+		sum += sample.mirror_distance;
+		max = max.max(sample.mirror_distance);
+	}
+	(sum / samples.len().max(1) as f32, max)
+}
+
+fn dynamics_vertex_probe_worst_mirror_samples(mut samples: Vec<DynamicsVertexProbeMirrorSample>) -> Vec<DynamicsVertexProbeMirrorSample> {
+	samples.sort_by(|a, b| {
+		b.mirror_distance
+			.total_cmp(&a.mirror_distance)
+			.then_with(|| a.vertex_index.cmp(&b.vertex_index))
+	});
+	samples.truncate(16);
+	samples
 }
 
 fn dynamics_vertex_probe_joint_weight_summaries(
@@ -7976,7 +9108,7 @@ fn visible_mesh_materials(
 }
 
 fn skin_summaries(scene: &un_avatar_core::UnaSceneSnapshot) -> Vec<DiagnoseSkinSummary> {
-	const RENDERER_MAX_BONES: usize = 512;
+	const RENDERER_MAX_BONES: usize = 1024;
 	let mut summaries = scene
 		.skins
 		.iter()
@@ -11828,10 +12960,12 @@ mod tests {
 				un_avatar_core::UnaMorphTargetDeltas {
 					position_deltas: vec![[0.001, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 				un_avatar_core::UnaMorphTargetDeltas {
 					position_deltas: vec![[0.02, 0.0, 0.0], [0.03, 0.0, 0.0], [0.0, 0.0, 0.0]],
 					normal_deltas: None,
+					tangent_deltas: None,
 				},
 			],
 			morph_target_names: vec!["Breast_Fix".to_string(), "GenericWide".to_string()],
@@ -11946,6 +13080,7 @@ mod tests {
 			center: [0.0, 0.0, 0.0],
 			radius: 0.1,
 			inside_bounds: true,
+			bones_as_sphere: true,
 		}];
 		let collider_source_ids = vec!["physbone:a".to_string()];
 		let collider_paths = vec!["BodyColliders/InsideSphere".to_string()];
