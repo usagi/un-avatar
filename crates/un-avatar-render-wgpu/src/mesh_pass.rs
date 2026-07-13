@@ -9776,6 +9776,7 @@ impl SceneMeshes {
 		gpu_texture_compression_enabled: bool,
 		mut progress: impl FnMut(SceneMeshBuildProgress),
 	) -> Result<Self, String> {
+		let device_limits = device.limits();
 		let texture_roles = texture_roles_for_scene(scene);
 		let skin_tone_kinds = if opts.skin_tone_matching {
 			skin_tone_texture_kinds_for_scene(scene)
@@ -11357,7 +11358,7 @@ impl SceneMeshes {
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
 				if has_morph_targets {
-					validate_morph_delta_buffer_size(&device.limits(), morph_target_count, buffer_upload.vertices.len())
+					validate_morph_delta_buffer_size(&device_limits, morph_target_count, buffer_upload.vertices.len())
 						.map_err(|error| format!("mesh={mesh_i} primitive={prim_i}: {error}"))?;
 				}
 				let morph_resources = if asset_resident {
