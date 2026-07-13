@@ -32,7 +32,7 @@ use un_avatar_core::{
 	UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget,
 	UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneDirectionalLight, UnaSceneEnvironmentLight, UnaSceneLighting, UnaSceneNode,
 	UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler,
-	UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaTextureWrapMode, UnaUnavatarExtension, UnaUnityConstraintWorldUpType,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -2681,14 +2681,20 @@ fn unavatar_node_constraints(
 	let mut out = Vec::new();
 	let mut missing = 0usize;
 	let mut unsupported = 0usize;
+	let mut unsupported_kinds = BTreeMap::<String, usize>::new();
+	let mut parent_count = 0usize;
+	let mut aim_count = 0usize;
+	let mut rotation_count = 0usize;
+	let mut position_count = 0usize;
 	for constraint in constraints {
 		let kind_text = constraint
 			.get("kind")
 			.or_else(|| constraint.get("type"))
 			.and_then(Value::as_str)
 			.unwrap_or("");
-		if kind_text != "parent" {
+		if !matches!(kind_text, "parent" | "unity_aim" | "unity_rotation" | "unity_position") {
 			unsupported += 1;
+			*unsupported_kinds.entry(kind_text.to_string()).or_default() += 1;
 			continue;
 		}
 		let Some(target_ref) = constraint
@@ -2730,35 +2736,130 @@ fn unavatar_node_constraints(
 			missing += 1;
 			continue;
 		};
+		let kind = match kind_text {
+			"parent" => {
+				parent_count += 1;
+				UnaNodeConstraintKind::Parent {
+					translate_x: json_bool_or(constraint.get("translateX").or_else(|| constraint.get("translate_x")), true),
+					translate_y: json_bool_or(constraint.get("translateY").or_else(|| constraint.get("translate_y")), true),
+					translate_z: json_bool_or(constraint.get("translateZ").or_else(|| constraint.get("translate_z")), true),
+					rotate_x: json_bool_or(constraint.get("rotateX").or_else(|| constraint.get("rotate_x")), true),
+					rotate_y: json_bool_or(constraint.get("rotateY").or_else(|| constraint.get("rotate_y")), true),
+					rotate_z: json_bool_or(constraint.get("rotateZ").or_else(|| constraint.get("rotate_z")), true),
+					translation_at_rest: json_vec3(
+						constraint
+							.get("translationAtRest")
+							.or_else(|| constraint.get("translation_at_rest")),
+					)
+					.unwrap_or([0.0; 3]),
+					rotation_at_rest: json_vec3(constraint.get("rotationAtRest").or_else(|| constraint.get("rotation_at_rest")))
+						.unwrap_or([0.0; 3]),
+				}
+			}
+			"unity_aim" => {
+				let world_up_type = match constraint
+					.get("worldUpType")
+					.or_else(|| constraint.get("world_up_type"))
+					.and_then(Value::as_str)
+					.unwrap_or("none")
+				{
+					"scene_up" | "SceneUp" => UnaUnityConstraintWorldUpType::SceneUp,
+					"object_up" | "ObjectUp" => UnaUnityConstraintWorldUpType::ObjectUp,
+					"object_rotation_up" | "ObjectRotationUp" => UnaUnityConstraintWorldUpType::ObjectRotationUp,
+					"vector" | "Vector" => UnaUnityConstraintWorldUpType::Vector,
+					_ => UnaUnityConstraintWorldUpType::None,
+				};
+				let world_up_ref = constraint.get("worldUpObject").or_else(|| constraint.get("world_up_object"));
+				let world_up_node =
+					world_up_ref.and_then(|node_ref| unavatar_node_ref_index(node_ref, node_ids, registry_paths, paths, normalized_paths));
+				if world_up_ref.is_some() && world_up_node.is_none() {
+					missing += 1;
+					continue;
+				}
+				aim_count += 1;
+				UnaNodeConstraintKind::UnityAim {
+					aim_vector: json_vec3(constraint.get("aimVector").or_else(|| constraint.get("aim_vector"))).unwrap_or([0.0, 0.0, 1.0]),
+					up_vector: json_vec3(constraint.get("upVector").or_else(|| constraint.get("up_vector"))).unwrap_or([0.0, 1.0, 0.0]),
+					world_up_vector: json_vec3(constraint.get("worldUpVector").or_else(|| constraint.get("world_up_vector")))
+						.unwrap_or([0.0, 1.0, 0.0]),
+					world_up_type,
+					world_up_node,
+					rotate_x: json_bool_or(constraint.get("rotateX").or_else(|| constraint.get("rotate_x")), true),
+					rotate_y: json_bool_or(constraint.get("rotateY").or_else(|| constraint.get("rotate_y")), true),
+					rotate_z: json_bool_or(constraint.get("rotateZ").or_else(|| constraint.get("rotate_z")), true),
+					rotation_at_rest: json_vec4(
+						constraint
+							.get("rotationAtRestQuaternion")
+							.or_else(|| constraint.get("rotation_at_rest_quaternion")),
+					)
+					.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+					rotation_offset: json_vec4(
+						constraint
+							.get("rotationOffsetQuaternion")
+							.or_else(|| constraint.get("rotation_offset_quaternion")),
+					)
+					.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+				}
+			}
+			"unity_rotation" => {
+				rotation_count += 1;
+				UnaNodeConstraintKind::UnityRotation {
+					rotate_x: json_bool_or(constraint.get("rotateX").or_else(|| constraint.get("rotate_x")), true),
+					rotate_y: json_bool_or(constraint.get("rotateY").or_else(|| constraint.get("rotate_y")), true),
+					rotate_z: json_bool_or(constraint.get("rotateZ").or_else(|| constraint.get("rotate_z")), true),
+					rotation_at_rest: json_vec4(
+						constraint
+							.get("rotationAtRestQuaternion")
+							.or_else(|| constraint.get("rotation_at_rest_quaternion")),
+					)
+					.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+					rotation_offset: json_vec4(
+						constraint
+							.get("rotationOffsetQuaternion")
+							.or_else(|| constraint.get("rotation_offset_quaternion")),
+					)
+					.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+				}
+			}
+			"unity_position" => {
+				position_count += 1;
+				UnaNodeConstraintKind::UnityPosition {
+					translate_x: json_bool_or(constraint.get("translateX").or_else(|| constraint.get("translate_x")), true),
+					translate_y: json_bool_or(constraint.get("translateY").or_else(|| constraint.get("translate_y")), true),
+					translate_z: json_bool_or(constraint.get("translateZ").or_else(|| constraint.get("translate_z")), true),
+					translation_at_rest: json_vec3(
+						constraint
+							.get("translationAtRest")
+							.or_else(|| constraint.get("translation_at_rest")),
+					)
+					.unwrap_or([0.0; 3]),
+					translation_offset: json_vec3(constraint.get("translationOffset").or_else(|| constraint.get("translation_offset")))
+						.unwrap_or([0.0; 3]),
+				}
+			}
+			_ => unreachable!(),
+		};
 		out.push(UnaNodeConstraint {
 			target_node,
 			source_node: primary_source,
 			weight: json_f32(constraint.get("weight")).unwrap_or(1.0).clamp(0.0, 1.0),
-			kind: UnaNodeConstraintKind::Parent {
-				translate_x: json_bool_or(constraint.get("translateX").or_else(|| constraint.get("translate_x")), true),
-				translate_y: json_bool_or(constraint.get("translateY").or_else(|| constraint.get("translate_y")), true),
-				translate_z: json_bool_or(constraint.get("translateZ").or_else(|| constraint.get("translate_z")), true),
-				rotate_x: json_bool_or(constraint.get("rotateX").or_else(|| constraint.get("rotate_x")), true),
-				rotate_y: json_bool_or(constraint.get("rotateY").or_else(|| constraint.get("rotate_y")), true),
-				rotate_z: json_bool_or(constraint.get("rotateZ").or_else(|| constraint.get("rotate_z")), true),
-				translation_at_rest: json_vec3(
-					constraint
-						.get("translationAtRest")
-						.or_else(|| constraint.get("translation_at_rest")),
-				)
-				.unwrap_or([0.0; 3]),
-				rotation_at_rest: json_vec3(constraint.get("rotationAtRest").or_else(|| constraint.get("rotation_at_rest")))
-					.unwrap_or([0.0; 3]),
-			},
+			kind,
 			sources,
+		});
+	}
+	for (kind, count) in &unsupported_kinds {
+		report.push_warning(format!(".unavatar unsupported node constraint: kind={kind}, count={count}"));
+		report.lost_features.push(un_avatar_core::LostFeature {
+			feature: format!("node_constraint.{kind}"),
+			detail: Some(format!(
+				"{count} authored node constraint(s) were preserved as source payload but not applied"
+			)),
 		});
 	}
 	if !out.is_empty() || missing > 0 || unsupported > 0 {
 		report.push_info(format!(
-			".unavatar node_constraints: parent={}, missing={}, unsupported={}",
-			out.len(),
-			missing,
-			unsupported
+			".unavatar node_constraints: parent={}, unity_aim={}, unity_rotation={}, unity_position={}, missing={}, unsupported={}",
+			parent_count, aim_count, rotation_count, position_count, missing, unsupported
 		));
 	}
 	out
@@ -6123,6 +6224,11 @@ fn remap_scene_node_references(scene: &mut UnaSceneSnapshot, old_node: usize, ne
 		if constraint.target_node == old_node {
 			constraint.target_node = new_node;
 		}
+		if let UnaNodeConstraintKind::UnityAim { world_up_node, .. } = &mut constraint.kind {
+			if *world_up_node == Some(old_node) {
+				*world_up_node = Some(new_node);
+			}
+		}
 	}
 }
 
@@ -6496,6 +6602,15 @@ fn retarget_merge_armature_node_constraint_sources(scene: &mut UnaSceneSnapshot,
 		for source in &mut constraint.sources {
 			if let Some(&target_node) = resolved.get(&source.source_node) {
 				source.source_node = target_node;
+				retargeted += 1;
+			}
+		}
+		if let UnaNodeConstraintKind::UnityAim {
+			world_up_node: Some(node), ..
+		} = &mut constraint.kind
+		{
+			if let Some(&target_node) = resolved.get(node) {
+				*node = target_node;
 				retargeted += 1;
 			}
 		}
@@ -13322,6 +13437,91 @@ mod tests {
 		assert_eq!(constraints[0].sources[1].source_node, 3);
 		assert!((constraints[0].weight - 0.75).abs() < f32::EPSILON);
 		assert!(matches!(constraints[0].kind, UnaNodeConstraintKind::Parent { .. }));
+	}
+
+	#[test]
+	fn unavatar_node_constraints_lower_unity_standard_constraint_payloads() {
+		let scene = UnaSceneSnapshot {
+			nodes: vec![
+				test_scene_node("node_root", vec![1, 2, 3, 4]),
+				test_scene_node("node_target", Vec::new()),
+				test_scene_node("node_source_a", Vec::new()),
+				test_scene_node("node_source_b", Vec::new()),
+				test_scene_node("node_world_up", Vec::new()),
+			],
+			roots: vec![0],
+			..Default::default()
+		};
+		let unavatar = UnaUnavatarExtension {
+			spec_version: "0.1-preview".to_string(),
+			source: serde_json::json!({
+				"nodes": [
+					{"nodeId": "node_target", "path": "node_root/node_target"},
+					{"nodeId": "node_source_a", "path": "node_root/node_source_a"},
+					{"nodeId": "node_source_b", "path": "node_root/node_source_b"},
+					{"nodeId": "node_world_up", "path": "node_root/node_world_up"}
+				],
+				"nodeConstraints": [
+					{
+						"kind": "unity_aim",
+						"target": {"nodeId": "node_target"},
+						"aimVector": [0.0, 0.0, 1.0],
+						"upVector": [0.0, 1.0, 0.0],
+						"worldUpType": "object_rotation_up",
+						"worldUpVector": [0.0, 1.0, 0.0],
+						"worldUpObject": {"nodeId": "node_world_up"},
+						"rotationAtRestQuaternion": [0.0, 0.0, 0.0, 1.0],
+						"rotationOffsetQuaternion": [0.0, 0.0, 0.0, 1.0],
+						"sources": [{"node": {"nodeId": "node_source_a"}, "weight": 1.0}]
+					},
+					{
+						"kind": "unity_rotation",
+						"target": {"nodeId": "node_target"},
+						"sources": [{"node": {"nodeId": "node_source_b"}, "weight": 1.0}]
+					},
+					{
+						"kind": "unity_position",
+						"target": {"nodeId": "node_target"},
+						"translationAtRest": [1.0, 2.0, 3.0],
+						"translationOffset": [0.5, 0.0, 0.0],
+						"sources": [{"node": {"nodeId": "node_source_a"}, "weight": 0.25}]
+					},
+					{
+						"kind": "unity_scale",
+						"target": {"nodeId": "node_target"},
+						"sources": [{"node": {"nodeId": "node_source_a"}, "weight": 1.0}]
+					}
+				]
+			}),
+		};
+		let node_ids = scene_node_ids(&scene);
+		let registry_paths = unavatar_node_registry_paths(Some(&unavatar));
+		let paths = scene_node_paths(&scene);
+		let normalized_paths = scene_node_normalized_paths(&scene);
+		let mut report = ImportReport::default();
+
+		let constraints = unavatar_node_constraints(&unavatar, &node_ids, &registry_paths, &paths, &normalized_paths, &mut report);
+
+		assert_eq!(constraints.len(), 3);
+		assert!(matches!(
+			constraints[0].kind,
+			UnaNodeConstraintKind::UnityAim {
+				world_up_node: Some(4),
+				world_up_type: UnaUnityConstraintWorldUpType::ObjectRotationUp,
+				..
+			}
+		));
+		assert!(matches!(constraints[1].kind, UnaNodeConstraintKind::UnityRotation { .. }));
+		assert!(matches!(
+			constraints[2].kind,
+			UnaNodeConstraintKind::UnityPosition {
+				translation_at_rest: [1.0, 2.0, 3.0],
+				translation_offset: [0.5, 0.0, 0.0],
+				..
+			}
+		));
+		assert_eq!(report.lost_features.len(), 1);
+		assert_eq!(report.lost_features[0].feature, "node_constraint.unity_scale");
 	}
 
 	#[test]

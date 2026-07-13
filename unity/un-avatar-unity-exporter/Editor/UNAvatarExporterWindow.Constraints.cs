@@ -17,19 +17,212 @@ namespace UNAvatar.UnityExporter
             }
 
             var sourceIdCounts = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (var constraint in rootObject.GetComponentsInChildren<ParentConstraint>(true))
+            foreach (var transform in rootObject.GetComponentsInChildren<Transform>(true))
             {
-                if (constraint == null || !constraint.enabled || !constraint.constraintActive || constraint.weight <= 0.0f)
+                foreach (var component in transform.GetComponents<Component>())
                 {
-                    continue;
-                }
-                var item = BuildParentConstraintPayload(rootObject.transform, constraint, sourceIdCounts);
-                if (item != null)
-                {
-                    payload.Add(item);
+                    Dictionary<string, object> item = null;
+                    if (component is ParentConstraint parent
+                        && parent.enabled && parent.constraintActive && parent.weight > 0.0f)
+                    {
+                        item = BuildParentConstraintPayload(rootObject.transform, parent, sourceIdCounts);
+                    }
+                    else if (component is AimConstraint aim
+                        && aim.enabled && aim.constraintActive && aim.weight > 0.0f)
+                    {
+                        item = BuildAimConstraintPayload(rootObject.transform, aim, sourceIdCounts);
+                    }
+                    else if (component is RotationConstraint rotation
+                        && rotation.enabled && rotation.constraintActive && rotation.weight > 0.0f)
+                    {
+                        item = BuildRotationConstraintPayload(rootObject.transform, rotation, sourceIdCounts);
+                    }
+                    else if (component is PositionConstraint position
+                        && position.enabled && position.constraintActive && position.weight > 0.0f)
+                    {
+                        item = BuildPositionConstraintPayload(rootObject.transform, position, sourceIdCounts);
+                    }
+                    else if (component is ScaleConstraint scale
+                        && scale.enabled && scale.constraintActive && scale.weight > 0.0f)
+                    {
+                        item = BuildScaleConstraintMetadata(rootObject.transform, scale, sourceIdCounts);
+                    }
+                    else if (component is LookAtConstraint lookAt
+                        && lookAt.enabled && lookAt.constraintActive && lookAt.weight > 0.0f)
+                    {
+                        item = BuildLookAtConstraintMetadata(rootObject.transform, lookAt, sourceIdCounts);
+                    }
+                    if (item != null)
+                    {
+                        payload.Add(item);
+                    }
                 }
             }
             return payload;
+        }
+
+        private static List<object> BuildConstraintSources(Transform root, IConstraint constraint)
+        {
+            var sources = new List<object>();
+            for (var i = 0; i < constraint.sourceCount; i++)
+            {
+                var source = constraint.GetSource(i);
+                if (source.sourceTransform == null || source.weight <= 0.0f)
+                {
+                    continue;
+                }
+                sources.Add(new Dictionary<string, object>
+                {
+                    ["node"] = TransformTargetJson(root, source.sourceTransform),
+                    ["weight"] = source.weight
+                });
+            }
+            return sources;
+        }
+
+        private static Dictionary<string, object> BuildAimConstraintPayload(
+            Transform root,
+            AimConstraint constraint,
+            Dictionary<string, int> sourceIdCounts)
+        {
+            var sources = BuildConstraintSources(root, constraint);
+            if (sources.Count == 0)
+            {
+                return null;
+            }
+            var item = new Dictionary<string, object>
+            {
+                ["id"] = BuildUnityConstraintSourceId(root, constraint.transform, "aim", sourceIdCounts),
+                ["kind"] = "unity_aim",
+                ["source"] = "unity_aim_constraint",
+                ["target"] = TransformTargetJson(root, constraint.transform),
+                ["weight"] = constraint.weight,
+                ["aimVector"] = GltfVector3List(constraint.aimVector),
+                ["upVector"] = GltfVector3List(constraint.upVector),
+                ["worldUpType"] = UnityWorldUpTypeName(constraint.worldUpType),
+                ["worldUpVector"] = GltfVector3List(constraint.worldUpVector),
+                ["rotateX"] = AxisHas(constraint.rotationAxis, Axis.X),
+                ["rotateY"] = AxisHas(constraint.rotationAxis, Axis.Y),
+                ["rotateZ"] = AxisHas(constraint.rotationAxis, Axis.Z),
+                ["rotationAtRestQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationAtRest)),
+                ["rotationOffsetQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationOffset)),
+                ["sources"] = sources
+            };
+            if (constraint.worldUpObject != null)
+            {
+                item["worldUpObject"] = TransformTargetJson(root, constraint.worldUpObject);
+            }
+            return item;
+        }
+
+        private static Dictionary<string, object> BuildRotationConstraintPayload(
+            Transform root,
+            RotationConstraint constraint,
+            Dictionary<string, int> sourceIdCounts)
+        {
+            var sources = BuildConstraintSources(root, constraint);
+            if (sources.Count == 0)
+            {
+                return null;
+            }
+            return new Dictionary<string, object>
+            {
+                ["id"] = BuildUnityConstraintSourceId(root, constraint.transform, "rotation", sourceIdCounts),
+                ["kind"] = "unity_rotation",
+                ["source"] = "unity_rotation_constraint",
+                ["target"] = TransformTargetJson(root, constraint.transform),
+                ["weight"] = constraint.weight,
+                ["rotateX"] = AxisHas(constraint.rotationAxis, Axis.X),
+                ["rotateY"] = AxisHas(constraint.rotationAxis, Axis.Y),
+                ["rotateZ"] = AxisHas(constraint.rotationAxis, Axis.Z),
+                ["rotationAtRestQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationAtRest)),
+                ["rotationOffsetQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationOffset)),
+                ["sources"] = sources
+            };
+        }
+
+        private static Dictionary<string, object> BuildPositionConstraintPayload(
+            Transform root,
+            PositionConstraint constraint,
+            Dictionary<string, int> sourceIdCounts)
+        {
+            var sources = BuildConstraintSources(root, constraint);
+            if (sources.Count == 0)
+            {
+                return null;
+            }
+            return new Dictionary<string, object>
+            {
+                ["id"] = BuildUnityConstraintSourceId(root, constraint.transform, "position", sourceIdCounts),
+                ["kind"] = "unity_position",
+                ["source"] = "unity_position_constraint",
+                ["target"] = TransformTargetJson(root, constraint.transform),
+                ["weight"] = constraint.weight,
+                ["translateX"] = AxisHas(constraint.translationAxis, Axis.X),
+                ["translateY"] = AxisHas(constraint.translationAxis, Axis.Y),
+                ["translateZ"] = AxisHas(constraint.translationAxis, Axis.Z),
+                ["translationAtRest"] = GltfVector3List(constraint.translationAtRest),
+                ["translationOffset"] = GltfVector3List(constraint.translationOffset),
+                ["sources"] = sources
+            };
+        }
+
+        private static Dictionary<string, object> BuildScaleConstraintMetadata(
+            Transform root,
+            ScaleConstraint constraint,
+            Dictionary<string, int> sourceIdCounts)
+        {
+            var sources = BuildConstraintSources(root, constraint);
+            if (sources.Count == 0)
+            {
+                return null;
+            }
+            return new Dictionary<string, object>
+            {
+                ["id"] = BuildUnityConstraintSourceId(root, constraint.transform, "scale", sourceIdCounts),
+                ["kind"] = "unity_scale",
+                ["source"] = "unity_scale_constraint",
+                ["runtimeSupport"] = "unsupported",
+                ["target"] = TransformTargetJson(root, constraint.transform),
+                ["weight"] = constraint.weight,
+                ["scaleX"] = AxisHas(constraint.scalingAxis, Axis.X),
+                ["scaleY"] = AxisHas(constraint.scalingAxis, Axis.Y),
+                ["scaleZ"] = AxisHas(constraint.scalingAxis, Axis.Z),
+                ["scaleAtRest"] = Vector3List(constraint.scaleAtRest),
+                ["scaleOffset"] = Vector3List(constraint.scaleOffset),
+                ["sources"] = sources
+            };
+        }
+
+        private static Dictionary<string, object> BuildLookAtConstraintMetadata(
+            Transform root,
+            LookAtConstraint constraint,
+            Dictionary<string, int> sourceIdCounts)
+        {
+            var sources = BuildConstraintSources(root, constraint);
+            if (sources.Count == 0)
+            {
+                return null;
+            }
+            var item = new Dictionary<string, object>
+            {
+                ["id"] = BuildUnityConstraintSourceId(root, constraint.transform, "look_at", sourceIdCounts),
+                ["kind"] = "unity_look_at",
+                ["source"] = "unity_look_at_constraint",
+                ["runtimeSupport"] = "unsupported",
+                ["target"] = TransformTargetJson(root, constraint.transform),
+                ["weight"] = constraint.weight,
+                ["roll"] = constraint.roll,
+                ["useUpObject"] = constraint.useUpObject,
+                ["rotationAtRestQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationAtRest)),
+                ["rotationOffsetQuaternion"] = GltfQuaternionList(Quaternion.Euler(constraint.rotationOffset)),
+                ["sources"] = sources
+            };
+            if (constraint.worldUpObject != null)
+            {
+                item["worldUpObject"] = TransformTargetJson(root, constraint.worldUpObject);
+            }
+            return item;
         }
 
         private static Dictionary<string, object> BuildParentConstraintPayload(
@@ -101,6 +294,29 @@ namespace UNAvatar.UnityExporter
         private static List<object> Vector3List(Vector3 value)
         {
             return new List<object> { value.x, value.y, value.z };
+        }
+
+        private static List<object> GltfVector3List(Vector3 value)
+        {
+            return new List<object> { -value.x, value.y, value.z };
+        }
+
+        private static List<object> GltfQuaternionList(Quaternion value)
+        {
+            return new List<object> { value.x, -value.y, -value.z, value.w };
+        }
+
+        private static string UnityWorldUpTypeName(AimConstraint.WorldUpType value)
+        {
+            switch (value)
+            {
+                case AimConstraint.WorldUpType.SceneUp: return "scene_up";
+                case AimConstraint.WorldUpType.ObjectUp: return "object_up";
+                case AimConstraint.WorldUpType.ObjectRotationUp: return "object_rotation_up";
+                case AimConstraint.WorldUpType.Vector: return "vector";
+                case AimConstraint.WorldUpType.None: return "none";
+                default: return "none";
+            }
         }
     }
 }

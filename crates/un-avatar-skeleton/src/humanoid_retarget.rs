@@ -4,7 +4,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
 	resolved_scene_roots, UnaDocument, UnaHumanoidRuntimeBasis, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
-	UnaNodeConstraintKind, UnaRuntimeRetargetInputs, UnaSceneNode, UnaSceneSnapshot,
+	UnaNodeConstraintKind, UnaRuntimeRetargetInputs, UnaSceneNode, UnaSceneSnapshot, UnaUnityConstraintWorldUpType,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
@@ -1415,6 +1415,73 @@ fn constraint_vec3(value: [f32; 3]) -> Vec3 {
 	Vec3::new(value[0], value[1], value[2])
 }
 
+fn constraint_quat(value: [f32; 4]) -> Quat {
+	let value = Quat::from_xyzw(value[0], value[1], value[2], value[3]);
+	if value.is_finite() && value.length_squared() > 1e-12 {
+		value.normalize()
+	} else {
+		Quat::IDENTITY
+	}
+}
+
+fn constraint_sources<'a>(c: &'a UnaNodeConstraint) -> impl Iterator<Item = (usize, f32)> + 'a {
+	c.sources
+		.iter()
+		.map(|source| (source.source_node, source.weight.max(0.0)))
+		.chain(c.sources.is_empty().then_some((c.source_node, 1.0)))
+}
+
+fn weighted_constraint_position(c: &UnaNodeConstraint, world: &[Mat4]) -> Option<Vec3> {
+	let mut weighted = Vec3::ZERO;
+	let mut total = 0.0;
+	for (node, weight) in constraint_sources(c) {
+		if weight <= 0.0 || node >= world.len() {
+			continue;
+		}
+		weighted += world[node].transform_point3(Vec3::ZERO) * weight;
+		total += weight;
+	}
+	(total > 0.0).then_some(weighted / total)
+}
+
+fn weighted_constraint_rotation(c: &UnaNodeConstraint, world: &[Mat4]) -> Option<Quat> {
+	let mut blended: Option<Quat> = None;
+	let mut total = 0.0;
+	for (node, weight) in constraint_sources(c) {
+		if weight <= 0.0 || node >= world.len() {
+			continue;
+		}
+		let rotation = world[node].to_scale_rotation_translation().1.normalize();
+		let next_total = total + weight;
+		let t = weight / next_total;
+		blended = Some(match blended {
+			Some(previous) => previous.slerp(rotation, t).normalize(),
+			None => rotation,
+		});
+		total = next_total;
+	}
+	blended
+}
+
+fn filter_constraint_rotation_axes(rest: Quat, target: Quat, x: bool, y: bool, z: bool) -> Quat {
+	if x && y && z {
+		return target.normalize();
+	}
+	if !x && !y && !z {
+		return rest.normalize();
+	}
+	let delta = (rest.inverse() * target).normalize();
+	let (rx, ry, rz) = delta.to_euler(EulerRot::XYZ);
+	(rest
+		* Quat::from_euler(
+			EulerRot::XYZ,
+			if x { rx } else { 0.0 },
+			if y { ry } else { 0.0 },
+			if z { rz } else { 0.0 },
+		))
+	.normalize()
+}
+
 fn blend_constraint_axis(current: Vec3, target: Vec3, x: bool, y: bool, z: bool) -> Vec3 {
 	Vec3::new(
 		if x { target.x } else { current.x },
@@ -1495,6 +1562,146 @@ fn apply_aim_constraint(
 	let result = dst_rest_rotation.slerp(target.normalize(), c.weight.clamp(0.0, 1.0));
 	if let Some(dst) = nodes.get_mut(c.target_node) {
 		set_node_rotation(dst, result);
+		update_world_subtree(nodes, parents, world, c.target_node);
+	}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_unity_aim_constraint(
+	nodes: &mut [UnaSceneNode],
+	world: &mut [Mat4],
+	parents: &[usize],
+	c: &UnaNodeConstraint,
+	aim_vector: [f32; 3],
+	up_vector: [f32; 3],
+	world_up_vector: [f32; 3],
+	world_up_type: UnaUnityConstraintWorldUpType,
+	world_up_node: Option<usize>,
+	rotate_x: bool,
+	rotate_y: bool,
+	rotate_z: bool,
+	rotation_at_rest: [f32; 4],
+	rotation_offset: [f32; 4],
+) {
+	if c.target_node >= nodes.len() || c.target_node >= world.len() {
+		return;
+	}
+	let Some(source_position) = weighted_constraint_position(c, world) else {
+		return;
+	};
+	let target_position = world[c.target_node].transform_point3(Vec3::ZERO);
+	let desired_aim = (source_position - target_position).normalize_or_zero();
+	let local_aim = constraint_vec3(aim_vector).normalize_or_zero();
+	if desired_aim.length_squared() < 1e-10 || local_aim.length_squared() < 1e-10 {
+		return;
+	}
+	let parent_world_rotation = parents
+		.get(c.target_node)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.map(|matrix| matrix.to_scale_rotation_translation().1.normalize())
+		.unwrap_or(Quat::IDENTITY);
+	let at_rest = constraint_quat(rotation_at_rest);
+	let base_world_rotation = parent_world_rotation * at_rest;
+	let current_aim = (base_world_rotation * local_aim).normalize_or_zero();
+	if current_aim.length_squared() < 1e-10 {
+		return;
+	}
+	let mut target_world_rotation = Quat::from_rotation_arc(current_aim, desired_aim) * base_world_rotation;
+	let world_up = match world_up_type {
+		UnaUnityConstraintWorldUpType::SceneUp => Some(Vec3::Y),
+		UnaUnityConstraintWorldUpType::ObjectUp => world_up_node
+			.and_then(|node| world.get(node))
+			.map(|matrix| (matrix.transform_point3(Vec3::ZERO) - target_position).normalize_or_zero()),
+		UnaUnityConstraintWorldUpType::ObjectRotationUp => world_up_node
+			.and_then(|node| world.get(node))
+			.map(|matrix| matrix.to_scale_rotation_translation().1 * constraint_vec3(world_up_vector)),
+		UnaUnityConstraintWorldUpType::Vector => Some(constraint_vec3(world_up_vector)),
+		UnaUnityConstraintWorldUpType::None => None,
+	};
+	if let Some(desired_up) = world_up.map(Vec3::normalize_or_zero).filter(|value| value.length_squared() > 1e-10) {
+		let local_up = constraint_vec3(up_vector).normalize_or_zero();
+		let current_up = target_world_rotation * local_up;
+		let projected_current = (current_up - desired_aim * current_up.dot(desired_aim)).normalize_or_zero();
+		let projected_desired = (desired_up - desired_aim * desired_up.dot(desired_aim)).normalize_or_zero();
+		if projected_current.length_squared() > 1e-10 && projected_desired.length_squared() > 1e-10 {
+			target_world_rotation = Quat::from_rotation_arc(projected_current, projected_desired) * target_world_rotation;
+		}
+	}
+	target_world_rotation = (target_world_rotation * constraint_quat(rotation_offset)).normalize();
+	let target_local = (parent_world_rotation.inverse() * target_world_rotation).normalize();
+	let filtered = filter_constraint_rotation_axes(at_rest, target_local, rotate_x, rotate_y, rotate_z);
+	let result = at_rest.slerp(filtered, c.weight.clamp(0.0, 1.0)).normalize();
+	if let Some(target) = nodes.get_mut(c.target_node) {
+		set_node_rotation(target, result);
+		update_world_subtree(nodes, parents, world, c.target_node);
+	}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_unity_rotation_constraint(
+	nodes: &mut [UnaSceneNode],
+	world: &mut [Mat4],
+	parents: &[usize],
+	c: &UnaNodeConstraint,
+	rotate_x: bool,
+	rotate_y: bool,
+	rotate_z: bool,
+	rotation_at_rest: [f32; 4],
+	rotation_offset: [f32; 4],
+) {
+	if c.target_node >= nodes.len() {
+		return;
+	}
+	let Some(source_world_rotation) = weighted_constraint_rotation(c, world) else {
+		return;
+	};
+	let parent_world_rotation = parents
+		.get(c.target_node)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.map(|matrix| matrix.to_scale_rotation_translation().1.normalize())
+		.unwrap_or(Quat::IDENTITY);
+	let at_rest = constraint_quat(rotation_at_rest);
+	let target_local = (parent_world_rotation.inverse() * source_world_rotation * constraint_quat(rotation_offset)).normalize();
+	let filtered = filter_constraint_rotation_axes(at_rest, target_local, rotate_x, rotate_y, rotate_z);
+	let result = at_rest.slerp(filtered, c.weight.clamp(0.0, 1.0)).normalize();
+	if let Some(target) = nodes.get_mut(c.target_node) {
+		set_node_rotation(target, result);
+		update_world_subtree(nodes, parents, world, c.target_node);
+	}
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_unity_position_constraint(
+	nodes: &mut [UnaSceneNode],
+	world: &mut [Mat4],
+	parents: &[usize],
+	c: &UnaNodeConstraint,
+	translate_x: bool,
+	translate_y: bool,
+	translate_z: bool,
+	translation_at_rest: [f32; 3],
+	translation_offset: [f32; 3],
+) {
+	if c.target_node >= nodes.len() {
+		return;
+	}
+	let Some(source_world_position) = weighted_constraint_position(c, world) else {
+		return;
+	};
+	let parent_world = parents
+		.get(c.target_node)
+		.and_then(|&parent| (parent != NO_PARENT).then_some(parent))
+		.and_then(|parent| world.get(parent).copied())
+		.unwrap_or(Mat4::IDENTITY);
+	let desired_local = parent_world.inverse().transform_point3(source_world_position) + constraint_vec3(translation_offset);
+	let at_rest = constraint_vec3(translation_at_rest);
+	let filtered = blend_constraint_axis(at_rest, desired_local, translate_x, translate_y, translate_z);
+	let result = at_rest.lerp(filtered, c.weight.clamp(0.0, 1.0));
+	if let Some(target) = nodes.get_mut(c.target_node) {
+		let (scale, rotation, _) = node_scale_rotation_translation(target);
+		target.transform = Mat4::from_scale_rotation_translation(scale, rotation, result).to_cols_array();
 		update_world_subtree(nodes, parents, world, c.target_node);
 	}
 }
@@ -1600,7 +1807,7 @@ fn apply_parent_constraint(
 	}
 }
 
-/// VRM 1 `VRMC_node_constraint` を現在のノード姿勢へ適用する。
+/// VRM 1 node constraint と `.unavatar` の source-neutral Unity constraint を現在のノード姿勢へ適用する。
 ///
 /// `rest_nodes` は importer 直後のノード列を渡す。制約は rest rotation からの差分として評価するため、
 /// VMC などで Humanoid ボーンを書き換えた直後に呼ぶ。
@@ -1656,6 +1863,79 @@ pub fn apply_node_constraints_to_scene(
 					rotate_x,
 					rotate_y,
 					rotate_z,
+				);
+			}
+			UnaNodeConstraintKind::UnityAim {
+				aim_vector,
+				up_vector,
+				world_up_vector,
+				world_up_type,
+				world_up_node,
+				rotate_x,
+				rotate_y,
+				rotate_z,
+				rotation_at_rest,
+				rotation_offset,
+			} => {
+				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_unity_aim_constraint(
+					nodes,
+					world,
+					parents,
+					c,
+					aim_vector,
+					up_vector,
+					world_up_vector,
+					world_up_type,
+					world_up_node,
+					rotate_x,
+					rotate_y,
+					rotate_z,
+					rotation_at_rest,
+					rotation_offset,
+				);
+			}
+			UnaNodeConstraintKind::UnityRotation {
+				rotate_x,
+				rotate_y,
+				rotate_z,
+				rotation_at_rest,
+				rotation_offset,
+			} => {
+				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_unity_rotation_constraint(
+					nodes,
+					world,
+					parents,
+					c,
+					rotate_x,
+					rotate_y,
+					rotate_z,
+					rotation_at_rest,
+					rotation_offset,
+				);
+			}
+			UnaNodeConstraintKind::UnityPosition {
+				translate_x,
+				translate_y,
+				translate_z,
+				translation_at_rest,
+				translation_offset,
+			} => {
+				let parents = parents.get_or_insert_with(|| compact_scene_parent_indices(nodes));
+				let world = current_world.get_or_insert_with(|| scene_world_matrices(nodes, roots));
+				apply_unity_position_constraint(
+					nodes,
+					world,
+					parents,
+					c,
+					translate_x,
+					translate_y,
+					translate_z,
+					translation_at_rest,
+					translation_offset,
 				);
 			}
 		}
@@ -4587,6 +4867,145 @@ mod tests {
 		let expected = Quat::from_rotation_z(0.5);
 		assert!(applied_rotation.abs_diff_eq(expected, 1e-5) || applied_rotation.abs_diff_eq(-expected, 1e-5));
 		assert!((translation - Vec3::X).length() < 1e-5);
+	}
+
+	#[test]
+	fn unity_aim_constraint_aligns_authored_aim_and_world_up_axes() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::X).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 1,
+			source_node: 2,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::UnityAim {
+				aim_vector: [0.0, 0.0, 1.0],
+				up_vector: [0.0, 1.0, 0.0],
+				world_up_vector: [0.0, 1.0, 0.0],
+				world_up_type: un_avatar_core::UnaUnityConstraintWorldUpType::SceneUp,
+				world_up_node: None,
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				rotation_at_rest: [0.0, 0.0, 0.0, 1.0],
+				rotation_offset: [0.0, 0.0, 0.0, 1.0],
+			},
+			sources: Vec::new(),
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let (_, rotation, _) = Mat4::from_cols_array(&nodes[1].transform).to_scale_rotation_translation();
+		assert!((rotation * Vec3::Z - Vec3::X).length() < 1e-5);
+		assert!((rotation * Vec3::Y - Vec3::Y).length() < 1e-5);
+	}
+
+	#[test]
+	fn unity_rotation_constraint_blends_multiple_sources_and_applies_offset() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2, 3],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_rotation_z(0.2).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_rotation_z(0.6).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		let offset = Quat::from_rotation_z(0.1);
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 1,
+			source_node: 2,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::UnityRotation {
+				rotate_x: true,
+				rotate_y: true,
+				rotate_z: true,
+				rotation_at_rest: [0.0, 0.0, 0.0, 1.0],
+				rotation_offset: offset.to_array(),
+			},
+			sources: vec![
+				un_avatar_core::UnaNodeConstraintSource {
+					source_node: 2,
+					weight: 0.5,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				},
+				un_avatar_core::UnaNodeConstraintSource {
+					source_node: 3,
+					weight: 0.5,
+					translation_offset: [0.0; 3],
+					rotation_offset: [0.0; 3],
+				},
+			],
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let (_, rotation, _) = Mat4::from_cols_array(&nodes[1].transform).to_scale_rotation_translation();
+		let expected = Quat::from_rotation_z(0.5);
+		assert!((rotation.dot(expected).abs() - 1.0).abs() < 1e-5);
+	}
+
+	#[test]
+	fn unity_position_constraint_uses_parent_local_offset_and_axis_mask() {
+		let rest_nodes = vec![
+			UnaSceneNode {
+				transform: Mat4::IDENTITY.to_cols_array(),
+				children: vec![1, 2],
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(0.0, 4.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+			UnaSceneNode {
+				transform: Mat4::from_translation(Vec3::new(2.0, 3.0, 0.0)).to_cols_array(),
+				..unknown_node()
+			},
+		];
+		let mut nodes = rest_nodes.clone();
+		let constraints = vec![un_avatar_core::UnaNodeConstraint {
+			target_node: 1,
+			source_node: 2,
+			weight: 1.0,
+			kind: un_avatar_core::UnaNodeConstraintKind::UnityPosition {
+				translate_x: true,
+				translate_y: false,
+				translate_z: false,
+				translation_at_rest: [0.0, 4.0, 0.0],
+				translation_offset: [0.5, 1.0, 0.0],
+			},
+			sources: Vec::new(),
+		}];
+
+		apply_node_constraints_to_scene(&mut nodes, &[0], &constraints, &rest_nodes);
+
+		let (_, _, translation) = Mat4::from_cols_array(&nodes[1].transform).to_scale_rotation_translation();
+		assert!((translation - Vec3::new(2.5, 4.0, 0.0)).length() < 1e-5);
 	}
 
 	#[test]
