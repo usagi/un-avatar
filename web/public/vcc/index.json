@@ -1,7 +1,7 @@
 {
-  "author": "contact@usagi.network",
+  "author": "USAGI.NETWORK",
   "id": "network.usagi.un-avatar",
-  "name": "UN Avatar Packages",
+  "name": "U.N. Avatar Exporter",
   "packages": {
     "network.usagi.un-avatar.unity-exporter": {
       "versions": {
