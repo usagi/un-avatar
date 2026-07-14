@@ -2477,8 +2477,23 @@ pub(crate) fn mesh_shader_resource_plan_for_adapter(adapter_limits: &wgpu::Limit
 	let tier = mesh_shader_variant_tier_for_limits(adapter_limits);
 	let mut required_limits = wgpu::Limits::downlevel_defaults().using_resolution(adapter_limits.clone());
 	required_limits.max_texture_dimension_2d = required_limits.max_texture_dimension_2d.max(4096);
+	// The WebGPU-compatible defaults intentionally cap a storage binding at 128 MiB.
+	// Native adapters commonly expose a much larger range, and requesting it does not
+	// allocate memory; it only preserves the capability reported by the adapter.
+	required_limits.max_storage_buffer_binding_size = adapter_limits.max_storage_buffer_binding_size;
+	required_limits.max_buffer_size = adapter_limits.max_buffer_size;
 	apply_mesh_shader_resource_limits(&mut required_limits, adapter_limits, tier);
 	MeshShaderResourcePlan { tier, required_limits }
+}
+
+fn log_gpu_buffer_limits(label: &str, adapter_limits: &wgpu::Limits, required_limits: &wgpu::Limits) {
+	eprintln!(
+		"un-avatar-renderer: {label} GPU buffer limits adapter_storage_binding={} adapter_buffer={} requested_storage_binding={} requested_buffer={}",
+		adapter_limits.max_storage_buffer_binding_size,
+		adapter_limits.max_buffer_size,
+		required_limits.max_storage_buffer_binding_size,
+		required_limits.max_buffer_size,
+	);
 }
 
 fn apply_mesh_shader_resource_limits(limits: &mut wgpu::Limits, adapter_limits: &wgpu::Limits, tier: MeshShaderVariantTier) {
@@ -5955,6 +5970,7 @@ pub(crate) fn warmup_gpu_scene_startup(opts: &AvatarWindowOptions, purpose: GpuS
 	let adapter = resolve_adapter(&instance, backends, None, opts.gpu_adapter.as_deref(), label).map_err(|e| format!("{label}: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+	log_gpu_buffer_limits(label, &adapter_limits, &mesh_shader_plan.required_limits);
 	let adapter_features = adapter.features();
 	let texture_compression_features = if matches!(
 		opts.texture_compression,
@@ -6053,6 +6069,7 @@ pub(crate) fn prewarm_shader_pipelines(opts: &AvatarWindowOptions) -> Result<(),
 		.map_err(|e| format!("shader prewarm: {e}"))?;
 	let adapter_limits = adapter.limits();
 	let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+	log_gpu_buffer_limits("shader prewarm", &adapter_limits, &mesh_shader_plan.required_limits);
 	let adapter_features = adapter.features();
 	let pipeline_cache_features = adapter_features & wgpu::Features::PIPELINE_CACHE;
 	let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -8045,6 +8062,7 @@ impl GpuState {
 
 		let adapter_limits = adapter.limits();
 		let mesh_shader_plan = mesh_shader_resource_plan_for_adapter(&adapter_limits);
+		log_gpu_buffer_limits("window startup", &adapter_limits, &mesh_shader_plan.required_limits);
 		let limits = mesh_shader_plan.required_limits.clone();
 		let shader_variant_tier = mesh_shader_plan.tier;
 		if shader_variant_tier.is_baseline_fallback() {
@@ -15230,10 +15248,17 @@ mod tests {
 			baseline_plan.required_limits.max_samplers_per_shader_stage,
 			BASELINE_FALLBACK_SAMPLERS_PER_STAGE
 		);
+		assert_eq!(
+			baseline_plan.required_limits.max_storage_buffer_binding_size,
+			baseline.max_storage_buffer_binding_size
+		);
+		assert_eq!(baseline_plan.required_limits.max_buffer_size, baseline.max_buffer_size);
 
 		let mut high_capability = baseline.clone();
 		high_capability.max_sampled_textures_per_shader_stage = HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE + 8;
 		high_capability.max_samplers_per_shader_stage = HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE + 4;
+		high_capability.max_storage_buffer_binding_size = 4_294_967_292;
+		high_capability.max_buffer_size = 4_294_967_292;
 		assert_eq!(
 			mesh_shader_variant_tier_for_limits(&high_capability),
 			MeshShaderVariantTier::HighCapability
@@ -15248,6 +15273,11 @@ mod tests {
 			high_plan.required_limits.max_samplers_per_shader_stage,
 			HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE
 		);
+		assert_eq!(
+			high_plan.required_limits.max_storage_buffer_binding_size,
+			high_capability.max_storage_buffer_binding_size
+		);
+		assert_eq!(high_plan.required_limits.max_buffer_size, high_capability.max_buffer_size);
 	}
 
 	#[test]

@@ -4417,7 +4417,7 @@ fn create_morph_resources(
 		usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
 		mapped_at_creation: false,
 	});
-	let delta_size = ((morph_deltas.len() * std::mem::size_of::<[f32; 4]>()) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
+	let delta_size = (std::mem::size_of_val(morph_deltas) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
 	let delta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 		label: Some("mesh_morph_deltas"),
 		size: delta_size,
@@ -4453,6 +4453,35 @@ fn create_morph_resources(
 	}
 }
 
+fn morph_delta_buffer_size(target_count: usize, vertex_count: usize) -> Result<u64, String> {
+	let vec4_count = target_count
+		.checked_mul(vertex_count)
+		.and_then(|count| count.checked_mul(3))
+		.ok_or_else(|| format!("morph delta element count overflow: targets={target_count} vertices={vertex_count}"))?;
+	let byte_size = vec4_count
+		.checked_mul(std::mem::size_of::<[f32; 4]>())
+		.and_then(|size| u64::try_from(size).ok())
+		.ok_or_else(|| format!("morph delta byte size overflow: targets={target_count} vertices={vertex_count}"))?;
+	Ok(byte_size.max(MORPH_DELTA_BUFFER_MIN_SIZE))
+}
+
+fn validate_morph_delta_buffer_size(limits: &wgpu::Limits, target_count: usize, vertex_count: usize) -> Result<u64, String> {
+	let byte_size = morph_delta_buffer_size(target_count, vertex_count)?;
+	if byte_size > limits.max_buffer_size {
+		return Err(format!(
+			"morph delta buffer requires {byte_size} bytes, exceeding device max_buffer_size {} (targets={target_count} vertices={vertex_count})",
+			limits.max_buffer_size
+		));
+	}
+	if byte_size > limits.max_storage_buffer_binding_size {
+		return Err(format!(
+			"morph delta buffer binding requires {byte_size} bytes, exceeding device max_storage_buffer_binding_size {} (targets={target_count} vertices={vertex_count})",
+			limits.max_storage_buffer_binding_size
+		));
+	}
+	Ok(byte_size)
+}
+
 fn create_shared_morph_delta_resources(
 	device: &wgpu::Device,
 	queue: &wgpu::Queue,
@@ -4470,7 +4499,7 @@ fn create_shared_morph_delta_resources(
 		contents: bytemuck::bytes_of(&morph_meta),
 		usage: wgpu::BufferUsages::UNIFORM,
 	});
-	let delta_size = ((morph_deltas.len() * std::mem::size_of::<[f32; 4]>()) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
+	let delta_size = (std::mem::size_of_val(morph_deltas) as u64).max(MORPH_DELTA_BUFFER_MIN_SIZE);
 	let delta_buffer = device.create_buffer(&wgpu::BufferDescriptor {
 		label: Some("mesh_morph_deltas_shared"),
 		size: delta_size,
@@ -9747,6 +9776,7 @@ impl SceneMeshes {
 		gpu_texture_compression_enabled: bool,
 		mut progress: impl FnMut(SceneMeshBuildProgress),
 	) -> Result<Self, String> {
+		let device_limits = device.limits();
 		let texture_roles = texture_roles_for_scene(scene);
 		let skin_tone_kinds = if opts.skin_tone_matching {
 			skin_tone_texture_kinds_for_scene(scene)
@@ -11327,6 +11357,10 @@ impl SceneMeshes {
 
 				let morph_target_count = morph_pos.len();
 				let has_morph_targets = morph_target_count > 0;
+				if has_morph_targets {
+					validate_morph_delta_buffer_size(&device_limits, morph_target_count, buffer_upload.vertices.len())
+						.map_err(|error| format!("mesh={mesh_i} primitive={prim_i}: {error}"))?;
+				}
 				let morph_resources = if asset_resident {
 					Some(if has_morph_targets {
 						if let Some(cache_key) = morph_delta_cache_key.as_ref() {
@@ -14620,6 +14654,23 @@ mod tests {
 		let mut out = Vec::new();
 		fill_morph_weights_for_draw(&[0.2, 0.25], 2, &bindings, Some(&[0.5]), &[], &[], &[], None, &mut out);
 		assert_eq!(out, vec![0.2, 0.5]);
+	}
+
+	#[test]
+	fn morph_delta_buffer_size_matches_mizuki_reproduction() {
+		assert_eq!(morph_delta_buffer_size(223, 13_509).unwrap(), 144_600_336);
+	}
+
+	#[test]
+	fn morph_delta_buffer_validation_uses_requested_device_limits() {
+		let mut limits = wgpu::Limits::downlevel_defaults();
+		let error = validate_morph_delta_buffer_size(&limits, 223, 13_509).unwrap_err();
+		assert!(error.contains("144600336 bytes"), "{error}");
+		assert!(error.contains("max_storage_buffer_binding_size 134217728"), "{error}");
+
+		limits.max_storage_buffer_binding_size = 4_294_967_292;
+		limits.max_buffer_size = 4_294_967_292;
+		assert_eq!(validate_morph_delta_buffer_size(&limits, 223, 13_509).unwrap(), 144_600_336);
 	}
 
 	#[test]

@@ -114,23 +114,31 @@ code {
 .product-tabs {
   display: flex;
   justify-content: center;
-  gap: 8px;
+  gap: 0;
+  min-width: 0;
 }
 
 .product-tabs a {
   display: grid;
   grid-template-columns: auto;
   min-width: 112px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-bottom-color: color-mix(in srgb, var(--tab-accent) 65%, transparent);
-  border-radius: 8px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 2px solid rgba(255, 255, 255, 0.14);
+  padding: 12px 14px 10px;
   color: var(--muted);
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.product-tabs a:hover {
+  border-bottom-color: color-mix(in srgb, var(--tab-accent) 65%, transparent);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
 }
 
 .product-tabs a.active {
-  border-color: color-mix(in srgb, var(--tab-accent) 70%, white 5%);
+  border-bottom-color: var(--tab-accent);
   background: color-mix(in srgb, var(--tab-accent) 16%, transparent);
   color: var(--text);
 }
@@ -668,7 +676,13 @@ footer {
   }
 
   .product-tabs a {
-    min-width: 98px;
+    min-width: 88px;
+    padding-inline: 6px;
+    font-size: 13px;
+  }
+
+  .product-tabs small {
+    font-size: 10px;
   }
 
   .capability-grid,

@@ -278,6 +278,10 @@ namespace UNAvatar.UnityExporter
         {
             var constraints = nodeConstraintsPayload ?? new List<object>();
             var parentCount = 0;
+            var aimCount = 0;
+            var rotationCount = 0;
+            var positionCount = 0;
+            var unsupportedCount = 0;
             var parentSourceCount = 0;
             var parentMultiSourceCount = 0;
             foreach (var item in constraints)
@@ -295,8 +299,24 @@ namespace UNAvatar.UnityExporter
                 {
                     kind = typeValue;
                 }
+                if (string.Equals(kind, "unity_aim", StringComparison.Ordinal))
+                {
+                    aimCount++;
+                    continue;
+                }
+                if (string.Equals(kind, "unity_rotation", StringComparison.Ordinal))
+                {
+                    rotationCount++;
+                    continue;
+                }
+                if (string.Equals(kind, "unity_position", StringComparison.Ordinal))
+                {
+                    positionCount++;
+                    continue;
+                }
                 if (!string.Equals(kind, "parent", StringComparison.Ordinal))
                 {
+                    unsupportedCount++;
                     continue;
                 }
                 parentCount++;
@@ -320,6 +340,10 @@ namespace UNAvatar.UnityExporter
             {
                 ["count"] = constraints.Count,
                 ["parentCount"] = parentCount,
+                ["aimCount"] = aimCount,
+                ["rotationCount"] = rotationCount,
+                ["positionCount"] = positionCount,
+                ["unsupportedCount"] = unsupportedCount,
                 ["parentSourceCount"] = parentSourceCount,
                 ["parentMultiSourceCount"] = parentMultiSourceCount
             };

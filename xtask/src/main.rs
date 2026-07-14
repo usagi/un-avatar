@@ -28,6 +28,8 @@ const DEFAULT_SPOUT2_REF: &str = "2.007.017";
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
 const UNITY_EXPORTER_PACKAGE: &str = "un-avatar-unity-exporter";
 const UNITY_EXPORTER_PACKAGE_ID: &str = "network.usagi.un-avatar.unity-exporter";
+const VCC_REPOSITORY_NAME: &str = "U.N. Avatar Exporter";
+const VCC_REPOSITORY_AUTHOR: &str = "USAGI.NETWORK";
 
 fn repo_root() -> &'static Path {
 	Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4370,10 +4372,10 @@ fn write_vcc_repo_index(repo_index: &Path, manifest: serde_json::Value, version:
 		}
 	} else {
 		serde_json::json!({
-			"name": "UN Avatar Packages",
+			"name": VCC_REPOSITORY_NAME,
 			"id": "network.usagi.un-avatar",
 			"url": "https://usagi.github.io/un-avatar/vcc/index.json",
-			"author": "contact@usagi.network",
+			"author": VCC_REPOSITORY_AUTHOR,
 			"packages": {}
 		})
 	};
@@ -4382,13 +4384,13 @@ fn write_vcc_repo_index(repo_index: &Path, manifest: serde_json::Value, version:
 		eprintln!("unity-exporter-vcc: repo index root must be an object: {}", repo_index.display());
 		return false;
 	};
-	root.insert("name".to_string(), serde_json::Value::String("UN Avatar Packages".to_string()));
+	root.insert("name".to_string(), serde_json::Value::String(VCC_REPOSITORY_NAME.to_string()));
 	root.insert("id".to_string(), serde_json::Value::String("network.usagi.un-avatar".to_string()));
 	root.insert(
 		"url".to_string(),
 		serde_json::Value::String("https://usagi.github.io/un-avatar/vcc/index.json".to_string()),
 	);
-	root.insert("author".to_string(), serde_json::Value::String("contact@usagi.network".to_string()));
+	root.insert("author".to_string(), serde_json::Value::String(VCC_REPOSITORY_AUTHOR.to_string()));
 	let packages = root.entry("packages".to_string()).or_insert_with(|| serde_json::json!({}));
 	let Some(packages) = packages.as_object_mut() else {
 		eprintln!(
@@ -7076,7 +7078,11 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 
 		let written: serde_json::Value =
 			serde_json::from_str(&fs::read_to_string(&index).expect("read written index")).expect("parse written index");
-		assert_eq!(written.get("name").and_then(serde_json::Value::as_str), Some("UN Avatar Packages"));
+		assert_eq!(written.get("name").and_then(serde_json::Value::as_str), Some(VCC_REPOSITORY_NAME));
+		assert_eq!(
+			written.get("author").and_then(serde_json::Value::as_str),
+			Some(VCC_REPOSITORY_AUTHOR)
+		);
 		assert_eq!(
 			written.get("id").and_then(serde_json::Value::as_str),
 			Some("network.usagi.un-avatar")

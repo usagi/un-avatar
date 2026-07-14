@@ -767,6 +767,9 @@ fn diagnose_node_constraint_kind(kind: &UnaNodeConstraintKind) -> &'static str {
 		UnaNodeConstraintKind::Aim { .. } => "aim",
 		UnaNodeConstraintKind::Rotation => "rotation",
 		UnaNodeConstraintKind::Parent { .. } => "parent",
+		UnaNodeConstraintKind::UnityAim { .. } => "unity_aim",
+		UnaNodeConstraintKind::UnityRotation { .. } => "unity_rotation",
+		UnaNodeConstraintKind::UnityPosition { .. } => "unity_position",
 	}
 }
 
@@ -6648,6 +6651,13 @@ fn dynamics_vertex_probe_constraint_node_samples(
 		node_indices.insert(constraint.source_node);
 		for source in &constraint.sources {
 			node_indices.insert(source.source_node);
+		}
+		if let UnaNodeConstraintKind::UnityAim {
+			world_up_node: Some(world_up_node),
+			..
+		} = &constraint.kind
+		{
+			node_indices.insert(*world_up_node);
 		}
 	}
 	let mut out = Vec::new();

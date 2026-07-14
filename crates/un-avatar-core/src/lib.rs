@@ -4296,6 +4296,16 @@ pub enum UnaNodeConstraintAimAxis {
 	NegativeZ,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnaUnityConstraintWorldUpType {
+	SceneUp,
+	ObjectUp,
+	ObjectRotationUp,
+	Vector,
+	None,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnaNodeConstraintKind {
@@ -4323,6 +4333,54 @@ pub enum UnaNodeConstraintKind {
 		translation_at_rest: [f32; 3],
 		#[serde(default)]
 		rotation_at_rest: [f32; 3],
+	},
+	/// Unity `AimConstraint` lowered without relying on model or bone names.
+	UnityAim {
+		#[serde(default)]
+		aim_vector: [f32; 3],
+		#[serde(default)]
+		up_vector: [f32; 3],
+		#[serde(default)]
+		world_up_vector: [f32; 3],
+		world_up_type: UnaUnityConstraintWorldUpType,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		world_up_node: Option<usize>,
+		#[serde(default = "true_bool")]
+		rotate_x: bool,
+		#[serde(default = "true_bool")]
+		rotate_y: bool,
+		#[serde(default = "true_bool")]
+		rotate_z: bool,
+		#[serde(default = "identity_quat_array")]
+		rotation_at_rest: [f32; 4],
+		#[serde(default = "identity_quat_array")]
+		rotation_offset: [f32; 4],
+	},
+	/// Unity `RotationConstraint` with weighted sources and authored offsets.
+	UnityRotation {
+		#[serde(default = "true_bool")]
+		rotate_x: bool,
+		#[serde(default = "true_bool")]
+		rotate_y: bool,
+		#[serde(default = "true_bool")]
+		rotate_z: bool,
+		#[serde(default = "identity_quat_array")]
+		rotation_at_rest: [f32; 4],
+		#[serde(default = "identity_quat_array")]
+		rotation_offset: [f32; 4],
+	},
+	/// Unity `PositionConstraint` with weighted sources and authored offset.
+	UnityPosition {
+		#[serde(default = "true_bool")]
+		translate_x: bool,
+		#[serde(default = "true_bool")]
+		translate_y: bool,
+		#[serde(default = "true_bool")]
+		translate_z: bool,
+		#[serde(default)]
+		translation_at_rest: [f32; 3],
+		#[serde(default)]
+		translation_offset: [f32; 3],
 	},
 }
 
