@@ -1,7 +1,7 @@
 {
   "name": "network.usagi.un-avatar.unity-exporter",
   "displayName": "U.N. Avatar Unity Exporter",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "unity": "2022.3",
   "description": "Unity Editor exporter for U.N. Avatar .unavatar GLB-compatible packages.",
   "author": {
