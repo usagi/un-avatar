@@ -35,6 +35,14 @@ export const products: Product[] = [
     group: 'pillar'
   },
   {
+    name: 'U.N. VRC PerfectSync',
+    shortName: 'PerfectSync',
+    role: 'Unity Tool',
+    href: 'https://usagi.github.io/un-vrc-perfectsync/',
+    accent: '#67d9b3',
+    group: 'pillar'
+  },
+  {
     name: 'U.N. Virtual Eye Tracker',
     shortName: 'VET',
     role: 'Tool',
