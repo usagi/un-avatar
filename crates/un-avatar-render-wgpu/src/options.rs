@@ -58,6 +58,8 @@ pub struct UnmotionZenohOptions {
 	pub enabled: bool,
 	/// `ZenohTopicStrategy::base_key_expr` に渡すベース key。空文字なら既定 `"un-motion/frame"` を使う。
 	pub base_key_expr: String,
+	/// `None`なら従来の自動探索。`Some`ならこの`host:port`へTCPで直接接続する。
+	pub connect_address: Option<String>,
 }
 
 impl Default for UnmotionZenohOptions {
@@ -65,6 +67,7 @@ impl Default for UnmotionZenohOptions {
 		Self {
 			enabled: false,
 			base_key_expr: "un-motion/frame".to_string(),
+			connect_address: None,
 		}
 	}
 }

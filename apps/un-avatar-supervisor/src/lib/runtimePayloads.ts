@@ -21,6 +21,7 @@ export type RuntimeMotionSetting = {
 	vmc_port: number | null;
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
+	unmotion_zenoh_connect: string | null;
 };
 
 export type RuntimeAvatarEffectsSetting = {
@@ -102,6 +103,7 @@ export function rendererMotionReceiversPayload(setting: RuntimeMotionSetting) {
 		vmcAddress: setting.motion_vmc_enabled ? (setting.vmc_address ?? `0.0.0.0:${setting.vmc_port ?? 39539}`) : null,
 		unmotionZenohEnabled: setting.motion_unmotion_enabled,
 		unmotionZenohKey: setting.unmotion_zenoh_key ?? "un-motion/frame",
+		unmotionZenohConnect: setting.unmotion_zenoh_connect,
 	};
 }
 

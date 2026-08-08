@@ -34,7 +34,7 @@ unsafe_code = "deny"
 [workspace.dependencies]
 # https://crates.io/crates/un-motion-frame / un-motion-frame-zenoh (registry で統一)
 un-motion-frame = "1.1"
-un-motion-frame-zenoh = { version = "1.0", default-features = true }
+un-motion-frame-zenoh = { version = "1.1", default-features = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"

@@ -7329,14 +7329,15 @@ dependencies = [
 
 [[package]]
 name = "un-motion-frame-zenoh"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "000d29501c5f1fb7e721749a715a2506cda2e49cf78da5d3f07323a136843b80"
+checksum = "a10dc6be24127b38ab4352fbcc84ab2822a54f232403fe45ec32b95e3a1d1052"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
  "rmp-serde",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
  "un-motion-frame",

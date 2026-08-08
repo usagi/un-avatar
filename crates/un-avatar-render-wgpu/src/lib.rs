@@ -554,6 +554,7 @@ enum RendererControlEvent {
 		vmc_address: Option<SocketAddr>,
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
+		unmotion_zenoh_connect: Option<String>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -784,6 +785,8 @@ enum RendererControlCommand {
 		unmotion_zenoh_enabled: bool,
 		#[serde(default)]
 		unmotion_zenoh_key: String,
+		#[serde(default)]
+		unmotion_zenoh_connect: Option<String>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -986,10 +989,12 @@ impl RendererControlCommand {
 				vmc_address,
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
+				unmotion_zenoh_connect,
 			} => RendererControlEvent::SetMotionReceivers {
 				vmc_address,
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
+				unmotion_zenoh_connect,
 			},
 			Self::SetDynamics {
 				enabled,
@@ -5126,6 +5131,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				vmc_address,
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
+				unmotion_zenoh_connect,
 			} => {
 				self.opts.vmc_address = vmc_address;
 				self.opts.unmotion_zenoh.enabled = unmotion_zenoh_enabled;
@@ -5134,6 +5140,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				} else {
 					unmotion_zenoh_key.trim().to_string()
 				};
+				self.opts.unmotion_zenoh.connect_address = unmotion_zenoh_connect
+					.map(|address| address.trim().to_string())
+					.filter(|address| !address.is_empty());
 				if let Some(gpu) = self.gpu.as_mut() {
 					if let Err(e) =
 						gpu.reconfigure_motion_receivers(self.opts.vmc_address, self.opts.unmotion_zenoh.clone(), self.opts.debug.vmc)
@@ -7673,6 +7682,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		)]
 		unmotion_zenoh_key: Option<String>,
 		#[arg(
+			long = "unmotion-zenoh-connect",
+			value_name = "HOST:PORT",
+			help = "UNMF/Z PublisherへTCPで直接接続する。省略時は従来どおり自動探索する。"
+		)]
+		unmotion_zenoh_connect: Option<String>,
+		#[arg(
 			long = "primary-motion-source",
 			value_enum,
 			help = "VMC と UNMotion 同時受信時の primary 選択 (既定 vmc)。"
@@ -7791,6 +7806,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
+			connect_address: cli.unmotion_zenoh_connect.clone(),
 		},
 		synthetic_head_motion: crate::options::SyntheticHeadMotionOptions {
 			enabled: cli.debug_synthetic_head_motion,
@@ -8172,6 +8188,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	}
 	if cli.unmotion_zenoh.base_key_expr != default.unmotion_zenoh.base_key_expr {
 		opts.unmotion_zenoh.base_key_expr = cli.unmotion_zenoh.base_key_expr;
+	}
+	if cli.unmotion_zenoh.connect_address.is_some() {
+		opts.unmotion_zenoh.connect_address = cli.unmotion_zenoh.connect_address;
 	}
 	if cli.synthetic_head_motion.enabled {
 		opts.synthetic_head_motion = cli.synthetic_head_motion;
@@ -10299,6 +10318,38 @@ mod tests {
 		};
 		assert_eq!(name, "JacketColor");
 		assert_eq!(value, 1.0);
+	}
+
+	#[test]
+	fn parses_motion_receiver_connection_without_breaking_automatic_default() {
+		let automatic = parse_renderer_control_command(
+			r#"{"command":"set_motion_receivers","unmotion_zenoh_enabled":true,"unmotion_zenoh_key":"un-motion/frame"}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetMotionReceivers {
+			unmotion_zenoh_enabled,
+			unmotion_zenoh_key,
+			unmotion_zenoh_connect,
+			..
+		} = automatic
+		else {
+			panic!("expected set_motion_receivers command");
+		};
+		assert!(unmotion_zenoh_enabled);
+		assert_eq!(unmotion_zenoh_key, "un-motion/frame");
+		assert_eq!(unmotion_zenoh_connect, None);
+
+		let direct = parse_renderer_control_command(
+			r#"{"command":"set_motion_receivers","unmotion_zenoh_enabled":true,"unmotion_zenoh_key":"un-motion/frame","unmotion_zenoh_connect":"192.168.1.20:39542"}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::SetMotionReceivers {
+			unmotion_zenoh_connect, ..
+		} = direct
+		else {
+			panic!("expected set_motion_receivers command");
+		};
+		assert_eq!(unmotion_zenoh_connect.as_deref(), Some("192.168.1.20:39542"));
 	}
 
 	#[test]

@@ -1436,6 +1436,8 @@ enum RendererControlCommand {
 		vmc_address: Option<String>,
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		unmotion_zenoh_connect: Option<String>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -1547,6 +1549,7 @@ struct AvatarSetting {
 	motion_vmc_enabled: bool,
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
+	unmotion_zenoh_connect: Option<String>,
 	audio_link_source: String,
 	audio_link_input_device_id: Option<String>,
 	audio_link_input_device_name_hint: Option<String>,
@@ -1845,6 +1848,7 @@ struct MotionSettings {
 	motion_vmc_enabled: bool,
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
+	unmotion_zenoh_connect: Option<String>,
 	look_at_enabled: bool,
 	look_at_clamp_deg: Option<f32>,
 	apply_vmc_root_translation: bool,
@@ -2054,6 +2058,7 @@ struct ManifestVmcUdp {
 struct ManifestUnmotionZenoh {
 	enabled: Option<bool>,
 	key: Option<String>,
+	connect: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -7031,6 +7036,13 @@ fn apply_motion_setting_value(
 		}
 		"motion.unmotion_zenoh.enabled" => set_nested_json_bool(manifest, &["motion", "unmotion_zenoh", "enabled"], &value, field),
 		"motion.unmotion_zenoh.key" => set_nested_json_string(manifest, &["motion", "unmotion_zenoh", "key"], &value, field),
+		"motion.unmotion_zenoh.connect" => {
+			let connect = json_optional_zenoh_connect_address(&value, field)?;
+			match connect {
+				Some(connect) => set_nested_string(manifest, &["motion", "unmotion_zenoh", "connect"], connect),
+				None => remove_nested_key(manifest, &["motion", "unmotion_zenoh", "connect"]),
+			}
+		}
 		"motion.primary_source" => {
 			let raw = json_string(&value, field)?;
 			let normalized = match raw.trim().to_ascii_lowercase().as_str() {
@@ -8353,6 +8365,7 @@ fn set_renderer_motion_receivers(
 	vmc_address: Option<String>,
 	unmotion_zenoh_enabled: bool,
 	unmotion_zenoh_key: String,
+	unmotion_zenoh_connect: Option<String>,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<(), String> {
 	send_renderer_command_by_id(
@@ -8362,6 +8375,7 @@ fn set_renderer_motion_receivers(
 			vmc_address,
 			unmotion_zenoh_enabled,
 			unmotion_zenoh_key,
+			unmotion_zenoh_connect,
 		},
 	)
 }
@@ -10428,6 +10442,7 @@ fn read_avatar_setting_inner(path: &Path, storage: ProfileStorage, include_model
 		motion_vmc_enabled: motion.motion_vmc_enabled,
 		motion_unmotion_enabled: motion.motion_unmotion_enabled,
 		unmotion_zenoh_key: motion.unmotion_zenoh_key,
+		unmotion_zenoh_connect: motion.unmotion_zenoh_connect,
 		audio_link_source: audio_link.source,
 		audio_link_input_device_id: audio_link.input_device_id,
 		audio_link_input_device_name_hint: audio_link.input_device_name_hint,
@@ -11756,6 +11771,20 @@ fn json_socket_addr_string(value: &serde_json::Value, field: &str) -> Result<Str
 		.map_err(|_| format!("{field} must be an IP:port address"))
 }
 
+fn json_optional_zenoh_connect_address(value: &serde_json::Value, field: &str) -> Result<Option<String>, String> {
+	if value.is_null() {
+		return Ok(None);
+	}
+	let address = json_string(value, field)?.trim().to_string();
+	if address.is_empty() {
+		return Ok(None);
+	}
+	address
+		.parse::<SocketAddr>()
+		.map(|_| Some(address))
+		.map_err(|_| format!("{field} must be an IP:port address"))
+}
+
 fn json_lowercase_choice(value: &serde_json::Value, field: &str, choices: &[&str]) -> Result<String, String> {
 	let choice = json_string(value, field)?.trim().to_ascii_lowercase();
 	if choices.contains(&choice.as_str()) {
@@ -12817,6 +12846,10 @@ fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, l
 		vmc_port,
 		motion_unmotion_enabled: unmotion_zenoh.enabled.unwrap_or(false),
 		unmotion_zenoh_key: unmotion_zenoh.key,
+		unmotion_zenoh_connect: unmotion_zenoh
+			.connect
+			.map(|address| address.trim().to_string())
+			.filter(|address| !address.is_empty()),
 		look_at_enabled: look_at.enabled.unwrap_or(false),
 		look_at_clamp_deg: Some(clamped_f32_or(look_at.clamp_deg, 30.0, 0.0, 90.0)),
 		apply_vmc_root_translation: motion.apply_vmc_root_translation.unwrap_or(false),
@@ -14579,6 +14612,19 @@ mod tests {
 		time::{Duration, Instant},
 	};
 	use un_avatar_skeleton::dynamics_token_filter_matches;
+
+	#[test]
+	fn unmfz_connect_address_accepts_ip_port_and_preserves_auto_default() {
+		assert_eq!(
+			super::json_optional_zenoh_connect_address(&serde_json::Value::Null, "connect").unwrap(),
+			None
+		);
+		assert_eq!(
+			super::json_optional_zenoh_connect_address(&serde_json::json!("192.168.1.20:39542"), "connect").unwrap(),
+			Some("192.168.1.20:39542".to_string())
+		);
+		assert!(super::json_optional_zenoh_connect_address(&serde_json::json!("192.168.1.20"), "connect").is_err());
+	}
 
 	use super::{
 		apply_avatar_setting_value, attach_standalone_renderer_manifest_in_state, avatar_model_picker_parent, avatar_setting_field_domain,

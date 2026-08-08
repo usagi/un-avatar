@@ -113,6 +113,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	motion_vmc_enabled: boolean;
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
+	unmotion_zenoh_connect: string | null;
 	audio_link_source: AudioLinkSource;
 	audio_link_input_device_id: string | null;
 	audio_link_input_device_name_hint: string | null;
@@ -360,6 +361,7 @@ export type MotionSetting = Pick<
 	AvatarSetting,
 	| "motion_unmotion_enabled"
 	| "unmotion_zenoh_key"
+	| "unmotion_zenoh_connect"
 	| "motion_vmc_enabled"
 	| "audio_link_source"
 	| "audio_link_input_device_id"

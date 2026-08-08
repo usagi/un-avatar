@@ -26,7 +26,7 @@ use un_motion_frame::UNMotionFrame;
 use un_motion_frame_zenoh::{Error, Subscriber, SubscriberBackend, ZenohTopicStrategy};
 
 #[cfg(feature = "zenoh-transport")]
-use un_motion_frame_zenoh::ZenohSubscriberBackend;
+use un_motion_frame_zenoh::{ZenohSessionConfig, ZenohSubscriberBackend};
 
 /// レンダラー側がポーリングする受信ハンドル。
 ///
@@ -45,6 +45,13 @@ impl UnAvatarZenohReceiver {
 	#[cfg(feature = "zenoh-transport")]
 	pub fn declare_zenoh_default(strategy: ZenohTopicStrategy) -> Result<Self, Error> {
 		let backend = ZenohSubscriberBackend::open_default()?;
+		Self::declare_with_backend(backend, strategy)
+	}
+
+	/// 指定したZenoh session設定でSubscriberを作る。
+	#[cfg(feature = "zenoh-transport")]
+	pub fn declare_zenoh(config: &ZenohSessionConfig, strategy: ZenohTopicStrategy) -> Result<Self, Error> {
+		let backend = ZenohSubscriberBackend::open(config)?;
 		Self::declare_with_backend(backend, strategy)
 	}
 

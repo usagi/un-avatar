@@ -62,6 +62,7 @@ let avatarSettings = [
 		motion_vmc_enabled: true,
 		motion_unmotion_enabled: true,
 		unmotion_zenoh_key: "un-motion/frame",
+		unmotion_zenoh_connect: null,
 		audio_link_source: "none",
 		audio_link_input_device_id: null,
 		audio_link_input_device_name_hint: null,
@@ -186,6 +187,7 @@ let avatarSettings = [
 		motion_vmc_enabled: true,
 		motion_unmotion_enabled: false,
 		unmotion_zenoh_key: null,
+		unmotion_zenoh_connect: null,
 		audio_link_source: "none",
 		audio_link_input_device_id: null,
 		audio_link_input_device_name_hint: null,
@@ -492,6 +494,15 @@ export function installDevIpcMock(): void {
 				}
 				if (setting && field === "wardrobe.transition.billboard_y_offset_mm") {
 					(setting as { wardrobe_billboard_y_offset_mm: number }).wardrobe_billboard_y_offset_mm = Number(args.value ?? 0);
+				}
+				if (setting && field === "motion.unmotion_zenoh.enabled") {
+					setting.motion_unmotion_enabled = Boolean(args.value);
+				}
+				if (setting && field === "motion.unmotion_zenoh.key") {
+					setting.unmotion_zenoh_key = String(args.value ?? "") || null;
+				}
+				if (setting && field === "motion.unmotion_zenoh.connect") {
+					(setting as { unmotion_zenoh_connect: string | null }).unmotion_zenoh_connect = String(args.value ?? "") || null;
 				}
 				if (setting && field === "wardrobe.shortcuts") {
 					(setting as { wardrobe_shortcuts: unknown[] }).wardrobe_shortcuts = (args.value as unknown[]) ?? [];

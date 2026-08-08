@@ -11349,7 +11349,16 @@ impl GpuState {
 				let received_frames_counter = Arc::clone(&self.unmotion_zenoh_received_frames);
 				let receiver_generation = Arc::clone(&self.motion_receiver_generation);
 				let key_expr_for_log = strategy.subscribe_key_expr();
-				match un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_default(strategy) {
+				let receiver = match unmotion_zenoh.connect_address.as_deref() {
+					Some(address) => {
+						let config = un_motion_frame_zenoh::ZenohSessionConfig::default()
+							.with_connect_endpoint(format!("tcp/{address}"))
+							.with_multicast_scouting(false);
+						un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh(&config, strategy)
+					}
+					None => un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_default(strategy),
+				};
+				match receiver {
 					Ok(receiver) => {
 						eprintln!("[un-avatar-zenoh] subscribed key='{key_expr_for_log}'");
 						if log_for_recv.is_enabled() {

@@ -335,6 +335,7 @@
 		"motion.vmc_udp.address",
 		"motion.unmotion_zenoh.enabled",
 		"motion.unmotion_zenoh.key",
+		"motion.unmotion_zenoh.connect",
 	] as const;
 
 	/// Renderers タブは稼働中プロセスの操作面に絞る。Exited/Crashed は Logs タブに履歴として残す。
@@ -509,6 +510,7 @@
 			motion_vmc_enabled: true,
 			motion_unmotion_enabled: false,
 			unmotion_zenoh_key: null,
+			unmotion_zenoh_connect: null,
 			audio_link_source: "none",
 			audio_link_input_device_id: null,
 			audio_link_input_device_name_hint: null,
@@ -643,6 +645,7 @@
 			motion_vmc_enabled: false,
 			motion_unmotion_enabled: false,
 			unmotion_zenoh_key: null,
+			unmotion_zenoh_connect: null,
 			audio_link_source: "none",
 			audio_link_input_device_id: null,
 			audio_link_input_device_name_hint: null,

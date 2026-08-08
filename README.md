@@ -16,6 +16,10 @@ v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC / Unity 
 4. 必要な設定を行い、`起動` ボタンで Renderer を起動します。
 5. U.N. Motion や VMC 対応アプリから UNMF/Z または VMC/UDP でモーションを送ります。
 
+同じPCのU.N. Motionは、UNMF/Zの接続方法を既定の「Auto（同じPC）」のまま利用できます。
+LAN内の別PCへ接続する場合は「Address（LAN）」を選び、U.N. Motionに表示された
+`IP:port`を入力します。送信側PCでは、指定したTCP待受ポートの受信をFirewallで許可する必要があります。
+
 VRC / Unity アバターを使う場合は、先に U.N. Avatar Exporter で `.unavatar` を作ります。`.unavatar` は、VRC / Unity アバターを U.N. Avatar で使うための配信用アバターパッケージです。Exporter の導入、`1. Base -> 2. Wardrobe Sets -> 3. Export` の操作、Wardrobe の作り方は [v2 Getting Started](docs/v2-getting-started.md) を参照してください。
 
 最初は Supervisor でプロファイルを作成・調整します。設定が固まったら、ショートカットやピン留めから特定プロファイルの Renderer を直接起動できます。Renderer 単独起動中の Wardrobe、出力、ウィンドウ、カメラなどの操作は、Windows タスクトレイの Renderer アイコンを右クリックして行います。

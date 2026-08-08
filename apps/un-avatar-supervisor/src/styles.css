@@ -4688,6 +4688,46 @@ dd {
 	grid-template-columns: repeat(2, minmax(180px, 1fr));
 }
 
+.unmfz-connection-controls {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+
+.unmfz-connection-controls .field-label,
+.unmfz-connect-field > span {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+.unmfz-connection-controls small {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.segmented-control.unmfz-connection-mode {
+	grid-template-columns: repeat(2, minmax(104px, 1fr));
+	width: min(360px, 100%);
+}
+
+.unmfz-connect-field {
+	display: grid;
+	gap: 6px;
+	max-width: 360px;
+}
+
+.unmfz-advanced summary {
+	cursor: pointer;
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.unmfz-advanced[open] summary {
+	margin-bottom: 10px;
+}
+
 .physics-main-control {
 	display: grid;
 	align-content: start;

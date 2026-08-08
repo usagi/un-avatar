@@ -500,6 +500,7 @@ pub(crate) struct VmcUdpManifest {
 pub(crate) struct UnmotionZenohManifest {
 	pub enabled: Option<bool>,
 	pub key: Option<String>,
+	pub connect: Option<String>,
 }
 
 impl UnmotionZenohManifest {
@@ -515,6 +516,10 @@ impl UnmotionZenohManifest {
 			} else {
 				opts.unmotion_zenoh.base_key_expr = trimmed.to_string();
 			}
+		}
+		if let Some(connect) = self.connect {
+			let trimmed = connect.trim();
+			opts.unmotion_zenoh.connect_address = (!trimmed.is_empty()).then(|| trimmed.to_string());
 		}
 	}
 }
@@ -1599,6 +1604,11 @@ enabled = true
 port = 39540
 address = "0.0.0.0:39541"
 
+[motion.unmotion_zenoh]
+enabled = true
+key = "un-motion/frame"
+connect = "192.168.1.20:39542"
+
 [audio_link]
 source = "input_device"
 input_device_id = "cpal:device-1"
@@ -1824,6 +1834,9 @@ drag_scale = 1.4
 		);
 		assert_eq!(opts.gpu_adapter.as_deref(), Some("gpu:8086:a780:Intel UHD Graphics"));
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
+		assert!(opts.unmotion_zenoh.enabled);
+		assert_eq!(opts.unmotion_zenoh.base_key_expr, "un-motion/frame");
+		assert_eq!(opts.unmotion_zenoh.connect_address.as_deref(), Some("192.168.1.20:39542"));
 		assert!(opts.disable_geometry_outlines);
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
 		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));
@@ -2098,6 +2111,7 @@ height = 720
 		assert!(opts.input_passthrough);
 		assert!(!opts.decorations);
 		assert_eq!(opts.vmc_address, Some("127.0.0.1:39539".parse().unwrap()));
+		assert_eq!(opts.unmotion_zenoh.connect_address, None);
 		assert!(opts.spout.enabled);
 		assert_eq!(opts.spout.name, "Legacy Spout");
 		assert_eq!(opts.spout.width, Some(1280));
