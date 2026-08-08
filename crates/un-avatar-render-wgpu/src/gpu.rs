@@ -2,7 +2,7 @@
 
 use std::{
 	borrow::Cow,
-	collections::{BTreeMap, HashMap, VecDeque},
+	collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
@@ -11336,73 +11336,79 @@ impl GpuState {
 		}
 		if unmotion_zenoh.enabled {
 			if humanoid_ok {
-				let strategy = un_motion_frame_zenoh::ZenohTopicStrategy {
-					base_key_expr: if unmotion_zenoh.base_key_expr.trim().is_empty() {
-						"un-motion/frame".to_string()
-					} else {
-						unmotion_zenoh.base_key_expr.trim().to_string()
-					},
-					..un_motion_frame_zenoh::ZenohTopicStrategy::default()
-				};
-				let log_for_recv = self.debug_log.clone();
-				let motion_buffer_for_zenoh = Arc::clone(&self.motion_buffer);
-				let received_frames_counter = Arc::clone(&self.unmotion_zenoh_received_frames);
-				let receiver_generation = Arc::clone(&self.motion_receiver_generation);
-				let key_expr_for_log = strategy.subscribe_key_expr();
-				let receiver = match unmotion_zenoh.connect_address.as_deref() {
-					Some(address) => {
-						let config = un_motion_frame_zenoh::ZenohSessionConfig::default()
-							.with_connect_endpoint(format!("tcp/{address}"))
-							.with_multicast_scouting(false);
-						un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh(&config, strategy)
+				let subscriptions = unmotion_zenoh.effective_subscriptions();
+				let mut ids = BTreeSet::new();
+				let mut endpoints = BTreeSet::new();
+				for subscription in &subscriptions {
+					ids.insert(subscription.normalized_id());
+					if let Some(endpoint) = subscription.connect_endpoint() {
+						endpoints.insert(endpoint);
 					}
-					None => un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_default(strategy),
-				};
-				match receiver {
-					Ok(receiver) => {
-						eprintln!("[un-avatar-zenoh] subscribed key='{key_expr_for_log}'");
-						if log_for_recv.is_enabled() {
-							log_for_recv.line("unmotion_zenoh", format!("subscribed key={key_expr_for_log}"));
+				}
+				let strategies = ids
+					.into_iter()
+					.map(|base_key_expr| un_motion_frame_zenoh::ZenohTopicStrategy {
+						base_key_expr,
+						..un_motion_frame_zenoh::ZenohTopicStrategy::default()
+					})
+					.collect::<Vec<_>>();
+				let mut config = un_motion_frame_zenoh::ZenohSessionConfig::default();
+				for endpoint in endpoints {
+					config = config.with_connect_endpoint(endpoint);
+				}
+				match un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_many(&config, strategies.clone()) {
+					Ok(receivers) => {
+						self.unmotion_zenoh_live = !receivers.is_empty();
+						for (index, (receiver, strategy)) in receivers.into_iter().zip(strategies).enumerate() {
+							let log_for_recv = self.debug_log.clone();
+							let motion_buffer_for_zenoh = Arc::clone(&self.motion_buffer);
+							let received_frames_counter = Arc::clone(&self.unmotion_zenoh_received_frames);
+							let receiver_generation = Arc::clone(&self.motion_receiver_generation);
+							let key_expr_for_log = strategy.subscribe_key_expr();
+							eprintln!("[un-avatar-zenoh] subscribed key='{key_expr_for_log}'");
+							if log_for_recv.is_enabled() {
+								log_for_recv.line("unmotion_zenoh", format!("subscribed key={key_expr_for_log}"));
+							}
+							std::thread::Builder::new()
+								.name(format!("un-avatar-zenoh-apply-{index}"))
+								.spawn(move || {
+									const MAX_ZENOH_APPLY_BATCH: usize = 64;
+									let mut received = 0u64;
+									while receiver_generation.load(Ordering::Acquire) == generation {
+										let frames =
+											receiver.recv_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
+										if frames.is_empty() {
+											continue;
+										}
+										let batch_len = frames.len();
+										received_frames_counter.fetch_add(batch_len as u64, Ordering::Relaxed);
+										let mut last_seq = None;
+										for frame in frames {
+											last_seq = Some(frame.header.sequence);
+											motion_buffer_for_zenoh.push_frame(frame);
+										}
+										received = received.wrapping_add(1);
+										if log_for_recv.is_enabled() && (received == 1 || received.is_multiple_of(120)) {
+											log_for_recv.line(
+												"unmotion_zenoh",
+												format!(
+													"received batch#{received} frames={batch_len} last_seq={}",
+													last_seq.unwrap_or_default()
+												),
+											);
+										}
+									}
+									if log_for_recv.is_enabled() {
+										log_for_recv.line("unmotion_zenoh", "thread_stop generation_changed");
+									}
+								})
+								.map_err(|e| format!("spawn un-avatar-zenoh-apply thread failed: {e}"))?;
 						}
-						self.unmotion_zenoh_live = true;
-						std::thread::Builder::new()
-							.name("un-avatar-zenoh-apply".into())
-							.spawn(move || {
-								const MAX_ZENOH_APPLY_BATCH: usize = 64;
-								let mut received = 0u64;
-								while receiver_generation.load(Ordering::Acquire) == generation {
-									let frames = receiver.recv_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
-									if frames.is_empty() {
-										continue;
-									}
-									let batch_len = frames.len();
-									received_frames_counter.fetch_add(batch_len as u64, Ordering::Relaxed);
-									let mut last_seq = None;
-									for frame in frames {
-										last_seq = Some(frame.header.sequence);
-										motion_buffer_for_zenoh.push_frame(frame);
-									}
-									received = received.wrapping_add(1);
-									if log_for_recv.is_enabled() && (received == 1 || received.is_multiple_of(120)) {
-										log_for_recv.line(
-											"unmotion_zenoh",
-											format!(
-												"received batch#{received} frames={batch_len} last_seq={}",
-												last_seq.unwrap_or_default()
-											),
-										);
-									}
-								}
-								if log_for_recv.is_enabled() {
-									log_for_recv.line("unmotion_zenoh", "thread_stop generation_changed");
-								}
-							})
-							.map_err(|e| format!("spawn un-avatar-zenoh-apply thread failed: {e}"))?;
 					}
 					Err(e) => {
 						eprintln!("[un-avatar-zenoh] declare failed: {e}");
-						if log_for_recv.is_enabled() {
-							log_for_recv.line("unmotion_zenoh", format!("declare_failed: {e}"));
+						if self.debug_log.is_enabled() {
+							self.debug_log.line("unmotion_zenoh", format!("declare_failed: {e}"));
 						}
 					}
 				}

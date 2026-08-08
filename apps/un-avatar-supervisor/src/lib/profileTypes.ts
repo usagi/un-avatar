@@ -6,6 +6,13 @@ import type { DynamicsCategoryOverrideSetting, DynamicsGroupOverrideSetting, Dyn
 
 export type ProfileSettingValue = boolean | string | number | string[] | number[] | Record<string, unknown>[] | null;
 
+export type UnmotionZenohSubscriptionSetting = {
+	id: string;
+	lan_enabled: boolean;
+	host: string | null;
+	port: number;
+};
+
 export type TextureCompressionPreference = "source" | "auto" | "high_quality" | "small" | "gpu_native";
 
 export type TextureCompressionMode = "source" | "balanced" | "memory" | "compat";
@@ -114,6 +121,7 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
 	unmotion_zenoh_connect: string | null;
+	unmotion_zenoh_subscriptions: UnmotionZenohSubscriptionSetting[];
 	audio_link_source: AudioLinkSource;
 	audio_link_input_device_id: string | null;
 	audio_link_input_device_name_hint: string | null;
@@ -362,6 +370,7 @@ export type MotionSetting = Pick<
 	| "motion_unmotion_enabled"
 	| "unmotion_zenoh_key"
 	| "unmotion_zenoh_connect"
+	| "unmotion_zenoh_subscriptions"
 	| "motion_vmc_enabled"
 	| "audio_link_source"
 	| "audio_link_input_device_id"

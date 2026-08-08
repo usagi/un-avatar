@@ -7,7 +7,7 @@ use crate::{
 	options::{
 		AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality,
 		ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
-		PrimaryMotionSource, SsaoOptions, WardrobeBindingKind, WardrobeBindingOptions,
+		PrimaryMotionSource, SsaoOptions, UnmotionZenohSubscriptionOptions, WardrobeBindingKind, WardrobeBindingOptions,
 	},
 	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
 	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
@@ -501,6 +501,7 @@ pub(crate) struct UnmotionZenohManifest {
 	pub enabled: Option<bool>,
 	pub key: Option<String>,
 	pub connect: Option<String>,
+	pub subscriptions: Vec<UnmotionZenohSubscriptionOptions>,
 }
 
 impl UnmotionZenohManifest {
@@ -520,6 +521,9 @@ impl UnmotionZenohManifest {
 		if let Some(connect) = self.connect {
 			let trimmed = connect.trim();
 			opts.unmotion_zenoh.connect_address = (!trimmed.is_empty()).then(|| trimmed.to_string());
+		}
+		if !self.subscriptions.is_empty() {
+			opts.unmotion_zenoh.subscriptions = self.subscriptions;
 		}
 	}
 }
@@ -1549,6 +1553,33 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn unmotion_manifest_applies_multiple_subscriptions() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[motion.unmotion_zenoh]
+enabled = true
+subscriptions = [
+  { id = "un-motion/frame", lan_enabled = true, host = "192.0.2.10", port = 47447 },
+  { id = "face/main", lan_enabled = false, port = 47447 },
+]
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+
+		assert!(opts.unmotion_zenoh.enabled);
+		assert_eq!(opts.unmotion_zenoh.subscriptions.len(), 2);
+		assert_eq!(opts.unmotion_zenoh.subscriptions[0].id, "un-motion/frame");
+		assert_eq!(
+			opts.unmotion_zenoh.subscriptions[0].connect_endpoint().as_deref(),
+			Some("tcp/192.0.2.10:47447")
+		);
+		assert_eq!(opts.unmotion_zenoh.subscriptions[1].id, "face/main");
+		assert_eq!(opts.unmotion_zenoh.subscriptions[1].connect_endpoint(), None);
+	}
+
+	#[test]
 	fn toml_manifest_applies_renderer_options() {
 		let manifest: RendererManifest = toml::from_str(
 			r#"
@@ -1607,7 +1638,7 @@ address = "0.0.0.0:39541"
 [motion.unmotion_zenoh]
 enabled = true
 key = "un-motion/frame"
-connect = "192.168.1.20:39542"
+connect = "192.168.1.20:47447"
 
 [audio_link]
 source = "input_device"
@@ -1836,7 +1867,7 @@ drag_scale = 1.4
 		assert_eq!(opts.vmc_address, Some("0.0.0.0:39541".parse().unwrap()));
 		assert!(opts.unmotion_zenoh.enabled);
 		assert_eq!(opts.unmotion_zenoh.base_key_expr, "un-motion/frame");
-		assert_eq!(opts.unmotion_zenoh.connect_address.as_deref(), Some("192.168.1.20:39542"));
+		assert_eq!(opts.unmotion_zenoh.connect_address.as_deref(), Some("192.168.1.20:47447"));
 		assert!(opts.disable_geometry_outlines);
 		assert_eq!(opts.audio_link.source, AudioLinkSource::InputDevice);
 		assert_eq!(opts.audio_link.input_device_id.as_deref(), Some("cpal:device-1"));

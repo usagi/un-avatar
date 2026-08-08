@@ -55,6 +55,20 @@ impl UnAvatarZenohReceiver {
 		Self::declare_with_backend(backend, strategy)
 	}
 
+	/// 一つのZenoh sessionを共有し、複数のUNMF/Z keyを購読する。
+	#[cfg(feature = "zenoh-transport")]
+	pub fn declare_zenoh_many(
+		config: &ZenohSessionConfig,
+		strategies: impl IntoIterator<Item = ZenohTopicStrategy>,
+	) -> Result<Vec<Self>, Error> {
+		let backend = ZenohSubscriberBackend::open(config)?;
+		let session = backend.session().clone();
+		strategies
+			.into_iter()
+			.map(|strategy| Self::declare_with_backend(ZenohSubscriberBackend::from_session(session.clone()), strategy))
+			.collect()
+	}
+
 	/// 任意の `SubscriberBackend` 実装を渡して Subscriber を作る。
 	///
 	/// テスト用途で `un_motion_frame_zenoh::InMemoryBackend` / `ReplayBackend` を渡すときに使う。

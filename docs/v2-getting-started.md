@@ -156,12 +156,17 @@ Renderer 起動後、U.N. Motion から UNMF/Z を送ると表情、姿勢、手
 
 ### 別PCのU.N. Motionへ接続する
 
-同じPCでは、profileのMotionにあるUNMF/Z Subscriberを有効にし、接続方法を
-`Auto（同じPC）`のまま使います。既存profileも接続先が未指定なら同じ自動探索動作です。
+同じPCでは、profileのMotionにあるUNMF/Z Subscriberを有効にし、受信IDを
+U.N. Motion側と同じ値（通常は`un-motion/frame`）にします。`LAN接続`はOFFのままで構いません。
+既存どおりZenohの自動探索で接続します。
 
 LAN内の別PCでは、U.N. Motion側で「LAN内の別PCから直接接続を許可」を有効にし、
-U.N. Avatar側を`Address（LAN）`へ切り替えて、表示された接続先候補を`IP:port`形式で入力します。
-Address接続では指定先だけへTCP接続し、multicastによる自動探索は行いません。
+U.N. Avatar側の対象受信IDで`LAN接続`をONにします。U.N. Motionに表示されたIPv4アドレスと
+port（既定`47447`）をそれぞれ入力します。LAN接続を追加しても同一PCの自動探索は維持されます。
+
+複数のU.N. Motionから同じ受信IDを受け取る場合は、受信IDを追加し、同じIDへそれぞれの
+IPv4アドレスとportを設定します。Rendererは一つのZenoh sessionで全接続先へ接続し、
+同じIDへPublishされたUNMotionFrameを一つの購読として受信します。
 
 接続できない場合は、U.N. Motionを実行しているPCのFirewallで表示されたTCP portへの受信を許可します。
 インターネットへのport転送は不要です。

@@ -40,7 +40,7 @@ address = "0.0.0.0:39539"
 
 [motion.unmotion_zenoh]
 enabled = false
-key = ""
+subscriptions = [{ id = "un-motion/frame", lan_enabled = false, port = 47447 }]
 
 [physics.dynamics]
 enabled = true

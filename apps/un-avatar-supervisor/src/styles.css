@@ -4688,44 +4688,98 @@ dd {
 	grid-template-columns: repeat(2, minmax(180px, 1fr));
 }
 
-.unmfz-connection-controls {
+.unmfz-heading-row,
+.unmfz-subscription-primary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.unmfz-heading-row .profile-channel-heading {
+	margin: 0;
+}
+
+.unmfz-add,
+.unmfz-subscription-primary .icon-button {
+	width: 32px;
+	height: 32px;
+	min-width: 32px;
+}
+
+.unmfz-subscriptions {
 	display: grid;
-	gap: 6px;
+	gap: 10px;
+}
+
+.unmfz-subscription-row {
+	display: grid;
+	gap: 10px;
+	padding: 12px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
+.unmfz-subscription-primary > label {
+	display: grid;
+	grid-template-columns: 76px minmax(180px, 1fr);
+	align-items: center;
+	gap: 10px;
 	min-width: 0;
+	flex: 1;
 }
 
-.unmfz-connection-controls .field-label,
-.unmfz-connect-field > span {
+.unmfz-subscription-row label > span,
+.unmfz-endpoint-fields label > span {
 	color: var(--muted);
 	font-size: 12px;
 }
 
-.unmfz-connection-controls small {
-	color: var(--muted);
-	font-size: 12px;
-	line-height: 1.45;
-}
-
-.segmented-control.unmfz-connection-mode {
-	grid-template-columns: repeat(2, minmax(104px, 1fr));
-	width: min(360px, 100%);
-}
-
-.unmfz-connect-field {
-	display: grid;
-	gap: 6px;
-	max-width: 360px;
-}
-
-.unmfz-advanced summary {
+.unmfz-lan-toggle {
+	display: flex;
+	align-items: flex-start;
+	gap: 9px;
+	width: fit-content;
 	cursor: pointer;
-	color: var(--muted);
-	font-size: 12px;
+}
+
+.unmfz-lan-toggle > input {
+	margin-top: 3px;
+}
+
+.unmfz-lan-toggle > span {
+	display: grid;
+	gap: 2px;
+}
+
+.unmfz-lan-toggle strong {
+	font-size: 13px;
 	font-weight: 600;
 }
 
-.unmfz-advanced[open] summary {
-	margin-bottom: 10px;
+.unmfz-lan-toggle small {
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.4;
+}
+
+.unmfz-endpoint-fields {
+	display: grid;
+	grid-template-columns: minmax(180px, 1fr) minmax(96px, 0.35fr);
+	gap: 10px;
+}
+
+.unmfz-endpoint-fields label {
+	display: grid;
+	gap: 6px;
+}
+
+@media (max-width: 760px) {
+	.unmfz-subscription-primary > label,
+	.unmfz-endpoint-fields {
+		grid-template-columns: 1fr;
+	}
 }
 
 .physics-main-control {

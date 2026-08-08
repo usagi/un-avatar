@@ -7,6 +7,7 @@ export type MotionLabelData = {
 	vmc_port: number | null;
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
+	unmotion_zenoh_subscriptions?: Array<{ id: string }>;
 };
 
 export type OutputLabelData = {
@@ -52,7 +53,8 @@ export function motionLabel(setting: MotionLabelData): string {
 		parts.push(vmcLabel);
 	}
 	if (setting.motion_unmotion_enabled) {
-		const key = setting.unmotion_zenoh_key ?? "un-motion/frame";
+		const ids = [...new Set((setting.unmotion_zenoh_subscriptions ?? []).map((item) => item.id.trim()).filter(Boolean))];
+		const key = ids.length > 0 ? ids.join(", ") : (setting.unmotion_zenoh_key ?? "un-motion/frame");
 		const zenohLabel = `UNMF/Z ${key}/v1`;
 		parts.push(zenohLabel);
 	}

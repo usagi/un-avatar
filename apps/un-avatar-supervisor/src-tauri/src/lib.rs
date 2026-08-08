@@ -4,7 +4,7 @@ use std::{
 	ffi::OsStr,
 	fs,
 	io::{BufRead, BufReader, Read, Seek, SeekFrom},
-	net::SocketAddr,
+	net::{Ipv4Addr, SocketAddr},
 	path::{Component, Path, PathBuf},
 	process::{Child, ChildStderr, Command, Stdio},
 	sync::{
@@ -1438,6 +1438,7 @@ enum RendererControlCommand {
 		unmotion_zenoh_key: String,
 		#[serde(skip_serializing_if = "Option::is_none")]
 		unmotion_zenoh_connect: Option<String>,
+		unmotion_zenoh_subscriptions: Vec<UnmotionZenohSubscriptionSetting>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -1528,6 +1529,27 @@ enum RendererState {
 	Degraded,
 }
 
+const DEFAULT_UNMFZ_TCP_PORT: u16 = 47_447;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UnmotionZenohSubscriptionSetting {
+	id: String,
+	lan_enabled: bool,
+	host: Option<String>,
+	port: u16,
+}
+
+impl Default for UnmotionZenohSubscriptionSetting {
+	fn default() -> Self {
+		Self {
+			id: "un-motion/frame".to_string(),
+			lan_enabled: false,
+			host: None,
+			port: DEFAULT_UNMFZ_TCP_PORT,
+		}
+	}
+}
+
 #[derive(Clone, Serialize)]
 struct AvatarSetting {
 	id: String,
@@ -1550,6 +1572,7 @@ struct AvatarSetting {
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
 	unmotion_zenoh_connect: Option<String>,
+	unmotion_zenoh_subscriptions: Vec<UnmotionZenohSubscriptionSetting>,
 	audio_link_source: String,
 	audio_link_input_device_id: Option<String>,
 	audio_link_input_device_name_hint: Option<String>,
@@ -1849,6 +1872,7 @@ struct MotionSettings {
 	motion_unmotion_enabled: bool,
 	unmotion_zenoh_key: Option<String>,
 	unmotion_zenoh_connect: Option<String>,
+	unmotion_zenoh_subscriptions: Vec<UnmotionZenohSubscriptionSetting>,
 	look_at_enabled: bool,
 	look_at_clamp_deg: Option<f32>,
 	apply_vmc_root_translation: bool,
@@ -2059,6 +2083,16 @@ struct ManifestUnmotionZenoh {
 	enabled: Option<bool>,
 	key: Option<String>,
 	connect: Option<String>,
+	subscriptions: Vec<ManifestUnmotionZenohSubscription>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ManifestUnmotionZenohSubscription {
+	id: Option<String>,
+	lan_enabled: Option<bool>,
+	host: Option<String>,
+	port: Option<u16>,
 }
 
 #[derive(Default, Deserialize)]
@@ -7043,6 +7077,7 @@ fn apply_motion_setting_value(
 				None => remove_nested_key(manifest, &["motion", "unmotion_zenoh", "connect"]),
 			}
 		}
+		"motion.unmotion_zenoh.subscriptions" => apply_unmotion_zenoh_subscriptions_value(manifest, value),
 		"motion.primary_source" => {
 			let raw = json_string(&value, field)?;
 			let normalized = match raw.trim().to_ascii_lowercase().as_str() {
@@ -7060,6 +7095,69 @@ fn apply_motion_setting_value(
 		}
 		_ => Err(format!("unsupported setting field: {field}")),
 	}
+}
+
+fn apply_unmotion_zenoh_subscriptions_value(manifest: &mut toml::Value, value: serde_json::Value) -> Result<(), String> {
+	let items = value
+		.as_array()
+		.ok_or_else(|| "motion.unmotion_zenoh.subscriptions must be an array".to_string())?;
+	if items.is_empty() || items.len() > 16 {
+		return Err("motion.unmotion_zenoh.subscriptions must contain 1 to 16 entries".to_string());
+	}
+	let mut subscriptions = Vec::with_capacity(items.len());
+	for (index, item) in items.iter().enumerate() {
+		let object = item
+			.as_object()
+			.ok_or_else(|| format!("motion.unmotion_zenoh.subscriptions[{index}] must be an object"))?;
+		let id = object
+			.get("id")
+			.and_then(serde_json::Value::as_str)
+			.map(str::trim)
+			.filter(|id| !id.is_empty())
+			.ok_or_else(|| format!("motion.unmotion_zenoh.subscriptions[{index}].id must not be empty"))?;
+		let lan_enabled = object
+			.get("lan_enabled")
+			.or_else(|| object.get("lanEnabled"))
+			.and_then(serde_json::Value::as_bool)
+			.unwrap_or(false);
+		let host = object
+			.get("host")
+			.and_then(serde_json::Value::as_str)
+			.map(str::trim)
+			.filter(|host| !host.is_empty());
+		if lan_enabled {
+			let host = host.ok_or_else(|| format!("motion.unmotion_zenoh.subscriptions[{index}].host is required for LAN"))?;
+			host.parse::<Ipv4Addr>()
+				.map_err(|_| format!("motion.unmotion_zenoh.subscriptions[{index}].host must be an IPv4 address"))?;
+		}
+		let port = object
+			.get("port")
+			.and_then(serde_json::Value::as_u64)
+			.map(u16::try_from)
+			.transpose()
+			.map_err(|_| format!("motion.unmotion_zenoh.subscriptions[{index}].port must be 1 to 65535"))?
+			.unwrap_or(DEFAULT_UNMFZ_TCP_PORT);
+		if port == 0 {
+			return Err(format!("motion.unmotion_zenoh.subscriptions[{index}].port must be 1 to 65535"));
+		}
+
+		let mut table = toml::map::Map::new();
+		table.insert("id".to_string(), toml::Value::String(id.to_string()));
+		table.insert("lan_enabled".to_string(), toml::Value::Boolean(lan_enabled));
+		if let Some(host) = host {
+			table.insert("host".to_string(), toml::Value::String(host.to_string()));
+		}
+		table.insert("port".to_string(), toml::Value::Integer(i64::from(port)));
+		subscriptions.push(toml::Value::Table(table));
+	}
+
+	set_nested_value(
+		manifest,
+		&["motion", "unmotion_zenoh", "subscriptions"],
+		toml::Value::Array(subscriptions),
+	)?;
+	remove_nested_key(manifest, &["motion", "unmotion_zenoh", "key"])?;
+	remove_nested_key(manifest, &["motion", "unmotion_zenoh", "connect"])
 }
 
 fn apply_physics_setting_value(
@@ -8366,6 +8464,7 @@ fn set_renderer_motion_receivers(
 	unmotion_zenoh_enabled: bool,
 	unmotion_zenoh_key: String,
 	unmotion_zenoh_connect: Option<String>,
+	unmotion_zenoh_subscriptions: Vec<UnmotionZenohSubscriptionSetting>,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<(), String> {
 	send_renderer_command_by_id(
@@ -8376,6 +8475,7 @@ fn set_renderer_motion_receivers(
 			unmotion_zenoh_enabled,
 			unmotion_zenoh_key,
 			unmotion_zenoh_connect,
+			unmotion_zenoh_subscriptions,
 		},
 	)
 }
@@ -10443,6 +10543,7 @@ fn read_avatar_setting_inner(path: &Path, storage: ProfileStorage, include_model
 		motion_unmotion_enabled: motion.motion_unmotion_enabled,
 		unmotion_zenoh_key: motion.unmotion_zenoh_key,
 		unmotion_zenoh_connect: motion.unmotion_zenoh_connect,
+		unmotion_zenoh_subscriptions: motion.unmotion_zenoh_subscriptions,
 		audio_link_source: audio_link.source,
 		audio_link_input_device_id: audio_link.input_device_id,
 		audio_link_input_device_name_hint: audio_link.input_device_name_hint,
@@ -12823,6 +12924,34 @@ fn runtime_target_fps(runtime: Option<ManifestRuntime>) -> f32 {
 fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, legacy_vmc_port: Option<u16>) -> MotionSettings {
 	let vmc_udp = motion.vmc_udp.unwrap_or_default();
 	let unmotion_zenoh = motion.unmotion_zenoh.unwrap_or_default();
+	let legacy_key = unmotion_zenoh.key.clone();
+	let legacy_connect = unmotion_zenoh
+		.connect
+		.as_deref()
+		.map(str::trim)
+		.filter(|address| !address.is_empty())
+		.map(str::to_string);
+	let unmotion_zenoh_subscriptions = if unmotion_zenoh.subscriptions.is_empty() {
+		vec![subscription_from_legacy(legacy_key.as_deref(), legacy_connect.as_deref())]
+	} else {
+		unmotion_zenoh
+			.subscriptions
+			.into_iter()
+			.map(|subscription| UnmotionZenohSubscriptionSetting {
+				id: subscription
+					.id
+					.map(|id| id.trim().to_string())
+					.filter(|id| !id.is_empty())
+					.unwrap_or_else(|| "un-motion/frame".to_string()),
+				lan_enabled: subscription.lan_enabled.unwrap_or(false),
+				host: subscription
+					.host
+					.map(|host| host.trim().to_string())
+					.filter(|host| !host.is_empty()),
+				port: subscription.port.filter(|port| *port > 0).unwrap_or(DEFAULT_UNMFZ_TCP_PORT),
+			})
+			.collect()
+	};
 	let look_at = motion.look_at.unwrap_or_default();
 	let vmc_port = vmc_udp.port.or(legacy_vmc_port);
 	let vmc_address = vmc_udp
@@ -12845,16 +12974,33 @@ fn motion_settings(motion: ManifestMotion, legacy_vmc_address: Option<String>, l
 		vmc_address,
 		vmc_port,
 		motion_unmotion_enabled: unmotion_zenoh.enabled.unwrap_or(false),
-		unmotion_zenoh_key: unmotion_zenoh.key,
-		unmotion_zenoh_connect: unmotion_zenoh
-			.connect
-			.map(|address| address.trim().to_string())
-			.filter(|address| !address.is_empty()),
+		unmotion_zenoh_key: legacy_key,
+		unmotion_zenoh_connect: legacy_connect,
+		unmotion_zenoh_subscriptions,
 		look_at_enabled: look_at.enabled.unwrap_or(false),
 		look_at_clamp_deg: Some(clamped_f32_or(look_at.clamp_deg, 30.0, 0.0, 90.0)),
 		apply_vmc_root_translation: motion.apply_vmc_root_translation.unwrap_or(false),
 		primary_motion_source,
 	}
+}
+
+fn subscription_from_legacy(key: Option<&str>, connect: Option<&str>) -> UnmotionZenohSubscriptionSetting {
+	let mut subscription = UnmotionZenohSubscriptionSetting {
+		id: key
+			.map(str::trim)
+			.filter(|id| !id.is_empty())
+			.unwrap_or("un-motion/frame")
+			.to_string(),
+		..Default::default()
+	};
+	if let Some((host, port)) = connect.and_then(|address| address.rsplit_once(':')) {
+		if let Ok(port) = port.parse::<u16>() {
+			subscription.lan_enabled = true;
+			subscription.host = Some(host.to_string());
+			subscription.port = port;
+		}
+	}
+	subscription
 }
 
 fn audio_link_settings(audio_link: ManifestAudioLink) -> AudioLinkSettings {
@@ -14620,10 +14766,43 @@ mod tests {
 			None
 		);
 		assert_eq!(
-			super::json_optional_zenoh_connect_address(&serde_json::json!("192.168.1.20:39542"), "connect").unwrap(),
-			Some("192.168.1.20:39542".to_string())
+			super::json_optional_zenoh_connect_address(&serde_json::json!("192.168.1.20:47447"), "connect").unwrap(),
+			Some("192.168.1.20:47447".to_string())
 		);
 		assert!(super::json_optional_zenoh_connect_address(&serde_json::json!("192.168.1.20"), "connect").is_err());
+	}
+
+	#[test]
+	fn unmfz_subscriptions_replace_legacy_connection_fields() {
+		let mut manifest: toml::Value = toml::from_str(
+			r#"
+[motion.unmotion_zenoh]
+enabled = true
+key = "legacy/frame"
+connect = "192.0.2.1:47447"
+"#,
+		)
+		.unwrap();
+		super::apply_unmotion_zenoh_subscriptions_value(
+			&mut manifest,
+			serde_json::json!([
+				{"id":"un-motion/frame","lan_enabled":true,"host":"192.0.2.10","port":47447},
+				{"id":"un-motion/frame","lan_enabled":true,"host":"192.0.2.11","port":47448}
+			]),
+		)
+		.unwrap();
+
+		let table = manifest
+			.get("motion")
+			.and_then(|value| value.get("unmotion_zenoh"))
+			.and_then(toml::Value::as_table)
+			.unwrap();
+		assert!(!table.contains_key("key"));
+		assert!(!table.contains_key("connect"));
+		let subscriptions = table.get("subscriptions").and_then(toml::Value::as_array).unwrap();
+		assert_eq!(subscriptions.len(), 2);
+		assert_eq!(subscriptions[0].get("port").and_then(toml::Value::as_integer), Some(47_447));
+		assert_eq!(subscriptions[1].get("port").and_then(toml::Value::as_integer), Some(47_448));
 	}
 
 	use super::{

@@ -52,6 +52,50 @@ impl Default for AudioLinkOptions {
 }
 
 /// UNMotion/Zenoh 受信の設定。`[motion.unmotion_zenoh]` 由来。
+pub const DEFAULT_UNMFZ_TCP_PORT: u16 = 47_447;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct UnmotionZenohSubscriptionOptions {
+	pub id: String,
+	pub lan_enabled: bool,
+	pub host: Option<String>,
+	pub port: u16,
+}
+
+impl Default for UnmotionZenohSubscriptionOptions {
+	fn default() -> Self {
+		Self {
+			id: "un-motion/frame".to_string(),
+			lan_enabled: false,
+			host: None,
+			port: DEFAULT_UNMFZ_TCP_PORT,
+		}
+	}
+}
+
+impl UnmotionZenohSubscriptionOptions {
+	pub fn normalized_id(&self) -> String {
+		let id = self.id.trim();
+		if id.is_empty() {
+			"un-motion/frame".to_string()
+		} else {
+			id.to_string()
+		}
+	}
+
+	pub fn connect_endpoint(&self) -> Option<String> {
+		if !self.lan_enabled {
+			return None;
+		}
+		let host = self.host.as_deref()?.trim();
+		if host.is_empty() || self.port == 0 {
+			return None;
+		}
+		Some(format!("tcp/{host}:{}", self.port))
+	}
+}
+
 #[derive(Clone, Debug)]
 pub struct UnmotionZenohOptions {
 	/// 受信を有効にするか。OFF のときは subscriber スレッドを起動しない。
@@ -60,6 +104,9 @@ pub struct UnmotionZenohOptions {
 	pub base_key_expr: String,
 	/// `None`なら従来の自動探索。`Some`ならこの`host:port`へTCPで直接接続する。
 	pub connect_address: Option<String>,
+	/// 購読するUNMF/Z IDと、同じZenoh networkへ参加するためのLAN endpoint。
+	/// 空なら旧`base_key_expr` / `connect_address`を一行として扱う。
+	pub subscriptions: Vec<UnmotionZenohSubscriptionOptions>,
 }
 
 impl Default for UnmotionZenohOptions {
@@ -68,7 +115,43 @@ impl Default for UnmotionZenohOptions {
 			enabled: false,
 			base_key_expr: "un-motion/frame".to_string(),
 			connect_address: None,
+			subscriptions: Vec::new(),
 		}
+	}
+}
+
+impl UnmotionZenohOptions {
+	pub fn effective_subscriptions(&self) -> Vec<UnmotionZenohSubscriptionOptions> {
+		if !self.subscriptions.is_empty() {
+			return self.subscriptions.clone();
+		}
+		let mut subscription = UnmotionZenohSubscriptionOptions {
+			id: self.base_key_expr.clone(),
+			..Default::default()
+		};
+		if let Some(connect) = self.connect_address.as_deref() {
+			if let Some((host, port)) = connect
+				.trim()
+				.rsplit_once(':')
+				.and_then(|(host, port)| Some((host, port.parse().ok()?)))
+			{
+				subscription.lan_enabled = true;
+				subscription.host = Some(host.to_string());
+				subscription.port = port;
+			}
+		}
+		vec![subscription]
+	}
+
+	pub fn display_ids(&self) -> String {
+		let mut ids = Vec::new();
+		for subscription in self.effective_subscriptions() {
+			let id = subscription.normalized_id();
+			if !ids.contains(&id) {
+				ids.push(id);
+			}
+		}
+		ids.join(", ")
 	}
 }
 
@@ -838,7 +921,49 @@ impl Default for AvatarWindowOptions {
 
 #[cfg(test)]
 mod tests {
-	use super::{ColorGradingLook, DirectionalLightOptions, TextureCompressionMode};
+	use super::{
+		ColorGradingLook, DirectionalLightOptions, TextureCompressionMode, UnmotionZenohOptions, UnmotionZenohSubscriptionOptions,
+	};
+
+	#[test]
+	fn unmotion_subscriptions_preserve_same_id_with_multiple_endpoints() {
+		let options = UnmotionZenohOptions {
+			subscriptions: vec![
+				UnmotionZenohSubscriptionOptions {
+					lan_enabled: true,
+					host: Some("192.0.2.10".to_string()),
+					..Default::default()
+				},
+				UnmotionZenohSubscriptionOptions {
+					lan_enabled: true,
+					host: Some("192.0.2.11".to_string()),
+					..Default::default()
+				},
+			],
+			..Default::default()
+		};
+
+		let subscriptions = options.effective_subscriptions();
+		assert_eq!(subscriptions.len(), 2);
+		assert_eq!(subscriptions[0].normalized_id(), "un-motion/frame");
+		assert_eq!(subscriptions[1].normalized_id(), "un-motion/frame");
+		assert_eq!(subscriptions[0].connect_endpoint().as_deref(), Some("tcp/192.0.2.10:47447"));
+		assert_eq!(subscriptions[1].connect_endpoint().as_deref(), Some("tcp/192.0.2.11:47447"));
+	}
+
+	#[test]
+	fn legacy_unmotion_connection_becomes_one_subscription() {
+		let options = UnmotionZenohOptions {
+			base_key_expr: "performer/main".to_string(),
+			connect_address: Some("192.0.2.20:47448".to_string()),
+			..Default::default()
+		};
+
+		let subscriptions = options.effective_subscriptions();
+		assert_eq!(subscriptions.len(), 1);
+		assert_eq!(subscriptions[0].normalized_id(), "performer/main");
+		assert_eq!(subscriptions[0].connect_endpoint().as_deref(), Some("tcp/192.0.2.20:47448"));
+	}
 
 	#[test]
 	fn texture_compression_mode_uses_v2_names_and_legacy_aliases() {

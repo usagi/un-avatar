@@ -22,6 +22,7 @@ export type RuntimeMotionSetting = {
 	motion_unmotion_enabled: boolean;
 	unmotion_zenoh_key: string | null;
 	unmotion_zenoh_connect: string | null;
+	unmotion_zenoh_subscriptions: import("./profileTypes").UnmotionZenohSubscriptionSetting[];
 };
 
 export type RuntimeAvatarEffectsSetting = {
@@ -104,6 +105,7 @@ export function rendererMotionReceiversPayload(setting: RuntimeMotionSetting) {
 		unmotionZenohEnabled: setting.motion_unmotion_enabled,
 		unmotionZenohKey: setting.unmotion_zenoh_key ?? "un-motion/frame",
 		unmotionZenohConnect: setting.unmotion_zenoh_connect,
+		unmotionZenohSubscriptions: setting.unmotion_zenoh_subscriptions,
 	};
 }
 

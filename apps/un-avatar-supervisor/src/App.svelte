@@ -336,6 +336,7 @@
 		"motion.unmotion_zenoh.enabled",
 		"motion.unmotion_zenoh.key",
 		"motion.unmotion_zenoh.connect",
+		"motion.unmotion_zenoh.subscriptions",
 	] as const;
 
 	/// Renderers タブは稼働中プロセスの操作面に絞る。Exited/Crashed は Logs タブに履歴として残す。
@@ -511,6 +512,7 @@
 			motion_unmotion_enabled: false,
 			unmotion_zenoh_key: null,
 			unmotion_zenoh_connect: null,
+			unmotion_zenoh_subscriptions: [{ id: "un-motion/frame", lan_enabled: false, host: null, port: 47447 }],
 			audio_link_source: "none",
 			audio_link_input_device_id: null,
 			audio_link_input_device_name_hint: null,
@@ -646,6 +648,7 @@
 			motion_unmotion_enabled: false,
 			unmotion_zenoh_key: null,
 			unmotion_zenoh_connect: null,
+			unmotion_zenoh_subscriptions: [{ id: "un-motion/frame", lan_enabled: false, host: null, port: 47447 }],
 			audio_link_source: "none",
 			audio_link_input_device_id: null,
 			audio_link_input_device_name_hint: null,

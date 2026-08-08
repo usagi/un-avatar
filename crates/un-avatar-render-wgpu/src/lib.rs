@@ -555,6 +555,7 @@ enum RendererControlEvent {
 		unmotion_zenoh_enabled: bool,
 		unmotion_zenoh_key: String,
 		unmotion_zenoh_connect: Option<String>,
+		unmotion_zenoh_subscriptions: Vec<crate::options::UnmotionZenohSubscriptionOptions>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -787,6 +788,8 @@ enum RendererControlCommand {
 		unmotion_zenoh_key: String,
 		#[serde(default)]
 		unmotion_zenoh_connect: Option<String>,
+		#[serde(default)]
+		unmotion_zenoh_subscriptions: Vec<crate::options::UnmotionZenohSubscriptionOptions>,
 	},
 	SetDynamics {
 		enabled: bool,
@@ -990,11 +993,13 @@ impl RendererControlCommand {
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
 				unmotion_zenoh_connect,
+				unmotion_zenoh_subscriptions,
 			} => RendererControlEvent::SetMotionReceivers {
 				vmc_address,
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
 				unmotion_zenoh_connect,
+				unmotion_zenoh_subscriptions,
 			},
 			Self::SetDynamics {
 				enabled,
@@ -3412,8 +3417,9 @@ impl AvatarApp {
 				spawn_runtime_memory_refresh(Arc::clone(&status_arc), Arc::clone(&self.memory_stats_refresh_pending));
 			}
 			status.unmotion_zenoh_enabled = gpu.is_some_and(|g| g.unmotion_zenoh_live());
-			if status.unmotion_zenoh_key != self.opts.unmotion_zenoh.base_key_expr {
-				status.unmotion_zenoh_key.clone_from(&self.opts.unmotion_zenoh.base_key_expr);
+			let unmotion_ids = self.opts.unmotion_zenoh.display_ids();
+			if status.unmotion_zenoh_key != unmotion_ids {
+				status.unmotion_zenoh_key = unmotion_ids;
 			}
 			status.unmotion_zenoh_received_frames = gpu.map_or(0, |g| g.unmotion_zenoh_received_frames());
 			status.motion_applied_frames = gpu.map_or(0, |g| g.motion_applied_frames());
@@ -5132,6 +5138,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				unmotion_zenoh_enabled,
 				unmotion_zenoh_key,
 				unmotion_zenoh_connect,
+				unmotion_zenoh_subscriptions,
 			} => {
 				self.opts.vmc_address = vmc_address;
 				self.opts.unmotion_zenoh.enabled = unmotion_zenoh_enabled;
@@ -5143,6 +5150,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				self.opts.unmotion_zenoh.connect_address = unmotion_zenoh_connect
 					.map(|address| address.trim().to_string())
 					.filter(|address| !address.is_empty());
+				self.opts.unmotion_zenoh.subscriptions = unmotion_zenoh_subscriptions;
 				if let Some(gpu) = self.gpu.as_mut() {
 					if let Err(e) =
 						gpu.reconfigure_motion_receivers(self.opts.vmc_address, self.opts.unmotion_zenoh.clone(), self.opts.debug.vmc)
@@ -7807,6 +7815,7 @@ pub fn run_cli() -> Result<(), RunError> {
 			enabled: cli.unmotion_zenoh_enabled,
 			base_key_expr: cli.unmotion_zenoh_key.clone().unwrap_or_else(|| "un-motion/frame".to_string()),
 			connect_address: cli.unmotion_zenoh_connect.clone(),
+			subscriptions: Vec::new(),
 		},
 		synthetic_head_motion: crate::options::SyntheticHeadMotionOptions {
 			enabled: cli.debug_synthetic_head_motion,
@@ -10340,16 +10349,20 @@ mod tests {
 		assert_eq!(unmotion_zenoh_connect, None);
 
 		let direct = parse_renderer_control_command(
-			r#"{"command":"set_motion_receivers","unmotion_zenoh_enabled":true,"unmotion_zenoh_key":"un-motion/frame","unmotion_zenoh_connect":"192.168.1.20:39542"}"#,
+			r#"{"command":"set_motion_receivers","unmotion_zenoh_enabled":true,"unmotion_zenoh_key":"un-motion/frame","unmotion_zenoh_connect":"192.168.1.20:47447","unmotion_zenoh_subscriptions":[{"id":"un-motion/frame","lan_enabled":true,"host":"192.168.1.20","port":47447}]}"#,
 		)
 		.unwrap();
 		let RendererControlCommand::SetMotionReceivers {
-			unmotion_zenoh_connect, ..
+			unmotion_zenoh_connect,
+			unmotion_zenoh_subscriptions,
+			..
 		} = direct
 		else {
 			panic!("expected set_motion_receivers command");
 		};
-		assert_eq!(unmotion_zenoh_connect.as_deref(), Some("192.168.1.20:39542"));
+		assert_eq!(unmotion_zenoh_connect.as_deref(), Some("192.168.1.20:47447"));
+		assert_eq!(unmotion_zenoh_subscriptions.len(), 1);
+		assert_eq!(unmotion_zenoh_subscriptions[0].id, "un-motion/frame");
 	}
 
 	#[test]
