@@ -119,6 +119,29 @@
           "url": "https://github.com/usagi/un-avatar/releases/download/2.2.1/network.usagi.un-avatar.unity-exporter-2.2.1.zip",
           "version": "2.2.1",
           "zipSHA256": "182800ba243b15f58d3f1e38407420b91a0d51ca6889836967bc1f9e0e68ea43"
+        },
+        "2.3.0": {
+          "author": {
+            "email": "contact@usagi.network",
+            "name": "USAGI.NETWORK",
+            "url": "https://github.com/usagi/un-avatar"
+          },
+          "description": "Unity Editor exporter for U.N. Avatar .unavatar GLB-compatible packages.",
+          "displayName": "U.N. Avatar Unity Exporter",
+          "keywords": [
+            "avatar",
+            "gltf",
+            "glb",
+            "vrchat",
+            "modular-avatar",
+            "unavatar"
+          ],
+          "license": "MIT",
+          "name": "network.usagi.un-avatar.unity-exporter",
+          "unity": "2022.3",
+          "url": "https://github.com/usagi/un-avatar/releases/download/2.3.0/network.usagi.un-avatar.unity-exporter-2.3.0.zip",
+          "version": "2.3.0",
+          "zipSHA256": "96444918cfa79b5412c2e6bd6dfa07c16e6bd77e68aea45d9c3fa72e85950c1d"
         }
       }
     }
