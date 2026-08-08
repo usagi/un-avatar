@@ -4707,6 +4707,14 @@ dd {
 	min-width: 32px;
 }
 
+.unmfz-remove-slot {
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	flex: 0 0 32px;
+}
+
 .unmfz-subscriptions {
 	display: grid;
 	gap: 10px;

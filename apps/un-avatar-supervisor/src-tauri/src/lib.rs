@@ -7125,8 +7125,7 @@ fn apply_unmotion_zenoh_subscriptions_value(manifest: &mut toml::Value, value: s
 			.and_then(serde_json::Value::as_str)
 			.map(str::trim)
 			.filter(|host| !host.is_empty());
-		if lan_enabled {
-			let host = host.ok_or_else(|| format!("motion.unmotion_zenoh.subscriptions[{index}].host is required for LAN"))?;
+		if let Some(host) = host {
 			host.parse::<Ipv4Addr>()
 				.map_err(|_| format!("motion.unmotion_zenoh.subscriptions[{index}].host must be an IPv4 address"))?;
 		}
@@ -14803,6 +14802,38 @@ connect = "192.0.2.1:47447"
 		assert_eq!(subscriptions.len(), 2);
 		assert_eq!(subscriptions[0].get("port").and_then(toml::Value::as_integer), Some(47_447));
 		assert_eq!(subscriptions[1].get("port").and_then(toml::Value::as_integer), Some(47_448));
+	}
+
+	#[test]
+	fn unmfz_subscription_allows_lan_draft_without_host() {
+		let mut manifest: toml::Value = toml::from_str(
+			r#"
+[motion.unmotion_zenoh]
+enabled = true
+"#,
+		)
+		.unwrap();
+
+		super::apply_unmotion_zenoh_subscriptions_value(
+			&mut manifest,
+			serde_json::json!([{"id":"un-motion/frame","lan_enabled":true,"host":null,"port":47447}]),
+		)
+		.unwrap();
+
+		let subscription = manifest
+			.get("motion")
+			.and_then(|value| value.get("unmotion_zenoh"))
+			.and_then(|value| value.get("subscriptions"))
+			.and_then(toml::Value::as_array)
+			.and_then(|items| items.first())
+			.unwrap();
+		assert_eq!(subscription.get("lan_enabled").and_then(toml::Value::as_bool), Some(true));
+		assert!(subscription.get("host").is_none());
+		assert!(super::apply_unmotion_zenoh_subscriptions_value(
+			&mut manifest,
+			serde_json::json!([{"id":"un-motion/frame","lan_enabled":true,"host":"not-an-ip","port":47447}]),
+		)
+		.is_err());
 	}
 
 	use super::{

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from "svelte";
 	import { Plus, Trash2 } from "lucide-svelte";
 	import { _ } from "svelte-i18n";
 	import { UNMOTION_CHANNEL_CONFIG, VMC_CHANNEL_CONFIG, vmcAddressValue } from "./motionOptions";
@@ -16,27 +17,55 @@
 		port: 47447,
 	});
 
-	function subscriptions(): UnmotionZenohSubscriptionSetting[] {
-		const configured = setting.unmotion_zenoh_subscriptions ?? [];
-		return configured.length > 0 ? configured : [defaultSubscription()];
+	function subscriptionsFromSetting(): UnmotionZenohSubscriptionSetting[] {
+		const configured = (setting.unmotion_zenoh_subscriptions ?? []) as UnmotionZenohSubscriptionSetting[];
+		return configured.length > 0 ? configured.map((item) => ({ ...item })) : [defaultSubscription()];
+	}
+
+	let sourceSubscriptions = setting.unmotion_zenoh_subscriptions;
+	let draftSubscriptions = subscriptionsFromSetting();
+	let queuedSubscriptions: UnmotionZenohSubscriptionSetting[] | null = null;
+	let saveRunning = false;
+
+	$: if (setting.unmotion_zenoh_subscriptions !== sourceSubscriptions && !saveRunning && queuedSubscriptions === null) {
+		sourceSubscriptions = setting.unmotion_zenoh_subscriptions;
+		draftSubscriptions = subscriptionsFromSetting();
 	}
 
 	function saveSubscriptions(next: UnmotionZenohSubscriptionSetting[]): void {
-		void onUpdateSettingValue("motion.unmotion_zenoh.subscriptions", next as unknown as Record<string, unknown>[]);
+		draftSubscriptions = next;
+		queuedSubscriptions = next.map((item) => ({ ...item }));
+		void flushSubscriptions();
+	}
+
+	async function flushSubscriptions(): Promise<void> {
+		if (saveRunning) return;
+		saveRunning = true;
+		try {
+			while (queuedSubscriptions !== null) {
+				const next = queuedSubscriptions;
+				queuedSubscriptions = null;
+				await onUpdateSettingValue("motion.unmotion_zenoh.subscriptions", next as unknown as Record<string, unknown>[]);
+			}
+		} finally {
+			saveRunning = false;
+			await tick();
+			sourceSubscriptions = setting.unmotion_zenoh_subscriptions;
+			draftSubscriptions = subscriptionsFromSetting();
+		}
 	}
 
 	function updateSubscription(index: number, patch: Partial<UnmotionZenohSubscriptionSetting>): void {
-		saveSubscriptions(subscriptions().map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+		saveSubscriptions(draftSubscriptions.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
 	}
 
 	function addSubscription(): void {
-		saveSubscriptions([...subscriptions(), defaultSubscription()]);
+		saveSubscriptions([...draftSubscriptions, defaultSubscription()]);
 	}
 
 	function removeSubscription(index: number): void {
-		const current = subscriptions();
-		if (current.length <= 1) return;
-		saveSubscriptions(current.filter((_, itemIndex) => itemIndex !== index));
+		if (draftSubscriptions.length <= 1) return;
+		saveSubscriptions(draftSubscriptions.filter((_, itemIndex) => itemIndex !== index));
 	}
 </script>
 
@@ -56,13 +85,13 @@
 			class="icon-button unmfz-add"
 			title={$_("profiles.editor.unmotion_zenoh_add")}
 			aria-label={$_("profiles.editor.unmotion_zenoh_add")}
-			disabled={!setting.motion_unmotion_enabled || busy || subscriptions().length >= 16}
+			disabled={!setting.motion_unmotion_enabled || busy || draftSubscriptions.length >= 16}
 			onclick={addSubscription}><Plus size={17} /></button
 		>
 	</div>
 
 	<div class="unmfz-subscriptions">
-		{#each subscriptions() as subscription, index}
+		{#each draftSubscriptions as subscription, index (subscription)}
 			<div class="unmfz-subscription-row">
 				<div class="unmfz-subscription-primary">
 					<label>
@@ -74,14 +103,18 @@
 							onchange={(event) => updateSubscription(index, { id: (event.currentTarget as HTMLInputElement).value })}
 						/>
 					</label>
-					<button
-						type="button"
-						class="icon-button danger-subtle"
-						title={$_("profiles.editor.unmotion_zenoh_remove")}
-						aria-label={$_("profiles.editor.unmotion_zenoh_remove")}
-						disabled={!setting.motion_unmotion_enabled || busy || subscriptions().length <= 1}
-						onclick={() => removeSubscription(index)}><Trash2 size={16} /></button
-					>
+					<span class="unmfz-remove-slot">
+						{#if draftSubscriptions.length > 1}
+							<button
+								type="button"
+								class="icon-button danger-subtle"
+								title={$_("profiles.editor.unmotion_zenoh_remove")}
+								aria-label={$_("profiles.editor.unmotion_zenoh_remove")}
+								disabled={!setting.motion_unmotion_enabled || busy}
+								onclick={() => removeSubscription(index)}><Trash2 size={16} /></button
+							>
+						{/if}
+					</span>
 				</div>
 
 				<label class="unmfz-lan-toggle">
