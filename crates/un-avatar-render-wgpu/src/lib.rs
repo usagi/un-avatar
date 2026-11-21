@@ -5783,6 +5783,7 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 			RendererControlEvent::TrayMenu { id } => {
 				self.handle_renderer_tray_menu(event_loop, id);
 			}
+			#[cfg(windows)]
 			RendererControlEvent::TrayIconActivate => {
 				self.toggle_preview_window_from_tray();
 			}
@@ -7249,7 +7250,10 @@ fn initial_runtime_snapshot(opts: &AvatarWindowOptions) -> RendererRuntimeSnapsh
 		dynamics_colliders: Vec::new(),
 		dynamics_constraint_refs: Vec::new(),
 		dynamics_warnings: Vec::new(),
+		#[cfg(windows)]
 		spout_available: crate::spout::backend_available(),
+		#[cfg(not(windows))]
+		spout_available: false,
 		spout_enabled: opts.spout.enabled,
 		spout_name: if opts.spout.enabled { Some(opts.spout.name.clone()) } else { None },
 		spout_width: opts.spout.width,

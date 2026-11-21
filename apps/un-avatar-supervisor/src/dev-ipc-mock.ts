@@ -958,6 +958,11 @@ export function installDevIpcMock(): void {
 				case "reveal_profiles_dir":
 					throw new Error("隔離プレビューではOSへの操作やファイル出力は実行していません。製品版で確認してください。 / Preview: native OS or file operation was not performed.");
 					return null;
+				case "begin_midi_note_capture":
+				case "capture_midi_note_binding":
+					throw new Error("MIDI input requires the desktop Supervisor.");
+				case "cancel_midi_note_capture":
+					return null;
 				default:
 					throw new Error(`dev IPC mock: unsupported command ${cmd}`);
 			}

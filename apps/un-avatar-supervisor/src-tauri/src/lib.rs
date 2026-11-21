@@ -15219,7 +15219,8 @@ fn remove_nested_key(manifest: &mut toml::Value, path: &[&str]) -> Result<(), St
 // Development assets live in the checkout; shipped builds must never use its baked-in path.
 fn application_asset_root() -> PathBuf {
 	let current = env::current_exe().ok();
-	let development = cfg!(debug_assertions).then(repo_root);
+	// Unit tests use the checked-in seed assets even when compiled with --release.
+	let development = cfg!(any(debug_assertions, test)).then(repo_root);
 	application_asset_root_for(current.as_deref(), development.as_deref())
 }
 
@@ -18820,8 +18821,9 @@ display_name = "Mizuki"
 			.expect("App.svelte should be readable");
 		let startup = app_svelte
 			.split("onMount(() => {")
-			.nth(1)
-			.and_then(|rest| rest.split("\n\t$effect(() => {").next())
+			.skip(1)
+			.filter_map(|rest| rest.split("\n\t});").next())
+			.find(|body| body.contains("await loadBackendAppSettings();"))
 			.expect("Supervisor startup onMount should exist");
 		assert!(
 			startup.contains("await loadBackendAppSettings();") && startup.contains("await refreshAll();"),
@@ -22230,11 +22232,7 @@ simulation_hz = 120
 					"drag_scale": 0.6,
 					"xpbd_compliance": 0.02,
 					"constraint_iterations": 5
-				},
-				{
-					"name": "draft rule"
-				},
-				{}
+				}
 			]),
 		)
 		.unwrap();
