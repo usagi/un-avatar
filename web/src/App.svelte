@@ -79,37 +79,14 @@
   <meta property="og:url" content="https://usagi.github.io/un-avatar/" />
 </svelte:head>
 
-<header class="site-header">
-  <div class="shell nav-shell">
-    <a class="brand" href="https://usagi.network/" aria-label="USAGI.NETWORK home">
-      <img src="/un-avatar/assets/brand/un-logo-2026c1.png" alt="" />
-      <span>
-        <strong>U.N. Apps</strong>
-        <small>USAGI.NETWORK</small>
-      </span>
-    </a>
-
-    <nav class="product-tabs" aria-label="U.N. Apps">
-      {#each pillars as product}
-        <a
-          class:active={product.active}
-          href={product.href}
-          style={`--tab-accent: ${product.accent}`}
-          aria-current={product.active ? 'page' : undefined}
-        >
-          <span>{product.shortName}</span>
-          <small>{product.role}</small>
-        </a>
-      {/each}
-    </nav>
-
-    <nav class="tool-links" aria-label="U.N. Tools">
-      {#each tools as product}
-        <a href={product.href}>{product.shortName}</a>
-      {/each}
-    </nav>
-  </div>
-</header>
+<header class="un-series-header"><div class="series-row">
+  <a class="series-brand" href="https://usagi.network/"><img src="/un-avatar/assets/brand/un-logo-2026c1.png" alt="" /><span><strong>U.N. Apps</strong><small>USAGI.NETWORK</small></span></a>
+  <nav class="series-tabs" aria-label="シリーズ製品"><a href="https://usagi.github.io/un-avatar/" style="--tab:#ff8a64" aria-current="page"><span>Avatar</span><small>Renderer</small></a>
+<a href="https://usagi.github.io/un-motion/" style="--tab:#91bbff"><span>Motion</span><small>Tracking</small></a>
+<a href="https://usagi.github.io/un-virtual-avatar-connect/" style="--tab:#bc9bff"><span>Connect</span><small>Hub</small></a>
+<a href="https://usagi.github.io/un-vrc-perfectsync/" style="--tab:#67d9b3"><span>PerfectSync</span><small>Unity Tool</small></a></nav>
+  <a class="series-vet" href="https://github.com/usagi/un-virtual-eye-tracker">VET</a>
+</div></header>
 
 <main>
   <section class="hero">
@@ -240,11 +217,8 @@
 
 </main>
 
-<footer>
-  <div class="shell footer-shell">
-    <span>U.N. Avatar by USAGI.NETWORK</span>
-    <a href="https://github.com/usagi/un-avatar">GitHub</a>
-    <a href="https://github.com/usagi/un-avatar#readme">README</a>
-    <a href="https://github.com/usagi/un-avatar/blob/main/docs/third-party-licenses.md">Licenses</a>
-  </div>
-</footer>
+<footer class="un-series-footer"><div class="series-row"><div><strong>U.N. Avatar</strong><small>by <a href="https://usagi.network/">USAGI.NETWORK</a></small></div><nav aria-label="製品資料"><a href="https://github.com/usagi/un-avatar">GitHub</a>
+<a href="https://github.com/usagi/un-avatar#readme">README</a>
+<a href="https://github.com/usagi/un-avatar/releases">リリース一覧</a>
+<a href="https://github.com/usagi/un-avatar/blob/HEAD/LICENSE">ライセンス</a>
+<a href="https://github.com/usagi/un-avatar/blob/main/docs/third-party-licenses.md">第三者ライセンス</a></nav></div></footer>
