@@ -1,9 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { products } from './lib/products';
+  import './series.css';
 
-  const pillars = products.filter((product) => product.group === 'pillar');
-  const tools = products.filter((product) => product.group === 'tool');
   const fallbackRelease = '2.4.0';
   const vccRepoUrl = 'https://usagi.github.io/un-avatar/vcc/index.json';
   const vccAddRepoUrl = `vcc://vpm/addRepo?url=${encodeURIComponent(vccRepoUrl)}`;
