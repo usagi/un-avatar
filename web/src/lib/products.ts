@@ -22,7 +22,7 @@ export const products: Product[] = [
     name: 'U.N. Motion',
     shortName: 'Motion',
     role: 'Tracking',
-    href: 'https://github.com/usagi/un-motion',
+    href: 'https://usagi.github.io/un-motion/',
     accent: '#2f7dff',
     group: 'pillar'
   },

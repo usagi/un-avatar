@@ -89,7 +89,7 @@ v2 は VRChat client や VRC SDK の完全な runtime 互換実装ではあり�
 
 ## U.N. Motion と組み合わせる例
 
-[U.N. Motion](https://github.com/usagi/un-motion) は Web カメラや VMC 入力からモーションを作るアプリで、U.N. Avatar はそのモーションを受けてアバターを表示できます。
+[U.N. Motion](https://usagi.github.io/un-motion/) は Web カメラや VMC 入力からモーションを作るアプリで、U.N. Avatar はそのモーションを受けてアバターを表示できます。
 
 ```text
 Web camera / VMC app
@@ -140,4 +140,3 @@ WebView2 Runtimeがない場合は、[Microsoft公式のWebView2 Runtime導入�
 ## 相対パスで指定したモデルとアイコン
 
 配布版のSupervisorでは、相対パスは設定ファイルの隣にあるファイルを優先し、見つからない場合はSupervisorのEXEがあるフォルダーを参照します。絶対パスは指定先をそのまま使用します。モデル一式を移す際は、モデルが参照するテクスチャなども一緒に移してください。
-
