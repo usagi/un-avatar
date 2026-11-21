@@ -10,6 +10,10 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux runtime/build dependencies
@@ -32,6 +36,9 @@ jobs:
       - name: Install Supervisor frontend dependencies
         working-directory: apps/un-avatar-supervisor
         run: npm ci
+      - name: Build the Supervisor frontend for Tauri
+        working-directory: apps/un-avatar-supervisor
+        run: npm run build
       - name: cargo xtask ci
         run: cargo run --locked -p xtask -- ci
       - name: Run Supervisor frontend unit regressions
