@@ -5108,7 +5108,9 @@ fn read_limited_gltf_external_image(source_path: &Path, uri: &str) -> Option<Vec
 
 fn safe_gltf_external_uri_path(source_path: &Path, uri: &str) -> Option<PathBuf> {
 	let relative = Path::new(uri);
-	if uri.trim().is_empty() || relative.is_absolute() {
+	// External glTF URIs are portable; a Windows drive prefix is never a relative asset.
+	let drive_prefix = matches!(uri.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
+	if uri.trim().is_empty() || relative.is_absolute() || drive_prefix {
 		return None;
 	}
 	if relative
@@ -16494,7 +16496,10 @@ enabled = true
 		assert_eq!(tasks[16].target, supervisor);
 		assert_eq!(tasks[16].working_dir, working_dir);
 		assert!(tasks[16].arguments.starts_with("--launch-renderer-manifest "));
-		assert!(tasks[16].arguments.contains(r#""target\tmp\profiles with spaces\profile 15.toml""#));
+		assert_eq!(
+			tasks[16].arguments,
+			format!("--launch-renderer-manifest \"{}\"", profiles[15].manifest_path.display())
+		);
 	}
 
 	#[test]
