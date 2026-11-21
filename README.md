@@ -1,6 +1,4 @@
 <p align="center">
-
-ビルドには **Rust 1.100.0** を使用します。`rust-toolchain.toml` に従って rustup が選択します（最低対応バージョン: 1.100、プロジェクト内コードの Edition: 2024）。依存関係は `Cargo.lock` を維持し、検証時は `cargo check --locked` / `cargo test --locked` を使用してください。
   <img src="assets/brand/un-avatar-artwork-supervisor.png" width="160" alt="U.N. Avatar">
 </p>
 
@@ -12,7 +10,7 @@ v2 では従来の `.vrm` / MToon / SpringBone 対応に加えて、VRC / Unity 
 
 ## はじめて使う場合
 
-1. `un-avatar-supervisor.exe` を起動します。
+1. [Windows版のZIP](https://github.com/usagi/un-avatar/releases/latest)をすべて展開し、`un-avatar-supervisor.exe` を起動します。
 2. 左側メニューの `プロファイルと稼働` を開き、`新規` で新しいプロファイルを作ります。既存のものを使う場合は、一覧から選びます。
 3. アバターファイルとして `.vrm` または `.unavatar` を選びます。
 4. 編集対象の名前を確認し、そのプロファイルの稼働欄から Renderer を起動します。Renderer は、アバターを実際に表示する処理です。

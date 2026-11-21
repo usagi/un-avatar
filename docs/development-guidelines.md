@@ -170,3 +170,7 @@ v2 は `.unavatar` / VRC 由来機能を含むため、VRM だけでなく軽量
 ### Windowsライブラリ単体試験のマニフェスト
 
 開発用のWindowsライブラリ単体試験で `TaskDialogIndirect` の読込に失敗する場合は、`UN_AVATAR_LIBTEST_MANIFEST=1` をその `cargo test --lib` 実行に限って設定する。単体試験の実行ファイルにCommon Controls v6のマニフェストを埋め込むための指定で、通常アプリのビルドには設定しない。通常アプリはTauriのリソース側でマニフェストを持つ。
+
+## Rust ビルド環境
+
+ビルドには **Rust 1.100.0** を使用します。`rust-toolchain.toml` に従って rustup が選択します（最低対応バージョン: 1.100、プロジェクト内コードの Edition: 2024）。依存関係は `Cargo.lock` を維持し、検証時は `cargo check --locked` / `cargo test --locked` を使用してください。
