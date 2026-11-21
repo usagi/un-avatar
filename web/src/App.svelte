@@ -67,16 +67,6 @@
   });
 </script>
 
-<svelte:head>
-  <meta property="og:title" content="U.N. Avatar" />
-  <meta
-    property="og:description"
-    content="お気に入りのアバターを、そのまま配信へ。VRM と VRC / Unity アバターをデスクトップ / OBS 向けに表示する仮想アバターレンダラー。"
-  />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://usagi.github.io/un-avatar/" />
-</svelte:head>
-
 <header class="un-series-header"><div class="series-row">
   <a class="series-brand" href="https://usagi.network/"><img src="/un-avatar/assets/brand/un-logo-2026c1.png" alt="" /><span><strong>U.N. Apps</strong><small>USAGI.NETWORK</small></span></a>
   <nav class="series-tabs" aria-label="シリーズ製品"><a href="https://usagi.github.io/un-avatar/" style="--tab:#ff8a64" aria-current="page"><span>Avatar</span><small>Renderer</small></a>
