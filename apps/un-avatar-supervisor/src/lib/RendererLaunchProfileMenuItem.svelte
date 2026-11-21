@@ -13,6 +13,7 @@
 	<img src={iconSrc(setting.icon_path)} alt="" />
 	<span>
 		<strong>{setting.name}</strong>
+		<small>ID: {setting.id}</small>
 		<small>{localizedSettingSummary(setting, $_)}</small>
 	</span>
 </button>

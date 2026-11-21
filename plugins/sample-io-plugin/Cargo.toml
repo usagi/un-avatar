@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.100"
 name = "sample-io-plugin"
 description = "UN Avatar — Commit 2.5 検証用・stdio JSON-RPC 外部 IO サンプル"
 version.workspace = true

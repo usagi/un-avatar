@@ -14,7 +14,8 @@
 	export let onActivate: () => void;
 </script>
 
-<section class="editor-section section-grid lighting-section" data-profile-section="lighting" onfocusin={onActivate}>
+<section class="editor-section section-grid lighting-section" tabindex="-1"
+	data-profile-section="lighting" onfocusin={onActivate}>
 	<div class="section-title-row">
 		<h3>{$_("profiles.editor.lighting")}</h3>
 	</div>

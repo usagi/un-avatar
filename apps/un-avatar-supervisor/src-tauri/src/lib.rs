@@ -1,3 +1,7 @@
+mod log_export;
+mod midi_capture;
+pub mod profile_archive;
+mod shell_integration;
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	env,
@@ -28,6 +32,11 @@ use tauri_plugin_notification::NotificationExt;
 use un_avatar_skeleton::dynamics_token_filter_matches;
 
 mod i18n;
+mod profile_write;
+mod profile_batch;
+mod close_gate;
+mod process_exit;
+mod review_environment;
 
 // rust-i18n の compile-time セットアップ。`locales/` を権威ソースに、`backend` は
 // `i18n::UN_I18N_STORE` の clone（共有 crate `un-i18n` の `UnI18nStore`）。
@@ -71,7 +80,10 @@ static RUNTIME_SESSION_ID: OnceLock<String> = OnceLock::new();
 static RUNTIME_CONTROL_SESSION: OnceLock<Mutex<Option<zenoh::Session>>> = OnceLock::new();
 const SUPERVISOR_LAUNCH_RENDERER_MANIFEST_ARG: &str = "--launch-renderer-manifest";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
+#[cfg(not(feature="isolated-review"))]
 const UN_AVATAR_LAUNCHER_APP_ID: &str = "UsagiNetwork.UNAvatar.Launcher";
+#[cfg(feature="isolated-review")]
+const UN_AVATAR_LAUNCHER_APP_ID: &str = "UsagiNetwork.UNAvatar.IsolatedReview";
 
 #[derive(Default)]
 struct SupervisorState {
@@ -101,6 +113,8 @@ struct StartupTimingSnapshot {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 struct AppRuntimeSettings {
+	#[serde(skip)]
+	startup_read_error: Option<String>,
 	system_tray_enabled: bool,
 	minimize_to_tray: bool,
 	close_to_tray_while_running: bool,
@@ -144,6 +158,7 @@ struct AppRuntimeSettings {
 impl Default for AppRuntimeSettings {
 	fn default() -> Self {
 		Self {
+			startup_read_error: None,
 			system_tray_enabled: false,
 			minimize_to_tray: true,
 			close_to_tray_while_running: true,
@@ -178,6 +193,7 @@ enum QuitBehavior {
 struct ManagedRenderer {
 	info: RendererInstance,
 	child: Option<Child>,
+	attached_process_exit: Option<process_exit::ProcessExit>,
 	started_at: Instant,
 	runtime_bus_key: String,
 	runtime_status_cache: Arc<Mutex<RendererRuntimeTelemetryCache>>,
@@ -240,6 +256,7 @@ enum NotificationLevel {
 #[derive(Clone, Serialize)]
 struct RendererInstance {
 	id: u32,
+	profile_id: Option<String>,
 	name: String,
 	state: RendererState,
 	pid: Option<u32>,
@@ -1553,6 +1570,7 @@ impl Default for UnmotionZenohSubscriptionSetting {
 #[derive(Clone, Serialize)]
 struct AvatarSetting {
 	id: String,
+	revision: String,
 	name: String,
 	created_at: String,
 	sort_order: u32,
@@ -2845,6 +2863,9 @@ fn animator_action_mode_is_enabled(mode: &str) -> bool {
 }
 
 pub fn run() {
+	if let Err(error)=review_environment::initialize(){eprintln!("{error}");return;}
+	let mut context=tauri::generate_context!();
+	if review_environment::ENABLED {context.config_mut().identifier="network.usagi.un-avatar.isolated-review".into();}
 	let startup_started = Instant::now();
 	let mut startup_entries = vec![StartupTimingEntry {
 		phase: "process-start".to_string(),
@@ -2877,7 +2898,7 @@ pub fn run() {
 	let startup_open_profile_manifest = startup_open_profile_manifest_arg(env::args_os()).unwrap_or_else(|error| {
 		eprintln!("un-avatar-supervisor: startup profile selection ignored: {error}");
 		None
-	});
+	}).or_else(review_environment::attached_manifest);
 	if let Some(manifest_path) = startup_open_profile_manifest.as_deref() {
 		if let Ok(setting) = read_avatar_setting(manifest_path, ProfileStorage::User) {
 			initial_settings.last_selected_setting_id = Some(setting.id);
@@ -2917,8 +2938,10 @@ pub fn run() {
 			},
 		))
 		.plugin(tauri_plugin_notification::init())
+		.register_uri_scheme_protocol("un-avatar-profile-icon", |_ctx, request| profile_icon_protocol_response(request))
 		.register_uri_scheme_protocol("un-avatar-thumbnail", |_ctx, request| thumbnail_protocol_response(request))
 		.manage(Mutex::new(SupervisorState::default()))
+		.manage(Mutex::new(close_gate::CloseGate::default()))
 		.manage(Mutex::new(initial_settings.clone()))
 		.manage(Mutex::new(StartupTimingState {
 			started: startup_started,
@@ -2934,7 +2957,7 @@ pub fn run() {
 			}
 			let window = setup_main_window(app)?;
 			record_startup_timing_state(app.handle(), "main-window-created");
-			refresh_taskbar_launcher_profile_tasks_in_background(initial_settings.clone());
+			refresh_taskbar_launcher_profile_tasks_in_background(app.handle().clone());
 			if initial_settings.system_tray_enabled && initial_settings.start_minimized_to_tray {
 				let _ = window.hide();
 			}
@@ -2946,6 +2969,7 @@ pub fn run() {
 			Ok(())
 		})
 		.invoke_handler(tauri::generate_handler![
+			resolve_supervisor_close,
 			activate_renderer_window,
 			app_version,
 			open_external_url,
@@ -2953,6 +2977,8 @@ pub fn run() {
 			compress_diagnostics,
 			duplicate_avatar_setting,
 			delete_avatar_setting,
+			list_deleted_avatar_settings,
+			restore_avatar_setting,
 			export_diagnostics,
 			get_app_settings,
 			get_avatar_setting_details,
@@ -2974,6 +3000,8 @@ pub fn run() {
 			clear_taskbar_profile_pins,
 			pick_file_path,
 			capture_midi_note_binding,
+			begin_midi_note_capture,
+			cancel_midi_note_capture,
 			read_vrm_metadata,
 			read_unavatar_metadata,
 			save_avatar_thumbnail_icon,
@@ -2981,6 +3009,8 @@ pub fn run() {
 			read_diagnostics_export,
 			reveal_profiles_dir,
 			reorder_avatar_settings,
+			list_profile_order_recovery,
+			restore_profile_order,
 			reveal_path,
 			save_supervisor_logs,
 			log_frontend_error,
@@ -3033,7 +3063,7 @@ pub fn run() {
 			crate::i18n::i18n_available_locales,
 			crate::i18n::i18n_resolve_default_locale,
 		])
-		.run(tauri::generate_context!())
+		.run(context)
 		.expect("error while running UN Avatar Supervisor");
 }
 
@@ -3063,11 +3093,17 @@ fn get_startup_timing(state: State<'_, Mutex<StartupTimingState>>) -> Result<Sta
 	})
 }
 
-fn refresh_taskbar_launcher_profile_tasks_in_background(settings: AppRuntimeSettings) {
+fn refresh_taskbar_launcher_profile_tasks_in_background(app: tauri::AppHandle) {
+	if review_environment::ENABLED {return;}
 	let _ = std::thread::Builder::new()
 		.name("un-avatar-taskbar-refresh".to_string())
 		.spawn(move || {
 			std::thread::sleep(Duration::from_secs(1));
+			// Read after the delay and hold the same mutex as pin edits through
+			// publication: a startup snapshot must not overwrite newer pins.
+			let Some(state) = app.try_state::<Mutex<AppRuntimeSettings>>() else { return; };
+			let Ok(settings) = state.lock() else { return; };
+			if ensure_app_settings_loaded(&settings).is_err() { return; }
 			if let Err(error) = update_taskbar_launcher_profile_tasks(&settings) {
 				eprintln!("un-avatar-supervisor: failed to refresh taskbar profile tasks: {error}");
 			}
@@ -3152,10 +3188,10 @@ fn handle_tray_menu_event(app: &tauri::AppHandle, event: tauri::menu::MenuEvent)
 		}
 		"stop_all" => {
 			if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
-				stop_all_in_state(&state);
+				if let Err(error) = stop_all_in_state(&state) { eprintln!("Renderer shutdown failed: {error}"); show_main_window(app); }
 			}
 		}
-		"quit" => quit_from_tray(app),
+		"quit" => request_supervisor_close(app, close_gate::CloseIntent::Quit),
 		_ => {}
 	}
 }
@@ -3168,7 +3204,7 @@ fn refresh_tray_menu(app: &tauri::AppHandle) -> Result<(), String> {
 	tray.set_menu(Some(menu)).map_err(|e| format!("set tray menu: {e}"))
 }
 
-fn quit_from_tray(app: &tauri::AppHandle) {
+fn quit_from_tray(app: &tauri::AppHandle) -> Result<bool, String> {
 	let settings = app
 		.try_state::<Mutex<AppRuntimeSettings>>()
 		.and_then(|settings| settings.lock().ok().map(|settings| settings.clone()))
@@ -3176,7 +3212,7 @@ fn quit_from_tray(app: &tauri::AppHandle) {
 	match settings.quit_behavior {
 		QuitBehavior::StopRenderers => {
 			if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
-				stop_all_in_state(&state);
+				stop_all_in_state(&state)?;
 			}
 		}
 		QuitBehavior::LeaveRenderers => {}
@@ -3185,26 +3221,74 @@ fn quit_from_tray(app: &tauri::AppHandle) {
 				match ask_quit_with_renderers() {
 					rfd::MessageDialogResult::Yes => {
 						if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
-							stop_all_in_state(&state);
+							stop_all_in_state(&state)?;
 						}
 					}
 					rfd::MessageDialogResult::No => {}
 					_ => {
 						show_main_window(app);
-						return;
+						return Ok(false);
 					}
 				}
 			}
 		}
 	}
 	app.exit(0);
+	Ok(true)
+}
+
+fn request_supervisor_close(app: &tauri::AppHandle, intent: close_gate::CloseIntent) {
+ let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else { return; };
+ let gate = app.state::<Mutex<close_gate::CloseGate>>();
+ let Some(id) = gate.lock().expect("close gate").request(intent) else { return; };
+ let script = include_str!("close_review.js").replace("__REQUEST_ID__", &id.to_string());
+ if let Err(error) = window.eval(script) {
+  let _ = gate.lock().expect("close gate").resolve(id, false);
+  eprintln!("Close review failed; keeping Supervisor open: {error}");
+  show_main_window(app);
+ }
+}
+
+#[tauri::command]
+async fn resolve_supervisor_close(app: tauri::AppHandle, window: WebviewWindow, request_id: u64, allowed: bool) -> Result<bool, String> {
+ if window.label() != MAIN_WINDOW_LABEL { return Err("Wrong close review window".into()); }
+ let intent = app.state::<Mutex<close_gate::CloseGate>>().lock().map_err(|e| e.to_string())?
+  .resolve(request_id, allowed).map_err(str::to_owned)?;
+ let Some(intent) = intent else { show_main_window(&app); return Ok(false); };
+ // Draft approval precedes all Renderer shutdown actions. Preserve the distinct
+ // window-close policy and tray Quit's Stop/Leave/Ask policy.
+ if intent == close_gate::CloseIntent::Quit {
+  let quit = quit_from_tray(&app);
+  if let Err(error) = quit {
+   app.state::<Mutex<close_gate::CloseGate>>().lock().map_err(|e| e.to_string())?.completion_failed();
+   show_main_window(&app);
+   return Err(error);
+  }
+  if !quit.unwrap_or(false) {
+   app.state::<Mutex<close_gate::CloseGate>>().lock().map_err(|e| e.to_string())?.completion_failed();
+   return Ok(false);
+  }
+ } else if should_stop_all_on_console_exit(&app) {
+  if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
+   if let Err(error) = stop_all_in_state(&state) {
+    app.state::<Mutex<close_gate::CloseGate>>().lock().map_err(|e| e.to_string())?.completion_failed();
+    show_main_window(&app);
+    return Err(error);
+   }
+  }
+  app.exit(0);
+ } else { match window.destroy() { Err(error) => {
+  app.state::<Mutex<close_gate::CloseGate>>().lock().map_err(|e| e.to_string())?.completion_failed();
+  return Err(error.to_string());
+ } _ => {}}}
+ Ok(true)
 }
 
 fn ask_quit_with_renderers() -> rfd::MessageDialogResult {
 	rfd::MessageDialog::new()
 		.set_level(rfd::MessageLevel::Warning)
-		.set_title("Quit UN Avatar")
-		.set_description("Renderer processes are still running. Stop them before quitting?")
+		.set_title(t!("tray.quit_confirm_title"))
+		.set_description(t!("tray.quit_confirm_description"))
 		.set_buttons(rfd::MessageButtons::YesNoCancel)
 		.show()
 }
@@ -3240,6 +3324,7 @@ fn setup_main_window(app: &mut tauri::App) -> tauri::Result<WebviewWindow> {
 		.min_inner_size(f64::from(MIN_LOGICAL_W), f64::from(MIN_LOGICAL_H))
 		.resizable(true)
 		.visible(true);
+	if let Some(root)=review_environment::root(){builder=builder.data_directory(root.join("webview"));}
 	// 位置も logical px。負値や極端な座標は OS が画面外スナップしてくれるが、保存値の sanity check は行う。
 	if let (Some(x), Some(y)) = (app_settings.console_window_x, app_settings.console_window_y) {
 		if (-16384..=16384).contains(&x) && (-16384..=16384).contains(&y) {
@@ -3260,19 +3345,8 @@ fn attach_hide_on_close(window: WebviewWindow, app_handle: tauri::AppHandle) {
 				}
 				return;
 			}
-			if should_stop_all_on_console_exit(&app_handle) {
-				api.prevent_close();
-				if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
-					let _ = window.hide();
-				}
-				let app = app_handle.clone();
-				std::thread::spawn(move || {
-					if let Some(state) = app.try_state::<Mutex<SupervisorState>>() {
-						stop_all_in_state(&state);
-					}
-					app.exit(0);
-				});
-			}
+			api.prevent_close();
+			request_supervisor_close(&app_handle, close_gate::CloseIntent::Window);
 		}
 		// ユーザーが移動/リサイズしたタイミングでもメモリ更新だけ行い、Disk 書き込みは閉じるとき。
 		// （頻繁な move/resize で write_app_settings を毎回叩くと体感が悪く、また権限要求でブロックされかねない）
@@ -3377,7 +3451,7 @@ fn show_main_window(app: &tauri::AppHandle) {
 #[tauri::command]
 fn list_avatar_settings() -> Result<Vec<AvatarSetting>, String> {
 	let mut by_id = BTreeMap::new();
-	let hidden_seed_ids = read_hidden_seed_profile_ids();
+	let hidden_seed_ids = read_hidden_seed_profile_ids()?;
 	for (storage, dir) in profile_dirs() {
 		if !dir.is_dir() {
 			continue;
@@ -3499,6 +3573,7 @@ fn native_notification_status(app: &tauri::AppHandle) -> Result<NativeNotificati
 
 #[tauri::command]
 fn send_test_native_notification(app: tauri::AppHandle) -> Result<(), String> {
+	shell_integration::require_enabled()?;
 	app.notification()
 		.builder()
 		.title(t!("notifications.test.title"))
@@ -3623,6 +3698,7 @@ fn profile_diagnostics() -> SupervisorProfileDiagnostics {
 #[tauri::command]
 fn get_app_settings(settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
 	let mut settings = settings.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	ensure_app_settings_loaded(&settings)?;
 	if prune_pinned_taskbar_profile_ids(&mut settings)? {
 		write_app_settings(&settings)?;
 		update_taskbar_launcher_profile_tasks(&settings)?;
@@ -3634,6 +3710,15 @@ fn get_app_settings(settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<Ap
 /// `value` が `None` または空文字列のときは記録を消去（次回起動時は先頭プロファイルを既定にする）。
 #[tauri::command]
 fn set_last_selected_setting_id(value: Option<String>, state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<(), String> {
+	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	persist_last_selection(&mut state, value, write_app_settings)
+}
+
+fn persist_last_selection(
+	state: &mut AppRuntimeSettings,
+	value: Option<String>,
+	write: impl FnOnce(&AppRuntimeSettings) -> Result<(), String>,
+) -> Result<(), String> {
 	let normalized = value.and_then(|v| {
 		let trimmed = v.trim().to_string();
 		if trimmed.is_empty() {
@@ -3642,12 +3727,13 @@ fn set_last_selected_setting_id(value: Option<String>, state: State<'_, Mutex<Ap
 			Some(trimmed)
 		}
 	});
-	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
 	if state.last_selected_setting_id == normalized {
 		return Ok(());
 	}
-	state.last_selected_setting_id = normalized;
-	write_app_settings(&state)?;
+	let mut updated = state.clone();
+	updated.last_selected_setting_id = normalized;
+	write(&updated)?;
+	*state = updated;
 	Ok(())
 }
 
@@ -3666,35 +3752,75 @@ fn sync_app_settings(
 	state: State<'_, Mutex<AppRuntimeSettings>>,
 ) -> Result<(), String> {
 	normalize_app_settings(&mut settings);
-	let (old_system_tray_enabled, old_locale) = {
-		let state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
-		(state.system_tray_enabled, state.locale.clone())
-	};
-	if old_system_tray_enabled != settings.system_tray_enabled {
-		if settings.system_tray_enabled {
-			setup_tray(&app).map_err(|e| format!("setup tray: {e}"))?;
-		} else {
-			drop(app.remove_tray_by_id("un-avatar-tray"));
-		}
-	}
-	// locale が変わったら rust-i18n のグローバル locale を即時切替。Svelte 側は
-	// 自前で `locale.set()` → loader 再実行で別途切替する。
-	if old_locale != settings.locale && !settings.locale.is_empty() {
-		crate::i18n::apply_locale(&settings.locale);
-	}
-	write_app_settings(&settings)?;
 	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+	save_app_settings_with_effects(
+		&mut state, settings, write_app_settings,
+		|old, next| {
+			let created = !old.system_tray_enabled && next.system_tray_enabled && app.tray_by_id("un-avatar-tray").is_none();
+			if created { setup_tray(&app).map_err(|e| format!("setup tray: {e}"))?; }
+			Ok(created)
+		},
+		|created| { if created { drop(app.remove_tray_by_id("un-avatar-tray")); } },
+		|old, next| {
+			if old.system_tray_enabled && !next.system_tray_enabled { drop(app.remove_tray_by_id("un-avatar-tray")); }
+			if old.locale != next.locale && !next.locale.is_empty() { crate::i18n::apply_locale(&next.locale); }
+		},
+	)
+}
+
+fn save_app_settings_with_effects(
+	state: &mut AppRuntimeSettings,
+	settings: AppRuntimeSettings,
+	write: impl FnOnce(&AppRuntimeSettings) -> Result<(), String>,
+	prepare: impl FnOnce(&AppRuntimeSettings, &AppRuntimeSettings) -> Result<bool, String>,
+	rollback: impl FnOnce(bool),
+	apply: impl FnOnce(&AppRuntimeSettings, &AppRuntimeSettings),
+) -> Result<(), String> {
+	ensure_app_settings_loaded(state)?;
+	let old = state.clone();
+	let prepared = prepare(&old, &settings)?;
+	if let Err(error) = persist_general_app_settings(state, settings, write) {
+		rollback(prepared);
+		return Err(error);
+	}
+	apply(&old, state);
+	Ok(())
+}
+
+fn persist_general_app_settings(
+	state: &mut AppRuntimeSettings,
+	mut settings: AppRuntimeSettings,
+	write: impl FnOnce(&AppRuntimeSettings) -> Result<(), String>,
+) -> Result<(), String> {
+	// This field has its own ordered command. A general-settings snapshot may
+	// have been sent before the latest editor selection was acknowledged.
+	ensure_app_settings_loaded(state)?;
+	settings.last_selected_setting_id = state.last_selected_setting_id.clone();
+	write(&settings)?;
 	*state = settings;
 	Ok(())
 }
 
 fn load_app_settings() -> AppRuntimeSettings {
-	let mut settings = fs::read_to_string(app_settings_path())
-		.ok()
-		.and_then(|text| toml::from_str(&text).ok())
-		.unwrap_or_default();
+	load_app_settings_at(&app_settings_path())
+}
+
+fn load_app_settings_at(path: &Path) -> AppRuntimeSettings {
+	let result = match fs::read_to_string(path) {
+		Ok(raw) => toml::from_str(&raw).map_err(|e| e.to_string()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AppRuntimeSettings::default()),
+		Err(e) => Err(e.to_string()),
+	};
+	let mut settings = result.unwrap_or_else(|error| AppRuntimeSettings {
+		startup_read_error: Some(format!("設定を読み込めませんでした。元ファイルは保持しています。修復またはバックアップから復元した後、UNAvatarを再起動してください。 / Settings could not be loaded; repair or restore this file, then restart UNAvatar: {}: {error}", path.display())),
+		..AppRuntimeSettings::default()
+	});
 	normalize_app_settings(&mut settings);
 	settings
+}
+
+fn ensure_app_settings_loaded(settings: &AppRuntimeSettings) -> Result<(), String> {
+	match &settings.startup_read_error { Some(error) => Err(error.clone()), None => Ok(()) }
 }
 
 fn normalize_app_settings(settings: &mut AppRuntimeSettings) {
@@ -3744,16 +3870,28 @@ fn prune_pinned_taskbar_profile_ids(settings: &mut AppRuntimeSettings) -> Result
 }
 
 fn write_app_settings(settings: &AppRuntimeSettings) -> Result<(), String> {
-	let path = app_settings_path();
+	write_app_settings_at(&app_settings_path(), settings)
+}
+
+fn write_app_settings_at(path: &Path, settings: &AppRuntimeSettings) -> Result<(), String> {
+	ensure_app_settings_loaded(settings)?;
+	// Default startup values must not overwrite an unreadable existing file.
+	match fs::read_to_string(path) {
+		Ok(raw) => { toml::from_str::<AppRuntimeSettings>(&raw).map_err(|e| format!("既存の設定ファイルを読み取れないため上書きしていません。 / Existing settings are invalid; original file preserved: {}: {e}", path.display()))?; }
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+		Err(e) => return Err(format!("既存の設定ファイルを読み取れないため上書きしていません。 / Cannot read existing settings; original file preserved: {}: {e}", path.display())),
+	}
 	if let Some(dir) = path.parent() {
 		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 	}
 	let text = toml::to_string_pretty(settings).map_err(|e| format!("serialize app settings: {e}"))?;
-	fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
+	profile_write::replace(&path, text.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 #[tauri::command]
-fn duplicate_avatar_setting(setting_id: String, app: tauri::AppHandle) -> Result<AvatarSetting, String> {
+fn duplicate_avatar_setting(setting_id: String, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<AvatarSetting, String> {
+	let guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+    let _transaction = lock_user_profile_store()?;
 	let source = resolve_avatar_setting(&setting_id)?;
 	let source_path = PathBuf::from(&source.manifest_path);
 	let mut manifest = read_manifest_value(&source_path)?;
@@ -3779,17 +3917,33 @@ fn duplicate_avatar_setting(setting_id: String, app: tauri::AppHandle) -> Result
 	if let Some(dir) = target_path.parent() {
 		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 	}
-	write_manifest_value(&target_path, &manifest)?;
+	create_manifest_value(&target_path, &manifest)?;
 	let setting = read_avatar_setting(&target_path, ProfileStorage::User)?;
+	drop(guard);
 	refresh_tray_menu(&app)?;
 	Ok(setting)
 }
 
 #[tauri::command]
-fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
+fn new_avatar_setting(app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<AvatarSetting, String> {
+	let guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+    let _transaction = lock_user_profile_store()?;
 	let name = unique_profile_name("New Avatar")?;
 	let id = unique_profile_id_for_name(&name)?;
 	let created_at = current_timestamp_compact();
+	let manifest = new_avatar_manifest(name.clone(), id, created_at.clone(), next_avatar_sort_order()?);
+	let path = unique_user_profile_path(&profile_file_stem(&created_at, &name));
+	if let Some(dir) = path.parent() {
+		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+	}
+	create_manifest_value(&path, &manifest)?;
+	let setting = read_avatar_setting(&path, ProfileStorage::User)?;
+	drop(guard);
+	refresh_tray_menu(&app)?;
+	Ok(setting)
+}
+
+fn new_avatar_manifest(name: String, id: String, created_at: String, sort_order: u32) -> toml::Value {
 	let mut manifest = toml::map::Map::new();
 	manifest.insert("title".to_string(), toml::Value::String(name.clone()));
 	manifest.insert(
@@ -3808,7 +3962,7 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 			("id".to_string(), toml::Value::String(id)),
 			("display_name".to_string(), toml::Value::String(name.clone())),
 			("created_at".to_string(), toml::Value::String(created_at.clone())),
-			("sort_order".to_string(), toml::Value::Integer(next_avatar_sort_order()? as i64)),
+			("sort_order".to_string(), toml::Value::Integer(sort_order as i64)),
 			("allow_multiple_renderers".to_string(), toml::Value::Boolean(false)),
 			("gpu_adapter".to_string(), toml::Value::String("auto".to_string())),
 			("group".to_string(), toml::Value::String(String::new())),
@@ -3892,56 +4046,145 @@ fn new_avatar_setting(app: tauri::AppHandle) -> Result<AvatarSetting, String> {
 			])),
 		)])),
 	);
-	let path = unique_user_profile_path(&profile_file_stem(&created_at, &name));
-	if let Some(dir) = path.parent() {
-		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-	}
-	let text = toml::to_string_pretty(&toml::Value::Table(manifest)).map_err(|e| format!("serialize new manifest: {e}"))?;
-	fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))?;
-	let setting = read_avatar_setting(&path, ProfileStorage::User)?;
-	refresh_tray_menu(&app)?;
-	Ok(setting)
+	toml::Value::Table(manifest)
+}
+
+fn avatar_archive_dir() -> PathBuf {
+    app_config_dir().join("deleted_profiles")
+}
+
+#[cfg(test)]
+mod new_profile_preview_contract {
+    use super::*;
+
+    #[test]
+    fn native_new_profile_matches_preview_fixture() {
+        let path = std::env::temp_dir().join(format!("una-new-profile-contract-{}.toml", std::process::id()));
+        let manifest = new_avatar_manifest("New Avatar".into(), "preview-new".into(), "20261018T000000Z".into(), 0);
+        fs::write(&path, toml::to_string_pretty(&manifest).unwrap()).unwrap();
+        let result = read_avatar_setting(&path, ProfileStorage::User);
+        fs::remove_file(&path).unwrap();
+        let mut actual = serde_json::to_value(result.unwrap()).unwrap();
+        actual["manifest_path"] = serde_json::json!("profiles/preview-new.toml");
+        assert!(actual["avatar_path"].is_null());
+        assert_eq!(actual["motion_vmc_enabled"], false);
+        assert_eq!(actual["motion_unmotion_enabled"], false);
+        assert_eq!(actual["allow_multiple_renderers"], false);
+        assert_eq!(actual["window_width"], 800);
+        assert_eq!(actual["window_height"], 600);
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/fixtures/new-avatar-setting.json");
+        let serialized = serde_json::to_string_pretty(&actual).unwrap() + "\n";
+        if std::env::var_os("UNAVATAR_REGENERATE_PREVIEW_DEFAULTS").is_some() {
+            fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+            fs::write(&fixture, &serialized).unwrap();
+        }
+        let expected = fs::read_to_string(fixture).unwrap();
+        assert_eq!(serialized, expected.replace("\r\n", "\n"), "Regenerate preview defaults after reviewing native default changes");
+    }
 }
 
 #[tauri::command]
-fn delete_avatar_setting(setting_id: String, app: tauri::AppHandle) -> Result<(), String> {
-	let setting = resolve_avatar_setting_direct(&setting_id)?;
-	match setting.storage {
-		ProfileStorage::User => {
-			let manifest_path = PathBuf::from(&setting.manifest_path);
-			fs::remove_file(&manifest_path).map_err(|e| format!("delete {}: {e}", manifest_path.display()))?;
-			remove_profile_icon_thumbnail_cache(&setting);
-			if seed_avatar_setting_exists(&setting.id) {
-				hide_seed_avatar_setting(&setting.id)?;
-			}
-		}
-		ProfileStorage::Seed => {
-			remove_profile_icon_thumbnail_cache(&setting);
-			hide_seed_avatar_setting(&setting.id)?;
-		}
-	}
-	refresh_tray_menu(&app)?;
-	Ok(())
+fn delete_avatar_setting(setting_id: String, expected_revision: Option<String>, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+    let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+    refresh_renderer_states(&mut state, false, None);
+    let _transaction = lock_user_profile_store()?;
+    let setting = resolve_avatar_setting_direct(&setting_id)?;
+    if state.renderers.values().any(|r| !matches!(r.info.state, RendererState::Exited | RendererState::Crashed)
+        && renderer_matches_profile(&r.info, &setting.id, &setting.manifest_path)) {
+        return Err(format!("Profile is in use by a Renderer: {}", setting.name));
+    }
+    let path = PathBuf::from(&setting.manifest_path);
+    let hidden = read_hidden_seed_profile_ids()?;
+    let record = profile_archive::ArchivedProfile {
+        version: 1, profile_id: setting.id.clone(), name: setting.name.clone(),
+        original_filename: path.file_name().and_then(|v| v.to_str()).ok_or("invalid profile filename")?.to_string(),
+        origin: if setting.storage == ProfileStorage::User { profile_archive::Origin::User } else { profile_archive::Origin::Seed },
+        seed_was_hidden: hidden.contains(&setting.id),
+        manifest: fs::read(&path).map_err(|e| format!("read profile before archive: {e}"))?,
+    };
+    profile_write::check_revision(&record.manifest, expected_revision.as_deref())?;
+    let archive_id = profile_archive::store(&avatar_archive_dir(), &record).map_err(|e| format!("archive profile; original retained: {e}"))?;
+    match setting.storage {
+        ProfileStorage::User => profile_archive::remove_archived_user(
+            &path, &record.manifest, &hidden_seed_profiles_path(), &setting.id, seed_avatar_setting_exists(&setting.id)
+        ).map_err(|e| format!("delete {}; archive retained as {archive_id}: {e}", path.display()))?,
+        ProfileStorage::Seed => hide_seed_avatar_setting(&setting.id).map_err(|e| format!("{e}; archive: {archive_id}"))?,
+    }
+    // Archived manifests still reference thumbnail assets; retain them for recovery.
+    drop(state);
+    // Deletion has committed. A tray failure must not report that deletion failed.
+    if let Err(error) = refresh_tray_menu(&app) { tracing::warn!(%error, "profile deleted; tray refresh failed"); }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct DeletedAvatarSetting {
+    archive_id: String,
+    profile_id: String,
+    name: String,
+}
+#[tauri::command]
+fn list_deleted_avatar_settings() -> Result<Vec<DeletedAvatarSetting>, String> {
+    Ok(profile_archive::list(&avatar_archive_dir()).map_err(|e| format!("read deleted profiles: {e}"))?
+        .into_iter().map(|e| DeletedAvatarSetting { archive_id: e.archive_id, profile_id: e.profile.profile_id, name: e.profile.name }).collect())
 }
 
 #[tauri::command]
-fn reorder_avatar_settings(setting_ids: Vec<String>, app: tauri::AppHandle) -> Result<Vec<AvatarSetting>, String> {
-	for (index, id) in setting_ids.iter().enumerate() {
-		let setting = resolve_avatar_setting(id)?;
-		let manifest_path = editable_avatar_setting_path(&setting)?;
-		let mut manifest = read_manifest_value(&manifest_path)?;
-		ensure_avatar_profile_metadata(&mut manifest, &manifest_path, Some(((index as u32) + 1) * 1000))?;
-		write_manifest_value(&manifest_path, &manifest)?;
-		let setting = read_avatar_setting(&manifest_path, ProfileStorage::User)?;
-		let _ = rename_avatar_setting_file_if_needed(&manifest_path, &setting)?;
+fn restore_avatar_setting(archive_id: String, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
+    let _state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+    let _transaction = lock_user_profile_store()?;
+    let root = avatar_archive_dir();
+    let record = profile_archive::load(&root, &archive_id).map_err(|e| format!("read deleted profile: {e}"))?;
+    if list_avatar_settings()?.iter().any(|s| s.id == record.profile_id) {
+        return Err(format!("A profile with this ID already exists: {}", record.profile_id));
+    }
+    match record.origin {
+        profile_archive::Origin::User => {
+            profile_archive::restore_user(&root, &archive_id, &user_profiles_dir()).map_err(|e| format!("restore profile: {e}"))?;
+            // The user profile takes precedence over a hidden seed. Keep seed
+            // visibility unchanged here; restoring it is unnecessary for use.
+        }
+        profile_archive::Origin::Seed => {
+            if !seed_avatar_setting_exists(&record.profile_id) { return Err("The bundled profile is no longer installed; archive retained".into()); }
+            profile_archive::set_seed_hidden(&hidden_seed_profiles_path(), &record.profile_id, false)
+                .map_err(|e| format!("restore bundled profile visibility: {e}"))?;
+        }
+    }
+    drop(_state);
+    if let Err(error) = refresh_tray_menu(&app) { tracing::warn!(%error, "profile restored; tray refresh failed"); }
+    Ok(())
+}
+
+#[tauri::command]
+fn reorder_avatar_settings(setting_ids: Vec<String>, expected_revisions: Option<BTreeMap<String,String>>, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<Vec<AvatarSetting>, String> {
+	let guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+    let _transaction = lock_user_profile_store()?;
+	let paths=setting_ids.iter().map(|id|resolve_avatar_setting(id).map(|setting|(id.clone(),PathBuf::from(setting.manifest_path)))).collect::<Result<Vec<_>,_>>()?;
+	profile_write::check_reorder(&paths,expected_revisions.as_ref())?;
+	let settings=setting_ids.iter().map(|id|resolve_avatar_setting(id)).collect::<Result<Vec<_>,_>>()?;
+	let root=user_profiles_dir();
+	let changes=plan_avatar_settings_reorder(&settings,&root)?;
+	if !changes.is_empty(){
+		let outcome=profile_batch::apply(&root,changes).map_err(|e|format!("prepare profile order: {e}"))?;
+		if let Some(error)=outcome.error {
+			return match profile_batch::restore(&root,&outcome.journal){
+				Ok(())=>Err(format!("profile order failed and original files restored: {error}")),
+				Err(recovery)=>Err(format!("profile order partially saved ({} steps): {error}; recovery failed: {recovery}; journal: {}",outcome.completed,outcome.journal.display())),
+			};
+		}
 	}
-	refresh_tray_menu(&app)?;
+	drop(guard);
+	// Storage has committed. A tray rendering failure must not invite a retry
+	// of the already-published profile transaction.
+	if let Err(error) = refresh_tray_menu(&app) {
+		tracing::warn!(%error, "profile order saved; tray refresh failed");
+	}
 	let order = setting_ids
 		.iter()
 		.enumerate()
 		.map(|(index, id)| (id.as_str(), index))
 		.collect::<BTreeMap<_, _>>();
-	let mut settings = list_avatar_settings()?;
+	let mut settings = list_avatar_settings().map_err(|error| format!("profile_order_committed_refresh_failed: {error}"))?;
 	settings.sort_by(|a, b| {
 		order
 			.get(a.id.as_str())
@@ -3954,8 +4197,71 @@ fn reorder_avatar_settings(setting_ids: Vec<String>, app: tauri::AppHandle) -> R
 	Ok(settings)
 }
 
+// Build the complete publication set without copying, updating or renaming sources.
+#[tauri::command]
+fn list_profile_order_recovery()->Result<serde_json::Value,String>{
+    let _transaction=lock_user_profile_store()?;
+    let root=user_profiles_dir().canonicalize().map_err(|e|e.to_string())?;
+    Ok(serde_json::json!({"root":root,"entries":profile_batch::history(&root).map_err(|e|e.to_string())?}))
+}
+#[tauri::command]
+fn restore_profile_order(expected_root:String,name:String,revision:String,app:tauri::AppHandle,state:State<'_,Mutex<SupervisorState>>)->Result<Vec<AvatarSetting>,String>{
+    let guard=state.lock().map_err(|_|"supervisor state poisoned".to_string())?;
+    let _transaction=lock_user_profile_store()?;
+    let root=user_profiles_dir().canonicalize().map_err(|e|e.to_string())?;
+    if root!=PathBuf::from(expected_root){return Err("profile_conflict: recovery store changed".into());}
+    profile_batch::restore_reviewed(&root,&name,&revision).map_err(|e|e.to_string())?;
+    drop(guard);
+    if let Err(error) = refresh_tray_menu(&app) {
+        tracing::warn!(%error, "profile order restored; tray refresh failed");
+    }
+    list_avatar_settings().map_err(|error| format!("profile_order_committed_refresh_failed: {error}"))
+}
+
+fn plan_avatar_settings_reorder(settings:&[AvatarSetting],root:&Path)->Result<Vec<profile_batch::Change>,String>{
+    let canonical=root.canonicalize().map_err(|e|e.to_string())?;
+    let mut reserved=fs::read_dir(root).map_err(|e|e.to_string())?.map(|entry|entry.map(|e|e.file_name().to_string_lossy().to_lowercase()).map_err(|e|e.to_string())).collect::<Result<std::collections::BTreeSet<_>,_>>()?;
+    let mut changes=vec![];
+    for (index,setting) in settings.iter().enumerate(){
+        let source=PathBuf::from(&setting.manifest_path);
+        let bytes=fs::read(&source).map_err(|e|e.to_string())?;
+        profile_write::check_revision(&bytes,Some(&setting.revision))?;
+        let original=source.file_name().and_then(|n|n.to_str()).ok_or("invalid profile filename")?.to_string();
+        let user=setting.storage==ProfileStorage::User;
+        if user&&fs::metadata(&source).map_err(|e|e.to_string())?.permissions().readonly(){return Err("profile is read-only".into());}
+        if user&&source.parent().ok_or("missing profile directory")?.canonicalize().map_err(|e|e.to_string())?!=canonical{return Err("profile outside user store".into());}
+        if !user&&root.join(&original).exists(){return Err("profile_conflict: seed copy destination occupied".into());}
+        let text=std::str::from_utf8(&bytes).map_err(|e|e.to_string())?;
+        let mut manifest=parse_manifest_value(text,&source)?;
+        let order=u32::try_from(index+1).ok().and_then(|n|n.checked_mul(1000)).ok_or("too many profiles")?;
+        ensure_avatar_profile_metadata(&mut manifest,&source,Some(order))?;
+        let created=manifest.get("profile").and_then(|p|p.get("created_at")).and_then(toml::Value::as_str).ok_or("missing profile creation date")?;
+        let stem=profile_file_stem(created,&setting.name);
+        let mut suffix=1u32;
+        let destination=loop{
+            let name=if suffix==1{format!("{stem}.toml")}else{format!("{stem}-{suffix}.toml")};
+            if (user&&name==original)||!reserved.contains(&name.to_lowercase()){break name;}
+            suffix=suffix.checked_add(1).ok_or("profile name collision overflow")?;
+        };
+        reserved.insert(destination.to_lowercase());
+        let after=toml::to_string_pretty(&manifest).map_err(|e|e.to_string())?.into_bytes();
+        if user&&destination==original{
+            if after!=bytes{changes.push(profile_batch::Change{name:original,before:Some(bytes),after:Some(after)});}
+        }else{
+            changes.push(profile_batch::Change{name:destination,before:None,after:Some(after)});
+            if user{changes.push(profile_batch::Change{name:original,before:Some(bytes),after:None});}
+        }
+    }
+    Ok(changes)
+}
+
 fn supervisor_logs_dir() -> PathBuf {
-	repo_root().join("target").join("tmp").join("supervisor-logs")
+	let development = (cfg!(debug_assertions) && !review_environment::ENABLED).then(repo_root);
+	supervisor_logs_dir_for(&app_config_dir(), development.as_deref())
+}
+
+fn supervisor_logs_dir_for(config: &Path, development: Option<&Path>) -> PathBuf {
+	development.map(|repo| repo.join("target/tmp/supervisor-logs")).unwrap_or_else(|| config.join("logs"))
 }
 
 #[tauri::command]
@@ -3966,10 +4272,7 @@ fn save_supervisor_logs(content: String, file_prefix: String) -> Result<String, 
 		.duration_since(std::time::UNIX_EPOCH)
 		.map(|d| d.as_secs())
 		.unwrap_or(0);
-	let prefix: String = file_prefix.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-	let prefix = if prefix.is_empty() { "supervisor".to_string() } else { prefix };
-	let path = dir.join(format!("{prefix}-{ts}.txt"));
-	std::fs::write(&path, content.as_bytes()).map_err(|e| format!("write logs: {e}"))?;
+	let path = log_export::save(&dir, &content, &file_prefix, ts)?;
 	Ok(path.display().to_string())
 }
 
@@ -4043,13 +4346,16 @@ fn activate_renderer_window(id: u32, state: State<'_, Mutex<SupervisorState>>) -
 	activate_process_window(pid)
 }
 
-#[tauri::command]
+// Native modal dialogs must not block WebView IPC dispatch.
+#[tauri::command(async)]
 fn pick_file_path(kind: String, settings: State<'_, Mutex<AppRuntimeSettings>>) -> Result<Option<String>, String> {
+	static PICKER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+	let _picker = PICKER.try_lock().map_err(|_| "A file picker is already open".to_string())?;
 	let start_dir = if kind == "avatar" {
 		let settings = settings.lock().map_err(|_| "app settings state poisoned".to_string())?;
 		avatar_model_picker_dir(&settings)
 	} else {
-		repo_root()
+		application_asset_root()
 	};
 	let mut dialog = rfd::FileDialog::new().set_directory(start_dir);
 	dialog = match kind.as_str() {
@@ -4090,8 +4396,9 @@ fn remember_avatar_model_picker_dir(settings: &mut AppRuntimeSettings, picked: &
 	if settings.last_avatar_model_dir.as_deref() == Some(parent.as_str()) {
 		return Ok(());
 	}
-	settings.last_avatar_model_dir = Some(parent);
-	write_app_settings(settings)
+	let mut next = settings.clone();
+	next.last_avatar_model_dir = Some(parent);
+	persist_general_app_settings(settings, next, write_app_settings)
 }
 
 fn avatar_model_picker_parent(picked: &Path) -> Option<String> {
@@ -4720,7 +5027,28 @@ fn read_unavatar_wardrobe_options(path: String, manifest_path: Option<String>) -
 }
 
 #[tauri::command]
-fn capture_midi_note_binding(timeout_ms: Option<u64>) -> Result<MidiNoteCaptureResult, String> {
+fn begin_midi_note_capture() -> Result<String, String> {
+    midi_capture::CAPTURES.reserve()
+}
+
+#[tauri::command]
+fn cancel_midi_note_capture(capture_id: String) -> Result<(), String> {
+    midi_capture::CAPTURES.cancel(&capture_id)
+}
+
+#[tauri::command]
+async fn capture_midi_note_binding(timeout_ms: Option<u64>, capture_id: Option<String>) -> Result<MidiNoteCaptureResult, String> {
+    let id = match capture_id { Some(id) => id, None => midi_capture::CAPTURES.reserve()? };
+    tauri::async_runtime::spawn_blocking(move || {
+        midi_capture::CAPTURES.run(&id, |ticket| capture_midi_note_binding_blocking(timeout_ms, ticket))
+    }).await.map_err(|error| format!("MIDI capture worker failed: {error}"))?
+}
+
+fn capture_midi_note_binding_blocking(timeout_ms: Option<u64>, ticket: &midi_capture::Ticket) -> Result<MidiNoteCaptureResult, String> {
+    #[cfg(feature = "isolated-review")]
+    if review_environment::ENABLED {
+        return capture_review_midi_input(timeout_ms, ticket);
+    }
 	let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(500, 30_000));
 	let discovery = midir::MidiInput::new("un-avatar-supervisor-midi-discovery").map_err(|e| format!("MIDI input unavailable: {e}"))?;
 	let ports = discovery.ports();
@@ -4771,7 +5099,38 @@ fn capture_midi_note_binding(timeout_ms: Option<u64>) -> Result<MidiNoteCaptureR
 	if connections.is_empty() {
 		return Err("no MIDI input ports could be opened".to_string());
 	}
-	rx.recv_timeout(timeout).map_err(|_| "MIDI note capture timed out".to_string())
+	ticket.receive(&rx, timeout)
+}
+
+// Compile-time isolated review only; normal and release builds cannot use this input.
+#[cfg(feature = "isolated-review")]
+fn capture_review_midi_input(timeout_ms: Option<u64>, ticket: &midi_capture::Ticket) -> Result<MidiNoteCaptureResult, String> {
+    #[derive(Deserialize)]
+    struct Fixture { mode: String, delay_ms: u64, channel: u8, note: u8 }
+    let root = review_environment::root().ok_or("Review root missing")?;
+    let fixture: Fixture = serde_json::from_slice(&fs::read(root.join("midi-input.json")).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    if !matches!(fixture.mode.as_str(), "wait" | "note") || fixture.delay_ms > 30_000 || !(1..=16).contains(&fixture.channel) || fixture.note > 127 {
+        return Err("Invalid isolated MIDI fixture".into());
+    }
+    let timeout = Duration::from_millis(timeout_ms.unwrap_or(10_000).clamp(500,30_000));
+    let done = AtomicBool::new(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        let done = &done;
+        scope.spawn(move || {
+            let start = Instant::now();
+            while !done.load(Ordering::Acquire) {
+                if fixture.mode == "note" && start.elapsed() >= Duration::from_millis(fixture.delay_ms) {
+                    let _ = tx.send(MidiNoteCaptureResult {device:"Isolated MIDI fixture".into(),channel:fixture.channel,note:fixture.note});
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let result = ticket.receive(&rx, timeout);
+        done.store(true, Ordering::Release);
+        result
+    })
 }
 
 fn midi_note_on_event(message: &[u8]) -> Option<(u8, u8)> {
@@ -5180,7 +5539,7 @@ fn resolve_avatar_metadata_path(path: &str, manifest_path: Option<&str>) -> Path
 	{
 		return candidate;
 	}
-	repo_root().join(trimmed)
+	application_asset_root().join(trimmed)
 }
 
 fn first_meta_string(meta: &serde_json::Value, keys: &[&str]) -> Option<String> {
@@ -5380,31 +5739,23 @@ fn invalidate_scene_cache_prewarm_records() -> Result<(), String> {
 			if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
 				continue;
 			}
-			let mut manifest = match read_manifest_value(&path) {
-				Ok(manifest) => manifest,
-				Err(error) if storage == ProfileStorage::Seed => {
-					eprintln!(
-						"un-avatar-supervisor: skip seed cache marker invalidation {}: {error}",
-						path.display()
-					);
-					continue;
-				}
-				Err(error) => return Err(error),
-			};
-			if !clear_scene_cache_prewarm_record(&mut manifest) {
-				continue;
-			}
-			if let Err(error) = write_manifest_value(&path, &manifest) {
+			if let Err(error) = invalidate_scene_cache_prewarm_record_file(&path) {
 				if storage == ProfileStorage::Seed {
-					eprintln!(
-						"un-avatar-supervisor: skip read-only seed cache marker invalidation {}: {error}",
-						path.display()
-					);
+					eprintln!("un-avatar-supervisor: skip seed cache marker invalidation {}: {error}", path.display());
 					continue;
 				}
 				return Err(error);
 			}
 		}
+	}
+	Ok(())
+}
+
+fn invalidate_scene_cache_prewarm_record_file(path: &Path) -> Result<(), String> {
+	let _transaction = profile_write::lock_directory(path).map_err(|e| format!("lock profile transaction: {e}"))?;
+	let mut manifest = read_manifest_value(path)?;
+	if clear_scene_cache_prewarm_record(&mut manifest) {
+		write_manifest_value(path, &manifest)?;
 	}
 	Ok(())
 }
@@ -5516,47 +5867,46 @@ fn remove_renderer_cache_dir(path: &Path) -> Result<(), String> {
 	fs::remove_dir_all(&full).map_err(|e| format!("remove {}: {e}", full.display()))
 }
 
-fn remove_profile_icon_thumbnail_files(cache_dir: &Path, stem: &str) {
-	for extension in ["webp", "png", "jpg", "jpeg"] {
-		let _ = fs::remove_file(cache_dir.join(format!("{stem}.{extension}")));
-	}
+
+
+
+fn commit_profile_icon(setting_id: &str, expected_revision: Option<&str>, bytes: Vec<u8>, app: &tauri::AppHandle, state: &Mutex<SupervisorState>) -> Result<AvatarSetting, String> {
+    let setting = {
+        let _guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+        update_avatar_setting_manifest(setting_id, expected_revision, |_, manifest| {
+            // Revision validation happens before creating an asset; a stale editor
+            // cannot publish an icon or overwrite another writer's manifest.
+            let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
+            store_profile_icon_in_manifest(manifest, &cache_dir, &bytes)
+        })?
+    };
+    refresh_tray_menu(app)?;
+    Ok(setting)
 }
 
-fn remove_profile_icon_thumbnail_cache(setting: &AvatarSetting) {
-	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
-	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
-	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
+fn store_profile_icon_in_manifest(manifest: &mut toml::Value, cache_dir: &Path, bytes: &[u8]) -> Result<(), String> {
+    let icon_path = profile_archive::store_icon(cache_dir, bytes)
+        .map_err(|e| format!("save new profile icon: {e}"))?;
+    set_optional_nested_string(manifest, &["window", "icon_path"], icon_path.display().to_string())
 }
 
-fn save_profile_icon_thumbnail_bytes(
-	setting: &AvatarSetting,
-	manifest_path: &Path,
-	bytes: Vec<u8>,
-	app: &tauri::AppHandle,
-) -> Result<AvatarSetting, String> {
-	let cache_dir = user_profiles_dir().join("assets").join("thumbnails");
-	fs::create_dir_all(&cache_dir).map_err(|e| format!("create {}: {e}", cache_dir.display()))?;
-	let file_stem = format!("{}-avatar-thumbnail", unique_profile_id(&setting.id));
-	remove_profile_icon_thumbnail_files(&cache_dir, &file_stem);
-	let file_name = format!("{file_stem}.webp");
-	let icon_path = cache_dir.join(file_name);
-	fs::write(&icon_path, bytes).map_err(|e| format!("write {}: {e}", icon_path.display()))?;
-
-	let mut manifest = read_manifest_value(manifest_path)?;
-	let icon_path_text = icon_path.display().to_string();
-	migrate_avatar_manifest_to_v2(&mut manifest)?;
-	set_optional_nested_string(&mut manifest, &["window", "icon_path"], icon_path_text)?;
-	ensure_avatar_profile_metadata(&mut manifest, manifest_path, None)?;
-	write_manifest_value(manifest_path, &manifest)?;
-	let setting = read_avatar_setting(manifest_path, ProfileStorage::User)?;
-	let manifest_path = rename_avatar_setting_file_if_needed(manifest_path, &setting)?;
-	let setting = if manifest_path == Path::new(&setting.manifest_path) {
-		Ok(setting)
-	} else {
-		read_avatar_setting(&manifest_path, ProfileStorage::User)
-	}?;
-	refresh_tray_menu(app)?;
-	Ok(setting)
+fn profile_icon_protocol_response(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let Some(id) = percent_decode_utf8(request.uri().path().trim_start_matches('/')) else {
+        return http_response(400, "text/plain", b"invalid profile id".to_vec());
+    };
+    // Resolve only a listed profile identity, never an arbitrary manifest or file path.
+    let setting = list_avatar_settings().ok().and_then(|items| items.into_iter().find(|item| item.id == id));
+    let Some(setting) = setting else { return http_response(404, "text/plain", b"profile not found".to_vec()); };
+    let image = setting.icon_path.as_deref().and_then(|icon| resolve_manifest_asset_path(icon, Path::new(&setting.manifest_path)));
+    let Some(image) = image else { return http_response(404, "text/plain", b"icon not found".to_vec()); };
+    let mime = match image.extension().and_then(|v| v.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "ico" => "image/x-icon",
+        _ => return http_response(415, "text/plain", b"unsupported icon format".to_vec()),
+    };
+    match fs::read(image) {
+        Ok(bytes) => http_response(200, mime, bytes),
+        Err(_) => http_response(404, "text/plain", b"icon not found".to_vec()),
+    }
 }
 
 fn thumbnail_protocol_response(request: tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
@@ -5619,9 +5969,9 @@ fn http_response(status: u16, content_type: &'static str, body: Vec<u8>) -> taur
 }
 
 #[tauri::command]
-fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, app: tauri::AppHandle) -> Result<AvatarSetting, String> {
+fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, expected_revision: Option<String>, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<AvatarSetting, String> {
 	let setting = resolve_avatar_setting(&setting_id)?;
-	let manifest_path = editable_avatar_setting_path(&setting)?;
+	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let avatar_path = avatar_path
 		.as_deref()
 		.or(setting.avatar_path.as_deref())
@@ -5646,7 +5996,7 @@ fn save_avatar_thumbnail_icon(setting_id: String, avatar_path: Option<String>, a
 	let (_mime, thumbnail_bytes) =
 		vrm_metadata_thumbnail_image(meta, &root, &bytes, &resolved_avatar).ok_or_else(|| "avatar thumbnail not found".to_string())?;
 	let thumbnail_bytes = encode_profile_icon_thumbnail_webp(&thumbnail_bytes)?;
-	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, thumbnail_bytes, &app)
+	commit_profile_icon(&setting_id, expected_revision.as_deref(), thumbnail_bytes, &app, state.inner())
 }
 
 #[tauri::command]
@@ -5654,17 +6004,17 @@ fn save_profile_icon_from_data_url(
 	setting_id: String,
 	image_data_url: String,
 	crop: ProfileIconCropRequest,
+	expected_revision: Option<String>,
 	app: tauri::AppHandle,
+	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<AvatarSetting, String> {
-	let setting = resolve_avatar_setting(&setting_id)?;
-	let manifest_path = editable_avatar_setting_path(&setting)?;
 	let (_mime, encoded) =
 		data_image_base64_parts(&image_data_url).ok_or_else(|| "profile icon image must be a data:image/* base64 URL".to_string())?;
 	let bytes = BASE64_STANDARD
 		.decode(encoded)
 		.map_err(|e| format!("decode profile icon image: {e}"))?;
 	let icon_bytes = encode_profile_icon_crop_webp(&bytes, crop)?;
-	save_profile_icon_thumbnail_bytes(&setting, &manifest_path, icon_bytes, &app)
+	commit_profile_icon(&setting_id, expected_revision.as_deref(), icon_bytes, &app, state.inner())
 }
 
 #[derive(Default)]
@@ -6089,17 +6439,26 @@ fn vrm_metadata_permissions(meta: &serde_json::Value) -> Vec<VrmMetadataField> {
 }
 
 #[tauri::command]
-fn update_avatar_setting_path(setting_id: String, field: String, path: String, app: tauri::AppHandle) -> Result<AvatarSetting, String> {
-	let setting = resolve_avatar_setting_direct(&setting_id)?;
-	let manifest_path = editable_avatar_setting_path(&setting)?;
-	let mut manifest = read_manifest_value(&manifest_path)?;
-	migrate_avatar_manifest_to_v2(&mut manifest)?;
+fn update_avatar_setting_path(setting_id: String, field: String, path: String, expected_revision: Option<String>, app: tauri::AppHandle, state: State<'_, Mutex<SupervisorState>>) -> Result<AvatarSetting, String> {
+    let setting = {
+        let _guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+        update_avatar_setting_manifest(&setting_id, expected_revision.as_deref(), |setting, manifest| {
+            let manifest_path = editable_avatar_setting_path(setting)?;
+            apply_legacy_avatar_setting_path(manifest, &manifest_path, &field, &path)
+        })?
+    };
+    refresh_tray_menu(&app)?;
+    Ok(setting)
+}
+
+// Preserve the legacy path command's empty-string behavior for older callers.
+fn apply_legacy_avatar_setting_path(manifest: &mut toml::Value, manifest_path: &Path, field: &str, path: &str) -> Result<(), String> {
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
-	match field.as_str() {
+	match field {
 		"avatar_path" => {
 			table.insert(
 				"avatar_path".to_string(),
-				toml::Value::String(avatar_path_for_manifest_value(&path, &manifest_path)),
+				toml::Value::String(avatar_path_for_manifest_value(path, manifest_path)),
 			);
 		}
 		"icon_path" => {
@@ -6108,21 +6467,11 @@ fn update_avatar_setting_path(setting_id: String, field: String, path: String, a
 				.or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
 				.as_table_mut()
 				.ok_or_else(|| "window must be a table".to_string())?;
-			window.insert("icon_path".to_string(), toml::Value::String(path));
+			window.insert("icon_path".to_string(), toml::Value::String(path.to_owned()));
 		}
 		_ => return Err(format!("unsupported path field: {field}")),
 	}
-	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
-	write_manifest_value(&manifest_path, &manifest)?;
-	let setting = read_avatar_setting(&manifest_path, ProfileStorage::User)?;
-	let manifest_path = rename_avatar_setting_file_if_needed(&manifest_path, &setting)?;
-	let setting = if manifest_path == Path::new(&setting.manifest_path) {
-		setting
-	} else {
-		read_avatar_setting(&manifest_path, ProfileStorage::User)?
-	};
-	refresh_tray_menu(&app)?;
-	Ok(setting)
+	Ok(())
 }
 
 #[tauri::command]
@@ -6130,12 +6479,16 @@ fn update_avatar_setting_value(
 	setting_id: String,
 	field: String,
 	value: serde_json::Value,
+	expected_revision: Option<String>,
 	app: tauri::AppHandle,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<AvatarSetting, String> {
-	let setting = update_avatar_setting_manifest(&setting_id, |setting, manifest| {
-		apply_avatar_setting_value(manifest, setting, &field, value)
-	})?;
+	let setting = {
+        let _guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+        update_avatar_setting_manifest(&setting_id, expected_revision.as_deref(), |setting, manifest| {
+            apply_avatar_setting_value(manifest, setting, &field, value)
+        })?
+    };
 	if avatar_setting_change_needs_tray_refresh(&field) {
 		refresh_tray_menu(&app)?;
 	}
@@ -6147,18 +6500,22 @@ fn update_avatar_setting_value(
 fn update_avatar_setting_values(
 	setting_id: String,
 	updates: Vec<AvatarSettingValueUpdate>,
+	expected_revision: Option<String>,
 	app: tauri::AppHandle,
 	state: State<'_, Mutex<SupervisorState>>,
 ) -> Result<AvatarSetting, String> {
 	if updates.is_empty() {
 		return Err("updates must not be empty".to_string());
 	}
-	let setting = update_avatar_setting_manifest(&setting_id, |setting, manifest| {
-		for update in &updates {
-			apply_avatar_setting_value(manifest, setting, &update.field, update.value.clone())?;
-		}
-		Ok(())
-	})?;
+	let setting = {
+        let _guard = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
+        update_avatar_setting_manifest(&setting_id, expected_revision.as_deref(), |setting, manifest| {
+            for update in &updates {
+                apply_avatar_setting_value(manifest, setting, &update.field, update.value.clone())?;
+            }
+            Ok(())
+        })?
+    };
 	let fields: Vec<&str> = updates.iter().map(|update| update.field.as_str()).collect();
 	if fields.iter().any(|field| avatar_setting_change_needs_tray_refresh(field)) {
 		refresh_tray_menu(&app)?;
@@ -6169,22 +6526,36 @@ fn update_avatar_setting_values(
 
 fn update_avatar_setting_manifest(
 	setting_id: &str,
+	expected_revision: Option<&str>,
 	apply: impl FnOnce(&AvatarSetting, &mut toml::Value) -> Result<(), String>,
 ) -> Result<AvatarSetting, String> {
-	let setting = resolve_avatar_setting(setting_id)?;
-	let manifest_path = editable_avatar_setting_path(&setting)?;
-	let mut manifest = read_manifest_value(&manifest_path)?;
-	migrate_avatar_manifest_to_v2(&mut manifest)?;
-	apply(&setting, &mut manifest)?;
-	ensure_avatar_profile_metadata(&mut manifest, &manifest_path, None)?;
-	write_manifest_value(&manifest_path, &manifest)?;
-	let setting = read_avatar_setting(&manifest_path, ProfileStorage::User)?;
+    let _transaction = lock_user_profile_store()?;
+    let setting = resolve_avatar_setting(setting_id)?;
+    let manifest_path = editable_avatar_setting_path_in(&setting, &user_profiles_dir(), expected_revision)?;
+	let setting = update_avatar_setting_contents_locked(&manifest_path, &setting, expected_revision, apply)?;
 	let manifest_path = rename_avatar_setting_file_if_needed(&manifest_path, &setting)?;
 	if manifest_path == Path::new(&setting.manifest_path) {
 		Ok(setting)
 	} else {
 		read_avatar_setting(&manifest_path, ProfileStorage::User)
 	}
+}
+
+// Caller holds the directory transaction lock through any subsequent rename.
+fn update_avatar_setting_contents_locked(
+    manifest_path: &Path,
+    setting: &AvatarSetting,
+    expected_revision: Option<&str>,
+    apply: impl FnOnce(&AvatarSetting, &mut toml::Value) -> Result<(), String>,
+) -> Result<AvatarSetting, String> {
+    let text = fs::read_to_string(manifest_path).map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
+    profile_write::check_revision(text.as_bytes(), expected_revision)?;
+    let mut manifest = parse_manifest_value(&text, manifest_path)?;
+    migrate_avatar_manifest_to_v2(&mut manifest)?;
+    apply(setting, &mut manifest)?;
+    ensure_avatar_profile_metadata(&mut manifest, manifest_path, None)?;
+    write_manifest_value(manifest_path, &manifest)?;
+    read_avatar_setting(manifest_path, ProfileStorage::User)
 }
 
 fn avatar_setting_change_needs_tray_refresh(field: &str) -> bool {
@@ -7496,16 +7867,12 @@ fn launch_renderer_in_state(
 	state: &Mutex<SupervisorState>,
 	app_settings: &AppRuntimeSettings,
 ) -> Result<RendererInstance, String> {
+	if review_environment::ENABLED && !review_environment::RUNTIME_ENABLED {return Err("Renderer launch disabled in isolated UI review".into());}
+	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	let setting = resolve_avatar_setting(setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
+	review_environment::validate_runtime_manifest(&manifest_path)?;
 	let manifest_path_text = manifest_path.display().to_string();
-	{
-		let state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
-		if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
-			return Ok(info);
-		}
-	}
-	let mut state = state.lock().map_err(|_| "supervisor state poisoned".to_string())?;
 	if let Some(info) = existing_renderer_for_setting(&state, &setting, &manifest_path_text) {
 		return Ok(info);
 	}
@@ -7519,6 +7886,7 @@ fn launch_renderer_in_state(
 		&app_settings.renderer_close_hotkey,
 		resolve_renderer_window_icon_path(&setting).as_deref(),
 		Some(&renderer_profile_app_user_model_id(&setting.id)),
+		Some(&setting.id),
 	)?;
 	configure_hidden_child(&mut command);
 	let mut child = command
@@ -7533,6 +7901,7 @@ fn launch_renderer_in_state(
 		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
 	let info = RendererInstance {
 		id,
+		profile_id: Some(setting.id.clone()),
 		name: setting.name,
 		state: RendererState::Running,
 		pid: Some(pid),
@@ -7565,6 +7934,7 @@ fn launch_renderer_in_state(
 		ManagedRenderer {
 			info,
 			child: Some(child),
+			attached_process_exit: None,
 			started_at: Instant::now(),
 			runtime_bus_key: runtime_bus_key.clone(),
 			runtime_status_cache,
@@ -7598,6 +7968,7 @@ fn attach_standalone_renderer_manifest_in_state(manifest_path: &Path, state: &Mu
 		spawn_runtime_status_stream(runtime_bus_key.clone(), id, manifest_path_text.clone());
 	let info = RendererInstance {
 		id,
+		profile_id: Some(setting.id.clone()),
 		name: setting.name,
 		state: RendererState::Running,
 		pid: None,
@@ -7630,6 +8001,7 @@ fn attach_standalone_renderer_manifest_in_state(manifest_path: &Path, state: &Mu
 		ManagedRenderer {
 			info,
 			child: None,
+			attached_process_exit: None,
 			started_at: Instant::now(),
 			runtime_bus_key,
 			runtime_status_cache,
@@ -7644,6 +8016,7 @@ fn attach_standalone_renderer_manifest_in_state(manifest_path: &Path, state: &Mu
 
 #[tauri::command]
 fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String> {
+	shell_integration::require_enabled()?;
 	let setting = resolve_avatar_setting(&setting_id)?;
 	let manifest_path = PathBuf::from(&setting.manifest_path);
 	let renderer_exe = renderer_executable_path();
@@ -7667,50 +8040,61 @@ fn create_renderer_desktop_shortcut(setting_id: String) -> Result<String, String
 	Ok(shortcut_path.display().to_string())
 }
 
+fn persist_taskbar_profile_settings(
+ state: &mut AppRuntimeSettings,
+ next: AppRuntimeSettings,
+ write: impl FnOnce(&AppRuntimeSettings) -> Result<(), String>,
+ apply: impl FnOnce(&AppRuntimeSettings) -> Result<String, String>,
+) -> Result<String, String> {
+ persist_general_app_settings(state, next, write)?;
+ apply(state).map_err(|error| format!("設定は保存済みですが、Windowsの起動メニューへの反映に失敗しました。再操作またはUNAvatarの再起動で再試行できます。 / Settings saved; Windows launcher update failed: {error}"))
+}
+
 #[tauri::command]
 fn create_taskbar_launcher_shortcuts(setting_id: String, state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<String, String> {
-	let setting = resolve_avatar_setting(&setting_id)?;
-	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
-	if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
-		state.pinned_taskbar_profile_ids.push(setting.id);
-	}
-	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
-	let path = update_taskbar_launcher_profile_tasks(&state)?;
-	write_app_settings(&state)?;
-	Ok(path)
+ shell_integration::require_enabled()?;
+ let setting = resolve_avatar_setting(&setting_id)?;
+ let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+ let mut next = state.clone();
+ if !next.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
+  next.pinned_taskbar_profile_ids.push(setting.id);
+ }
+ next.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&next.pinned_taskbar_profile_ids);
+ persist_taskbar_profile_settings(&mut state, next, write_app_settings, update_taskbar_launcher_profile_tasks)
 }
 
 #[tauri::command]
 fn set_taskbar_profile_pinned(
-	setting_id: String,
-	pinned: bool,
-	state: State<'_, Mutex<AppRuntimeSettings>>,
+ setting_id: String,
+ pinned: bool,
+ state: State<'_, Mutex<AppRuntimeSettings>>,
 ) -> Result<AppRuntimeSettings, String> {
-	let setting = resolve_avatar_setting(&setting_id)?;
-	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
-	if pinned {
-		if !state.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) {
-			state.pinned_taskbar_profile_ids.push(setting.id);
-		}
-	} else {
-		state.pinned_taskbar_profile_ids.retain(|id| id != &setting.id);
-	}
-	state.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&state.pinned_taskbar_profile_ids);
-	update_taskbar_launcher_profile_tasks(&state)?;
-	write_app_settings(&state)?;
-	Ok(state.clone())
+ shell_integration::require_enabled()?;
+ let setting = resolve_avatar_setting(&setting_id)?;
+ let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+ let mut next = state.clone();
+ if pinned {
+  if !next.pinned_taskbar_profile_ids.iter().any(|id| id == &setting.id) { next.pinned_taskbar_profile_ids.push(setting.id); }
+ } else { next.pinned_taskbar_profile_ids.retain(|id| id != &setting.id); }
+ next.pinned_taskbar_profile_ids = normalized_taskbar_profile_ids(&next.pinned_taskbar_profile_ids);
+ persist_taskbar_profile_settings(&mut state, next, write_app_settings, update_taskbar_launcher_profile_tasks)?;
+ Ok(state.clone())
 }
 
 #[tauri::command]
 fn clear_taskbar_profile_pins(state: State<'_, Mutex<AppRuntimeSettings>>) -> Result<AppRuntimeSettings, String> {
-	let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
-	state.pinned_taskbar_profile_ids.clear();
-	update_taskbar_launcher_profile_tasks(&state)?;
-	write_app_settings(&state)?;
-	Ok(state.clone())
+ shell_integration::require_enabled()?;
+ let mut state = state.lock().map_err(|_| "app settings state poisoned".to_string())?;
+ let mut next = state.clone();
+ next.pinned_taskbar_profile_ids.clear();
+ persist_taskbar_profile_settings(&mut state, next, write_app_settings, update_taskbar_launcher_profile_tasks)?;
+ Ok(state.clone())
 }
 
 fn update_taskbar_launcher_profile_tasks(settings: &AppRuntimeSettings) -> Result<String, String> {
+	ensure_app_settings_loaded(settings)?;
+	if shell_integration::disabled() { return Ok("Windows連携は --no-shell-integration により無効です".into()); }
+	if review_environment::ENABLED {return Ok("Disabled in isolated UI review".into());}
 	let supervisor_exe = supervisor_executable_path()?;
 	let start_menu_dir = start_menu_un_avatar_dir()?;
 	fs::create_dir_all(&start_menu_dir).map_err(|e| format!("create start menu dir {}: {e}", start_menu_dir.display()))?;
@@ -7985,7 +8369,7 @@ fn existing_renderer_for_setting(state: &SupervisorState, setting: &AvatarSettin
 		.values()
 		.find(|renderer| {
 			!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
-				&& renderer.info.manifest_path.as_deref() == Some(manifest_path_text)
+				&& renderer_matches_profile(&renderer.info, &setting.id, manifest_path_text)
 		})
 		.map(|renderer| renderer.info.clone())
 }
@@ -8281,6 +8665,7 @@ fn read_output_state_from_manifest(manifest: &toml::Value, manifest_path: &str) 
 }
 
 fn write_spout_state_to_manifest(manifest_path: &Path, output: &RendererSpoutProfileState) -> Result<(), String> {
+	let _transaction = profile_write::lock_directory(manifest_path).map_err(|e| format!("lock profile transaction: {e}"))?;
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let output_table = table
@@ -8330,9 +8715,11 @@ fn resolve_screenshot_path(requested: Option<String>, profile_name: &str) -> Res
 }
 
 fn default_screenshot_dir() -> PathBuf {
-	dirs::picture_dir()
-		.unwrap_or_else(|| repo_root().join("target").join("tmp").join("screenshots"))
-		.join("un-avatar")
+	screenshot_dir_for(dirs::picture_dir().as_deref(), &app_config_dir())
+}
+
+fn screenshot_dir_for(pictures: Option<&Path>, config: &Path) -> PathBuf {
+	pictures.map(|dir| dir.join("un-avatar")).unwrap_or_else(|| config.join("screenshots"))
 }
 
 fn screenshot_profile_filename_stem(profile_name: &str) -> String {
@@ -8883,6 +9270,7 @@ fn restore_renderer_window_from_profile(id: u32, state: State<'_, Mutex<Supervis
 }
 
 fn write_window_state_to_manifest(manifest_path: &Path, position: [i32; 2], inner_size: Option<[u32; 2]>) -> Result<(), String> {
+	let _transaction = profile_write::lock_directory(manifest_path).map_err(|e| format!("lock profile transaction: {e}"))?;
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let window_table = table
@@ -8900,6 +9288,7 @@ fn write_window_state_to_manifest(manifest_path: &Path, position: [i32; 2], inne
 }
 
 fn write_camera_state_to_manifest(manifest_path: &Path, camera: &RendererCameraSnapshot) -> Result<(), String> {
+	let _transaction = profile_write::lock_directory(manifest_path).map_err(|e| format!("lock profile transaction: {e}"))?;
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let table = manifest.as_table_mut().ok_or_else(|| "manifest root must be a table".to_string())?;
 	let camera_table = table
@@ -9014,25 +9403,25 @@ fn validate_optional_f32_range(
 
 #[tauri::command]
 fn stop_all_renderers(state: State<'_, Mutex<SupervisorState>>) -> Result<(), String> {
-	stop_all_in_state(&state);
-	Ok(())
+	stop_all_in_state(&state)
 }
 
-fn stop_all_in_state(state: &Mutex<SupervisorState>) {
-	stop_all_in_state_with_grace(state, RENDERER_STOP_GRACE_NORMAL);
+fn stop_all_in_state(state: &Mutex<SupervisorState>) -> Result<(), String> {
+	stop_all_in_state_with_grace(state, RENDERER_STOP_GRACE_NORMAL)
 }
 
-fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration) {
-	let Ok(mut state) = state.lock() else {
-		return;
-	};
+fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration) -> Result<(), String> {
+	let mut state = state.lock().map_err(|e| e.to_string())?;
+	let mut failures = Vec::new();
 	let mut stopping = Vec::new();
 	for (id, renderer) in state.renderers.iter_mut() {
 		if matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed) {
 			continue;
 		}
+		if let Err(error) = prepare_attached_renderer_exit(renderer) {
+   failures.push(format!("Renderer {id}: {error}")); continue;
+  }
 		renderer.info.state = RendererState::Stopping;
-		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 		drop_renderer_control_session(renderer);
 		let graceful_requested = send_managed_renderer_shutdown(renderer).is_ok();
 		stopping.push((*id, graceful_requested));
@@ -9042,6 +9431,12 @@ fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration)
 		let Some(renderer) = state.renderers.get_mut(&id) else {
 			continue;
 		};
+  if let Some(observer) = renderer.attached_process_exit.as_ref() {
+   if let Err(error) = observer.wait_until(deadline) {
+    failures.push(format!("Renderer {id}: {error}"));
+    continue;
+   }
+  }
 		let exited = if graceful_requested {
 			renderer
 				.child
@@ -9053,22 +9448,28 @@ fn stop_all_in_state_with_grace(state: &Mutex<SupervisorState>, grace: Duration)
 		};
 		if !exited {
 			if let Some(child) = renderer.child.as_mut() {
-				let _ = child.kill();
-				let _ = child.wait();
+				if let Err(error) = terminate_renderer_child(id, child) {
+					failures.push(error);
+					continue;
+				}
 			}
 		}
+		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
 		refresh_renderer_stderr(renderer);
 	}
+	if failures.is_empty() { Ok(()) } else { Err(failures.join("; ")) }
 }
 
 fn stop_managed_renderer(id: u32, renderer: &mut ManagedRenderer) -> Result<(), String> {
+ prepare_attached_renderer_exit(renderer)?;
 	renderer.info.state = RendererState::Stopping;
-	renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 	let graceful_requested = send_managed_renderer_shutdown(renderer).is_ok();
 	drop_renderer_control_session(renderer);
-	if renderer.child.is_none() {
+	if let Some(observer) = renderer.attached_process_exit.as_ref() {
+  observer.wait_until(Instant::now() + RENDERER_STOP_GRACE_NORMAL)?;
+		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
 		refresh_renderer_stderr(renderer);
@@ -9076,17 +9477,39 @@ fn stop_managed_renderer(id: u32, renderer: &mut ManagedRenderer) -> Result<(), 
 	}
 	let child = renderer.child.as_mut().expect("checked child above");
 	if graceful_requested && wait_renderer_exit(child, RENDERER_STOP_GRACE_NORMAL)? {
+		renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 		renderer.info.state = RendererState::Exited;
 		renderer.info.pid = None;
 		refresh_renderer_stderr(renderer);
 		return Ok(());
 	}
-	child.kill().map_err(|e| format!("stop renderer {id}: {e}"))?;
-	let _ = child.wait();
+	terminate_renderer_child(id, child)?;
+	renderer.runtime_status_stream_stop.store(true, Ordering::Release);
 	renderer.info.state = RendererState::Exited;
 	renderer.info.pid = None;
 	refresh_renderer_stderr(renderer);
 	Ok(())
+}
+
+// Capture a process handle before sending Shutdown. Waiting on this handle
+// cannot accidentally observe a later process that reuses the same PID.
+fn prepare_attached_renderer_exit(renderer: &mut ManagedRenderer) -> Result<(), String> {
+ if renderer.child.is_some() || renderer.attached_process_exit.is_some() { return Ok(()); }
+ let pid = cached_runtime_telemetry(renderer).0.and_then(|t| t.pid)
+  .ok_or_else(|| "Fresh Renderer PID unavailable; refresh its connection before retrying".to_string())?;
+ renderer.attached_process_exit = Some(process_exit::ProcessExit::open(pid)?);
+ Ok(())
+}
+
+// Do not erase PID/state until the OS confirms exit. A failed termination can
+// be retried using the retained Child; a process exiting during kill is success.
+fn terminate_renderer_child(id: u32, child: &mut Child) -> Result<(), String> {
+ if child.try_wait().map_err(|e| format!("check renderer {id}: {e}"))?.is_some() { return Ok(()); }
+ if let Err(error) = child.kill() {
+  if child.try_wait().ok().flatten().is_none() { return Err(format!("stop renderer {id}: {error}")); }
+ }
+ child.wait().map_err(|e| format!("wait renderer {id}: {e}"))?;
+ Ok(())
 }
 
 fn wait_renderer_exit(child: &mut Child, timeout: Duration) -> Result<bool, String> {
@@ -9132,7 +9555,7 @@ fn runtime_status_from_renderer(renderer: &ManagedRenderer) -> RendererRuntimeSt
 		.or(cache_note)
 		.or_else(|| match &info.state {
 			RendererState::Running | RendererState::Starting | RendererState::Degraded => {
-				Some(format!("runtime status unavailable on {}", renderer.runtime_bus_key))
+				telemetry.is_none().then(|| format!("runtime status unavailable on {}", renderer.runtime_bus_key))
 			}
 			RendererState::Stopping | RendererState::Exited | RendererState::Crashed => None,
 		});
@@ -9598,14 +10021,19 @@ fn read_runtime_telemetry_stream(
 	stop: &AtomicBool,
 ) -> Result<(), String> {
 	use zenoh::Wait as _;
-	let session = zenoh::open(zenoh::Config::default())
-		.wait()
-		.map_err(|e| format!("open runtime bus: {e}"))?;
+	let diagnose = env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some();
+	if diagnose { eprintln!("runtime-bus review open begin: {base_key}"); }
+	// Share the process's peer session with control traffic. Per-renderer sessions
+	// create redundant discovery meshes even though their subscriptions are distinct.
+	let session = runtime_control_session()?;
+	if diagnose { eprintln!("runtime-bus review open ready: {base_key}"); }
 	let status_key = format!("{base_key}/status");
 	let subscriber = session
 		.declare_subscriber(&status_key)
 		.wait()
 		.map_err(|e| format!("subscribe runtime status {status_key}: {e}"))?;
+	if diagnose { eprintln!("runtime-bus review subscribed: {status_key}"); }
+	let mut received_first = false;
 	let mut last_activation_seq = cache
 		.lock()
 		.ok()
@@ -9621,6 +10049,7 @@ fn read_runtime_telemetry_stream(
 		else {
 			continue;
 		};
+		if diagnose && !received_first { eprintln!("runtime-bus review first sample: {status_key}"); received_first = true; }
 		let telemetry = serde_json::from_slice::<RendererRuntimeTelemetry>(&sample.payload().to_bytes())
 			.map_err(|e| format!("parse runtime status {status_key}: {e}"))?;
 		if telemetry.window_focused && telemetry.window_activation_seq > last_activation_seq {
@@ -9926,6 +10355,13 @@ fn manifest_path_key(path: &str) -> String {
 	path.replace('\\', "/").to_ascii_lowercase()
 }
 
+fn renderer_matches_profile(renderer: &RendererInstance, profile_id: &str, manifest: &str) -> bool {
+    match renderer.profile_id.as_deref() {
+        Some(id) => id == profile_id,
+        None => same_manifest_path(renderer.manifest_path.as_deref(), manifest),
+    }
+}
+
 fn same_manifest_path(left: Option<&str>, right: &str) -> bool {
 	left.map(|left| manifest_path_key(left) == manifest_path_key(right))
 		.unwrap_or(false)
@@ -9941,7 +10377,7 @@ fn send_renderer_command_to_matching_renderers(
 	let mut failures = Vec::new();
 	for renderer in state.renderers.values().filter(|renderer| {
 		!matches!(renderer.info.state, RendererState::Exited | RendererState::Crashed)
-			&& same_manifest_path(renderer.info.manifest_path.as_deref(), &setting.manifest_path)
+			&& renderer_matches_profile(&renderer.info, &setting.id, &setting.manifest_path)
 	}) {
 		match send_managed_renderer_control(renderer, command) {
 			Ok(()) => applied += 1,
@@ -10148,29 +10584,24 @@ fn runtime_control_request(command: &RendererControlCommand) -> Result<RuntimeBu
 }
 
 fn runtime_control_session() -> Result<zenoh::Session, String> {
+	if review_environment::ENABLED && !review_environment::RUNTIME_ENABLED {return Err("Renderer bus disabled in isolated UI review".into());}
 	use zenoh::Wait as _;
 	let cell = RUNTIME_CONTROL_SESSION.get_or_init(|| Mutex::new(None));
-	if let Some(session) = cell
-		.lock()
-		.map_err(|_| "runtime control session poisoned".to_string())?
-		.as_ref()
-		.cloned()
-	{
-		return Ok(session);
+	// Serialize first initialization too: concurrent status/prewarm callers must
+	// not open several transient peer sessions before keeping only one.
+	let mut session = cell.lock().map_err(|_| "runtime control session poisoned".to_string())?;
+	if let Some(session) = session.as_ref() {
+		return Ok(session.clone());
 	}
 	let opened = zenoh::open(zenoh::Config::default())
 		.wait()
 		.map_err(|e| format!("open renderer control bus: {e}"))?;
-	let mut session = cell.lock().map_err(|_| "runtime control session poisoned".to_string())?;
-	if let Some(session) = session.as_ref() {
-		Ok(session.clone())
-	} else {
-		*session = Some(opened.clone());
-		Ok(opened)
-	}
+	*session = Some(opened.clone());
+	Ok(opened)
 }
 
 fn prewarm_runtime_control_session() {
+	if review_environment::ENABLED && !review_environment::RUNTIME_ENABLED {return;}
 	let _ = std::thread::Builder::new()
 		.name("un-avatar-runtime-control-prewarm".into())
 		.spawn(|| {
@@ -10179,12 +10610,30 @@ fn prewarm_runtime_control_session() {
 }
 
 fn publish_runtime_control_request(base_key: &str, request: &RuntimeBusControlRequest) -> Result<(), String> {
-	use zenoh::Wait as _;
 	let control_key = format!("{base_key}/control");
 	let session = runtime_control_session()?;
 	let request_json = serde_json::to_string(request).map_err(|e| format!("serialize renderer control request: {e}"))?;
-	session
-		.put(&control_key, request_json)
+	publish_ready_runtime_control(&session, &control_key, request_json)
+}
+
+fn publish_ready_runtime_control(session: &zenoh::Session, control_key: &str, request_json: String) -> Result<(), String> {
+	use zenoh::Wait as _;
+	let publisher = session.declare_publisher(control_key).wait()
+		.map_err(|e| format!("declare renderer control {control_key}: {e}"))?;
+	let deadline = Instant::now() + Duration::from_secs(10);
+	loop {
+		if publisher.matching_status().wait()
+			.map_err(|e| format!("check renderer control subscriber {control_key}: {e}"))?.matching() {
+			break;
+		}
+		if Instant::now() >= deadline {
+			return Err(format!("renderer control subscriber not ready on {control_key}; request not sent"));
+		}
+		std::thread::sleep(Duration::from_millis(20));
+	}
+	// A publish accepted by the local session is not proof of a remote recipient.
+	// Wait before the first send; never blindly replay potentially non-idempotent actions.
+	publisher.put(request_json)
 		.wait()
 		.map_err(|e| format!("publish renderer control {control_key}: {e}"))
 }
@@ -10205,10 +10654,7 @@ fn send_renderer_control_bus(base_key: &str, command: &RendererControlCommand) -
 		.map_err(|e| format!("subscribe renderer control response {response_key}: {e}"))?;
 	let control_key = format!("{base_key}/control");
 	let request_json = serde_json::to_string(&request).map_err(|e| format!("serialize renderer control request: {e}"))?;
-	session
-		.put(&control_key, request_json)
-		.wait()
-		.map_err(|e| format!("publish renderer control {control_key}: {e}"))?;
+	publish_ready_runtime_control(&session, &control_key, request_json)?;
 	let Some(sample) = response_subscriber
 		.recv_timeout(Duration::from_secs(10))
 		.map_err(|e| format!("read renderer control response {response_key}: {e}"))?
@@ -10327,7 +10773,13 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 			continue;
 		}
 		let Some(child) = renderer.child.as_mut() else {
-			renderer.info.state = RendererState::Running;
+   if renderer.attached_process_exit.as_ref().is_some_and(|observer| observer.wait_until(Instant::now()).is_ok()) {
+    renderer.runtime_status_stream_stop.store(true, Ordering::Release);
+    renderer.info.pid = None;
+    renderer.info.state = RendererState::Exited;
+   } else if !matches!(renderer.info.state, RendererState::Stopping) {
+    renderer.info.state = RendererState::Running;
+   }
 			continue;
 		};
 		match child.try_wait() {
@@ -10345,6 +10797,7 @@ fn refresh_renderer_states(state: &mut SupervisorState, crash_notifications: boo
 					RendererState::Crashed
 				};
 			}
+			Ok(None) if matches!(renderer.info.state, RendererState::Stopping) => {},
 			Ok(None) => renderer.info.state = RendererState::Running,
 			Err(e) => {
 				renderer.info.last_stderr = Some(e.to_string());
@@ -10379,6 +10832,7 @@ fn prune_stopped_renderer_history(state: &mut SupervisorState) {
 }
 
 fn show_native_notification(app: &tauri::AppHandle, title: &str, body: &str) {
+	if shell_integration::disabled() { return; }
 	if let Err(error) = app.notification().builder().title(title).body(body).show() {
 		eprintln!("un-avatar-supervisor: failed to show native notification: {error}");
 	}
@@ -10517,6 +10971,7 @@ fn read_avatar_setting_inner(path: &Path, storage: ProfileStorage, include_model
 	let post_effects = post_effect_settings(effects.post);
 	let camera = camera_settings(manifest.camera.as_ref());
 	let setting = AvatarSetting {
+		revision: profile_write::revision(text.as_bytes()),
 		id: profile.id.unwrap_or_else(|| path.display().to_string()),
 		name: profile.display_name.or(manifest.title).unwrap_or_else(|| file_stem.to_string()),
 		created_at: normalize_created_at(profile.created_at.as_deref().unwrap_or_default(), path),
@@ -10798,6 +11253,7 @@ fn renderer_command(
 	close_hotkey: &str,
 	icon_path: Option<&Path>,
 	app_user_model_id: Option<&str>,
+	unaa_z_instance_id: Option<&str>,
 ) -> Result<Command, String> {
 	let repo = repo_root();
 	let exe = renderer_executable_path();
@@ -10816,8 +11272,14 @@ fn renderer_command(
 		if let Some(app_user_model_id) = app_user_model_id {
 			command.arg("--app-user-model-id").arg(app_user_model_id);
 		}
+		if let Some(instance_id) = unaa_z_instance_id {
+			command.arg("--unaa-z-instance-id").arg(instance_id);
+		}
 		prepend_spout2_runtime_path(&mut command);
 		return Ok(command);
+	}
+	if !cfg!(debug_assertions) {
+		return Err(format!("Rendererが見つかりません（{}）。配布ZIP全体を展開し、un-avatar-renderer.exeをSupervisorと同じフォルダーへ戻してください。", exe.display()));
 	}
 	let mut command = Command::new("cargo");
 	command
@@ -10835,11 +11297,15 @@ fn renderer_command(
 	if let Some(app_user_model_id) = app_user_model_id {
 		command.arg("--app-user-model-id").arg(app_user_model_id);
 	}
+	if let Some(instance_id) = unaa_z_instance_id {
+		command.arg("--unaa-z-instance-id").arg(instance_id);
+	}
 	prepend_spout2_runtime_path(&mut command);
 	Ok(command)
 }
 
 fn renderer_scene_cache_prewarm_command(manifest_path: &Path) -> Result<Command, String> {
+	if review_environment::ENABLED {return Err("Renderer launch disabled in isolated UI review".into());}
 	let repo = repo_root();
 	let exe = renderer_executable_path();
 	if exe.is_file() {
@@ -10847,6 +11313,9 @@ fn renderer_scene_cache_prewarm_command(manifest_path: &Path) -> Result<Command,
 		command.arg("--manifest").arg(manifest_path).arg("--prewarm-scene-cache");
 		prepend_spout2_runtime_path(&mut command);
 		return Ok(command);
+	}
+	if !cfg!(debug_assertions) {
+		return Err(format!("Rendererが見つかりません（{}）。配布ZIP全体を展開し、un-avatar-renderer.exeをSupervisorと同じフォルダーへ戻してください。", exe.display()));
 	}
 	let mut command = Command::new("cargo");
 	command
@@ -10865,7 +11334,7 @@ fn resolve_renderer_window_icon_path(setting: &AvatarSetting) -> Option<PathBuf>
 		.as_deref()
 		.and_then(|path| resolve_manifest_asset_path(path, Path::new(&setting.manifest_path)))
 		.or_else(|| {
-			let fallback = repo_root().join("assets").join("brand").join("un-avatar-artwork-renderer.png");
+			let fallback = application_asset_root().join("assets").join("brand").join("un-avatar-artwork-renderer.png");
 			fallback.is_file().then_some(fallback)
 		})
 }
@@ -10950,6 +11419,7 @@ where
 }
 
 fn spawn_standalone_renderer_manifest(manifest_path: &Path) -> Result<(), String> {
+	if review_environment::ENABLED {return Err("Renderer launch disabled in isolated UI review".into());}
 	let exe = renderer_executable_path();
 	if !exe.is_file() {
 		return Err(format!("renderer executable not found: {}", exe.display()));
@@ -11121,6 +11591,7 @@ fn create_windows_shortcut(
 
 #[cfg(windows)]
 fn set_process_app_user_model_id() -> Result<(), String> {
+	if shell_integration::disabled() { return Ok(()); }
 	windows_integration::set_process_app_user_model_id(UN_AVATAR_LAUNCHER_APP_ID)
 }
 
@@ -11159,7 +11630,7 @@ fn update_windows_jump_lists(
 	let active_app_ids = std::iter::once(UN_AVATAR_LAUNCHER_APP_ID.to_string())
 		.chain(renderer_app_ids.iter().cloned())
 		.collect::<Vec<_>>();
-	windows_integration::replace_jump_lists(UN_AVATAR_LAUNCHER_APP_ID, &renderer_app_ids, &active_app_ids, &tasks)
+	windows_integration::replace_jump_lists(&active_app_ids, &tasks)
 }
 
 #[cfg(not(windows))]
@@ -11226,27 +11697,34 @@ fn resolve_manifest_asset_path(path: &str, manifest_path: &Path) -> Option<PathB
 	if let Some(candidate) = manifest_relative.filter(|candidate| candidate.is_file()) {
 		return Some(candidate);
 	}
-	let repo_relative = repo_root().join(&path);
+	let repo_relative = application_asset_root().join(&path);
 	repo_relative.is_file().then_some(repo_relative)
 }
 
 fn renderer_executable_path() -> PathBuf {
+	if let Some(path)=review_environment::renderer_path(){return path;}
 	renderer_executable_candidates()
 		.into_iter()
 		.find(|path| path.is_file())
-		.unwrap_or_else(|| repo_root().join("target").join("debug").join(exe_name("un-avatar-renderer")))
+		.unwrap_or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default().join(exe_name("un-avatar-renderer")))
 }
 
 fn renderer_executable_candidates() -> Vec<PathBuf> {
 	let current = std::env::current_exe().ok();
+	let development = cfg!(debug_assertions).then(repo_root);
+	renderer_candidates_for(current.as_deref(), development.as_deref())
+}
+
+fn renderer_candidates_for(current: Option<&Path>, development: Option<&Path>) -> Vec<PathBuf> {
 	let mut candidates = Vec::new();
-	if let Some(dir) = current.as_ref().and_then(|path| path.parent()) {
+	if let Some(dir) = current.and_then(Path::parent) {
 		candidates.push(dir.join(exe_name("un-avatar-renderer")));
 		candidates.push(dir.join("runtimes").join(exe_name("un-avatar-renderer")));
 	}
-	let repo = repo_root();
-	candidates.push(repo.join("target").join("release").join(exe_name("un-avatar-renderer")));
-	candidates.push(repo.join("target").join("debug").join(exe_name("un-avatar-renderer")));
+	if let Some(repo) = development {
+		candidates.push(repo.join("target").join("release").join(exe_name("un-avatar-renderer")));
+		candidates.push(repo.join("target").join("debug").join(exe_name("un-avatar-renderer")));
+	}
 	candidates
 }
 
@@ -11284,12 +11762,29 @@ fn spout2_runtime_candidates() -> Vec<PathBuf> {
 			candidates.push(dir.join("spout2"));
 		}
 	}
-	candidates.push(repo_root().join("target").join("package").join("un-avatar"));
+	if cfg!(debug_assertions) {
+		candidates.push(repo_root().join("target").join("package").join("un-avatar"));
+	}
 	candidates
 }
 
 fn profiles_dir() -> PathBuf {
-	repo_root().join("profiles")
+	if let Some(root)=review_environment::root(){return root.join("seeds");}
+	let current = std::env::current_exe().ok();
+	let development = cfg!(debug_assertions).then(repo_root);
+	bundled_profiles_dir_for(current.as_deref(), development.as_deref())
+}
+
+fn bundled_profiles_dir_for(current: Option<&Path>, development: Option<&Path>) -> PathBuf {
+	// Keep source templates for development; distributed builds use only their own package.
+	if let Some(repo) = development { return repo.join("profiles"); }
+	current.and_then(Path::parent).unwrap_or_else(|| Path::new(".")).join("profiles")
+}
+
+fn lock_user_profile_store() -> Result<fs::File, String> {
+    let directory = user_profiles_dir();
+    profile_write::lock_store(&directory)
+        .map_err(|e| format!("lock profile store: {e}"))
 }
 
 fn user_profiles_dir() -> PathBuf {
@@ -11304,7 +11799,7 @@ fn profile_dirs() -> [(ProfileStorage, PathBuf); 2] {
 /// bundled templates + 初回コピー" 方式へ寄せる第一歩。
 ///
 /// 起動時に `user_profiles_dir()` が空 (= `*.toml` 0 件) の場合に限り、
-/// repo 同梱の `profiles_dir()` (= `<workspace_root>/profiles/`) を **テンプレート**
+/// 同梱の `profiles_dir()` (配布版は `<exe_dir>/profiles/`、開発版は workspace 内) を **テンプレート**
 /// として user dir へ全部コピーする。これにより:
 ///
 /// * 新規ユーザー: user dir に最初から個別 `*.toml` が並ぶ。`list_avatar_settings`
@@ -11317,58 +11812,35 @@ fn profile_dirs() -> [(ProfileStorage, PathBuf); 2] {
 /// 失敗してもアプリ起動を止めない (warn ログのみ) — `list_avatar_settings` は
 /// Seed dir もまだ読むので、コピー失敗時はそのまま Seed が見える形に degrade する。
 fn ensure_user_profiles_seeded() {
-	let user_dir = user_profiles_dir();
-	if has_any_toml_file(&user_dir) {
-		return;
-	}
-	let template_dir = profiles_dir();
-	if !template_dir.is_dir() {
-		return;
-	}
-	if let Err(error) = fs::create_dir_all(&user_dir) {
-		eprintln!(
-			"un-avatar-supervisor: failed to create user profiles dir for seeding ({}): {error} (continuing without initial copy)",
-			user_dir.display(),
-		);
-		return;
-	}
-	let entries = match fs::read_dir(&template_dir) {
-		Ok(entries) => entries,
-		Err(error) => {
-			eprintln!(
-				"un-avatar-supervisor: failed to read bundled profile templates ({}): {error}",
-				template_dir.display(),
-			);
-			return;
-		}
-	};
-	let mut copied = 0_usize;
-	for entry in entries.flatten() {
-		let path = entry.path();
-		if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-			continue;
-		}
-		let Some(file_name) = path.file_name() else { continue };
-		let dest = user_dir.join(file_name);
-		if dest.exists() {
-			continue;
-		}
-		match fs::copy(&path, &dest) {
-			Ok(_) => copied += 1,
-			Err(error) => eprintln!(
-				"un-avatar-supervisor: failed to copy bundled profile template {} -> {}: {error}; that profile will continue to be served from the repo seed dir",
-				path.display(),
-				dest.display(),
-			),
-		}
-	}
-	if copied > 0 {
-		eprintln!(
-			"un-avatar-supervisor: seeded user profile dir from bundled templates: copied {copied} file(s) from {} to {} (first run); Seed profiles are now visible as user-editable copies",
-			template_dir.display(),
-			user_dir.display(),
-		);
-	}
+    let user_dir = user_profiles_dir();
+    let template_dir = profiles_dir();
+    match seed_user_profiles_from(&template_dir, &user_dir) {
+        Ok(0) => {},
+        Ok(copied) => eprintln!("un-avatar-supervisor: seeded {copied} bundled profiles into {}", user_dir.display()),
+        Err(error) => eprintln!("un-avatar-supervisor: initial profile copy failed: {error}; bundled profiles remain available"),
+    }
+}
+
+fn seed_user_profiles_from(template_dir: &Path, user_dir: &Path) -> Result<usize, String> {
+    if !template_dir.is_dir() { return Ok(0); }
+    let _transaction = profile_write::lock_store(user_dir).map_err(|e| format!("lock initial profile copy: {e}"))?;
+    // Check under the same lock used by creation/restoration and ordinary saves.
+    if has_any_toml_file(user_dir) { return Ok(0); }
+    let entries = fs::read_dir(template_dir).map_err(|e| format!("read bundled profiles: {e}"))?;
+    let mut copied = 0;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("read bundled profile entry: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") { continue; }
+        let Some(file_name) = path.file_name() else { continue };
+        let destination = user_dir.join(file_name);
+        let result = fs::read(&path).and_then(|bytes| profile_write::create(&destination, &bytes));
+        match result {
+            Ok(()) => copied += 1,
+            Err(error) => eprintln!("un-avatar-supervisor: copy {} to {} failed: {error}; bundled profile remains available", path.display(), destination.display()),
+        }
+    }
+    Ok(copied)
 }
 
 /// `dir/*.toml` が 1 件以上あるかどうかを軽量にチェックする。`dir` 自体が
@@ -11387,6 +11859,7 @@ fn has_any_toml_file(dir: &Path) -> bool {
 }
 
 fn app_config_dir() -> PathBuf {
+	if let Some(root)=review_environment::root(){return root.join("config");}
 	if let Some(path) = env::var_os("APPDATA") {
 		return PathBuf::from(path).join("UN Avatar");
 	}
@@ -11407,25 +11880,12 @@ fn hidden_seed_profiles_path() -> PathBuf {
 	app_config_dir().join("hidden_seed_profiles.json")
 }
 
-fn read_hidden_seed_profile_ids() -> Vec<String> {
-	fs::read_to_string(hidden_seed_profiles_path())
-		.ok()
-		.and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
-		.unwrap_or_default()
+fn read_hidden_seed_profile_ids() -> Result<Vec<String>, String> {
+    profile_archive::hidden_seed_ids(&hidden_seed_profiles_path()).map_err(|e| format!("read hidden seed profiles: {e}"))
 }
 
 fn hide_seed_avatar_setting(setting_id: &str) -> Result<(), String> {
-	let mut ids = read_hidden_seed_profile_ids();
-	if !ids.iter().any(|id| id == setting_id) {
-		ids.push(setting_id.to_string());
-		ids.sort();
-	}
-	let path = hidden_seed_profiles_path();
-	if let Some(dir) = path.parent() {
-		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
-	}
-	let text = serde_json::to_string_pretty(&ids).map_err(|e| format!("serialize hidden seed profiles: {e}"))?;
-	fs::write(&path, text).map_err(|e| format!("write {}: {e}", path.display()))
+    profile_archive::set_seed_hidden(&hidden_seed_profiles_path(), setting_id, true).map_err(|e| format!("save hidden seed profiles: {e}"))
 }
 
 fn seed_avatar_setting_exists(setting_id: &str) -> bool {
@@ -11449,19 +11909,31 @@ fn seed_avatar_setting_exists(setting_id: &str) -> bool {
 }
 
 fn editable_avatar_setting_path(setting: &AvatarSetting) -> Result<PathBuf, String> {
+    editable_avatar_setting_path_in(setting, &user_profiles_dir(), None)
+}
+
+// Caller holds the user-store lock through materialization and subsequent save.
+fn editable_avatar_setting_path_in(setting: &AvatarSetting, user_dir: &Path, expected_revision: Option<&str>) -> Result<PathBuf, String> {
 	let source_path = PathBuf::from(&setting.manifest_path);
 	if setting.storage == ProfileStorage::User {
 		return Ok(source_path);
 	}
 	let file_name = source_path.file_name().and_then(|name| name.to_str()).unwrap_or("avatar.toml");
-	let target_path = user_profiles_dir().join(file_name);
+	let target_path = user_dir.join(file_name);
 	if target_path.exists() {
+        let existing = read_avatar_setting_inner(&target_path, ProfileStorage::User, false)?;
+        if existing.id != setting.id {
+            return Err(format!("profile_conflict: destination belongs to another profile: {}", target_path.display()));
+        }
 		return Ok(target_path);
 	}
 	if let Some(dir) = target_path.parent() {
 		fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 	}
-	fs::copy(&source_path, &target_path).map_err(|e| format!("copy {} to {}: {e}", source_path.display(), target_path.display()))?;
+	let contents = fs::read(&source_path).map_err(|e| format!("read {}: {e}", source_path.display()))?;
+	profile_write::check_revision(&contents, expected_revision)?;
+	profile_write::create(&target_path, &contents)
+		.map_err(|e| format!("copy {} to {}: {e}", source_path.display(), target_path.display()))?;
 	Ok(target_path)
 }
 
@@ -11611,6 +12083,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 fn mark_scene_cache_prewarmed(manifest_path: &Path, fingerprint: &str) -> Result<(), String> {
+	let _transaction = profile_write::lock_directory(manifest_path).map_err(|e| format!("lock profile transaction: {e}"))?;
 	let mut manifest = read_manifest_value(manifest_path)?;
 	let profile = manifest
 		.as_table_mut()
@@ -11703,6 +12176,11 @@ fn next_avatar_sort_order() -> Result<u32, String> {
 }
 
 fn normalize_created_at(value: &str, path: &Path) -> String {
+	let file_time = fs::metadata(path).ok().and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok());
+	normalize_created_at_with_file_time(value, path, file_time)
+}
+
+fn normalize_created_at_with_file_time(value: &str, path: &Path, file_time: Option<SystemTime>) -> String {
 	let trimmed = value.trim();
 	if is_compact_timestamp(trimmed) {
 		return trimmed.to_string();
@@ -11713,7 +12191,7 @@ fn normalize_created_at(value: &str, path: &Path) -> String {
 			return prefix.to_string();
 		}
 	}
-	current_timestamp_compact()
+	file_time.map(timestamp_compact).unwrap_or_else(current_timestamp_compact)
 }
 
 fn is_compact_timestamp(value: &str) -> bool {
@@ -11771,7 +12249,11 @@ fn sanitize_profile_file_label(name: &str) -> String {
 }
 
 fn current_timestamp_compact() -> String {
-	let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+	timestamp_compact(SystemTime::now())
+}
+
+fn timestamp_compact(time: SystemTime) -> String {
+	let secs = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
 	let (year, month, day, hour, minute, second) = unix_seconds_to_utc(secs);
 	format!("{year:04}{month:02}{day:02}T{hour:02}{minute:02}{second:02}Z")
 }
@@ -13308,7 +13790,12 @@ fn read_manifest_value(path: &Path) -> Result<toml::Value, String> {
 
 fn write_manifest_value(path: &Path, manifest: &toml::Value) -> Result<(), String> {
 	let text = toml::to_string_pretty(manifest).map_err(|e| format!("serialize manifest: {e}"))?;
-	fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))
+	profile_write::replace(path, text.as_bytes()).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn create_manifest_value(path: &Path, manifest: &toml::Value) -> Result<(), String> {
+	let text = toml::to_string_pretty(manifest).map_err(|e| format!("serialize manifest: {e}"))?;
+	profile_write::create(path, text.as_bytes()).map_err(|e| format!("create {}: {e}", path.display()))
 }
 
 fn manifest_has_nested_key(manifest: &toml::Value, path: &[&str]) -> bool {
@@ -13733,9 +14220,10 @@ fn apply_dynamics_collider_augment_overrides_value(manifest: &mut toml::Value, v
 			.and_then(toml::Value::as_array)
 			.map(|values| !values.is_empty())
 			.unwrap_or(false);
-		if has_source && has_collider {
-			overrides.push(toml::Value::Table(toml_table));
+		if !has_source || !has_collider {
+			return Err(format!("physics.dynamics.solver.collider_augment_overrides[{index}] requires non-empty source_id_contains and collider_path_contains"));
 		}
+		overrides.push(toml::Value::Table(toml_table));
 	}
 	if overrides.is_empty() {
 		remove_nested_key(manifest, &["physics", "dynamics", "solver", "collider_augment_overrides"])
@@ -13880,7 +14368,7 @@ fn apply_dynamics_match_overrides_value(manifest: &mut toml::Value, value: serde
 				.map(|values| !values.is_empty())
 				.unwrap_or(false);
 		if !has_matcher {
-			continue;
+			return Err(format!("physics.dynamics.solver.match_overrides[{index}] requires a source_id, source_id_contains or source_id_regex condition; use explicit removal to delete the rule"));
 		}
 		overrides.push(toml::Value::Table(toml_table));
 	}
@@ -14393,12 +14881,24 @@ fn remove_nested_key(manifest: &mut toml::Value, path: &[&str]) -> Result<(), St
 	Ok(())
 }
 
+// Development assets live in the checkout; shipped builds must never use its baked-in path.
+fn application_asset_root() -> PathBuf {
+    let current = env::current_exe().ok();
+    let development = cfg!(debug_assertions).then(repo_root);
+    application_asset_root_for(current.as_deref(), development.as_deref())
+}
+
+fn application_asset_root_for(executable: Option<&Path>, development: Option<&Path>) -> PathBuf {
+    if let Some(root) = development { return root.to_path_buf(); }
+    executable.and_then(Path::parent).map(Path::to_path_buf).unwrap_or_else(app_config_dir)
+}
+
 fn resolve_repo_path(path: &str) -> PathBuf {
 	let path = PathBuf::from(path);
 	if path.is_absolute() {
 		path
 	} else {
-		repo_root().join(path)
+		application_asset_root().join(path)
 	}
 }
 
@@ -14417,7 +14917,12 @@ fn avatar_path_for_manifest_value(path: &str, manifest_path: &Path) -> String {
 }
 
 fn diagnostics_dir() -> PathBuf {
-	repo_root().join("target").join("tmp").join("diagnostics")
+	let development = (cfg!(debug_assertions) && !review_environment::ENABLED).then(repo_root);
+	diagnostics_dir_for(&app_config_dir(), development.as_deref())
+}
+
+fn diagnostics_dir_for(config: &Path, development: Option<&Path>) -> PathBuf {
+	development.map(|repo| repo.join("target/tmp/diagnostics")).unwrap_or_else(|| config.join("diagnostics"))
 }
 
 fn diagnostics_generated_at_secs(path: &Path) -> Option<u64> {
@@ -14435,35 +14940,21 @@ fn diagnostics_archive_path(path: &Path) -> PathBuf {
 	archive_path
 }
 
-#[cfg(windows)]
 fn compress_file_to_zip(path: &Path, archive_path: &Path) -> Result<(), String> {
-	let mut command = Command::new("powershell.exe");
-	configure_hidden_child(&mut command);
-	let status = command
-		.args(["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive", "-LiteralPath"])
-		.arg(path)
-		.arg("-DestinationPath")
-		.arg(archive_path)
-		.arg("-Force")
-		.status()
-		.map_err(|e| format!("compress diagnostics: {e}"))?;
-	if !status.success() {
-		return Err(format!("compress diagnostics failed: {}", path.display()));
-	}
-	Ok(())
-}
-
-#[cfg(not(windows))]
-fn compress_file_to_zip(path: &Path, archive_path: &Path) -> Result<(), String> {
-	let status = Command::new("zip")
-		.args(["-j", "-q"])
-		.arg(archive_path)
-		.arg(path)
-		.status()
-		.map_err(|e| format!("compress diagnostics: {e}"))?;
-	if !status.success() {
-		return Err(format!("compress diagnostics failed: {}", path.display()));
-	}
+	// Do not pass user paths through a shell; spaces and Unicode are ordinary paths.
+	let name = path.file_name().and_then(|name| name.to_str()).ok_or("invalid diagnostic filename")?;
+	let mut source = fs::File::open(path).map_err(|e| format!("read diagnostics: {e}"))?;
+	let parent = archive_path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+	let temporary = tempfile::NamedTempFile::new_in(parent).map_err(|e| format!("create diagnostic archive: {e}"))?;
+	let output = temporary.reopen().map_err(|e| format!("open diagnostic archive: {e}"))?;
+	let mut writer = zip::ZipWriter::new(output);
+	writer.start_file(name, zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated))
+		.map_err(|e| format!("start diagnostic archive: {e}"))?;
+	std::io::copy(&mut source, &mut writer).map_err(|e| format!("compress diagnostics: {e}"))?;
+	let output = writer.finish().map_err(|e| format!("finish diagnostic archive: {e}"))?;
+	output.sync_all().map_err(|e| format!("sync diagnostic archive: {e}"))?;
+	drop(output);
+	temporary.persist(archive_path).map_err(|e| format!("publish diagnostic archive: {}", e.error))?;
 	Ok(())
 }
 
@@ -14620,17 +15111,13 @@ mod windows_integration {
 	}
 
 	pub(crate) fn replace_jump_lists(
-		launcher_app_id: &str,
-		renderer_app_ids: &[String],
 		active_app_ids: &[String],
 		tasks: &[JumpListTask],
 	) -> Result<(), String> {
 		ensure_com_initialized()?;
 		unsafe {
-			delete_jump_list(launcher_app_id)?;
-			for app_id in renderer_app_ids {
-				delete_jump_list(app_id)?;
-			}
+			// BeginList/CommitList replaces each list. Deleting first loses the
+			// existing tasks if constructing the replacement fails.
 			for app_id in active_app_ids {
 				write_jump_list(app_id, tasks)?;
 			}
@@ -14638,12 +15125,13 @@ mod windows_integration {
 		Ok(())
 	}
 
-	unsafe fn write_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> {
+	unsafe fn write_jump_list(app_id: &str, tasks: &[JumpListTask]) -> Result<(), String> { unsafe {
 		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
 		let app_id_wide = WideString::new(app_id);
 		list.SetAppID(app_id_wide.as_pcwstr()).map_err(format_windows_error)?;
 		let mut min_slots = 0;
 		let _removed: IObjectArray = list.BeginList(&mut min_slots).map_err(format_windows_error)?;
+		let mut pending = PendingJumpList(Some(list.clone()));
 		let collection: IObjectCollection =
 			CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
 		for task in tasks {
@@ -14660,14 +15148,17 @@ mod windows_integration {
 		let array: IObjectArray = collection.cast().map_err(format_windows_error)?;
 		list.AddUserTasks(&array).map_err(format_windows_error)?;
 		list.CommitList().map_err(format_windows_error)?;
+		pending.0 = None;
 		Ok(())
-	}
+	}}
 
-	unsafe fn delete_jump_list(app_id: &str) -> Result<(), String> {
-		let list: ICustomDestinationList = CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
-		let app_id = WideString::new(app_id);
-		let _ = list.DeleteList(app_id.as_pcwstr());
-		Ok(())
+	// A begun list must be explicitly abandoned on any construction or commit
+	// failure. This does not roll back lists already committed for other IDs.
+	struct PendingJumpList(Option<ICustomDestinationList>);
+	impl Drop for PendingJumpList {
+		fn drop(&mut self) {
+			if let Some(list) = self.0.take() { unsafe { let _ = list.AbortList(); } }
+		}
 	}
 
 	unsafe fn create_shell_link(
@@ -14677,7 +15168,7 @@ mod windows_integration {
 		icon_path: Option<&Path>,
 		app_id: Option<&str>,
 		title: Option<&str>,
-	) -> Result<IShellLinkW, String> {
+	) -> Result<IShellLinkW, String> { unsafe {
 		let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(format_windows_error)?;
 		let target = WideString::from_path(target_path);
 		link.SetPath(target.as_pcwstr()).map_err(format_windows_error)?;
@@ -14704,7 +15195,7 @@ mod windows_integration {
 		}
 		properties.Commit().map_err(format_windows_error)?;
 		Ok(link)
-	}
+	}}
 
 	fn ensure_com_initialized() -> Result<(), String> {
 		let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
@@ -14742,6 +15233,247 @@ mod windows_integration {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn legacy_profile_created_at_uses_file_time_without_overriding_saved_metadata() {
+		let old = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(946684800));
+		let plain = std::path::Path::new("legacy-avatar.toml");
+		assert_eq!(super::normalize_created_at_with_file_time("", plain, old), "20000101T000000Z");
+		assert_eq!(super::normalize_created_at_with_file_time("invalid", plain, old), "20000101T000000Z");
+		assert_eq!(super::normalize_created_at_with_file_time(" 20250102T030405Z ", plain, old), "20250102T030405Z");
+		assert_eq!(super::normalize_created_at_with_file_time("", std::path::Path::new("20240102T030405Z-avatar.toml"), old), "20240102T030405Z");
+	}
+
+	#[test]
+	fn diagnostic_zip_handles_unicode_spaces_and_preserves_previous_on_failure() {
+		let root = tempfile::tempdir().unwrap();
+		let dir = root.path().join("UN Avatar 日本語 ' $ marker");
+		std::fs::create_dir(&dir).unwrap();
+		let source = dir.join("診断 report.json");
+		let archive = dir.join("診断 report.zip");
+		let bytes = "{\"message\":\"検証\"}".as_bytes();
+		std::fs::write(&source, bytes).unwrap();
+		super::compress_file_to_zip(&source, &archive).unwrap();
+		let original = std::fs::read(&archive).unwrap();
+		let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&original)).unwrap();
+		assert_eq!(zip.len(), 1);
+		let mut entry = zip.by_index(0).unwrap();
+		assert_eq!(entry.name(), "診断 report.json");
+		let mut restored = Vec::new();
+		std::io::Read::read_to_end(&mut entry, &mut restored).unwrap();
+		assert_eq!(restored, bytes);
+		std::fs::remove_file(&source).unwrap();
+		assert!(super::compress_file_to_zip(&source, &archive).is_err());
+		assert_eq!(std::fs::read(&archive).unwrap(), original);
+	}
+
+	#[test]
+	fn distributed_diagnostics_use_user_storage() {
+		let config = std::path::Path::new("user/settings");
+		assert_eq!(super::supervisor_logs_dir_for(config, None), config.join("logs"));
+		assert_eq!(super::diagnostics_dir_for(config, None), config.join("diagnostics"));
+		assert_eq!(super::supervisor_logs_dir_for(config, Some(std::path::Path::new("workspace"))), std::path::Path::new("workspace/target/tmp/supervisor-logs"));
+		assert_eq!(super::screenshot_dir_for(None, config), config.join("screenshots"));
+		assert_eq!(super::screenshot_dir_for(Some(std::path::Path::new("pictures")), config), std::path::Path::new("pictures/un-avatar"));
+	}
+
+	#[test]
+    fn distributed_asset_root_follows_moved_executable() {
+        let source = Path::new("developer-checkout");
+        for root in ["original-package", "moved-package 日本語"] {
+            let executable = Path::new(root).join("un-avatar-supervisor.exe");
+            assert_eq!(super::application_asset_root_for(Some(&executable), None), Path::new(root));
+            assert_eq!(super::application_asset_root_for(Some(&executable), Some(source)), source);
+        }
+    }
+
+	#[test]
+	fn distributed_templates_are_package_local() {
+		let current = std::path::Path::new("package").join("supervisor.exe");
+		assert_eq!(super::bundled_profiles_dir_for(Some(&current), None), std::path::Path::new("package").join("profiles"));
+		assert_eq!(super::bundled_profiles_dir_for(Some(&current), Some(std::path::Path::new("workspace"))), std::path::Path::new("workspace").join("profiles"));
+	}
+
+	#[test]
+	fn distributed_renderer_candidates_stay_inside_package() {
+		let current = std::path::Path::new("package").join("supervisor.exe");
+		let packaged = super::renderer_candidates_for(Some(&current), None);
+		assert_eq!(packaged, vec![
+			std::path::Path::new("package").join(super::exe_name("un-avatar-renderer")),
+			std::path::Path::new("package/runtimes").join(super::exe_name("un-avatar-renderer")),
+		]);
+		let development = super::renderer_candidates_for(Some(&current), Some(std::path::Path::new("workspace")));
+		assert_eq!(development.len(), 4);
+		assert_eq!(&development[..2], &packaged);
+		assert!(super::renderer_candidates_for(None, None).is_empty());
+	}
+
+	#[test]
+	fn app_settings_taskbar_update_requires_persisted_settings() {
+		let temp = tempfile::tempdir().unwrap();
+		let path = temp.path().join("settings.toml");
+		let mut state = super::AppRuntimeSettings::default();
+		state.pinned_taskbar_profile_ids = vec!["old".into()];
+		super::write_app_settings_at(&path, &state).unwrap();
+		let mut next = state.clone();
+		next.pinned_taskbar_profile_ids = vec!["new".into()];
+		assert!(super::persist_taskbar_profile_settings(&mut state, next.clone(), |_| Err("disk failure".into()), |_| panic!("must not update Windows before persistence")).is_err());
+		assert_eq!(state.pinned_taskbar_profile_ids, ["old"]);
+		assert_eq!(super::load_app_settings_at(&path).pinned_taskbar_profile_ids, ["old"]);
+		let error = super::persist_taskbar_profile_settings(&mut state, next.clone(), |value| super::write_app_settings_at(&path, value), |value| {
+			assert_eq!(value.pinned_taskbar_profile_ids, ["new"]);
+			assert_eq!(super::load_app_settings_at(&path).pinned_taskbar_profile_ids, ["new"]);
+			Err("shell unavailable".into())
+		}).unwrap_err();
+		assert!(error.contains("設定は保存済み"));
+		assert_eq!(state.pinned_taskbar_profile_ids, ["new"]);
+		assert_eq!(super::persist_taskbar_profile_settings(&mut state, next, |value| super::write_app_settings_at(&path, value), |_| Ok("updated".into())).unwrap(), "updated");
+		std::fs::write(&path, "theme_mode = [broken").unwrap();
+		let mut unread = super::load_app_settings_at(&path);
+		assert!(super::persist_taskbar_profile_settings(&mut unread, super::AppRuntimeSettings::default(), |_| panic!("must not save fallback"), |_| panic!("must not apply fallback")).is_err());
+		assert!(super::update_taskbar_launcher_profile_tasks(&unread).unwrap_err().contains("再起動"));
+	}
+	#[test]
+	fn app_settings_startup_error_requires_repair_and_fresh_load() {
+		let temp = tempfile::tempdir().unwrap();
+		let path = temp.path().join("settings.toml");
+		assert!(super::ensure_app_settings_loaded(&super::load_app_settings_at(&path)).is_ok());
+		std::fs::write(&path, "theme_mode = [broken").unwrap();
+		let mut loaded = super::load_app_settings_at(&path);
+		assert!(super::ensure_app_settings_loaded(&loaded).unwrap_err().contains("再起動"));
+		let incoming = serde_json::from_value(serde_json::to_value(super::AppRuntimeSettings::default()).unwrap()).unwrap();
+		assert!(super::persist_general_app_settings(&mut loaded, incoming, |_| panic!("must not save startup fallback")).is_err());
+		std::fs::write(&path, "theme_mode = 'light'\n").unwrap();
+		assert!(super::write_app_settings_at(&path, &loaded).is_err());
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), "theme_mode = 'light'\n");
+		let fresh = super::load_app_settings_at(&path);
+		assert!(super::ensure_app_settings_loaded(&fresh).is_ok());
+		assert_eq!(fresh.theme_mode, "light");
+		assert!(serde_json::to_value(fresh).unwrap().get("startup_read_error").is_none());
+	}
+	#[test]
+	fn app_settings_invalid_file_is_preserved_until_repaired() {
+		let temp = tempfile::tempdir().unwrap();
+		let path = temp.path().join("settings.toml");
+		let mut current = super::AppRuntimeSettings::default();
+		current.last_selected_setting_id = Some("current-profile".into());
+		let before = serde_json::to_value(&current).unwrap();
+		let mut next = current.clone();
+		next.locale = "en-US".into();
+		next.last_selected_setting_id = Some("stale-profile".into());
+		for bytes in [b"locale = [broken".as_slice(), b"locale = 123", &[0xff, 0xfe]] {
+			std::fs::write(&path, bytes).unwrap();
+			assert!(super::persist_general_app_settings(&mut current, next.clone(), |value| super::write_app_settings_at(&path, value)).is_err());
+			assert_eq!(std::fs::read(&path).unwrap(), bytes);
+			assert_eq!(serde_json::to_value(&current).unwrap(), before);
+		}
+		std::fs::write(&path, "locale = 'ja-JP'\n").unwrap();
+		super::persist_general_app_settings(&mut current, next, |value| super::write_app_settings_at(&path, value)).unwrap();
+		let saved: super::AppRuntimeSettings = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+		assert_eq!(saved.locale, "en-US");
+		assert_eq!(saved.last_selected_setting_id.as_deref(), Some("current-profile"));
+	}
+    #[cfg(windows)]
+    #[test]
+    fn app_settings_real_file_locked_save_retry_and_readback() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("isolated/settings.toml");
+        let other = temp.path().join("other/settings.toml");
+        let mut current = super::AppRuntimeSettings::default();
+        current.last_selected_setting_id = Some("current-profile".into());
+        super::write_app_settings_at(&path, &current).unwrap();
+        super::write_app_settings_at(&other, &current).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let before = serde_json::to_value(&current).unwrap();
+        let mut next = current.clone();
+        next.theme_mode = "dark".into();
+        next.last_selected_setting_id = Some("stale-profile".into());
+        // Allow readers but prevent replacement/deletion of this real Windows file.
+        let locked = std::fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        let failed = super::persist_general_app_settings(&mut current, next.clone(), |saved| super::write_app_settings_at(&path, saved));
+        assert!(failed.is_err());
+        assert_eq!(serde_json::to_value(&current).unwrap(), before);
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        drop(locked);
+        super::persist_general_app_settings(&mut current, next, |saved| super::write_app_settings_at(&path, saved)).unwrap();
+        let reopened: super::AppRuntimeSettings = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(reopened.theme_mode, "dark");
+        assert_eq!(reopened.last_selected_setting_id.as_deref(), Some("current-profile"));
+        assert_eq!(serde_json::to_value(&reopened).unwrap(), serde_json::to_value(&current).unwrap());
+        assert_eq!(std::fs::read(&other).unwrap(), original);
+    }
+	#[test]
+	fn app_settings_side_effects_follow_persistence_and_rollback() {
+		use std::cell::RefCell;
+		let events = RefCell::new(Vec::new());
+		let mut current = super::AppRuntimeSettings::default();
+		let before = serde_json::to_value(&current).unwrap();
+		let mut next = current.clone(); next.locale = "en-US".into();
+		let result = super::save_app_settings_with_effects(&mut current, next.clone(),
+			|_| { events.borrow_mut().push("write"); Err("locked".into()) },
+			|_,_| { events.borrow_mut().push("prepare"); Ok(true) },
+			|created| { assert!(created); events.borrow_mut().push("rollback"); },
+			|_,_| panic!("failed save must not change locale or remove existing tray"));
+		assert_eq!(result.unwrap_err(), "locked");
+		assert_eq!(serde_json::to_value(&current).unwrap(), before);
+		assert_eq!(*events.borrow(), vec!["prepare", "write", "rollback"]);
+		events.borrow_mut().clear();
+		super::save_app_settings_with_effects(&mut current, next.clone(),
+			|_| { events.borrow_mut().push("write"); Ok(()) },
+			|_,_| { events.borrow_mut().push("prepare"); Ok(false) },
+			|_| panic!("successful save must not roll back"),
+			|old,saved| { assert_ne!(old.locale,saved.locale); events.borrow_mut().push("apply"); }).unwrap();
+		assert_eq!(*events.borrow(), vec!["prepare", "write", "apply"]);
+		assert_eq!(current.locale, "en-US");
+		assert!(super::save_app_settings_with_effects(&mut current, next,
+			|_| panic!("tray setup failure must not write"),
+			|_,_| Err("tray failed".into()), |_| panic!("nothing prepared"),
+			|_,_| panic!("setup failed")).is_err());
+	}
+
+	#[test]
+	fn general_settings_save_preserves_newer_editor_selection() {
+		let mut current = super::AppRuntimeSettings::default();
+		current.last_selected_setting_id = Some("new-selection".into());
+		let mut incoming = current.clone();
+		incoming.last_selected_setting_id = Some("stale-selection".into());
+		incoming.minimize_to_tray = !current.minimize_to_tray;
+		let before = serde_json::to_value(&current).unwrap();
+		assert!(super::persist_general_app_settings(&mut current, incoming.clone(), |_| Err("write failed".into())).is_err());
+		assert_eq!(serde_json::to_value(&current).unwrap(), before);
+		let mut saved = None;
+		super::persist_general_app_settings(&mut current, incoming.clone(), |candidate| {
+			saved = Some(serde_json::to_value(candidate).unwrap());
+			Ok(())
+		}).unwrap();
+		assert_eq!(current.last_selected_setting_id.as_deref(), Some("new-selection"));
+		assert_eq!(current.minimize_to_tray, incoming.minimize_to_tray);
+		assert_eq!(saved, Some(serde_json::to_value(&current).unwrap()));
+	}
+
+	#[test]
+	fn last_selection_failure_preserves_state_and_retry_writes_again() {
+		let mut settings = super::AppRuntimeSettings::default();
+		settings.last_selected_setting_id = Some("main".into());
+		let before = serde_json::to_value(&settings).unwrap();
+		let result = super::persist_last_selection(&mut settings, Some(" debug ".into()), |candidate| {
+			assert_eq!(candidate.last_selected_setting_id.as_deref(), Some("debug"));
+			Err("fixture destination locked".into())
+		});
+		assert!(result.is_err());
+		assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+		let mut written = None;
+		super::persist_last_selection(&mut settings, Some(" debug ".into()), |candidate| {
+			written = Some(serde_json::to_value(candidate).unwrap());
+			Ok(())
+		}).unwrap();
+		assert_eq!(written, Some(serde_json::to_value(&settings).unwrap()));
+		assert_eq!(settings.last_selected_setting_id.as_deref(), Some("debug"));
+		super::persist_last_selection(&mut settings, Some("debug".into()), |_| panic!("unchanged selection must not write")).unwrap();
+		super::persist_last_selection(&mut settings, Some("  ".into()), |_| Ok(())).unwrap();
+		assert!(settings.last_selected_setting_id.is_none());
+	}
+
 	use base64::Engine;
 	use std::{
 		collections::{BTreeMap, BTreeSet},
@@ -15037,6 +15769,7 @@ enabled = true
 		ManagedRenderer {
 			info: RendererInstance {
 				id: 1,
+				profile_id: None,
 				name: "test".to_string(),
 				state: RendererState::Running,
 				pid: None,
@@ -15064,6 +15797,7 @@ enabled = true
 				exit_code: None,
 			},
 			child: None,
+			attached_process_exit: None,
 			started_at: Instant::now(),
 			runtime_bus_key: "test/runtime".to_string(),
 			runtime_status_cache: Arc::new(Mutex::new(RendererRuntimeTelemetryCache {
@@ -15076,6 +15810,49 @@ enabled = true
 			crash_notified: false,
 		}
 	}
+
+ #[cfg(windows)]
+ #[test]
+ fn attached_exit_timeout_remains_stopping_after_refresh() {
+  let mut telemetry = runtime_telemetry_fixture();
+  telemetry.pid = Some(std::process::id());
+  let mut renderer = managed_renderer_with_telemetry(telemetry);
+  super::prepare_attached_renderer_exit(&mut renderer).unwrap();
+  renderer.info.state = RendererState::Stopping;
+  let id = renderer.info.id;
+  let mut state = SupervisorState::default();
+  state.renderers.insert(id, renderer);
+  super::refresh_renderer_states(&mut state, false, None);
+  let renderer = state.renderers.get(&id).unwrap();
+  assert!(matches!(renderer.info.state, RendererState::Stopping));
+  assert!(renderer.attached_process_exit.is_some());
+  assert!(!renderer.runtime_status_stream_stop.load(Ordering::Acquire));
+ }
+
+ #[cfg(windows)]
+ #[test]
+ fn attached_exit_observation_requires_fresh_identity_and_keeps_status_stream() {
+  let mut telemetry = runtime_telemetry_fixture();
+  telemetry.pid = Some(std::process::id());
+  let mut renderer = managed_renderer_with_telemetry(telemetry);
+  renderer.runtime_status_cache.lock().unwrap().updated_at = Some(Instant::now() - Duration::from_secs(3));
+  assert!(super::prepare_attached_renderer_exit(&mut renderer).is_err());
+  renderer.runtime_status_cache.lock().unwrap().updated_at = Some(Instant::now());
+  super::prepare_attached_renderer_exit(&mut renderer).unwrap();
+  assert!(renderer.attached_process_exit.as_ref().unwrap().wait_until(Instant::now()).is_err());
+  assert!(!renderer.runtime_status_stream_stop.load(Ordering::Acquire));
+  // A timeout may be followed by process exit and loss of telemetry. Keep the
+  // original handle so retry still observes that process, not a recycled PID.
+  renderer.runtime_status_cache.lock().unwrap().updated_at = Some(Instant::now() - Duration::from_secs(3));
+  super::prepare_attached_renderer_exit(&mut renderer).unwrap();
+  assert!(!renderer.runtime_status_stream_stop.load(Ordering::Acquire));
+  renderer.attached_process_exit = None;
+  let mut cache = renderer.runtime_status_cache.lock().unwrap();
+  cache.updated_at = Some(Instant::now());
+  cache.telemetry.as_mut().unwrap().pid = None;
+  drop(cache);
+  assert!(super::prepare_attached_renderer_exit(&mut renderer).is_err());
+ }
 
 	#[test]
 	fn dynamics_profile_category_matching_uses_token_boundaries() {
@@ -15217,15 +15994,15 @@ enabled = true
 	#[test]
 	fn avatar_model_picker_parent_uses_selected_file_directory() {
 		assert_eq!(
-			avatar_model_picker_parent(Path::new("C:/Users/the/Documents/models/avatar.vrm")).as_deref(),
-			Some("C:/Users/the/Documents/models")
+			avatar_model_picker_parent(Path::new("C:/Users/example/Documents/models/avatar.vrm")).as_deref(),
+			Some("C:/Users/example/Documents/models")
 		);
 	}
 
 	#[test]
 	fn picked_avatar_path_preserves_absolute_path_for_portable_packages() {
-		let path = Path::new("C:/Users/the/Documents/models/avatar.vrm");
-		assert_eq!(path_for_manifest(path), "C:/Users/the/Documents/models/avatar.vrm");
+		let path = Path::new("C:/Users/example/Documents/models/avatar.vrm");
+		assert_eq!(path_for_manifest(path), "C:/Users/example/Documents/models/avatar.vrm");
 	}
 
 	#[test]
@@ -15265,10 +16042,10 @@ enabled = true
 	fn launcher_task_specs_keep_profile_icons_when_available() {
 		let supervisor = Path::new(r"C:\UN Avatar\un-avatar-supervisor.exe");
 		let working_dir = Path::new(r"C:\UN Avatar");
-		let icon = Path::new(r"C:\Users\the\Pictures\profile.ico").to_path_buf();
+		let icon = Path::new(r"C:\Users\example\Pictures\profile.ico").to_path_buf();
 		let profiles = vec![LauncherTaskProfile {
 			name: "Usagi".to_string(),
-			manifest_path: PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"),
+			manifest_path: PathBuf::from(r"C:\Users\example\Profiles\usagi.toml"),
 			icon: Some(icon.clone()),
 		}];
 
@@ -15277,7 +16054,7 @@ enabled = true
 		assert_eq!(tasks[1].icon.as_ref(), Some(&icon));
 		assert_eq!(
 			tasks[1].arguments,
-			r#"--launch-renderer-manifest "C:\Users\the\Profiles\usagi.toml""#
+			r#"--launch-renderer-manifest "C:\Users\example\Profiles\usagi.toml""#
 		);
 	}
 
@@ -15323,12 +16100,12 @@ enabled = true
 		let args = [
 			r"C:\UN Avatar\un-avatar-supervisor.exe",
 			"--launch-renderer-manifest",
-			r"C:\Users\the\Profiles\usagi.toml",
+			r"C:\Users\example\Profiles\usagi.toml",
 		];
 
 		let manifest = startup_proxy_manifest_arg(args).unwrap().unwrap();
 
-		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\usagi.toml"));
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\example\Profiles\usagi.toml"));
 	}
 
 	#[test]
@@ -15343,12 +16120,12 @@ enabled = true
 		let args = [
 			r"C:\UN Avatar\un-avatar-supervisor.exe",
 			"--open-profile-manifest",
-			r"C:\Users\the\Profiles\mizuki-split.toml",
+			r"C:\Users\example\Profiles\avatar-split.toml",
 		];
 
 		let manifest = startup_open_profile_manifest_arg(args).unwrap().unwrap();
 
-		assert_eq!(manifest, PathBuf::from(r"C:\Users\the\Profiles\mizuki-split.toml"));
+		assert_eq!(manifest, PathBuf::from(r"C:\Users\example\Profiles\avatar-split.toml"));
 	}
 
 	#[test]
@@ -15597,6 +16374,26 @@ display_name = "Mizuki"
 			Some("Body/Upper")
 		);
 		assert_eq!(telemetry.dynamics_collision_projection_top_collider_count, Some(7));
+	}
+
+	#[test]
+	fn runtime_status_note_distinguishes_healthy_missing_and_stale() {
+		let mut telemetry = runtime_telemetry_fixture();
+		telemetry.note = None;
+		let renderer = managed_renderer_with_telemetry(telemetry);
+		let healthy = runtime_status_from_renderer(&renderer);
+		assert!(!healthy.note.as_deref().unwrap_or("").contains("runtime status unavailable"));
+		{
+			let mut cache = renderer.runtime_status_cache.lock().unwrap();
+			cache.updated_at = Some(Instant::now() - Duration::from_secs(3));
+		}
+		assert!(runtime_status_from_renderer(&renderer).note.unwrap().contains("stale"));
+		{
+			let mut cache = renderer.runtime_status_cache.lock().unwrap();
+			cache.telemetry = None;
+			cache.updated_at = None;
+		}
+		assert!(runtime_status_from_renderer(&renderer).note.unwrap().contains("runtime status unavailable"));
 	}
 
 	#[test]
@@ -16605,6 +17402,147 @@ display_name = "Mizuki"
 		assert_eq!(metadata.preview_sets.len(), 0);
 	}
 
+    #[cfg(windows)]
+    #[test]
+    fn generated_icon_transaction_rejects_stale_and_recovers_after_locked_manifest() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("target.toml");
+        let other = root.path().join("other.toml");
+        let icons = root.path().join("icons");
+        fs::write(&path, "title = 'Target'\n[profile]\nid = 'icon-target'\n[custom]\nkeep = 'extension'\n").unwrap();
+        fs::write(&other, "title = 'Other'\n").unwrap();
+        let other_bytes = fs::read(&other).unwrap();
+        let source = image::RgbaImage::from_pixel(16, 16, image::Rgba([96, 180, 255, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(source).write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let webp = encode_profile_icon_crop_webp(&png, ProfileIconCropRequest { zoom: 2.0, offset_x: 0.2, offset_y: -0.1 }).unwrap();
+        let initial = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+        let _transaction = super::profile_write::lock_directory(&path).unwrap();
+        let save = |setting: &AvatarSetting| super::update_avatar_setting_contents_locked(&path, setting, Some(&setting.revision), |_, manifest| {
+            super::store_profile_icon_in_manifest(manifest, &icons, &webp)
+        });
+        let first = save(&initial).unwrap();
+        let saved_bytes = fs::read(&path).unwrap();
+        let saved = super::read_manifest_value(&path).unwrap();
+        let old_icon = PathBuf::from(saved["window"]["icon_path"].as_str().unwrap());
+        assert_eq!(fs::read(&old_icon).unwrap(), webp);
+        assert!(image::load_from_memory(&fs::read(&old_icon).unwrap()).is_ok());
+        assert!(save(&initial).err().unwrap().contains("profile_conflict"));
+        assert_eq!(fs::read_dir(&icons).unwrap().count(), 1, "stale save must not publish an icon");
+        assert_eq!(fs::read(&path).unwrap(), saved_bytes);
+        // Allow reads but deny replacement, simulating another app holding the file.
+        let deny_replace = fs::OpenOptions::new().read(true).share_mode(1).open(&path).unwrap();
+        assert!(save(&first).is_err());
+        drop(deny_replace);
+        assert_eq!(fs::read(&path).unwrap(), saved_bytes);
+        assert_eq!(fs::read(&old_icon).unwrap(), webp);
+        // Assets are immutable; a failed manifest publication can leave an orphan.
+        assert_eq!(fs::read_dir(&icons).unwrap().count(), 2);
+        let retry = save(&first).unwrap();
+        assert_eq!(retry.revision, super::profile_write::revision(&fs::read(&path).unwrap()));
+        let current = super::read_manifest_value(&path).unwrap();
+        assert_ne!(current["window"]["icon_path"], saved["window"]["icon_path"]);
+        assert_eq!(current["custom"]["keep"].as_str(), Some("extension"));
+        assert_eq!(fs::read(&other).unwrap(), other_bytes);
+        assert_eq!(fs::read(&old_icon).unwrap(), webp);
+    }
+
+    #[test]
+    fn legacy_path_save_preserves_empty_values_and_rejects_stale_revision() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("target.toml");
+        fs::write(&path, "title = 'Target'\n[profile]\nid = 'legacy-target'\n[window]\nwidth = 640\n").unwrap();
+        let initial = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+        let _guard = super::profile_write::lock_directory(&path).unwrap();
+        let save = |setting: &AvatarSetting, field: &str, value: &str| super::update_avatar_setting_contents_locked(&path, setting, Some(&setting.revision), |_, manifest| {
+            super::apply_legacy_avatar_setting_path(manifest, &path, field, value)
+        });
+        let icon = save(&initial, "icon_path", "").unwrap();
+        let manifest = super::read_manifest_value(&path).unwrap();
+        assert_eq!(manifest["window"]["icon_path"].as_str(), Some(""));
+        assert_eq!(manifest["window"]["width"].as_integer(), Some(640));
+        let bytes = fs::read(&path).unwrap();
+        assert!(save(&initial, "avatar_path", "stale.vrm").err().unwrap().contains("profile_conflict"));
+        assert!(save(&icon, "unsupported", "x").is_err());
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let avatar = save(&icon, "avatar_path", "avatar.vrm").unwrap();
+        assert_ne!(avatar.revision, icon.revision);
+        assert_eq!(PathBuf::from(super::read_manifest_value(&path).unwrap()["avatar_path"].as_str().unwrap()), repo_root().join("avatar.vrm"));
+        fs::write(root.path().join("local.vrm"), b"fixture").unwrap();
+        save(&avatar, "avatar_path", "local.vrm").unwrap();
+        assert_eq!(PathBuf::from(super::read_manifest_value(&path).unwrap()["avatar_path"].as_str().unwrap()), root.path().join("local.vrm"));
+    }
+
+    #[test]
+    fn initial_profile_copy_serializes_and_preserves_existing_user_content() {
+        let root = tempfile::tempdir().unwrap();
+        let templates = root.path().join("templates");
+        let users = root.path().join("users");
+        fs::create_dir_all(&templates).unwrap();
+        fs::write(templates.join("first.toml"), b"title = 'First'\n").unwrap();
+        fs::write(templates.join("second.toml"), b"title = 'Second'\n").unwrap();
+        fs::write(templates.join("notes.txt"), b"not a profile").unwrap();
+        let workers: Vec<_> = (0..2).map(|_| {
+            let templates = templates.clone(); let users = users.clone();
+            std::thread::spawn(move || super::seed_user_profiles_from(&templates, &users).unwrap())
+        }).collect();
+        let copied: usize = workers.into_iter().map(|worker| worker.join().unwrap()).sum();
+        assert_eq!(copied, 2);
+        assert_eq!(fs::read(users.join("first.toml")).unwrap(), b"title = 'First'\n");
+        assert!(!users.join("notes.txt").exists());
+        fs::write(users.join("first.toml"), b"title = 'User edited'\n").unwrap();
+        fs::write(templates.join("third.toml"), b"title = 'Later template'\n").unwrap();
+        assert_eq!(super::seed_user_profiles_from(&templates, &users).unwrap(), 0);
+        assert_eq!(fs::read(users.join("first.toml")).unwrap(), b"title = 'User edited'\n");
+        assert!(!users.join("third.toml").exists());
+        assert_eq!(fs::read(templates.join("first.toml")).unwrap(), b"title = 'First'\n");
+    }
+
+    #[test]
+    fn initial_profile_copy_failure_keeps_templates_and_avoids_partial_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let templates = root.path().join("templates");
+        fs::create_dir_all(&templates).unwrap();
+        fs::write(templates.join("valid.toml"), b"title = 'Valid'\n").unwrap();
+        fs::create_dir(templates.join("unreadable.toml")).unwrap();
+        let blocked = root.path().join("blocked");
+        fs::write(&blocked, b"existing file").unwrap();
+        assert!(super::seed_user_profiles_from(&templates, &blocked).is_err());
+        assert_eq!(fs::read(&blocked).unwrap(), b"existing file");
+        let users = root.path().join("users");
+        assert_eq!(super::seed_user_profiles_from(&templates, &users).unwrap(), 1);
+        assert!(!users.join("unreadable.toml").exists());
+        assert_eq!(fs::read(users.join("valid.toml")).unwrap(), b"title = 'Valid'\n");
+        assert_eq!(fs::read(templates.join("valid.toml")).unwrap(), b"title = 'Valid'\n");
+    }
+
+    #[test]
+    fn lazy_seed_copy_rejects_stale_revision_and_foreign_filename_without_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source"); let users = root.path().join("users");
+        fs::create_dir_all(&source).unwrap();
+        let path = source.join("same.toml");
+        let original = b"title = 'Seed'\n[profile]\nid = 'seed-a'\n";
+        fs::write(&path, original).unwrap();
+        let setting = read_avatar_setting(&path, ProfileStorage::Seed).unwrap();
+        let _guard = super::profile_write::lock_store(&users).unwrap();
+        fs::write(&path, b"title = 'Changed seed'\n[profile]\nid = 'seed-a'\n").unwrap();
+        assert!(super::editable_avatar_setting_path_in(&setting, &users, Some(&setting.revision)).unwrap_err().contains("profile_conflict"));
+        assert!(!users.join("same.toml").exists());
+        fs::write(&path, original).unwrap();
+        let foreign = b"title = 'Other user profile'\n[profile]\nid = 'user-b'\n";
+        fs::write(users.join("same.toml"), foreign).unwrap();
+        assert!(super::editable_avatar_setting_path_in(&setting, &users, Some(&setting.revision)).unwrap_err().contains("another profile"));
+        assert_eq!(fs::read(users.join("same.toml")).unwrap(), foreign);
+        let fresh_users = root.path().join("fresh-users");
+        let _fresh_guard = super::profile_write::lock_store(&fresh_users).unwrap();
+        let copied = super::editable_avatar_setting_path_in(&setting, &fresh_users, Some(&setting.revision)).unwrap();
+        assert_eq!(fs::read(&copied).unwrap(), original);
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(super::editable_avatar_setting_path_in(&setting, &fresh_users, Some(&setting.revision)).unwrap(), copied);
+    }
+
 	#[test]
 	fn profile_icon_crop_encoder_outputs_square_webp() {
 		let source = image::RgbaImage::from_pixel(320, 180, image::Rgba([96, 180, 255, 255]));
@@ -17415,7 +18353,8 @@ display_name = "Mizuki"
 			".unavatar accept flow must save avatar_path before saving profile icon"
 		);
 		assert!(
-			accept_unavatar.contains(r#"unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl"#),
+			accept_unavatar.contains("const crop = { ...unavatarProfileIconCrop };")
+				&& accept_unavatar.contains("crop.enabled && crop.imageDataUrl"),
 			".unavatar accept flow should save a profile icon only when the preview crop is enabled"
 		);
 	}
@@ -17517,7 +18456,8 @@ display_name = "Mizuki"
 		);
 
 		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
-			.expect("styles.css should be readable");
+			.expect("styles.css should be readable")
+			.replace("\r\n", "\n");
 		let css_markers = [
 			(".profile-identity-section", "order: 0"),
 			(".profile-avatar-section", "order: 1"),
@@ -17542,7 +18482,8 @@ display_name = "Mizuki"
 	#[test]
 	fn static_profile_stage_uses_fixed_desktop_height() {
 		let styles_css = fs::read_to_string(repo_root().join("apps").join("un-avatar-supervisor").join("src").join("styles.css"))
-			.expect("styles.css should be readable");
+			.expect("styles.css should be readable")
+			.replace("\r\n", "\n");
 		assert!(
 			styles_css
 				.contains(".profile-stage {\n\tgrid-template-columns: auto minmax(0, 1fr);\n\tmin-height: 134px;\n\talign-items: center;"),
@@ -18376,6 +19317,177 @@ height = 360
 		assert_eq!(window.get("width").and_then(toml::Value::as_integer), Some(640));
 		assert_eq!(window.get("height").and_then(toml::Value::as_integer), Some(360));
 		let _ = fs::remove_file(path);
+	}
+
+	#[test]
+	fn spout_profile_save_waits_for_writer_and_preserves_latest_other_fields() {
+		let root = tempfile::tempdir().unwrap();
+		let path = root.path().join("target.toml");
+		let other = root.path().join("other.toml");
+		fs::write(&path, "title = 'Before'\n[window]\nwidth = 640\n").unwrap();
+		fs::write(&other, "title = 'Other'\n").unwrap();
+		let guard = super::profile_write::lock_directory(&path).unwrap();
+		let worker_path = path.clone();
+		let (started_tx, started_rx) = std::sync::mpsc::channel();
+		let (done_tx, done_rx) = std::sync::mpsc::channel();
+		let worker = std::thread::spawn(move || {
+			started_tx.send(()).unwrap();
+			let result = write_spout_state_to_manifest(&worker_path, &RendererSpoutProfileState {
+				spout_enabled: true, spout_name: Some("Live".into()), spout_width: Some(1920), spout_height: Some(1080),
+			});
+			done_tx.send(result).unwrap();
+		});
+		started_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+		let blocked = matches!(done_rx.recv_timeout(std::time::Duration::from_millis(150)), Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+		fs::write(&path, "title = 'Latest'\n[window]\nwidth = 800\n[custom]\nkeep = 'extension'\n").unwrap();
+		drop(guard);
+		worker.join().unwrap();
+		assert!(blocked, "Spout save bypassed the profile writer lock");
+		done_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap();
+		let saved = super::read_manifest_value(&path).unwrap();
+		assert_eq!(saved["title"].as_str(), Some("Latest"));
+		assert_eq!(saved["window"]["width"].as_integer(), Some(800));
+		assert_eq!(saved["custom"]["keep"].as_str(), Some("extension"));
+		assert_eq!(saved["output"]["spout2"]["name"].as_str(), Some("Live"));
+		assert_eq!(fs::read_to_string(other).unwrap(), "title = 'Other'\n");
+	}
+
+	#[test]
+	fn cache_marker_writers_preserve_concurrent_profile_edits() {
+		for clear in [false, true] {
+			let root = tempfile::tempdir().unwrap();
+			let path = root.path().join("target.toml");
+			fs::write(&path, "title = 'Before'\n").unwrap();
+			let guard = super::profile_write::lock_directory(&path).unwrap();
+			let target = path.clone();
+			let (started_tx, started_rx) = std::sync::mpsc::channel();
+			let (done_tx, done_rx) = std::sync::mpsc::channel();
+			let worker = std::thread::spawn(move || {
+				started_tx.send(()).unwrap();
+				let result = if clear { super::invalidate_scene_cache_prewarm_record_file(&target) }
+					else { super::mark_scene_cache_prewarmed(&target, "new-fingerprint") };
+				done_tx.send(result).unwrap();
+			});
+			started_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+			let blocked = matches!(done_rx.recv_timeout(std::time::Duration::from_millis(150)), Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+			fs::write(&path, "title = 'Latest'\n[custom]\nkeep = 'extension'\n[profile.scene_cache]\nfingerprint = 'old'\nprewarmed_at = 'old-date'\nkeep = 'cache-option'\n").unwrap();
+			drop(guard);
+			worker.join().unwrap();
+			assert!(blocked, "cache marker writer bypassed profile lock");
+			done_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap().unwrap();
+			let saved = super::read_manifest_value(&path).unwrap();
+			assert_eq!(saved["title"].as_str(), Some("Latest"));
+			assert_eq!(saved["custom"]["keep"].as_str(), Some("extension"));
+			let cache = &saved["profile"]["scene_cache"];
+			assert_eq!(cache["keep"].as_str(), Some("cache-option"));
+			if clear { assert!(cache.get("fingerprint").is_none()); assert!(cache.get("prewarmed_at").is_none()); }
+			else { assert_eq!(cache["fingerprint"].as_str(), Some("new-fingerprint")); }
+		}
+	}
+
+    #[test]
+    fn profile_contents_save_rejects_stale_revision_and_preserves_other_target() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("target.toml");
+        let other = root.path().join("other.toml");
+        fs::write(&path, "title = 'Target'\n[profile]\nid = 'isolated-target'\n[window]\nwidth = 640\n[custom]\nkeep = 'extension'\n").unwrap();
+        fs::write(&other, "title = 'Other'\n").unwrap();
+        let other_bytes = fs::read(&other).unwrap();
+        let initial = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+        let _guard = super::profile_write::lock_directory(&path).unwrap();
+        let saved = super::update_avatar_setting_contents_locked(&path, &initial, Some(&initial.revision), |setting, manifest| {
+            apply_avatar_setting_value(manifest, setting, "window.width", serde_json::json!(800))
+        }).unwrap();
+        let saved_bytes = fs::read(&path).unwrap();
+        let called = std::cell::Cell::new(false);
+        let rejected = super::update_avatar_setting_contents_locked(&path, &initial, Some(&initial.revision), |_, _| {
+            called.set(true); Ok(())
+        });
+        assert!(rejected.err().expect("must reject stale save").contains("profile_conflict"));
+        assert!(!called.get(), "stale save must reject before applying edits");
+        assert_eq!(fs::read(&path).unwrap(), saved_bytes);
+        let updated = super::update_avatar_setting_contents_locked(&path, &saved, Some(&saved.revision), |setting, manifest| {
+            apply_avatar_setting_value(manifest, setting, "window.width", serde_json::json!(1024))
+        }).unwrap();
+        let disk = super::read_manifest_value(&path).unwrap();
+        assert_eq!(disk["window"]["width"].as_integer(), Some(1024));
+        assert_eq!(disk["custom"]["keep"].as_str(), Some("extension"));
+        assert_eq!(updated.revision, super::profile_write::revision(&fs::read(&path).unwrap()));
+        assert_ne!(updated.revision, saved.revision);
+        let with_icon = super::update_avatar_setting_contents_locked(&path, &updated, Some(&updated.revision), |setting, manifest| {
+            apply_avatar_setting_value(manifest, setting, "icon_path", serde_json::json!("chosen-icon.png"))
+        }).unwrap();
+        let icon_disk = super::read_manifest_value(&path).unwrap();
+        assert_eq!(icon_disk["window"]["icon_path"].as_str(), Some("chosen-icon.png"));
+        assert_eq!(icon_disk["window"]["width"].as_integer(), Some(1024));
+        assert_eq!(icon_disk["custom"]["keep"].as_str(), Some("extension"));
+        let icon_bytes = fs::read(&path).unwrap();
+        assert!(super::update_avatar_setting_contents_locked(&path, &with_icon, Some(&with_icon.revision), |setting, manifest| {
+            apply_avatar_setting_value(manifest, setting, "icon_path", serde_json::json!(123))
+        }).is_err());
+        assert_eq!(fs::read(&path).unwrap(), icon_bytes);
+        assert_eq!(fs::read(&other).unwrap(), other_bytes);
+    }
+
+    #[test]
+    fn reorder_plan_preserves_seed_and_allocates_distinct_names_before_writing() {
+        let temp=tempfile::tempdir().unwrap();let root=temp.path().join("user");let seeds=temp.path().join("seed");
+        fs::create_dir(&root).unwrap();fs::create_dir(&seeds).unwrap();
+        let original="title='Same'\n[profile]\nid='one'\ncreated_at='20260101-000000'\n[custom]\nkeep='extension'\n";
+        let seed=original.replace("id='one'","id='two'");
+        let a=root.join("original.toml");let b=seeds.join("seed.toml");
+        fs::write(&a,original).unwrap();fs::write(&b,&seed).unwrap();
+        let settings=vec![read_avatar_setting(&a,ProfileStorage::User).unwrap(),read_avatar_setting(&b,ProfileStorage::Seed).unwrap()];
+        let changes=super::plan_avatar_settings_reorder(&settings,&root).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(),original);assert_eq!(fs::read_to_string(&b).unwrap(),seed);
+        assert_eq!(fs::read_dir(&root).unwrap().count(),1);
+        let destinations=changes.iter().filter(|c|c.after.is_some()).map(|c|c.name.clone()).collect::<Vec<_>>();
+        assert_eq!(destinations.len(),2);assert_ne!(destinations[0],destinations[1]);
+        let _lock=super::profile_write::lock_store(&root).unwrap();
+        let outcome=super::profile_batch::apply(&root,changes).unwrap();assert!(outcome.error.is_none());
+        for (index,name) in destinations.iter().enumerate(){
+            let value:toml::Value=toml::from_str(&fs::read_to_string(root.join(name)).unwrap()).unwrap();
+            assert_eq!(value["custom"]["keep"].as_str(),Some("extension"));
+            assert_eq!(value["profile"]["sort_order"].as_integer(),Some((index as i64+1)*1000));
+        }
+        assert_eq!(fs::read_to_string(&b).unwrap(),seed);
+        super::profile_batch::restore(&root,&outcome.journal).unwrap();
+        assert_eq!(fs::read_to_string(&a).unwrap(),original);
+        assert!(destinations.iter().all(|name|!root.join(name).exists()));
+    }
+
+	#[test]
+	fn runtime_window_save_preserves_other_profile_and_unreported_fields() {
+		use super::{read_manifest_value, write_window_state_to_manifest};
+		let root = std::env::temp_dir().join(format!("una-window-save-{}-{}", std::process::id(), line!()));
+		fs::create_dir_all(&root).unwrap();
+		let target = root.join("target.toml");
+		let other = root.join("other.toml");
+		let original = "title = 'Target'\n[window]\nx = 1\ny = 2\nwidth = 640\nheight = 360\ntransparent = true\n[camera]\nradius = 2.5\n[custom]\nkeep = 'extension'\n";
+		fs::write(&target, original).unwrap();
+		fs::write(&other, "title = 'Other'\n").unwrap();
+		let other_bytes = fs::read(&other).unwrap();
+		write_window_state_to_manifest(&target, [-1920, 24], None).unwrap();
+		let saved = read_manifest_value(&target).unwrap();
+		let before: toml::Value = toml::from_str(original).unwrap();
+		assert_eq!(saved["window"]["x"].as_integer(), Some(-1920));
+		assert_eq!(saved["window"]["y"].as_integer(), Some(24));
+		for key in ["width", "height", "transparent"] {
+			assert_eq!(saved["window"][key], before["window"][key]);
+		}
+		for key in ["title", "camera", "custom"] { assert_eq!(saved[key], before[key]); }
+		write_window_state_to_manifest(&target, [10, 20], Some([1280, 720])).unwrap();
+		let resized = read_manifest_value(&target).unwrap();
+		assert_eq!(resized["window"]["width"].as_integer(), Some(1280));
+		assert_eq!(resized["window"]["height"].as_integer(), Some(720));
+		assert_eq!(fs::read(&other).unwrap(), other_bytes);
+		// A malformed section must reject the save without destroying the original file.
+		let invalid = "title = 'Invalid'\nwindow = 'not a table'\n";
+		fs::write(&target, invalid).unwrap();
+		assert!(write_window_state_to_manifest(&target, [0, 0], None).is_err());
+		assert_eq!(fs::read_to_string(&target).unwrap(), invalid);
+		assert_eq!(fs::read(&other).unwrap(), other_bytes);
+		fs::remove_dir_all(root).unwrap();
 	}
 
 	#[test]
@@ -19262,7 +20374,7 @@ id = "test"
 	fn prewarm_renderer_scene_cache_detail_reports_texture_and_pipeline_cache() {
 		let stderr = r#"
 un-avatar-renderer: gpu scene texture prepare summary: total=364.3ms images=231 resident=59 deferred=172 processed_cache=0/0/0 processed_cache_read_mb=0.0 compressed_cache=59/0/0
-un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\the\AppData\Local\UN Avatar\pipeline-cache\v1\cache.upc bytes=6025281
+un-avatar-renderer: Vulkan pipeline cache store path=C:\Users\example\AppData\Local\UN Avatar\pipeline-cache\v1\cache.upc bytes=6025281
 "#;
 
 		assert_eq!(
@@ -19542,6 +20654,124 @@ avatar_path = "main.unavatar"
 		let _ = fs::remove_dir_all(&root);
 
 		assert_ne!(first, second);
+	}
+
+	#[test]
+	fn dynamics_rule_transaction_preserves_order_and_rejects_partial_updates() {
+		let root = tempfile::tempdir().unwrap();
+		let path = root.path().join("edited.toml");
+		let other = root.path().join("other.toml");
+		let initial = "title = \"Physics rules\"\n[profile]\nid = \"physics-rules\"\n[custom]\nretained = true\n";
+		fs::write(&path, initial).unwrap();
+		fs::write(&other, initial).unwrap();
+		let original = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let groups = serde_json::json!([
+			{"source_id":"physbone:Hair", "solver":"xpbd", "constraint_iterations":7},
+			{"source_id":"physbone:Tail", "solver":"verlet", "drag_scale":0.5}
+		]);
+		let rules = serde_json::json!([
+			{"name":"broad", "source_id_contains":["Hair", "Tail"], "solver":"verlet", "drag_scale":0.75},
+			{"name":"specific", "source_id_regex":["(?i)Hair/Tip$"], "solver":"xpbd", "constraint_iterations":9}
+		]);
+		let saved = super::update_avatar_setting_contents_locked(&path, &original, Some(&original.revision), |setting, manifest| {
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.group_overrides", groups.clone())?;
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.match_overrides", rules.clone())
+		}).unwrap();
+		let disk = crate::read_manifest_value(&path).unwrap();
+		let solver = &disk["physics"]["dynamics"]["solver"];
+		assert_eq!(serde_json::to_value(&solver["group_overrides"]).unwrap(), groups);
+		assert_eq!(serde_json::to_value(&solver["match_overrides"]).unwrap(), rules);
+		assert_eq!(saved.dynamics_group_overrides.len(), 2);
+		assert_eq!(saved.dynamics_match_overrides.len(), 2);
+		let before = fs::read(&path).unwrap();
+		let stale = super::update_avatar_setting_contents_locked(&path, &original, Some(&original.revision), |_, _| {
+			panic!("stale write must be rejected before applying changes")
+		}).err().expect("write must be rejected");
+		assert!(stale.contains("profile_conflict"));
+		assert_eq!(fs::read(&path).unwrap(), before);
+		let invalid = super::update_avatar_setting_contents_locked(&path, &saved, Some(&saved.revision), |setting, manifest| {
+			// A valid earlier batch change must not leak when a later rule fails validation.
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.group_overrides", serde_json::json!([]))?;
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.match_overrides", serde_json::json!([
+				{"name":"invalid", "source_id_regex":["("]}
+			]))
+		}).err().expect("write must be rejected");
+		assert!(invalid.contains("invalid regular expression"));
+		assert_eq!(fs::read(&path).unwrap(), before);
+		let incomplete = super::update_avatar_setting_contents_locked(&path, &saved, Some(&saved.revision), |setting, manifest| {
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.match_overrides", serde_json::json!([
+				{"name":"first", "source_id_contains":["Hair"]},
+				{"name":"editing", "source_id_contains":[], "source_id_regex":[], "solver":"xpbd", "constraint_iterations":9}
+			]))
+		}).err().expect("incomplete rule must not silently disappear");
+		assert!(incomplete.contains("requires a source_id"));
+		assert_eq!(fs::read(&path).unwrap(), before);
+		let deleted = super::update_avatar_setting_contents_locked(&path, &saved, Some(&saved.revision), |setting, manifest| {
+			apply_avatar_setting_value(manifest, setting, "physics.dynamics.solver.match_overrides", serde_json::json!([]))
+		}).unwrap();
+		assert!(deleted.dynamics_match_overrides.is_empty());
+		assert_eq!(deleted.dynamics_group_overrides.len(), 2);
+		let disk = crate::read_manifest_value(&path).unwrap();
+		assert_eq!(serde_json::to_value(&disk["physics"]["dynamics"]["solver"]["group_overrides"]).unwrap(), groups);
+		assert_eq!(disk["custom"]["retained"].as_bool(), Some(true));
+		assert_eq!(fs::read_to_string(&other).unwrap(), initial);
+	}
+
+	#[test]
+	fn dynamics_all_categories_disk_roundtrip_preserves_other_profile() {
+		let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+		let root = std::env::temp_dir().join(format!("una-physics-roundtrip-{}-{nonce}", std::process::id()));
+		fs::create_dir(&root).unwrap();
+		let path = root.join("edited.toml");
+		let other = root.join("other.toml");
+		let initial = "title = \"Physics audit\"\n[profile]\nid = \"physics-audit\"\n[custom]\nretained = \"unrelated value\"\n";
+		fs::write(&path, initial).unwrap();
+		fs::write(&other, initial).unwrap();
+		let categories = ["hair", "ears", "tail", "cloth", "accessory", "soft_body", "other"];
+		let values = [("damping_half_life_ms", serde_json::json!(123.0)), ("bounce_scale", serde_json::json!(0.4)),
+			("rest_response", serde_json::json!(0.2)), ("shape_preservation", serde_json::json!(0.3)),
+			("motion_coupling", serde_json::json!(0.6)), ("stretch_range_scale", serde_json::json!(0.8)),
+			("stretch_motion", serde_json::json!(0.7)), ("xpbd_compliance", serde_json::json!(0.015)),
+			("constraint_iterations", serde_json::json!(8))];
+		for category in categories {
+			let setting = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+			let mut manifest = crate::read_manifest_value(&path).unwrap();
+			let prefix = format!("physics.dynamics.solver.overrides.{category}");
+			apply_avatar_setting_value(&mut manifest, &setting, &format!("{prefix}.mode"), serde_json::json!("override_xpbd")).unwrap();
+			for (key, value) in &values {
+				apply_avatar_setting_value(&mut manifest, &setting, &format!("{prefix}.{key}"), value.clone()).unwrap();
+			}
+			crate::write_manifest_value(&path, &manifest).unwrap();
+			let reread = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+			let item = reread.dynamics_category_overrides.iter().find(|item| item.category == category).unwrap();
+			assert_eq!(item.mode, "override_xpbd");
+			assert_eq!(item.constraint_iterations, 8);
+			assert!((item.damping_half_life_ms - 123.0).abs() < 1e-6);
+			let disk = crate::read_manifest_value(&path).unwrap();
+			let saved = disk["physics"]["dynamics"]["solver"]["overrides"].as_array().unwrap()
+				.iter().find(|item| item["category"].as_str() == Some(category)).unwrap();
+			for (key, expected) in &values {
+				let actual = serde_json::to_value(&saved[*key]).unwrap();
+				assert!((actual.as_f64().unwrap() - expected.as_f64().unwrap()).abs() < 1e-6, "{category}.{key}: {actual} != {expected}");
+			}
+			assert_eq!(disk["custom"]["retained"].as_str(), Some("unrelated value"));
+			assert_eq!(fs::read_to_string(&other).unwrap(), initial);
+		}
+		let before_invalid = fs::read(&path).unwrap();
+		let setting = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		let mut manifest = crate::read_manifest_value(&path).unwrap();
+		assert!(apply_avatar_setting_value(&mut manifest, &setting, "physics.dynamics.solver.overrides.ears.constraint_iterations", serde_json::json!(0)).is_err());
+		assert_eq!(fs::read(&path).unwrap(), before_invalid);
+		for category in categories {
+			let setting = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+			let mut manifest = crate::read_manifest_value(&path).unwrap();
+			apply_avatar_setting_value(&mut manifest, &setting, &format!("physics.dynamics.solver.overrides.{category}.mode"), serde_json::json!("authored")).unwrap();
+			crate::write_manifest_value(&path, &manifest).unwrap();
+		}
+		let final_setting = read_avatar_setting(&path, ProfileStorage::User).unwrap();
+		assert!(final_setting.dynamics_category_overrides.iter().all(|item| item.mode == "authored"));
+		assert_eq!(fs::read_to_string(&other).unwrap(), initial);
+		fs::remove_dir_all(&root).unwrap();
 	}
 
 	#[test]
@@ -20191,10 +21421,6 @@ simulation_hz = 120
 					"name": " body colliders ",
 					"source_id_contains": [" cloth source ", "", "cloth panel"],
 					"collider_path_contains": [" torso collider ", "limb collider"]
-				},
-				{
-					"name": "incomplete",
-					"source_id_contains": ["cloth source"]
 				}
 			]),
 		)
@@ -20221,6 +21447,20 @@ simulation_hz = 120
 				.map(|items| items.iter().filter_map(toml::Value::as_str).collect::<Vec<_>>()),
 			Some(vec!["torso collider", "limb collider"])
 		);
+
+		let before = manifest.clone();
+		for incomplete in [
+			serde_json::json!({"source_id_contains": ["cloth source"]}),
+			serde_json::json!({"collider_path_contains": ["torso"]}),
+			serde_json::json!({"source_id_contains": ["cloth source"], "collider_path_contains": [" "]}),
+		] {
+			let error = apply_avatar_setting_value(
+				&mut manifest, &setting, "physics.dynamics.solver.collider_augment_overrides",
+				serde_json::json!([{"source_id_contains": ["hair"], "collider_path_contains": ["head"]}, incomplete]),
+			).unwrap_err();
+			assert!(error.contains("requires non-empty"));
+			assert_eq!(manifest, before, "incomplete rule must not replace existing rules");
+		}
 
 		apply_avatar_setting_value(
 			&mut manifest,
@@ -21160,4 +22400,18 @@ id = "test"
 			vec![r#"{"command":"shutdown"}"#.to_string(), r#"{"command":"reset_camera"}"#.to_string()]
 		);
 	}
+    #[test]
+    fn renderer_profile_identity_survives_rename_and_rejects_reused_path() {
+        let mut renderer=managed_renderer_with_telemetry(runtime_telemetry_fixture()).info;
+        renderer.profile_id=Some("original".into());renderer.manifest_path=Some("C:/profiles/old.toml".into());
+        assert!(crate::renderer_matches_profile(&renderer,"original","C:/profiles/renamed.toml"));
+        assert!(!crate::renderer_matches_profile(&renderer,"different","C:/profiles/old.toml"));
+        renderer.profile_id=None;
+        assert!(crate::renderer_matches_profile(&renderer,"legacy","c:/profiles/old.toml"));
+        assert!(!crate::renderer_matches_profile(&renderer,"legacy","c:/profiles/other.toml"));
+    }
+
 }
+
+#[cfg(test)]
+mod runtime_bus_probe;

@@ -7,7 +7,7 @@ U.N. Avatar v2 の `Wardrobe (Split)` は、Unity Editor で wardrobe set ごと
 ## Reference
 
 - Modular Avatar reference: `bdunderscore/modular-avatar`, MIT License
-- Local source during v2 development: `C:\Users\the\tmp\modular-avatar`
+- Local source during v2 development: `<Modular Avatar checkout>`
 - Historical regression target: `mizuki-split` / `field_drape` / `Mizuki&Rurune_Field Drape_Hair/Hair_Base`
 
 ## Scope

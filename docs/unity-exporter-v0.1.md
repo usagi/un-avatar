@@ -278,7 +278,7 @@ Exporter は原則として Unity の texture asset 元ファイルをそのま�
 - Exporter では重い再圧縮、WebP/KTX2/BCn 変換、resize を行わない。品質劣化、世代劣化、Unity 側 encoder 依存、export 時間増加を避ける。
 - Exporter が `.unavatar` 内部の texture を最適化目的で置換する機能は持たない。
 
-RAW RGBA を exporter 内で生成し、PNG 化が避けられない場合の encoder 方針は [`unity-exporter-png-encoding.md`](unity-exporter-png-encoding.md) を正とする。この方針は source-backed PNG / JPEG の再エンコードではなく、wardrobe preview、generated fallback、cubemap strip などの生成画像だけに適用する。
+RAW RGBA を exporter 内で生成し、PNG 化が避けられない場合の encoder 方針は [`unity-exporter-png-encoding.md`](https://github.com/usagi/un-avatar/blob/main/docs/unity-exporter-png-encoding.md) を正とする。この方針は source-backed PNG / JPEG の再エンコードではなく、wardrobe preview、generated fallback、cubemap strip などの生成画像だけに適用する。
 
 PNG / JPEG 非対応の pixel format は、PNG fallback だけで済ませない。
 

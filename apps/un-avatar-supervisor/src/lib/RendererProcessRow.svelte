@@ -24,6 +24,7 @@
 			<img src={iconSrc} alt="" />
 			<span>
 				<strong>{renderer.name}</strong>
+				{#if renderer.profile_id}<small class="profile-identity">ID: {renderer.profile_id}</small>{/if}
 				<small>{basename(renderer.avatar_path)}</small>
 			</span>
 		</div>
@@ -34,3 +35,11 @@
 		<small>{localizedRuntimeOutputLabel(renderer, status, $_)}</small>
 	</td>
 </tr>
+
+<style>
+	.process-cell-profile .process-profile-summary .profile-identity {
+		white-space: normal;
+		overflow-wrap: anywhere;
+		text-overflow: clip;
+	}
+</style>

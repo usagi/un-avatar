@@ -5,6 +5,7 @@
 	import type { ProfileSettingValue } from "./profileTypes";
 	import {
 		DYNAMICS_BOUNCE_FIELD,
+		DYNAMICS_DRAG_FIELD,
 		DYNAMICS_DAMPING_FIELD,
 		DYNAMICS_GROUP_OVERRIDE_FIELD,
 		DYNAMICS_MOTION_COUPLING_FIELD,
@@ -135,6 +136,17 @@
 						placeholder="-"
 						{disabled}
 						onChange={(value) => updateOverride(index, { shape_preservation: value })}
+					/>
+					<ProfileNumberInputField
+					 label={$_(DYNAMICS_DRAG_FIELD.labelKey)}
+					 hint={$_(DYNAMICS_DRAG_FIELD.hintKey)}
+					 value={override.drag_scale}
+					 min={DYNAMICS_DRAG_FIELD.min}
+					 max={DYNAMICS_DRAG_FIELD.max}
+					 step={DYNAMICS_DRAG_FIELD.step}
+					 placeholder="-"
+					 {disabled}
+					 onChange={(value) => updateOverride(index, { drag_scale: value })}
 					/>
 					{#each DYNAMICS_VERLET_FIELDS as field}
 						<ProfileNumberInputField

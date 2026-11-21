@@ -1,8 +1,47 @@
 <script lang="ts">
-	import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+	import DeletedProfiles from "./lib/DeletedProfiles.svelte";
+	import ReviewProfileStop from "./lib/ReviewProfileStop.svelte";
+	import ProfileOrderRecovery, {type OrderRecoveryEntry} from "./lib/ProfileOrderRecovery.svelte";
+	import { convertFileSrc, invoke as nativeInvoke } from "@tauri-apps/api/core";
+	import { orderedProfileInvoke } from "./lib/orderedProfileInvoke";
+	const invoke = orderedProfileInvoke(nativeInvoke);
 	import { listen } from "@tauri-apps/api/event";
-	import { onMount } from "svelte";
-	import { _ } from "svelte-i18n";
+	import { onMount, tick, untrack } from "svelte";
+	import AvatarFeatureMap from "./lib/AvatarFeatureMap.svelte";
+	import PreviewAvatarFeatureIndex from "./lib/PreviewAvatarFeatureIndex.svelte";
+	import "./lib/featureNavigation.css";
+	const isolatedDesignPreview = import.meta.env.VITE_UN_DESIGN_PREVIEW === '1' && document.documentElement.dataset.unIsolatedPreview === '1';
+	const previewQuery = new URL(location.href).searchParams;
+	// Adopted A. Comparison builds retain the previous layout unless explicitly selected.
+	const previewOperationsA = import.meta.env.VITE_UN_DESIGN_PREVIEW !== '1' || (isolatedDesignPreview && previewQuery.get('supervisorLayout') === 'A');
+	// Adopted B layout. Historical A remains available only in the comparison build.
+	let previewEditWorkspace = $state(import.meta.env.VITE_UN_DESIGN_PREVIEW !== '1' || previewQuery.get('workspace') !== 'existing');
+	$effect(() => {
+		if (import.meta.env.VITE_UN_DESIGN_PREVIEW !== '1') return;
+		const update = () => { previewEditWorkspace = document.documentElement.dataset.seriesWorkspace === 'focus'; };
+		window.addEventListener('un-series-workspace', update);
+		return () => window.removeEventListener('un-series-workspace', update);
+	});
+	let previewFeatureOutline = $state(import.meta.env.VITE_UN_DESIGN_PREVIEW !== '1' || (previewQuery.get('navigation') !== 'existing' && previewQuery.get('design') !== 'baseline'));
+	$effect(() => {
+		if (import.meta.env.VITE_UN_DESIGN_PREVIEW !== '1') return;
+		const update = (event: Event) => { previewFeatureOutline = (event as CustomEvent).detail === 'outline'; };
+		window.addEventListener('un-series-navigation', update);
+		return () => window.removeEventListener('un-series-navigation', update);
+	});
+	$effect(() => {
+		if (!isolatedDesignPreview) return;
+		const open = async (event: Event) => {
+			await refreshAll();
+			const id = String((event as CustomEvent).detail ?? "");
+			if (avatarSettings.some(setting => setting.id === id)) selectProfileForEditing(id);
+			setActiveTab("settings", "isolated-workspace-example");
+		};
+		window.addEventListener("un-series-profile-example", open);
+		return () => window.removeEventListener("un-series-profile-example", open);
+	});
+	import type { AvatarFeature } from "./lib/avatarFeatureCatalog";
+	import { _, locale } from "svelte-i18n";
 	import { setUiLocale } from "@usagi.network/un-i18n-svelte";
 	import ProfileAvatarSection from "./lib/ProfileAvatarSection.svelte";
 	import ProfileCameraSection from "./lib/ProfileCameraSection.svelte";
@@ -199,11 +238,13 @@
 	type VrmMetadataModalState = VrmMetadataDialogState & {
 		settingId: string;
 		rendererToRestart: RendererInstance | null;
+		expectedRevision?: string;
 	};
 
 	type UnavatarMetadataModalState = UnavatarMetadataDialogState & {
 		settingId: string;
 		rendererToRestart: RendererInstance | null;
+		expectedRevision?: string;
 	};
 
 	const appSettingsStorageKey = "un-avatar-supervisor.app-settings";
@@ -238,7 +279,7 @@
 	const defaultIconSrc = DEFAULT_PROFILE_ICON_SRC;
 
 	let appVersion = $state("");
-	let activeTab = $state<"renderers" | "settings" | "logs" | "app">("renderers");
+	let activeTab = $state<"renderers" | "settings" | "logs" | "app" | "map">("renderers");
 	let renderers = $state<RendererInstance[]>([]);
 	let runtimeStatuses = $state<Record<number, RendererRuntimeStatus>>({});
 	let runtimeStatusSamples = new Map<
@@ -259,6 +300,7 @@
 	let profileIconRevision = $state<Record<string, number>>({});
 	let wardrobeOptions = $state<UnavatarWardrobeOptions | null>(null);
 	let wardrobeOptionsKey = $state("");
+	let wardrobeOptionsRequestId = 0;
 	let selectedRendererId = $state<number | null>(null);
 	/// Selected Renderer 詳細パネルのサブタブ。Overview = 状態 + コントロール、
 	/// Expressions = 表情プレビュー、Diagnostics = stderr など。タブ分割で縦長解消。
@@ -269,8 +311,12 @@
 	let draggedSettingId = $state<string | null>(null);
 	let profileHint = $state("");
 	let settingsHint = $state("");
+	let orderDraft = $state<{reviewed: AvatarSetting[]; ids: string[]; committed?: boolean; error?: string} | null>(null);
+	let orderSaving = $state(false);
 	let settingPointerDrag = $state<{
 		id: string;
+		reviewed: AvatarSetting[];
+		desiredIds: string[];
 		startX: number;
 		startY: number;
 		currentX: number;
@@ -286,6 +332,7 @@
 	const defaultSettingsHint = $derived($_("settings.hints.default"));
 	let launchTargetId = $state<string | null>(loadLaunchTargetId(launchTargetStorageKey));
 	let launchMenuOpen = $state(false);
+	let featureQuery = $state("");
 	let activeProfileSection = $state<ProfileSectionId>("identity");
 	let profileSectionScrollTarget = $state<ProfileSectionId | null>(null);
 	let profileSectionScrollUnlockTimer: number | null = null;
@@ -310,6 +357,13 @@
 	let appSettings = $state<AppSettings>(loadAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey));
 	let colorDisplayMode = $state<ColorDisplayMode>(loadColorDisplayMode(COLOR_DISPLAY_MODE_KEY));
 	let backendAppSettingsReady = $state(!hasTauriRuntime());
+	let backendAppSettingsLoading = false;
+	let appSettingsEarlyEdits: Partial<AppSettings> = {};
+	let appSettingsBeforeEarlyEdits: AppSettings | null = null;
+	let appSettingsPending = $state(0);
+	let appSettingsSaveError = $state("");
+	let appSettingsSaveSequence = 0;
+	let appSettingsSaveTail: Promise<void> = Promise.resolve();
 	/// サーバー側 `i18n_available_locales` で得られたサポート言語の BCP-47 タグ一覧。
 	let availableLocales = $state<string[]>(["ja-JP", "en-US"]);
 	let deleteHoldTargetId = $state<string | null>(null);
@@ -323,6 +377,7 @@
 	let runtimeRefreshPending = false;
 	let runtimeRefreshTraceSeq = 0;
 	let startupAutoLaunchAttempted = false;
+	let startupAutoLaunchReady = $state(false);
 
 	const deleteHoldDurationMs = 1200;
 	const runtimeRefreshIntervalMs = 250;
@@ -398,23 +453,6 @@
 			return byGroup;
 		})()
 	);
-	const liveRenderersByManifestPath = $derived(
-		(() => {
-			const byPath = new Map<string, RendererInstance[]>();
-			for (const renderer of renderers) {
-				if (!isLiveRenderer(renderer)) continue;
-				const path = normalizedPathKey(renderer.manifest_path);
-				if (!path) continue;
-				const existing = byPath.get(path);
-				if (existing) {
-					existing.push(renderer);
-				} else {
-					byPath.set(path, [renderer]);
-				}
-			}
-			return byPath;
-		})()
-	);
 	/// 選択中のレンダラー詳細。操作対象は `visibleRenderers` から選ぶ。
 	const selectedRenderer = $derived(selectedRendererById(selectedRendererId) ?? rendererTableRenderers[0] ?? null);
 	const selectedRuntimeStatus = $derived(selectedRenderer ? (runtimeStatuses[selectedRenderer.id] ?? null) : null);
@@ -427,7 +465,8 @@
 	const rendererStatusCounts = $derived(countRendererStates(renderers));
 	const notificationErrorCount = $derived(countErrorNotifications(notifications));
 	const runningCount = $derived(rendererStatusCounts.running);
-	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount);
+	let runtimeCommandFailures = $state<{ rendererId: number; name: string; command: string; error: string }[]>([]);
+	const issueCount = $derived(rendererStatusCounts.issues + notificationErrorCount + runtimeCommandFailures.length);
 	const resolvedTheme = $derived(appSettings.theme_mode === "system" ? osTheme : appSettings.theme_mode);
 	const rendererCacheTotalLabel = $derived(
 		rendererCacheStatus
@@ -524,6 +563,13 @@
 			dynamics_physics_configured: false,
 			dynamics_simulation_hz: 60,
 			dynamics_substeps: 1,
+			dynamics_surface_constraints_enabled: false,
+			dynamics_surface_constraint_topology_max_edge_distance_m: 0.06,
+			dynamics_surface_constraint_topology_max_mean_edge_distance_m: 0.03,
+			dynamics_surface_constraint_spatial_max_distance_m: 0.012,
+			dynamics_surface_constraint_topology_stiffness: 0.35,
+			dynamics_surface_constraint_spatial_stiffness: 0.9,
+			dynamics_surface_constraint_min_edge_count: 3,
 			dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
 			dynamics_match_overrides: [],
 			dynamics_collider_augment_overrides: [],
@@ -660,6 +706,13 @@
 			dynamics_physics_configured: false,
 			dynamics_simulation_hz: 60,
 			dynamics_substeps: 1,
+			dynamics_surface_constraints_enabled: false,
+			dynamics_surface_constraint_topology_max_edge_distance_m: 0.06,
+			dynamics_surface_constraint_topology_max_mean_edge_distance_m: 0.03,
+			dynamics_surface_constraint_spatial_max_distance_m: 0.012,
+			dynamics_surface_constraint_topology_stiffness: 0.35,
+			dynamics_surface_constraint_spatial_stiffness: 0.9,
+			dynamics_surface_constraint_min_edge_count: 3,
 			dynamics_category_overrides: defaultDynamicsCategoryOverrides(),
 			dynamics_match_overrides: [],
 			dynamics_collider_augment_overrides: [],
@@ -765,6 +818,15 @@
 		},
 	];
 
+	async function openFeature(feature: AvatarFeature): Promise<void> {
+		setActiveTab(feature.destination, "feature-map");
+		await tick();
+		if (feature.section) {
+			scrollProfileSection(feature.section);
+			const section = document.querySelector<HTMLElement>(`[data-profile-section="${feature.section}"]`);
+			section?.focus({ preventScroll: true });
+		}
+	}
 	function scrollProfileSection(id: ProfileSectionId): void {
 		activeProfileSection = id;
 		profileSectionScrollTarget = id;
@@ -805,19 +867,70 @@
 		saveColorDisplayMode(COLOR_DISPLAY_MODE_KEY, mode);
 	}
 
+	let editorNavigationGeneration = 0;
+	function selectProfileForEditing(id: string | null): void {
+		editorNavigationGeneration++;
+		selectedSettingId = id;
+	}
+
 	function setActiveTab(tab: typeof activeTab, source: string): void {
+		editorNavigationGeneration++;
 		traceFrontendEvent("activeTab:set", { from: activeTab, to: tab, source });
 		activeTab = tab;
 	}
 
 	async function syncAppSettingsToBackend(settings: AppSettings): Promise<void> {
-		if (!hasTauriRuntime()) return;
-		if (!backendAppSettingsReady) return;
-		try {
-			await invoke("sync_app_settings", { settings });
-		} catch (error) {
-			message = String(error);
+		if (!hasTauriRuntime()) {
+			try { saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, settings); appSettingsSaveError = ""; }
+			catch (error) { appSettingsSaveError = String(error); }
+			return;
 		}
+		if (!backendAppSettingsReady) { await loadBackendAppSettings(); return; }
+		const sequence = ++appSettingsSaveSequence;
+		const snapshot: AppSettings = JSON.parse(JSON.stringify(settings));
+		appSettingsPending++;
+		const save = appSettingsSaveTail.then(async () => {
+			try {
+				await invoke("sync_app_settings", { settings: snapshot });
+				if (sequence === appSettingsSaveSequence) {
+					try { saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, snapshot); }
+					catch (error) { throw new Error(`Settings file saved; local display cache failed: ${String(error)}`); }
+					appSettingsSaveError = "";
+				}
+			} catch (error) {
+				if (sequence === appSettingsSaveSequence) appSettingsSaveError = String(error);
+			} finally { appSettingsPending--; }
+		});
+		appSettingsSaveTail = save;
+		await save;
+	}
+
+	async function discardAppSettingsDraft(): Promise<void> {
+		if (appSettingsPending > 0) return;
+		if (!backendAppSettingsReady) {
+			if (appSettingsBeforeEarlyEdits) appSettings = appSettingsBeforeEarlyEdits;
+			appSettingsEarlyEdits = {};
+			appSettingsBeforeEarlyEdits = null;
+			setUiLocale(appSettings.locale || "ja-JP");
+			return;
+		}
+		const sequence = ++appSettingsSaveSequence;
+		appSettingsPending++;
+		try {
+			const saved = await invoke<AppSettings>("get_app_settings");
+			if (!saved) throw new Error("Settings read returned no values");
+			const effectiveLocale = saved.locale || await invoke<string>("i18n_resolve_default_locale");
+			if (sequence === appSettingsSaveSequence) {
+				saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, saved);
+				appSettings = saved;
+				appSettingsEarlyEdits = {};
+				backendAppSettingsReady = true;
+				appSettingsSaveError = "";
+				setUiLocale(effectiveLocale);
+			}
+		} catch (error) {
+			if (sequence === appSettingsSaveSequence) appSettingsSaveError = String(error);
+		} finally { appSettingsPending--; }
 	}
 
 	function replaceAvatarSetting(setting: AvatarSetting, selectSetting = true): void {
@@ -855,24 +968,30 @@
 		};
 	}
 
-	/// Renderers / Avatar Settings 画面で選択された ID を Tauri 側へ即座に保存する。
-	/// 失敗は UI を阻害しないようサイレントに無視する。
+	/// Remember editor selection in order without changing the launch target.
+	let lastSelectionSaveQueue: Promise<void> = Promise.resolve();
 	async function persistLastSelectedSettingId(id: string | null): Promise<void> {
 		if (!hasTauriRuntime()) return;
 		if (!backendAppSettingsReady) return;
-		try {
-			await invoke("set_last_selected_setting_id", { value: id });
-			appSettings = { ...appSettings, last_selected_setting_id: id };
-			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
-		} catch {
-			// 永続化失敗は次回起動時に「先頭プロファイル」にフォールバックするだけなので致命的ではない
-		}
+		const save = lastSelectionSaveQueue.then(async () => {
+			if (id === appSettings.last_selected_setting_id) return;
+			try {
+				await invoke("set_last_selected_setting_id", { value: id });
+				appSettings = { ...appSettings, last_selected_setting_id: id };
+				saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
+			} catch (error) {
+				message = `set_last_selected_setting_id failed: ${String(error)}`;
+			}
+		});
+		lastSelectionSaveQueue = save;
+		await save;
 	}
 
 	function setAppSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void {
+		if (!backendAppSettingsReady && !appSettingsBeforeEarlyEdits) appSettingsBeforeEarlyEdits = { ...appSettings };
 		appSettings = { ...appSettings, [key]: value };
-		saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
-		syncAppSettingsToBackend(appSettings);
+		if (!backendAppSettingsReady) appSettingsEarlyEdits = { ...appSettingsEarlyEdits, [key]: value };
+		void syncAppSettingsToBackend(appSettings);
 	}
 
 	function setThemeMode(mode: ThemeMode): void {
@@ -905,19 +1024,29 @@
 	}
 
 	async function loadBackendAppSettings(): Promise<void> {
-		if (!hasTauriRuntime()) return;
+		if (!hasTauriRuntime() || backendAppSettingsLoading) return;
+		backendAppSettingsLoading = true;
+		appSettingsPending++;
 		try {
-			appSettings = await invoke<AppSettings>("get_app_settings");
-			saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
-			// backend が解決した locale (永続化済 or 起動時 OS 自動解決済) を svelte-i18n へ反映する。
-			// 空文字なら resolve_default_locale を再取得して適用 (起動経路の単一化のため)。
-			const effective = appSettings.locale || (await invoke<string>("i18n_resolve_default_locale").catch(() => "ja-JP"));
-			setUiLocale(effective);
-		} catch (error) {
-			message = String(error);
-		} finally {
+			const saved = await invoke<AppSettings>("get_app_settings");
+			if (!saved) throw new Error("Settings read returned no values");
+			const resolvedLocale = saved.locale || (await invoke<string>("i18n_resolve_default_locale").catch(() => "ja-JP"));
+			const hasEarlyEdits = Object.keys(appSettingsEarlyEdits).length > 0;
+			appSettings = { ...saved, ...appSettingsEarlyEdits };
+			appSettingsEarlyEdits = {};
+			appSettingsBeforeEarlyEdits = null;
 			backendAppSettingsReady = true;
+			appSettingsSaveError = "";
+			setUiLocale(appSettings.locale || resolvedLocale);
+			if (hasEarlyEdits) void syncAppSettingsToBackend(appSettings);
+			else saveAppSettings(appSettingsStorageKey, legacyThemeModeStorageKey, appSettings);
+		} catch (error) {
+			appSettingsSaveError = String(error);
+		} finally {
+			backendAppSettingsLoading = false;
+			appSettingsPending--;
 		}
+
 		try {
 			appVersion = await invoke<string>("app_version");
 		} catch {
@@ -966,12 +1095,18 @@
 	}
 
 	function iconSrc(path: string | null): string {
-		const src = profileIconSrc(path, hasTauriRuntime(), convertFileSrc);
+		const profile = path ? avatarSettings.find(setting => setting.icon_path === path) : null;
+        const original = profileIconSrc(path, hasTauriRuntime(), convertFileSrc);
+        const src = hasTauriRuntime() && profile && (original.startsWith("http://asset.localhost/") || original.startsWith("asset://"))
+            ? `http://un-avatar-profile-icon.localhost/${encodeURIComponent(profile.id)}?revision=${encodeURIComponent(profile.revision ?? path ?? "")}`
+            : original;
 		const revision = path ? (profileIconRevision[path] ?? 0) : 0;
 		if (!revision || src.startsWith("data:image/") || src === DEFAULT_PROFILE_ICON_SRC) return src;
 		return `${src}${src.includes("?") ? "&" : "?"}v=${revision}`;
 	}
 
+	let profileBatchSequence = 0;
+	let profileBatchDrafts = $state<{id:number; settingId:string; name:string; updates:ProfilePresetUpdate[]; state:"saving"|"failed"; error:string}[]>([]);
 	async function applyProfileUpdates(updates: readonly ProfilePresetUpdate[]): Promise<void> {
 		if (updates.length === 0) return;
 		if (!selectedSetting || !hasTauriRuntime() || updates.some(([field]) => field === "avatar_path")) {
@@ -981,12 +1116,16 @@
 			return;
 		}
 		const previousSetting = selectedSetting;
+		const snapshot: ProfilePresetUpdate[] = JSON.parse(JSON.stringify(updates));
+		const draftId = ++profileBatchSequence;
+		profileBatchDrafts = [...profileBatchDrafts, {id:draftId,settingId:previousSetting.id,name:previousSetting.name,updates:snapshot,state:"saving",error:""}];
+		let saved = false;
 		const updatePayload: Array<{ field: string; value: ProfileSettingValue }> = [];
 		const restartTargets: Array<{
 			field: string;
 			renderer: RendererInstance | null;
 		}> = [];
-		for (const [field, value] of updates) {
+		for (const [field, value] of snapshot) {
 			updatePayload.push({ field, value });
 			restartTargets.push({
 				field,
@@ -996,15 +1135,19 @@
 		try {
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_values", {
 				settingId: previousSetting.id,
+				...(previousSetting.revision ? { expectedRevision: previousSetting.revision } : {}),
 				updates: updatePayload,
 			});
+			saved = true;
+			profileBatchDrafts = profileBatchDrafts.filter(draft => draft.id !== draftId);
 			message = $_("profiles.messages.updated_setting");
-			replaceAvatarSetting(setting);
-			await applyRuntimeProfileUpdates(updates, setting, previousSetting);
+			replaceAvatarSetting(setting, false);
+			await applyRuntimeProfileUpdates(snapshot, setting, previousSetting);
 			for (const { field, renderer } of restartTargets) {
 				queueRendererRestart(renderer, field);
 			}
 		} catch (error) {
+			if (!saved) profileBatchDrafts = profileBatchDrafts.map(draft => draft.id === draftId ? {...draft,state:"failed",error:String(error)} : draft);
 			message = String(error);
 		}
 	}
@@ -1235,7 +1378,17 @@
 
 	function renderersForSetting(setting: AvatarSetting | null): RendererInstance[] {
 		if (!setting) return [];
-		return liveRenderersByManifestPath.get(normalizedPathKey(setting.manifest_path)) ?? [];
+		return renderers.filter((renderer) => isLiveRenderer(renderer) && (renderer.profile_id != null
+            ? renderer.profile_id === setting.id
+            : sameNormalizedPath(renderer.manifest_path, setting.manifest_path)));
+	}
+
+	let reviewRendererTargets = $state<Record<string, number>>({});
+	function reviewRendererForSetting(setting: AvatarSetting): RendererInstance | null {
+		const live = renderersForSetting(setting);
+		const selected = reviewRendererTargets[setting.id];
+		if (selected !== undefined) return live.find((renderer) => renderer.id === selected) ?? null;
+		return live.length === 1 ? live[0] : null;
 	}
 
 	function rendererForSetting(setting: AvatarSetting | null): RendererInstance | null {
@@ -1243,7 +1396,8 @@
 	}
 
 	function settingForRenderer(renderer: RendererInstance | null): AvatarSetting | null {
-		if (!renderer?.manifest_path) return null;
+		if (!renderer) return null;
+        if (renderer.profile_id != null) return avatarSettingById.get(renderer.profile_id) ?? null;
 		return settingForManifestPath(renderer.manifest_path);
 	}
 
@@ -1296,12 +1450,15 @@
 
 	async function restartPendingRenderer(): Promise<void> {
 		const pending = pendingRendererRestart;
-		if (!pending) return;
-		pendingRendererRestart = null;
-		await restartRenderer(pending.renderer);
+		if (!pending || busy) return;
+		const restarted = await restartRenderer(pending.renderer);
+		if (restarted && pendingRendererRestart === pending) pendingRendererRestart = null;
 	}
 
-	async function refreshAll(): Promise<void> {
+	let refreshAllRequest = 0;
+	async function refreshAll(propagateError = false): Promise<void> {
+		const request = ++refreshAllRequest;
+		const settingsAtRequest = avatarSettings;
 		traceFrontendEvent("refreshAll:enter", { activeTab });
 		if (!hasTauriRuntime()) {
 			renderers = [];
@@ -1336,18 +1493,24 @@
 					}
 				),
 			]);
+			if (request !== refreshAllRequest) return;
 			renderers = instances;
-			loadedProfileDetailKey = "";
-			avatarSettings = settings;
+			if (avatarSettings === settingsAtRequest && pendingProfileSettingUpdates.size === 0) {
+				loadedProfileDetailKey = "";
+				avatarSettings = settings;
+			}
 			await refreshRendererRuntimeStatuses(instances);
+			if (request !== refreshAllRequest) return;
 			void refreshRendererCacheStatus();
 			notifications = appNotifications;
 			nativeNotificationStatus = nativeNotifications;
 			reconcileSelectedRendererId(instances);
-			selectedSettingId = pickInitialSelectedSettingId(selectedSettingId, appSettings.last_selected_setting_id, settings);
-			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, settings);
+			selectedSettingId = pickInitialSelectedSettingId(selectedSettingId, appSettings.last_selected_setting_id, avatarSettings);
+			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, avatarSettings);
 			traceFrontendEvent("refreshAll:ok", { renderers: instances.length, settings: settings.length });
 		} catch (error) {
+			if (request !== refreshAllRequest) return;
+			if (propagateError === true) throw error;
 			message = String(error);
 			traceFrontendEvent("refreshAll:error", { error: String(error) });
 		}
@@ -1506,6 +1669,7 @@
 		}
 	}
 
+	const runtimeCommandGenerations = new Map<string, number>();
 	async function applyRendererCommand(
 		targetRenderers: RendererInstance[],
 		command: string,
@@ -1515,11 +1679,21 @@
 		let applied = 0;
 		await Promise.all(
 			targetRenderers.map(async (renderer) => {
+				const key = `${renderer.id}\n${command}`;
+				const generation = (runtimeCommandGenerations.get(key) ?? 0) + 1;
+				runtimeCommandGenerations.set(key, generation);
+				let failure: string | null = null;
 				try {
 					await invoke(command, { id: renderer.id, ...(await payload(renderer)) });
 					applied += 1;
 				} catch (error) {
 					console.warn(logLabel, error);
+					failure = String(error);
+				} finally {
+					if (runtimeCommandGenerations.get(key) === generation) {
+						runtimeCommandFailures = runtimeCommandFailures.filter((item) => item.rendererId !== renderer.id || item.command !== command);
+						if (failure !== null) runtimeCommandFailures = [...runtimeCommandFailures, { rendererId: renderer.id, name: renderer.name, command, error: failure }];
+					}
 				}
 			})
 		);
@@ -1558,45 +1732,42 @@
 	}
 
 	async function launchSetting(id: string | null, allowGroupTarget = true): Promise<void> {
-		if (!id && (!allowGroupTarget || !launchGroupName)) return;
-		if (!hasTauriRuntime()) {
-			message = $_("profiles.messages.launch_requires_tauri");
-			return;
-		}
+		if (busy || (!id && (!allowGroupTarget || !launchGroupName))) return;
+		if (!hasTauriRuntime()) { message = $_("profiles.messages.launch_requires_tauri"); return; }
+		const group = allowGroupTarget ? launchGroupName : null;
+		const targets = group ? launchGroupSettings.map(setting => ({ id: setting.id, name: setting.name })) : [{ id, name: id ?? "" }];
+		const originSelection = selectedRendererId;
+		const originNavigation = editorNavigationGeneration;
+		const originTab = activeTab;
+		const opened: RendererInstance[] = [];
+		let targetName = "";
+		let outcome = "";
+		let failed = false;
 		busy = true;
 		try {
-			if (allowGroupTarget && launchGroupName) {
-				if (launchGroupSettings.length === 0) {
-					throw new Error($_("profiles.messages.empty_launch_group", { values: { group: launchGroupName } }));
-				}
-				let lastInstance: RendererInstance | null = null;
-				for (const setting of launchGroupSettings) {
-					lastInstance = await invoke<RendererInstance>("launch_renderer", {
-						settingId: setting.id,
-					});
-				}
-				if (lastInstance) selectedRendererId = lastInstance.id;
-				message = $_("profiles.messages.opened_renderers", { values: { count: launchGroupSettings.length } });
-				await refreshAll();
-				if (appSettings.jump_to_renderers_on_quick_run) {
-					setActiveTab("renderers", "launchSetting:group");
-				}
-				return;
+			if (!targets.length) throw new Error($_("profiles.messages.empty_launch_group", { values: { group } }));
+			for (const target of targets) {
+				targetName = target.name || target.id || "";
+				opened.push(await invoke<RendererInstance>("launch_renderer", { settingId: target.id }));
 			}
-
-			const instance = await invoke<RendererInstance>("launch_renderer", {
-				settingId: id,
-			});
-			selectedRendererId = instance.id;
-			message = $_("profiles.messages.opened_renderer", { values: { name: instance.name } });
-			await refreshAll();
-			if (appSettings.jump_to_renderers_on_quick_run) {
-				setActiveTab("renderers", "launchSetting:single");
-			}
+			outcome = group ? $_("profiles.messages.opened_renderers", { values: { count: opened.length } }) : $_("profiles.messages.opened_renderer", { values: { name: opened[0].name } });
 		} catch (error) {
-			message = String(error);
+			failed = true;
+			outcome = $_("profiles.messages.launch_target_failed", { values: { name: targetName || group || "", error: String(error) } });
+			if (opened.length) outcome += "\n" + $_("profiles.messages.partial_launch", { values: { count: opened.length, ids: opened.map(item => `#${item.id}`).join(", ") } });
 		} finally {
-			busy = false;
+			const lastInstance = opened[opened.length - 1];
+			const retainedSelection = selectedRendererId === originSelection;
+			if (lastInstance && retainedSelection) selectedRendererId = lastInstance.id;
+			try { await refreshAll(true); }
+			catch (error) { outcome += "\n" + $_("profiles.messages.launch_refresh_failed", { values: { error: String(error) } }); }
+			finally {
+				message = outcome;
+				busy = false;
+			}
+			if (!failed && lastInstance && retainedSelection && selectedRendererId === lastInstance.id && editorNavigationGeneration === originNavigation && activeTab === originTab && appSettings.jump_to_renderers_on_quick_run) {
+				setActiveTab("renderers", group ? "launchSetting:group" : "launchSetting:single");
+			}
 		}
 	}
 
@@ -1692,8 +1863,15 @@
 		}
 	}
 
+	$effect(() => {
+		if (startupAutoLaunchReady && backendAppSettingsReady && !busy) {
+			untrack(() => { void maybeAutoLaunchSelectedOnStartup(); });
+		}
+	});
+
 	async function maybeAutoLaunchSelectedOnStartup(): Promise<void> {
-		if (startupAutoLaunchAttempted) return;
+		if (busy) return;
+		if (!backendAppSettingsReady || startupAutoLaunchAttempted) return;
 		startupAutoLaunchAttempted = true;
 		if (!appSettings.auto_launch_selected_on_startup) return;
 		if (!isValidLaunchTarget(launchTargetId, avatarSettings)) return;
@@ -1703,7 +1881,15 @@
 	}
 
 	async function duplicateSetting(id: string | null): Promise<void> {
-		if (!id) return;
+		if (!id || busy) return;
+		if ([...pendingProfileSettingUpdates.values()].some((pending) => pending.settingId === id)
+            || profileBatchDrafts.some((draft) => draft.settingId === id)) {
+			message = $_("profiles.messages.duplicate_pending_edits");
+			return;
+		}
+		const originSelection = selectedSettingId;
+		const originTab = activeTab;
+		const originNavigation = editorNavigationGeneration;
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.duplicate_requires_tauri");
 			return;
@@ -1714,9 +1900,11 @@
 				settingId: id,
 			});
 			message = $_("profiles.messages.duplicated", { values: { name: setting.name } });
-			await refreshAll();
-			selectedSettingId = setting.id;
-			setActiveTab("settings", "duplicateSetting");
+			avatarSettings = [...avatarSettings, setting].sort(compareAvatarSettings);
+			if (editorNavigationGeneration === originNavigation && selectedSettingId === originSelection && activeTab === originTab) {
+				selectedSettingId = setting.id;
+				setActiveTab("settings", "duplicateSetting");
+			}
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1724,27 +1912,42 @@
 		}
 	}
 
+	let creatingProfile = $state(false);
+
 	async function newSetting(): Promise<void> {
+		if (busy) return;
+		const originSelection = selectedSettingId;
+		const originTab = activeTab;
+		const originNavigation = editorNavigationGeneration;
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.new_requires_tauri");
 			return;
 		}
 		busy = true;
+		creatingProfile = true;
 		try {
 			const setting = await invoke<AvatarSetting>("new_avatar_setting");
 			message = $_("profiles.messages.created", { values: { name: setting.name } });
-			await refreshAll();
-			selectedSettingId = setting.id;
-			setActiveTab("settings", "newSetting");
+			avatarSettings = [...avatarSettings, setting].sort(compareAvatarSettings);
+			if (editorNavigationGeneration === originNavigation && selectedSettingId === originSelection && activeTab === originTab) {
+				selectedSettingId = setting.id;
+				setActiveTab("settings", "newSetting");
+			}
 		} catch (error) {
 			message = String(error);
 		} finally {
 			busy = false;
+			creatingProfile = false;
 		}
 	}
 
-	async function deleteSetting(id: string | null): Promise<void> {
-		if (!id) return;
+	async function deleteSetting(id: string | null, expectedRevision = id ? avatarSettingBySelectedId(id)?.revision : undefined): Promise<void> {
+		if (!id || busy) return;
+        if ([...pendingProfileSettingUpdates.values()].some((pending) => pending.settingId === id)
+            || profileBatchDrafts.some((draft) => draft.settingId === id)) {
+            message = $_("profiles.archive.pending_edits");
+            return;
+        }
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.delete_requires_tauri");
 			return;
@@ -1753,9 +1956,12 @@
 		if (!setting) return;
 		busy = true;
 		try {
-			await invoke("delete_avatar_setting", { settingId: id });
+			await invoke("delete_avatar_setting", { settingId: id, ...(expectedRevision ? { expectedRevision } : {}) });
 			message = $_("profiles.messages.deleted", { values: { name: setting.name } });
-			selectedSettingId = null;
+			// Reflect the acknowledged deletion before selection effects or a failed
+			// telemetry refresh can prevent refreshAll from replacing the list.
+			avatarSettings = avatarSettings.filter((entry) => entry.id !== id);
+			if (selectedSettingId === id) selectedSettingId = null;
 			await refreshAll();
 		} catch (error) {
 			message = String(error);
@@ -1764,9 +1970,20 @@
 		}
 	}
 
+	async function restoreArchivedSetting(archiveId: string): Promise<void> {
+		if (busy) throw new Error("Profile operation already in progress");
+		busy = true;
+		try {
+			await invoke("restore_avatar_setting", { archiveId });
+			try { avatarSettings = await invoke<AvatarSetting[]>("list_avatar_settings"); }
+			catch (error) { throw new Error(`${$_("profiles.archive.refresh_failed")}: ${String(error)}`); }
+		} finally { busy = false; }
+	}
+
 	function startDeleteHold(id: string | null): void {
 		if (!id || busy) return;
 		cancelDeleteHold();
+		const expectedRevision = avatarSettingBySelectedId(id)?.revision;
 		deleteHoldTargetId = id;
 		deleteHoldProgress = 0;
 		deleteHoldStartedAt = performance.now();
@@ -1775,7 +1992,7 @@
 			deleteHoldProgress = Math.min(1, (performance.now() - deleteHoldStartedAt) / deleteHoldDurationMs);
 			if (deleteHoldProgress >= 1) {
 				cancelDeleteHold();
-				void deleteSetting(id);
+				void deleteSetting(id, expectedRevision);
 				return;
 			}
 			deleteHoldTimer = window.requestAnimationFrame(tick);
@@ -1832,24 +2049,62 @@
 	}
 
 	async function saveSettingsOrder(): Promise<void> {
+		if(orderSaving||orderDraft?.committed)return;
+		const draft=orderDraft??{reviewed:avatarSettings.map(setting=>({...setting})),ids:avatarSettings.map(setting=>setting.id)};
+		orderDraft=draft;orderSaving=true;
+		const reviewed = draft.reviewed;
 		try {
-			await invoke<AvatarSetting[]>("reorder_avatar_settings", {
-				settingIds: avatarSettings.map((setting) => setting.id),
+			const saved = await invoke<AvatarSetting[]>("reorder_avatar_settings", {
+				settingIds: [...draft.ids],
+				expectedRevisions: reviewed.every(setting=>typeof setting.revision==='string') ? Object.fromEntries(reviewed.map(setting=>[setting.id,setting.revision])) : undefined,
 			});
+			for (const setting of saved) {
+				const previous=reviewed.find(item=>item.id===setting.id);
+				if(previous&&avatarSettings.find(item=>item.id===setting.id)?.revision===previous.revision) replaceAvatarSetting(setting,false);
+			}
 			message = $_("profiles.messages.reordered");
+			orderDraft=null;
 		} catch (error) {
-			message = String(error);
-			await refreshAll();
+			if(String(error).startsWith('profile_order_committed_refresh_failed:')) {
+				orderDraft={...draft,committed:true};
+				message=$_('profiles.order_draft.committed');
+			} else message = String(error);
+		} finally {orderSaving=false;}
+	}
+	async function discardSettingsOrder(): Promise<void> {
+		if(orderSaving)return;
+		orderSaving=true;
+		try{
+			const beforeRead=avatarSettings;
+			const versions=avatarSettings.map(setting=>({id:setting.id,revision:setting.revision}));
+			if(pendingProfileSettingUpdates.size)throw Error($_("profiles.order_draft.changed_during_read"));
+			const saved=await invoke<AvatarSetting[]>("list_avatar_settings");
+			if(avatarSettings!==beforeRead||pendingProfileSettingUpdates.size||versions.length!==avatarSettings.length||versions.some((version,index)=>version.id!==avatarSettings[index]?.id||version.revision!==avatarSettings[index]?.revision))throw Error($_("profiles.order_draft.changed_during_read"));
+			avatarSettings=saved;orderDraft=null;
 		}
+		catch(error){message=String(error);if(orderDraft)orderDraft={...orderDraft,error:String(error)};}
+		finally{orderSaving=false;}
+	}
+	async function restoreProfileOrder(root:string,entry:OrderRecoveryEntry):Promise<void>{
+		if(busy||orderSaving||orderDraft||pendingProfileSettingUpdates.size)throw Error($_("profiles.order_recovery.pending"));
+		busy=true;
+		try{avatarSettings=await invoke<AvatarSetting[]>("restore_profile_order",{expectedRoot:root,name:entry.name,revision:entry.revision});}
+		catch(error){
+			if(String(error).startsWith('profile_order_committed_refresh_failed:'))orderDraft={reviewed:avatarSettings.map(setting=>({...setting})),ids:avatarSettings.map(setting=>setting.id),committed:true};
+			throw error;
+		}
+		finally{busy=false;}
 	}
 
 	function beginSettingPointerDrag(event: PointerEvent, settingId: string): void {
-		if (busy || event.button !== 0) return;
+		if (busy || orderSaving || orderDraft || event.button !== 0) return;
 		const card = (event.currentTarget as HTMLElement).closest<HTMLElement>("[data-profile-id]");
 		const rect = card?.getBoundingClientRect();
 		if (!rect) return;
 		settingPointerDrag = {
 			id: settingId,
+			reviewed: avatarSettings.map(setting=>({...setting})),
+			desiredIds: avatarSettings.map(setting=>setting.id),
 			startX: event.clientX,
 			startY: event.clientY,
 			currentX: event.clientX,
@@ -1876,6 +2131,7 @@
 	}
 
 	function cancelSettingPointerDrag(): void {
+		if(settingPointerDrag){const order=settingPointerDrag.reviewed.map(s=>s.id);avatarSettings=[...avatarSettings].sort((a,b)=>(order.indexOf(a.id)<0?order.length:order.indexOf(a.id))-(order.indexOf(b.id)<0?order.length:order.indexOf(b.id)));}
 		removeSettingDragListeners();
 		settingPointerDrag = null;
 		draggedSettingId = null;
@@ -1902,6 +2158,7 @@
 			return event.clientY < rect.top + rect.height / 2;
 		});
 		previewSettingReorder(drag.id, insertIndex < 0 ? avatarSettings.length : insertIndex);
+		if(settingPointerDrag)settingPointerDrag={...settingPointerDrag,desiredIds:avatarSettings.map(setting=>setting.id)};
 	}
 
 	function scrollSettingListDuringDrag(clientY: number): void {
@@ -1922,13 +2179,14 @@
 		settingPointerDrag = null;
 		draggedSettingId = null;
 		if (!drag?.active) return;
+		orderDraft={reviewed:drag.reviewed,ids:drag.desiredIds};
 		event.preventDefault();
 		event.stopPropagation();
 		void saveSettingsOrder();
 	}
 
 	async function browseSettingPath(field: "avatar_path" | "icon_path", kind: "avatar" | "icon"): Promise<void> {
-		const targetSetting = selectedSetting;
+		const targetSetting = selectedSetting ? { ...selectedSetting } : null;
 		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.file_picker_requires_tauri");
@@ -1946,14 +2204,8 @@
 				await requestAvatarPathUpdate(path, rendererToRestart, targetSetting);
 				return;
 			}
-			const setting = await invoke<AvatarSetting>("update_avatar_setting_path", {
-				settingId: targetSetting.id,
-				field,
-				path,
-			});
-			message = $_("profiles.messages.updated_icon_path");
-			replaceAvatarSetting(setting);
-			queueRendererRestart(rendererToRestart, field);
+			scheduleCoalescedProfileSettingUpdate(targetSetting, field, path);
+			await flushCoalescedProfileSettingUpdate(profileSettingUpdateKey(targetSetting.id, field));
 		} catch (error) {
 			message = String(error);
 		} finally {
@@ -1967,8 +2219,9 @@
 		targetSetting: AvatarSetting | null = selectedSetting
 	): Promise<void> {
 		if (!targetSetting) return;
+		const expectedRevision = targetSetting.revision;
 		if (!path.trim()) {
-			await saveAvatarPath(path, rendererToRestart, targetSetting.id);
+			await saveAvatarPath(path, rendererToRestart, targetSetting.id, expectedRevision);
 			return;
 		}
 		if (looksLikeUnavatarPath(path)) {
@@ -1989,6 +2242,7 @@
 				metadata,
 				pendingPath: path,
 				settingId: targetSetting.id,
+				expectedRevision,
 				rendererToRestart,
 			};
 			message = $_("unavatar_rights.title");
@@ -2000,28 +2254,31 @@
 				metadata,
 				pendingPath: path,
 				settingId: targetSetting.id,
+				expectedRevision,
 				rendererToRestart,
 			};
 			useThumbnailForProfileIconOnAccept = Boolean(metadata.thumbnail_data_url);
 			message = $_("vrm_metadata.messages.review_before_use");
 			return;
 		}
-		await saveAvatarPath(path, rendererToRestart, targetSetting.id);
+		await saveAvatarPath(path, rendererToRestart, targetSetting.id, expectedRevision);
 	}
 
 	async function saveAvatarPath(
 		path: string,
 		rendererToRestart: RendererInstance | null,
-		settingId: string | null = selectedSetting?.id ?? null
+		settingId: string | null = selectedSetting?.id ?? null,
+		expectedRevision?: string
 	): Promise<AvatarSetting | null> {
 		if (!settingId) return null;
 		const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
 			settingId,
+			...(expectedRevision ? { expectedRevision } : {}),
 			field: "avatar_path",
 			value: path,
 		});
 		message = $_("profiles.messages.updated_avatar_path");
-		replaceAvatarSetting(setting);
+		replaceAvatarSetting(setting, false);
 		queueRendererRestart(rendererToRestart, "avatar_path");
 		return setting;
 	}
@@ -2029,21 +2286,37 @@
 	async function acceptVrmMetadataAndUse(): Promise<void> {
 		const modal = vrmMetadataModal;
 		if (!modal?.pendingPath) return;
-		vrmMetadataModal = null;
+		const useThumbnail = modal.avatarPathSaved || useThumbnailForProfileIconOnAccept;
+		modal.saveError = undefined;
 		busy = true;
+		let recoveryModal = modal;
 		try {
-			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
-			if (useThumbnailForProfileIconOnAccept && modal.metadata.thumbnail_data_url) {
+			if (!modal.avatarPathSaved) {
+				const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId, modal.expectedRevision);
+				recoveryModal = {
+					...modal, avatarPathSaved: true,
+					settingId: savedSetting?.id ?? modal.settingId,
+					expectedRevision: savedSetting?.revision,
+				};
+				if (vrmMetadataModal === modal) {
+					vrmMetadataModal = recoveryModal;
+					recoveryModal = vrmMetadataModal;
+				}
+			}
+			if (useThumbnail && modal.metadata.thumbnail_data_url) {
 				await applySelectedAvatarThumbnail({
 					rendererToRestart: modal.rendererToRestart,
-					settingId: savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
+					settingId: recoveryModal.settingId,
 					avatarPath: modal.pendingPath,
+					expectedRevision: recoveryModal.expectedRevision,
 					manageBusy: false,
 				});
 			} else {
 				message = $_("vrm_metadata.messages.updated_after_confirmation");
 			}
+			if (vrmMetadataModal === recoveryModal) vrmMetadataModal = null;
 		} catch (error) {
+			if (vrmMetadataModal === recoveryModal) recoveryModal.saveError = String(error);
 			message = String(error);
 		} finally {
 			busy = false;
@@ -2053,22 +2326,33 @@
 	async function acceptUnavatarMetadataAndUse(): Promise<void> {
 		const modal = unavatarMetadataModal;
 		if (!modal?.pendingPath) return;
-		unavatarMetadataModal = null;
+		const crop = { ...unavatarProfileIconCrop };
+		modal.saveError = undefined;
 		busy = true;
+		let recoveryModal = modal;
 		try {
-			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId);
+			const savedSetting = await saveAvatarPath(modal.pendingPath, modal.rendererToRestart, modal.settingId, modal.expectedRevision);
+			recoveryModal = {
+				...modal, pendingPath: null, iconSelectionOnly: true, avatarPathSaved: true,
+				settingId: savedSetting?.id ?? modal.settingId,
+				expectedRevision: savedSetting?.revision,
+			};
+			// Keep the same dialog mounted so its selected preview and crop survive.
+			if (unavatarMetadataModal === modal) {
+				unavatarMetadataModal = recoveryModal;
+				recoveryModal = unavatarMetadataModal;
+			}
 			let savedProfileIcon = false;
-			if (unavatarProfileIconCrop.enabled && unavatarProfileIconCrop.imageDataUrl) {
-				await saveUnavatarProfileIconCrop(
-					savedSetting?.id ?? savedSetting?.manifest_path ?? modal.settingId,
-					modal.rendererToRestart
-				);
+			if (crop.enabled && crop.imageDataUrl) {
+				await saveUnavatarProfileIconCrop(recoveryModal.settingId, modal.rendererToRestart, recoveryModal.expectedRevision, crop);
 				savedProfileIcon = true;
 			}
+			if (unavatarMetadataModal === recoveryModal) unavatarMetadataModal = null;
 			message = savedProfileIcon
 				? $_("profiles.messages.updated_unavatar_sample_icon")
 				: $_("vrm_metadata.messages.updated_after_confirmation");
 		} catch (error) {
+			if (unavatarMetadataModal === recoveryModal) recoveryModal.saveError = String(error);
 			message = String(error);
 		} finally {
 			busy = false;
@@ -2081,11 +2365,16 @@
 			settingId?: string | null;
 			avatarPath?: string | null;
 			manageBusy?: boolean;
+			expectedRevision?: string;
 		} = {}
 	): Promise<void> {
 		const settingId = options.settingId ?? selectedSetting?.manifest_path ?? selectedSetting?.id ?? null;
+		const expectedRevision = options.expectedRevision ?? avatarSettingByIdOrManifestPath(settingId)?.revision;
 		const avatarPath = options.avatarPath ?? selectedSetting?.avatar_path ?? null;
-		const rendererToRestart = options.rendererToRestart ?? restartableRendererForField("icon_path");
+		// Explicit null retains the captured absence of a renderer after profile navigation.
+		const rendererToRestart = options.rendererToRestart === undefined
+			? restartableRendererForField("icon_path")
+			: options.rendererToRestart;
 		const manageBusy = options.manageBusy ?? true;
 		if (!settingId) return;
 		if (!avatarPath?.trim()) {
@@ -2097,7 +2386,7 @@
 			return;
 		}
 		if (looksLikeUnavatarPath(avatarPath)) {
-			await openUnavatarProfileIconPicker(avatarPath, settingId, rendererToRestart);
+			await openUnavatarProfileIconPicker(avatarPath, settingId, rendererToRestart, expectedRevision);
 			return;
 		}
 		if (manageBusy) busy = true;
@@ -2105,9 +2394,10 @@
 			message = $_("profiles.messages.saving_thumbnail_icon");
 			const setting = await invoke<AvatarSetting>("save_avatar_thumbnail_icon", {
 				settingId,
+				...(expectedRevision ? { expectedRevision } : {}),
 				avatarPath,
 			});
-			replaceAvatarSetting(setting);
+			replaceAvatarSetting(setting, false);
 			bumpProfileIconRevision(setting.icon_path);
 			queueRendererRestart(rendererToRestart, "icon_path");
 			message = $_("profiles.messages.updated_thumbnail_icon");
@@ -2122,7 +2412,8 @@
 	async function openUnavatarProfileIconPicker(
 		avatarPath: string,
 		settingId: string,
-		rendererToRestart: RendererInstance | null
+		rendererToRestart: RendererInstance | null,
+		expectedRevision?: string
 	): Promise<void> {
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.thumbnail_requires_tauri");
@@ -2150,6 +2441,7 @@
 				settingId,
 				rendererToRestart,
 				iconSelectionOnly: true,
+				expectedRevision,
 			};
 			message = $_("profiles.messages.choose_unavatar_sample_icon");
 		} catch (error) {
@@ -2161,19 +2453,22 @@
 
 	async function saveUnavatarProfileIconCrop(
 		settingId: string | null | undefined,
-		rendererToRestart: RendererInstance | null
+		rendererToRestart: RendererInstance | null,
+		expectedRevision?: string,
+		crop: UnavatarProfileIconCrop = unavatarProfileIconCrop
 	): Promise<AvatarSetting | null> {
-		if (!settingId || !unavatarProfileIconCrop.imageDataUrl) return null;
+		if (!settingId || !crop.imageDataUrl) return null;
 		const setting = await invoke<AvatarSetting>("save_profile_icon_from_data_url", {
 			settingId,
-			imageDataUrl: unavatarProfileIconCrop.imageDataUrl,
+			...(expectedRevision ? { expectedRevision } : {}),
+			imageDataUrl: crop.imageDataUrl,
 			crop: {
-				zoom: Number(unavatarProfileIconCrop.zoom) || 1,
-				offset_x: Number(unavatarProfileIconCrop.offsetX) || 0,
-				offset_y: Number(unavatarProfileIconCrop.offsetY) || 0,
+				zoom: Number(crop.zoom) || 1,
+				offset_x: Number(crop.offsetX) || 0,
+				offset_y: Number(crop.offsetY) || 0,
 			},
 		});
-		replaceAvatarSetting(setting);
+		replaceAvatarSetting(setting, false);
 		bumpProfileIconRevision(setting.icon_path);
 		queueRendererRestart(rendererToRestart, "icon_path");
 		return setting;
@@ -2182,12 +2477,14 @@
 	async function saveUnavatarProfileIconFromModal(): Promise<void> {
 		const modal = unavatarMetadataModal;
 		if (!modal || !unavatarProfileIconCrop.enabled || !unavatarProfileIconCrop.imageDataUrl) return;
+		modal.saveError = undefined;
 		busy = true;
 		try {
-			await saveUnavatarProfileIconCrop(modal.settingId, modal.rendererToRestart);
-			unavatarMetadataModal = null;
+			await saveUnavatarProfileIconCrop(modal.settingId, modal.rendererToRestart, modal.expectedRevision);
+			if (unavatarMetadataModal === modal) unavatarMetadataModal = null;
 			message = $_("profiles.messages.updated_unavatar_sample_icon");
 		} catch (error) {
+			if (unavatarMetadataModal === modal) modal.saveError = String(error);
 			message = String(error);
 		} finally {
 			busy = false;
@@ -2211,15 +2508,16 @@
 	}
 
 	async function reviewSelectedAvatarMetadata(): Promise<void> {
-		if (!selectedSetting?.avatar_path) return;
+		const targetSetting = selectedSetting ? { ...selectedSetting } : null;
+		if (!targetSetting?.avatar_path) return;
 		if (!hasTauriRuntime()) {
 			message = $_("vrm_metadata.messages.tauri_required");
 			return;
 		}
 		busy = true;
 		try {
-			if (looksLikeUnavatarPath(selectedSetting.avatar_path)) {
-				const metadata = await readUnavatarMetadataForPath(selectedSetting.avatar_path, selectedSetting);
+			if (looksLikeUnavatarPath(targetSetting.avatar_path)) {
+				const metadata = await readUnavatarMetadataForPath(targetSetting.avatar_path, targetSetting);
 				if (!metadata) {
 					message = $_("unavatar_rights.messages.no_metadata");
 					return;
@@ -2234,12 +2532,13 @@
 				unavatarMetadataModal = {
 					metadata,
 					pendingPath: null,
-					settingId: selectedSetting.id,
+					settingId: targetSetting.id,
+				expectedRevision: targetSetting.revision,
 					rendererToRestart: null,
 				};
 				return;
 			}
-			const metadata = await readVrmMetadataForPath(selectedSetting.avatar_path, selectedSetting);
+			const metadata = await readVrmMetadataForPath(targetSetting.avatar_path, targetSetting);
 			if (!metadata) {
 				message = $_("vrm_metadata.messages.no_metadata");
 				return;
@@ -2247,7 +2546,8 @@
 			vrmMetadataModal = {
 				metadata,
 				pendingPath: null,
-				settingId: selectedSetting.id,
+				settingId: targetSetting.id,
+				expectedRevision: targetSetting.revision,
 				rendererToRestart: null,
 			};
 		} catch (error) {
@@ -2293,10 +2593,8 @@
 		shouldQueueTransparentRestart: boolean
 	): Promise<void> {
 		if (!renderer) return;
-		await invoke("set_renderer_window", {
-			id: renderer.id,
-			...rendererWindowPayload(setting),
-		});
+		const applied = await applyRendererCommand([renderer], "set_renderer_window", () => rendererWindowPayload(setting));
+		if (!applied) return;
 		message = $_("renderers.messages.updated_window");
 		await refreshRendererRuntimeViewAfterApply();
 		if (shouldQueueTransparentRestart) {
@@ -2326,14 +2624,12 @@
 				enabled: setting.apply_vmc_root_translation,
 			}));
 			if (applied > 0) await refreshRendererRuntimeViewAfterApply();
-			return;
 		}
 		if (fieldSetIncludesAny(fields, motionLookAtFields)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_look_at", () => rendererLookAtPayload(setting));
 			await setAppliedMessage(applied, $_("renderers.messages.updated_look_at"), (count) =>
 				$_("renderers.messages.updated_look_at_count", { values: { count } })
 			);
-			return;
 		}
 		if (fieldSetIncludesAny(fields, motionReceiverFields)) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_motion_receivers", () =>
@@ -2352,14 +2648,13 @@
 	): Promise<void> {
 		if (
 			fieldSetIncludes(fields, DYNAMICS_ENABLED_FIELD) ||
-			fieldSetStartsWith(fields, DYNAMICS_OVERRIDE_FIELD_PREFIX) ||
+			fields.some(field => field.startsWith(DYNAMICS_OVERRIDE_FIELD_PREFIX) && canApplyWithoutRestart(field)) ||
 			fieldSetStartsWith(fields, DYNAMICS_BONE_COLLIDER_FIELD_PREFIX)
 		) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_dynamics", () => ({ setting }));
 			await setAppliedMessage(applied, $_("renderers.messages.updated_physics"), (count) =>
 				$_("renderers.messages.updated_physics_count", { values: { count } })
 			);
-			return;
 		}
 		if (fieldSetIncludes(fields, "debug.show_bone_colliders")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_show_bone_colliders", () => ({
@@ -2383,7 +2678,6 @@
 			await setAppliedMessage(applied, $_("renderers.messages.updated_avatar_effects"), (count) =>
 				$_("renderers.messages.updated_avatar_effects_count", { values: { count } })
 			);
-			return;
 		}
 		if (fieldSetStartsWith(fields, "effects.avatar.contact_shadow.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_contact_shadow", () =>
@@ -2405,7 +2699,6 @@
 			await setAppliedMessage(applied, $_("renderers.messages.updated_avatar_effects"), (count) =>
 				$_("renderers.messages.updated_avatar_effects_count", { values: { count } })
 			);
-			return;
 		}
 		if (fieldSetStartsWith(fields, "effects.post.bloom.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_bloom", () => rendererBloomPayload(setting));
@@ -2427,7 +2720,6 @@
 			await setAppliedMessage(applied, $_("renderers.messages.updated_color_adjustment"), (count) =>
 				$_("renderers.messages.updated_color_adjustment_count", { values: { count } })
 			);
-			return;
 		}
 		if (fieldSetStartsWith(fields, "environment.lighting.")) {
 			const applied = await applyRendererCommand(renderersToApply, "set_renderer_lighting", () => rendererLightingPayload(setting));
@@ -2445,37 +2737,66 @@
 		if (!fieldSetStartsWith(fields, "camera.")) return;
 		const onlyCameraLock = fields.every((field) => field === "camera.locked");
 		let applied = 0;
+		const failures: string[] = [];
 		await Promise.all(
 			renderersToApply.map(async (renderer) => {
-				try {
-					await invoke("set_renderer_camera_lock", {
-						id: renderer.id,
-						locked: setting.camera_locked,
-					});
-					if (!onlyCameraLock) {
-						await invoke("set_renderer_camera_state", {
-							id: renderer.id,
-							target: setting.camera_target,
-							longitudeDeg: setting.camera_longitude_deg,
-							latitudeDeg: setting.camera_latitude_deg,
-							radius: setting.camera_radius,
-							diagonalFovDeg: setting.camera_diagonal_fov_deg,
-							transition: {
-								duration_ms: 320,
-								easing: "ease_out_cubic",
-								mode: "replace",
-							},
-						});
-					}
-					applied += 1;
-				} catch (error) {
-					console.warn("set_renderer_camera_state", error);
+				const failed = (command: string) => {
+					const failure = runtimeCommandFailures.find((item) => item.rendererId === renderer.id && item.command === command);
+					failures.push(`#${renderer.id}: ${failure?.error ?? command}`);
+				};
+				const locked = await applyRendererCommand([renderer], "set_renderer_camera_lock", () => ({ locked: setting.camera_locked }));
+				if (!locked) { failed("set_renderer_camera_lock"); return; }
+				if (!onlyCameraLock) {
+					const positioned = await applyRendererCommand([renderer], "set_renderer_camera_state", () => ({
+						target: setting.camera_target,
+						longitudeDeg: setting.camera_longitude_deg,
+						latitudeDeg: setting.camera_latitude_deg,
+						radius: setting.camera_radius,
+						diagonalFovDeg: setting.camera_diagonal_fov_deg,
+						transition: { duration_ms: 320, easing: "ease_out_cubic", mode: "replace" },
+					}));
+					if (!positioned) { failed("set_renderer_camera_state"); return; }
 				}
+				applied += 1;
 			})
 		);
 		await setAppliedMessage(applied, $_("renderers.messages.updated_camera"), (count) =>
 			$_("renderers.messages.updated_camera_count", { values: { count } })
 		);
+		if (failures.length) {
+			message = $_("profiles.runtime_recovery.camera_apply_partial", {
+				values: { profile: `${setting.name} · ${setting.id}`, applied, failures: failures.join(" / ") },
+			});
+		}
+	}
+
+	const profileRuntimeApplyTails = new Map<string, Promise<void>>();
+
+	async function retrySavedCameraForRenderer(rendererId: number): Promise<void> {
+		const renderer = selectedRendererById(rendererId);
+		const profile = settingForRenderer(renderer);
+		if (!renderer || !profile || !isLiveRenderer(renderer)) return;
+		const profileId = profile.id;
+		const rendererPid = renderer.pid;
+		busy = true;
+		try {
+			// Finish pending edits before the ordered read. Read BEFORE joining the
+			// runtime queue: a later saved edit must still run after this snapshot.
+			for (const [key, pending] of pendingProfileSettingUpdates) {
+				if (pending.settingId === profileId) await flushCoalescedProfileSettingUpdate(key);
+			}
+			const saved = await invoke<AvatarSetting>("get_avatar_setting_details", { settingId: profileId });
+			const preceding = profileRuntimeApplyTails.get(profileId) ?? Promise.resolve();
+			const applying = preceding.catch(() => undefined).then(async () => {
+				const current = selectedRendererById(rendererId);
+				if (!current || current.pid !== rendererPid || !isLiveRenderer(current) || settingForRenderer(current)?.id !== profileId) return;
+				await applyRuntimeCameraUpdate(["camera."], saved, [current]);
+			});
+			profileRuntimeApplyTails.set(profileId, applying);
+			try { await applying; }
+			finally { if (profileRuntimeApplyTails.get(profileId) === applying) profileRuntimeApplyTails.delete(profileId); }
+		} catch (error) { message = String(error); }
+		finally { busy = false; }
 	}
 
 	async function applyRuntimeProfileUpdates(
@@ -2495,7 +2816,11 @@
 		const enablingTransparentOnOpaqueRenderer = enablingTransparent && rendererToApply !== null && !rendererToApply.transparent;
 		const renderersToApply = renderersForSetting(previousSetting);
 
-		await withDeferredRuntimeRefresh(async () => {
+		// Each saved snapshot may emit several asynchronous renderer commands.
+		// Finish that sequence before applying the next snapshot of this profile.
+		// Capture renderer identities above, before waiting; never follow selection.
+		const preceding = profileRuntimeApplyTails.get(setting.id) ?? Promise.resolve();
+		const applying = preceding.catch(() => undefined).then(() => withDeferredRuntimeRefresh(async () => {
 			await applyRuntimeWindowUpdate(setting, rendererToApply, enablingTransparentOnOpaqueRenderer);
 			await applyRuntimeBackgroundColor(fields, setting, renderersToApply);
 			await applyRuntimeMotionUpdate(fields, setting, renderersToApply);
@@ -2504,7 +2829,13 @@
 			await applyRuntimePostEffectsUpdate(fields, setting, renderersToApply);
 			await applyRuntimeEnvironmentUpdate(fields, setting, renderersToApply);
 			await applyRuntimeCameraUpdate(fields, setting, renderersToApply);
-		});
+		}));
+		profileRuntimeApplyTails.set(setting.id, applying);
+		try {
+			await applying;
+		} finally {
+			if (profileRuntimeApplyTails.get(setting.id) === applying) profileRuntimeApplyTails.delete(setting.id);
+		}
 	}
 
 	async function applyRuntimeProfileUpdate(
@@ -2518,6 +2849,7 @@
 
 	type PendingProfileSettingUpdate = {
 		settingId: string;
+		expectedRevision?: string;
 		field: string;
 		value: ProfileSettingValue;
 		timer: number | null;
@@ -2526,6 +2858,45 @@
 	};
 
 	const pendingProfileSettingUpdates = new Map<string, PendingProfileSettingUpdate>();
+	let failedProfileSettingUpdates = $state<{ key: string; settingId: string; field: string; value: ProfileSettingValue; error: string }[]>([]);
+	// Native close review will dispatch this same event before applying its quit
+	// policy. Keep queued/coalesced edits and failed drafts protected even after
+	// the user navigates to another profile or the Renderer page.
+	function guardProfileDraftUnload(event: BeforeUnloadEvent): void {
+		const hasSettingsDraft = Object.keys(appSettingsEarlyEdits).length > 0 || (backendAppSettingsReady && Boolean(appSettingsSaveError));
+		const unresolved = busy || orderSaving || !!orderDraft || profileBatchDrafts.length > 0
+			|| appSettingsPending > 0 || hasSettingsDraft
+			|| pendingProfileSettingUpdates.size > 0 || failedProfileSettingUpdates.length > 0
+			|| profileRuntimeApplyTails.size > 0
+			|| !!vrmMetadataModal?.pendingPath || !!unavatarMetadataModal?.pendingPath;
+		if (!unresolved) return;
+		event.preventDefault();
+		event.returnValue = "";
+	}
+	onMount(() => {
+
+  const blocked = () => { message = ($locale ?? "ja-JP").startsWith("ja") ? "保存中または未保存の変更があります。保存状態を確認してから終了してください。Rendererは停止していません。" : "Changes are pending or unsaved. Review them before closing. Renderers have not been stopped."; };
+  const failed = () => { message = ($locale ?? "ja-JP").startsWith("ja") ? "終了処理を確認できませんでした。状態を確認してから再操作してください。" : "Close could not be confirmed. Review the current state before retrying."; };
+  window.addEventListener("beforeunload", guardProfileDraftUnload);
+  document.documentElement.dataset.unCloseGuardReady = "true";
+  window.addEventListener("un-avatar-close-blocked", blocked);
+  window.addEventListener("un-avatar-close-failed", failed);
+  return () => {
+   delete document.documentElement.dataset.unCloseGuardReady;
+  window.removeEventListener("beforeunload", guardProfileDraftUnload);
+   window.removeEventListener("un-avatar-close-blocked", blocked);
+   window.removeEventListener("un-avatar-close-failed", failed);
+  };
+	});
+
+	// Keep the editable rule array separate from saved/runtime state, per profile.
+	let profileMatchDrafts = $state<Record<string, AvatarSetting["dynamics_match_overrides"]>>({});
+	let profileColliderDrafts = $state<Record<string, AvatarSetting["dynamics_collider_augment_overrides"]>>({});
+	function physicsSettingForEditor(setting: AvatarSetting): AvatarSetting {
+		const draft = profileMatchDrafts[setting.id];
+		const colliders = profileColliderDrafts[setting.id];
+		return { ...setting, ...(draft ? { dynamics_match_overrides: draft } : {}), ...(colliders ? { dynamics_collider_augment_overrides: colliders } : {}) };
+	}
 
 	function profileSettingUpdateKey(settingId: string, field: string): string {
 		return `${settingId}\n${field}`;
@@ -2537,6 +2908,7 @@
 
 	function scheduleCoalescedProfileSettingUpdate(setting: AvatarSetting, field: string, value: ProfileSettingValue): void {
 		const key = profileSettingUpdateKey(setting.id, field);
+		failedProfileSettingUpdates = failedProfileSettingUpdates.filter((item) => item.key !== key);
 		const pending = pendingProfileSettingUpdates.get(key) ?? {
 			settingId: setting.id,
 			field,
@@ -2545,7 +2917,17 @@
 			inFlight: false,
 			generation: 0,
 		};
-		pending.value = value;
+		// Remove Svelte state proxies before retaining nested settings. Existing
+		// action/rule objects may be proxies even inside a newly created array.
+		const capturedValue = structuredClone($state.snapshot(value)) as ProfileSettingValue;
+		pending.value = capturedValue;
+		if (field === DYNAMICS_MATCH_OVERRIDE_FIELD) {
+			profileMatchDrafts[setting.id] = structuredClone(capturedValue) as AvatarSetting["dynamics_match_overrides"];
+		}
+		if (field === "physics.dynamics.solver.collider_augment_overrides") {
+			profileColliderDrafts[setting.id] = structuredClone(capturedValue) as AvatarSetting["dynamics_collider_augment_overrides"];
+		}
+		pending.expectedRevision = setting.revision;
 		pending.generation += 1;
 		if (pending.timer !== null) {
 			window.clearTimeout(pending.timer);
@@ -2578,22 +2960,33 @@
 				? rendererForSetting(previousSetting)
 				: null;
 		pending.inFlight = true;
+		let saved = false;
+		failedProfileSettingUpdates = failedProfileSettingUpdates.filter((item) => item.key !== key);
 		try {
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
 				settingId: pending.settingId,
+				...(pending.expectedRevision ? { expectedRevision: pending.expectedRevision } : {}),
 				field: pending.field,
 				value,
 			});
+			saved = true;
 			message = $_("profiles.messages.updated_setting");
 			replaceAvatarSetting(setting, selectedSettingId === pending.settingId);
 			await applyRuntimeProfileUpdate(pending.field, value, setting, previousSetting);
 			queueRendererRestart(rendererToRestart, pending.field);
 		} catch (error) {
 			message = String(error);
+			if (!saved && pending.generation === generation) {
+				failedProfileSettingUpdates = [...failedProfileSettingUpdates, { key, settingId: pending.settingId, field: pending.field, value, error: String(error) }];
+			}
 		} finally {
 			pending.inFlight = false;
 			if (pending.generation === generation) {
-				pendingProfileSettingUpdates.delete(key);
+				if (saved) {
+					pendingProfileSettingUpdates.delete(key);
+					if (pending.field === DYNAMICS_MATCH_OVERRIDE_FIELD) delete profileMatchDrafts[pending.settingId];
+					if (pending.field === "physics.dynamics.solver.collider_augment_overrides") delete profileColliderDrafts[pending.settingId];
+				}
 			} else if (pending.timer === null) {
 				pending.timer = window.setTimeout(() => {
 					pending.timer = null;
@@ -2603,8 +2996,20 @@
 		}
 	}
 
-	async function updateSettingValue(field: string, value: ProfileSettingValue): Promise<void> {
-		const targetSetting = selectedSetting;
+	async function reviewProfileConflict(settingId: string): Promise<void> {
+		selectProfileForEditing(settingId);
+		setActiveTab("settings", "profileConflict:review");
+		const generation = editorNavigationGeneration;
+		try {
+			const setting = await invoke<AvatarSetting>("get_avatar_setting_details", { settingId });
+			if (generation === editorNavigationGeneration && selectedSettingId === settingId) replaceAvatarSetting(setting, false);
+		} catch (error) { message = String(error); }
+	}
+
+	function profileUpdaterFor(target: AvatarSetting) {
+		return (field: string, value: ProfileSettingValue) => updateSettingValue(field, value, target);
+	}
+	async function updateSettingValue(field: string, value: ProfileSettingValue, targetSetting: AvatarSetting | null = selectedSetting): Promise<void> {
 		if (!targetSetting) return;
 		if (!hasTauriRuntime()) {
 			message = $_("profiles.messages.setting_changes_require_tauri");
@@ -2627,25 +3032,14 @@
 			return;
 		}
 
-		const previousSetting = targetSetting;
-		const rendererToRestart = restartableRendererForField(field);
-		try {
-			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
-				settingId: previousSetting.id,
-				field,
-				value,
-			});
-			message = $_("profiles.messages.updated_setting");
-			replaceAvatarSetting(setting);
-			await applyRuntimeProfileUpdate(field, value, setting, previousSetting);
-			queueRendererRestart(rendererToRestart, field);
-		} catch (error) {
-			message = String(error);
-		}
+		scheduleCoalescedProfileSettingUpdate(targetSetting, field, value);
+		await flushCoalescedProfileSettingUpdate(profileSettingUpdateKey(targetSetting.id, field));
 	}
 
 	async function refreshWardrobeOptionsForSetting(setting: AvatarSetting | null): Promise<void> {
 		const key = setting?.avatar_path ? `${setting.manifest_path}\n${setting.avatar_path}` : "";
+		const requestId = ++wardrobeOptionsRequestId;
+		if (wardrobeOptionsKey !== key) wardrobeOptions = null;
 		wardrobeOptionsKey = key;
 		if (!key || !setting?.avatar_path || !hasTauriRuntime()) {
 			wardrobeOptions = null;
@@ -2656,11 +3050,11 @@
 				path: setting.avatar_path,
 				manifestPath: setting.manifest_path,
 			});
-			if (wardrobeOptionsKey === key) {
+			if (wardrobeOptionsKey === key && wardrobeOptionsRequestId === requestId) {
 				wardrobeOptions = options;
 			}
 		} catch (error) {
-			if (wardrobeOptionsKey === key) {
+			if (wardrobeOptionsKey === key && wardrobeOptionsRequestId === requestId) {
 				wardrobeOptions = {
 					available: false,
 					base_label: "Base",
@@ -2689,23 +3083,31 @@
 		}
 	}
 
-	async function restartRenderer(renderer: RendererInstance | null): Promise<void> {
-		if (!renderer?.manifest_path) return;
+	async function restartRenderer(renderer: RendererInstance | null): Promise<boolean> {
+		if (!renderer) return false;
+		const profileTarget = renderer.profile_id ?? renderer.manifest_path;
+		if (!profileTarget) return false;
 		if (!hasTauriRuntime()) {
 			message = $_("renderers.messages.restart_requires_tauri");
-			return;
+			return false;
 		}
+		const originSelection = selectedRendererId;
 		busy = true;
 		try {
+			// Resolve before stopping: a renamed profile keeps its identity, and a
+			// missing profile must not tear down the still-running renderer.
+			const setting = await invoke<AvatarSetting>("get_avatar_setting_details", { settingId: profileTarget });
 			await invoke("stop_renderer", { id: renderer.id });
 			const instance = await invoke<RendererInstance>("launch_renderer", {
-				settingId: renderer.manifest_path,
+				settingId: setting.id,
 			});
-			selectedRendererId = instance.id;
+			if (selectedRendererId === originSelection) selectedRendererId = instance.id;
 			message = $_("renderers.messages.restarted", { values: { name: instance.name } });
 			await refreshAll();
+			return true;
 		} catch (error) {
 			message = String(error);
+			return false;
 		} finally {
 			busy = false;
 		}
@@ -3072,16 +3474,23 @@
 			...(solver === "xpbd" && clampedXpbdCompliance != null ? { xpbd_compliance: clampedXpbdCompliance } : {}),
 		};
 		const value: ProfileSettingValue = [...existing, override];
+		const originNavigation = editorNavigationGeneration;
+		const originSelection = selectedSettingId;
+		const originTab = activeTab;
 		try {
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
 				settingId: previousSetting.id,
+				...(previousSetting.revision ? { expectedRevision: previousSetting.revision } : {}),
 				field: DYNAMICS_MATCH_OVERRIDE_FIELD,
 				value,
 			});
 			message = $_("profiles.messages.updated_setting");
-			replaceAvatarSetting(setting);
+			replaceAvatarSetting(setting, false);
 			await applyRuntimeProfileUpdate(DYNAMICS_MATCH_OVERRIDE_FIELD, value, setting, previousSetting);
-			setActiveTab("settings", "rendererDetails:addDynamicsMatchOverride");
+			if (editorNavigationGeneration === originNavigation && selectedSettingId === originSelection && activeTab === originTab) {
+				selectProfileForEditing(setting.id);
+				setActiveTab("settings", "rendererDetails:addDynamicsMatchOverride");
+			}
 		} catch (error) {
 			message = String(error);
 		}
@@ -3125,16 +3534,23 @@
 			...(solver === "xpbd" && clampedXpbdCompliance != null ? { xpbd_compliance: clampedXpbdCompliance } : {}),
 		};
 		const value: ProfileSettingValue = [...existing, override];
+		const originNavigation = editorNavigationGeneration;
+		const originSelection = selectedSettingId;
+		const originTab = activeTab;
 		try {
 			const setting = await invoke<AvatarSetting>("update_avatar_setting_value", {
 				settingId: previousSetting.id,
+				...(previousSetting.revision ? { expectedRevision: previousSetting.revision } : {}),
 				field: "physics.dynamics.solver.group_overrides",
 				value,
 			});
 			message = $_("profiles.messages.updated_setting");
-			replaceAvatarSetting(setting);
+			replaceAvatarSetting(setting, false);
 			await applyRuntimeProfileUpdate("physics.dynamics.solver.group_overrides", value, setting, previousSetting);
-			setActiveTab("settings", "rendererDetails:addDynamicsGroupOverride");
+			if (editorNavigationGeneration === originNavigation && selectedSettingId === originSelection && activeTab === originTab) {
+				selectProfileForEditing(setting.id);
+				setActiveTab("settings", "rendererDetails:addDynamicsGroupOverride");
+			}
 		} catch (error) {
 			message = String(error);
 		}
@@ -3275,9 +3691,7 @@
 		void (async () => {
 			await loadBackendAppSettings();
 			await refreshAll();
-			if (!cancelled) {
-				await maybeAutoLaunchSelectedOnStartup();
-			}
+			if (!cancelled) startupAutoLaunchReady = true;
 		})();
 		return () => {
 			cancelled = true;
@@ -3317,7 +3731,7 @@
 			if (!profileId) return;
 			await refreshAll();
 			if (!avatarSettings.some((setting) => setting.id === profileId)) return;
-			selectedSettingId = profileId;
+			selectProfileForEditing(profileId);
 			launchTargetId = pickInitialLaunchTargetId(launchTargetId, selectedSettingId, avatarSettings);
 			setActiveTab("settings", "profile-open-requested");
 		})
@@ -3360,7 +3774,6 @@
 	$effect(() => {
 		document.documentElement.dataset.theme = resolvedTheme;
 		document.documentElement.dataset.themeMode = appSettings.theme_mode;
-		syncAppSettingsToBackend(appSettings);
 	});
 
 	$effect(() => {
@@ -3390,7 +3803,10 @@
 	});
 
 	$effect(() => {
-		if (selectedSetting) void loadSelectedProfileDetails(selectedSetting);
+		const setting = selectedSetting;
+		// Read only the selected profile reactively. Resetting the request cache on failure
+		// must not schedule the same failed request again in a microtask loop.
+		if (setting) untrack(() => void loadSelectedProfileDetails(setting));
 	});
 
 	/// selectedSettingId が変わるたびに Tauri 側へ保存し、次回起動時に復元できるようにする。
@@ -3398,8 +3814,7 @@
 	$effect(() => {
 		const id = selectedSettingId;
 		if (!backendAppSettingsReady) return;
-		if (id === appSettings.last_selected_setting_id) return;
-		void persistLastSelectedSettingId(id);
+		untrack(() => { void persistLastSelectedSettingId(id); });
 	});
 
 	$effect(() => {
@@ -3411,7 +3826,7 @@
 	<title>UN Avatar Supervisor</title>
 </svelte:head>
 
-<main class="shell">
+<main class="shell" class:preview-feature-outline={previewFeatureOutline}>
 	<header class="topbar">
 		<div class="brand">
 			<img src="/un-avatar-artwork-supervisor.png" alt="" />
@@ -3421,15 +3836,21 @@
 			</div>
 		</div>
 		<div class="status-strip" aria-label={$_("app.status_aria")}>
+			{#if isolatedDesignPreview}
+				<strong role="status">{$locale?.startsWith('ja') ? '比較用 · 模擬データ（実機起動・設定保存なし）' : 'Preview · Simulated data (no native launch or file save)'}</strong>
+			{/if}
 			<span><Activity size={14} />{$_("app.running_count", { values: { count: runningCount } })}</span>
 			<span class:warn={issueCount > 0}><AlertTriangle size={14} />{$_("app.issue_count", { values: { count: issueCount } })}</span>
-			<span>{message}</span>
+			<span class="status-message" role="status">{message}</span>
+			{#if appSettingsPending > 0 || appSettingsSaveError}
+				<button onclick={() => setActiveTab("app", "settingsSave:review")}>{($locale ?? "ja-JP").startsWith("ja") ? (!backendAppSettingsReady ? "アプリ設定の読込を確認" : appSettingsPending > 0 ? "アプリ設定を保存中" : "アプリ設定の保存を確認") : (!backendAppSettingsReady ? "Review settings loading" : appSettingsPending > 0 ? "Saving settings" : "Review settings save")}</button>
+			{/if}
 			{#if screenshotNoticePath}
 				<button class="screenshot-notice" title={screenshotNoticePath} onclick={() => void revealScreenshotFolder()}>
 					<FolderOpen size={14} />{basename(screenshotNoticePath)}
 				</button>
 			{/if}
-			{#if pendingRendererRestart && !(activeTab === "settings" && selectedSetting && sameNormalizedPath(pendingRendererRestart.renderer.manifest_path, selectedSetting.manifest_path))}
+			{#if pendingRendererRestart && !(activeTab === "settings" && selectedSetting && settingForRenderer(pendingRendererRestart.renderer)?.id === selectedSetting.id)}
 				<span class="restart-notice">
 					{$_("profiles.live.pending_field", {
 						values: { field: pendingRendererRestart.fieldLabel },
@@ -3453,18 +3874,30 @@
 
 	<div class="workspace">
 		<aside class="side-rail" aria-label={$_("sidebar.aria")}>
+			{#if previewOperationsA}
+				<button class:active={activeTab === 'settings'} onclick={() => setActiveTab('settings', 'operations-proposal:navigation')}><FileCog size={17} />{$_("supervisor_operations.profiles_runtime")}</button>
+				<button class:active={activeTab === 'renderers'} onclick={() => setActiveTab('renderers', 'operations-proposal:navigation')}><Monitor size={17} />{$_("supervisor_operations.all_instances")}</button>
+				<button class:active={activeTab === 'map'} onclick={() => setActiveTab('map', 'operations-proposal:navigation')}>{$_('sidebar.feature_map')}</button>
+				<button class:active={activeTab === 'logs'} onclick={() => setActiveTab('logs', 'operations-proposal:navigation')}><TerminalSquare size={17} />{$_('sidebar.logs')}</button>
+				<button class:active={activeTab === 'app'} onclick={() => setActiveTab('app', 'operations-proposal:navigation')}><Settings size={17} />{$_('sidebar.settings')}</button>
+			{:else}
+			<button class:active={activeTab === "map"} onclick={() => setActiveTab("map", "side-rail")}>{$_("sidebar.feature_map")}</button>
 			<button class:active={activeTab === "renderers"} onclick={() => setActiveTab("renderers", "side-rail")}
 				><Monitor size={17} />{$_("sidebar.renderers")}</button
 			>
 			<button class:active={activeTab === "settings"} onclick={() => setActiveTab("settings", "side-rail")}
 				><FileCog size={17} />{$_("sidebar.profiles")}</button
 			>
-			<button class:active={activeTab === "logs"} onclick={() => setActiveTab("logs", "side-rail")}
+			<button data-preview-duplicate="logs" class:active={activeTab === "logs"} onclick={() => setActiveTab("logs", "side-rail")}
 				><TerminalSquare size={17} />{$_("sidebar.logs")}</button
 			>
-			<button class:active={activeTab === "app"} onclick={() => setActiveTab("app", "side-rail")}
+			<button data-preview-duplicate="app" class:active={activeTab === "app"} onclick={() => setActiveTab("app", "side-rail")}
 				><Settings size={17} />{$_("sidebar.settings")}</button
 			>
+			{/if}
+			{#if previewFeatureOutline}
+				<PreviewAvatarFeatureIndex language={$locale ?? 'ja-JP'} targetName={selectedSetting ? `${selectedSetting.name} · ${selectedSetting.id}` : ''} activeSection={activeTab === 'settings' ? activeProfileSection : ''} activeDestination={activeTab} sectionItems={profileSectionNavItems} onOpen={openFeature} />
+			{/if}
 			<div class="rail-footer">
 				<div class="cache-panel" aria-label={$_("app.cache_panel_aria")}>
 					<div class="cache-panel-head">
@@ -3517,7 +3950,14 @@
 			</div>
 		</aside>
 
-		{#if activeTab === "renderers"}
+		{#if activeTab === "map"}
+			<AvatarFeatureMap
+				profiles={avatarSettings}
+				bind:selectedProfileId={() => selectedSettingId, selectProfileForEditing}
+				bind:query={featureQuery}
+				onOpen={(feature) => void openFeature(feature)}
+			/>
+		{:else if activeTab === "renderers"}
 			<section class="view renderers-view">
 				<RenderersToolbar
 					{busy}
@@ -3541,7 +3981,7 @@
 					}}
 					onSelectSetting={(settingId) => {
 						launchTargetId = settingId;
-						selectedSettingId = settingId;
+						selectProfileForEditing(settingId);
 						launchMenuOpen = false;
 					}}
 				/>
@@ -3556,7 +3996,7 @@
 						{busy}
 						rendererStateLabel={(state) => rendererStateLabel(state as RendererState)}
 						onViewProfile={(profileId) => {
-							selectedSettingId = profileId;
+							selectProfileForEditing(profileId);
 							setActiveTab("settings", "rendererStage:viewProfile");
 						}}
 						onActivateRenderer={(rendererId) => {
@@ -3571,9 +4011,9 @@
 							const renderer = selectedRendererById(rendererId);
 							if (renderer) return captureRendererScreenshot(renderer);
 						}}
-						onRestartRenderer={(rendererId) => {
+						onRestartRenderer={async (rendererId) => {
 							const renderer = selectedRendererById(rendererId);
-							if (renderer) return restartRenderer(renderer);
+							if (renderer) await restartRenderer(renderer);
 						}}
 						onStopRenderer={(rendererId) => stopRenderer(rendererId)}
 					/>
@@ -3592,7 +4032,7 @@
 
 				<div class="split">
 					<RendererProcessTable
-						renderers={rendererTableRenderers}
+						renderers={rendererTableRenderers.map((renderer) => ({ ...renderer, name: settingForRenderer(renderer)?.name ?? renderer.name }))}
 						{selectedRendererId}
 						{showStoppedRenderers}
 						emptySummary={launchGroupName
@@ -3603,7 +4043,7 @@
 								? localizedSettingSummary(launchTargetSetting, $_)
 								: $_("renderers.details.none_selected")}
 						statusForRenderer={(rendererId) => runtimeStatuses[rendererId] ?? null}
-						iconSrcForManifest={(manifestPath) => iconSrc(settingForManifestPath(manifestPath)?.icon_path ?? null)}
+						iconSrcForRenderer={(rendererId) => iconSrc(settingForRenderer(rendererById.get(rendererId) ?? null)?.icon_path ?? null)}
 						onSelectRenderer={(rendererId) => (selectedRendererId = rendererId)}
 						onOpenRendererLog={(rendererId) => {
 							const renderer = selectedRendererById(rendererId);
@@ -3714,7 +4154,7 @@
 						}}
 						onOpenProfile={() => {
 							if (!launchTargetSetting) return;
-							selectedSettingId = launchGroupSettings[0]?.id ?? launchTargetSetting.id;
+							selectProfileForEditing(launchGroupSettings[0]?.id ?? launchTargetSetting.id);
 							setActiveTab("settings", "rendererDetails:openProfile");
 						}}
 						onRevealProfilesDir={() => revealProfilesDir()}
@@ -3724,12 +4164,14 @@
 		{:else if activeTab === "settings"}
 			<section
 				class="view settings-view"
+                class:profile-edit-focus={previewEditWorkspace}
 				aria-label={$_("profiles.aria")}
 				onpointerover={updateProfileHintFromEvent}
 				onfocusin={updateProfileHintFromEvent}
 				onpointerleave={clearProfileHint}
 			>
 				<ProfilesToolbar
+					subduedCreation={previewOperationsA}
 					{busy}
 					selectedSettingId={selectedSetting?.id ?? null}
 					{deleteHoldTargetId}
@@ -3740,19 +4182,75 @@
 					onCancelDeleteHold={cancelDeleteHold}
 					onOpenFolder={() => revealProfilesDir()}
 				/>
+                <div class="profile-history-tools">
+				<DeletedProfiles {busy} existingIds={avatarSettings.map((setting) => setting.id)} onRestore={restoreArchivedSetting} />
+				<ProfileOrderRecovery busy={busy||orderSaving||!!orderDraft} onRestore={restoreProfileOrder}/>
+                </div>
+				{#if profileBatchDrafts.length}
+					<section class="panel profile-save-recovery" aria-label={($locale ?? "ja-JP").startsWith("ja") ? "一括変更の保存確認" : "Batch save review"}>
+						{#each profileBatchDrafts as draft (draft.id)}
+							<details><summary>{draft.name} · {draft.settingId} · {draft.state === "saving" ? (($locale ?? "ja-JP").startsWith("ja") ? "保存中" : "Saving") : (($locale ?? "ja-JP").startsWith("ja") ? "保存未確認" : "Save unconfirmed")}</summary>
+								<p>{draft.error}</p>
+								{#if draft.state === "failed"}
+									<p>{($locale ?? "ja-JP").startsWith("ja") ? "要求した一括変更を保持しています。元の対象の保存内容と比較し、必要な変更を新しい編集として行ってください。確認だけでは上書きしません。" : "The requested batch is retained. Compare the original profile's saved values and make the changes you still need as a new edit. Review does not overwrite values."}</p>
+									<button disabled={busy} onclick={() => void reviewProfileConflict(draft.settingId)}>{$_("profiles.save_recovery.review_latest")}</button>
+									<button disabled={busy} onclick={() => profileBatchDrafts = profileBatchDrafts.filter(item=>item.id!==draft.id)}>{($locale ?? "ja-JP").startsWith("ja") ? "保持した一括変更を破棄" : "Discard retained batch"}</button>
+								{/if}
+								<details><summary>{($locale ?? "ja-JP").startsWith("ja") ? `保持した ${draft.updates.length} 項目の詳細` : `${draft.updates.length} retained fields`}</summary><pre>{JSON.stringify(draft.updates,null,2)}</pre></details>
+							</details>
+						{/each}
+					</section>
+				{/if}
+				{#if failedProfileSettingUpdates.length}
+					<section class="panel profile-save-recovery" aria-label={$_("profiles.save_recovery.title")}>
+						<h3>{$_("profiles.save_recovery.title")}</h3>
+						<p>{$_("profiles.save_recovery.explanation")}</p>
+						{#each failedProfileSettingUpdates as failure (failure.key)}
+							<div>
+								<strong>{avatarSettings.find((setting) => setting.id === failure.settingId)?.name ?? failure.settingId} · {failure.settingId}</strong>
+								<p>{failure.field}: {JSON.stringify(failure.value)}</p>
+
+								{#if failure.error.includes("profile_conflict")}
+									<p>{$_("profiles.save_recovery.conflict_explanation")}</p>
+									<button disabled={busy} onclick={() => void reviewProfileConflict(failure.settingId)}>{$_("profiles.save_recovery.review_latest")}</button>
+								{:else}
+									<button disabled={busy} onclick={() => void flushCoalescedProfileSettingUpdate(failure.key)}>{$_("profiles.save_recovery.retry")}</button>
+								{/if}
+								<details><summary>{($locale ?? "ja-JP").startsWith("ja") ? "診断情報" : "Diagnostic details"}</summary><pre>{failure.error}</pre></details>
+							</div>
+						{/each}
+					</section>
+				{/if}
+				{#if runtimeCommandFailures.length}
+					<section class="panel profile-save-recovery" aria-label={$_("profiles.runtime_recovery.title")}>
+						<h3>{$_("profiles.runtime_recovery.title")}</h3>
+						<p>{$_("profiles.runtime_recovery.explanation")}</p>
+						{#each runtimeCommandFailures as failure (`${failure.rendererId}:${failure.command}`)}
+							<p role="alert">{failure.name} · #{failure.rendererId} — {failure.command}: {failure.error}</p>
+                                {#if import.meta.env.VITE_UN_DESIGN_PREVIEW === "1" && ["set_renderer_camera_lock", "set_renderer_camera_state"].includes(failure.command)}
+                                    <button disabled={busy} onclick={() => void retrySavedCameraForRenderer(failure.rendererId)}>{$_("profiles.runtime_recovery.retry_camera", { values: { id: failure.rendererId } })}</button>
+                                {/if}
+						{/each}
+					</section>
+				{/if}
 				{#if selectedSetting}
-					{@const liveRenderer = rendererForSetting(selectedSetting)}
+					{@const liveRenderer = previewFeatureOutline ? reviewRendererForSetting(selectedSetting) : rendererForSetting(selectedSetting)}
 					{@const liveRendererCount = runningCountForSetting(selectedSetting)}
 					{@const profilePendingRestart =
 						pendingRendererRestart &&
-						sameNormalizedPath(pendingRendererRestart.renderer.manifest_path, selectedSetting.manifest_path)
+						settingForRenderer(pendingRendererRestart.renderer)?.id === selectedSetting.id
 							? pendingRendererRestart
 							: null}
+                    {#snippet existingProfileStage()}
 					<ProfileStage
+                        compactTools={previewEditWorkspace}
 						setting={selectedSetting}
 						iconUrl={iconSrc(selectedSetting.icon_path)}
 						{liveRenderer}
 						{liveRendererCount}
+                        targetOverview={previewFeatureOutline}
+                        reviewRenderers={renderersForSetting(selectedSetting)}
+                        onSelectReviewRenderer={(rendererId) => { if (selectedSetting) reviewRendererTargets[selectedSetting.id] = rendererId; }}
 						pendingRestart={profilePendingRestart}
 						activeSection={activeProfileSection}
 						cacheProgress={sceneCachePrewarmProgress?.setting_id === selectedSetting.id ? sceneCachePrewarmProgress : null}
@@ -3777,26 +4275,63 @@
 						onSetTaskbarPinned={(settingId, pinned) => setTaskbarProfilePinned(settingId, pinned)}
 						onScrollSection={(section) => scrollProfileSection(section)}
 					/>
+                    {/snippet}
+                    {#if previewOperationsA}
+                        <details class="panel operations-proposal-tools"><summary>{$_("supervisor_operations.avatar_tools", {values:{name:selectedSetting.name}})}</summary>
+                            {@render existingProfileStage()}
+                        </details>
+                    {:else}
+                        {@render existingProfileStage()}
+                    {/if}
 				{/if}
-				<div class="split settings-split">
+				{#if orderDraft}<section role="status" class="panel profile-save-recovery">
+					<strong>{$_(orderDraft.committed ? "profiles.order_draft.committed" : "profiles.order_draft.title")}</strong>
+					<p>{orderDraft.ids.map(id=>orderDraft?.reviewed.find(s=>s.id===id)?.name??id).join(' → ')}</p>
+					{#if orderDraft.error}<p role="alert">{orderDraft.error}</p>{/if}
+					{#if !orderDraft.committed}<p>{$_("profiles.order_draft.help")}</p>
+					<button disabled={orderSaving} onclick={()=>void saveSettingsOrder()}>{$_("profiles.order_draft.retry")}</button>{/if}
+					<button disabled={orderSaving} onclick={()=>void discardSettingsOrder()}>{$_(orderDraft.committed ? "profiles.order_draft.reload" : "profiles.order_draft.discard")}</button>
+				</section>{/if}
+				<div class="split settings-split" class:operations-proposal-a={previewOperationsA}>
 					<ProfileSettingList
 						settings={avatarSettings}
 						{selectedSettingId}
 						{draggedSettingId}
 						{settingPointerDrag}
 						{iconSrc}
-						runningCountForManifestPath={(manifestPath) =>
-							liveRenderersByManifestPath.get(normalizedPathKey(manifestPath))?.length ?? 0}
+						runningCountForProfileId={(profileId) => renderersForSetting(avatarSettingBySelectedId(profileId)).length}
 						onSelect={(settingId) => {
 							if (suppressSettingClick) {
 								suppressSettingClick = false;
 								return;
 							}
-							selectedSettingId = settingId;
+							selectProfileForEditing(settingId);
 						}}
 						onBeginDrag={beginSettingPointerDrag}
 					/>
-					<section class="panel editor-panel">
+					{#if previewOperationsA && selectedSetting}
+						<section class="panel operations-proposal-runtime" aria-label={$_("supervisor_operations.runtime_aria")}>
+							<h2>{$_("supervisor_operations.runtime_heading", {values:{name:selectedSetting.name,count:renderersForSetting(selectedSetting).length}})}</h2>
+							{#if isolatedDesignPreview}<p>隔離試作 · 操作は模擬個体のみ</p>{/if}
+							<button class="primary" disabled={busy} onclick={() => launchSetting(selectedSetting.id, false)}>{$_("supervisor_operations.launch")}</button>
+							{#each renderersForSetting(selectedSetting) as renderer (renderer.id)}
+								<article>
+									<h3>Renderer #{renderer.id}</h3>
+									<p>{renderer.state}</p>
+									<button disabled={busy} onclick={() => stopRenderer(renderer.id)}>{$_("supervisor_operations.stop_instance", {values:{id:renderer.id}})}</button>
+									<button onclick={() => { logsRendererFilter = renderer.id; setActiveTab('logs', 'operations-proposal:logs'); }}>{$_("supervisor_operations.instance_logs")}</button>
+								</article>
+							{:else}
+								<p>{$_("supervisor_operations.none")}</p>
+							{/each}
+							<details><summary>{$_("supervisor_operations.avatar_scope")}</summary>
+								<p>{$_("supervisor_operations.avatar_save")}</p>
+								<p>{$_("supervisor_operations.window_target", {values:{target:rendererForSetting(selectedSetting) ? `Renderer #${rendererForSetting(selectedSetting)?.id}` : $_("supervisor_operations.no_instance")}})}</p>
+							</details>
+							<ReviewProfileStop targets={renderersForSetting(selectedSetting)} profileName={selectedSetting.name} disabled={busy} onStop={async(id) => {await invoke('stop_renderer',{id});await refreshAll();}} />
+							</section>
+					{/if}
+					<section class="panel editor-panel" inert={creatingProfile} aria-busy={creatingProfile}>
 						{#if selectedSetting}
 							<ProfileSectionNav
 								items={profileSectionNavItems}
@@ -3814,15 +4349,17 @@
 									onActivate={() => (activeProfileSection = "identity")}
 								/>
 
+								{#key `${selectedSetting.id}\n${selectedSetting.avatar_path ?? ""}`}
 								<ProfileAvatarSection
 									setting={selectedSetting}
 									{wardrobeOptions}
 									{busy}
 									onBrowseAvatar={() => browseSettingPath("avatar_path", "avatar")}
 									onReviewMetadata={() => reviewSelectedAvatarMetadata()}
-									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onUpdateSettingValue={profileUpdaterFor(selectedSetting)}
 									onActivate={() => (activeProfileSection = "avatar")}
 								/>
+								{/key}
 
 								<ProfileQualitySection
 									setting={selectedSetting}
@@ -3854,17 +4391,19 @@
 									onActivate={() => (activeProfileSection = "look")}
 								/>
 
+								{#key selectedSetting.id}
 								<ProfileMotionSection
 									setting={selectedSetting}
 									{busy}
-									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onUpdateSettingValue={profileUpdaterFor(selectedSetting)}
 									onActivate={() => (activeProfileSection = "motion")}
 								/>
+								{/key}
 
 								<ProfilePhysicsSection
-									setting={selectedSetting}
+									setting={physicsSettingForEditor(selectedSetting)}
 									{busy}
-									onUpdateSettingValue={(field, value) => updateSettingValue(field, value)}
+									onUpdateSettingValue={profileUpdaterFor(selectedSetting)}
 									onActivate={() => (activeProfileSection = "physics")}
 								/>
 
@@ -3883,6 +4422,7 @@
 								<ProfileWindowSection
 									setting={selectedSetting}
 									runtimeWindowAvailable={runtimeWindowAvailableForSetting(selectedSetting)}
+                                    reviewRendererIds={import.meta.env.VITE_UN_DESIGN_PREVIEW === "1" ? renderersForSetting(selectedSetting).map(renderer => renderer.id) : []}
 									{busy}
 									{colorDisplayMode}
 									onColorModeChange={setColorDisplayMode}
@@ -3938,6 +4478,15 @@
 				/>
 			{/await}
 		{:else}
+			<div class="app-settings-workspace">
+			{#if appSettingsSaveError}
+				<section class="panel profile-save-recovery" aria-label={($locale ?? "ja-JP").startsWith("ja") ? "アプリ設定の保存状態" : "Application settings save status"}>
+					<p>{($locale ?? "ja-JP").startsWith("ja") ? (backendAppSettingsReady ? "アプリ設定の保存を確認できませんでした。変更した内容を画面に保持しています。" : "アプリ設定をまだ読み込めていません。元の設定は上書きしません。") : (backendAppSettingsReady ? "The settings save could not be confirmed. Your changes are retained on screen." : "Application settings have not loaded. Existing settings will not be overwritten.")}</p>
+					<p>{appSettingsSaveError}</p>
+					<button disabled={appSettingsPending > 0} onclick={() => void syncAppSettingsToBackend(appSettings)}>{($locale ?? "ja-JP").startsWith("ja") ? (backendAppSettingsReady ? "保持した設定を再保存" : "設定の読込を再試行") : (backendAppSettingsReady ? "Retry retained settings" : "Retry loading settings")}</button>
+					<button disabled={appSettingsPending > 0} onclick={() => void discardAppSettingsDraft()}>{($locale ?? "ja-JP").startsWith("ja") ? (backendAppSettingsReady ? "変更を破棄して保存済み設定を読み直す" : "読込前の入力を破棄（ファイルは変更しません）") : (backendAppSettingsReady ? "Discard changes and reload saved settings" : "Discard early edits (file unchanged)")}</button>
+				</section>
+			{/if}
 			{#await import("./lib/AppSettingsView.svelte") then module}
 				{@const AppSettingsView = module.default}
 				<AppSettingsView
@@ -3958,6 +4507,7 @@
 					onOpenExternalLink={(url) => openExternalLink(url)}
 				/>
 			{/await}
+			</div>
 		{/if}
 	</div>
 	{#if vrmMetadataModal}
@@ -3965,6 +4515,8 @@
 			{@const VrmMetadataModal = module.default}
 			<VrmMetadataModal
 				modal={vrmMetadataModal}
+				targetProfileId={vrmMetadataModal.settingId}
+				targetProfile={avatarSettingByIdOrManifestPath(vrmMetadataModal.settingId)}
 				{busy}
 				bind:useThumbnailForProfileIconOnAccept
 				onClose={closeVrmMetadataModal}
@@ -3977,6 +4529,8 @@
 			{@const UnavatarRightsModal = module.default}
 			<UnavatarRightsModal
 				modal={unavatarMetadataModal}
+				targetProfileId={unavatarMetadataModal.settingId}
+				targetProfile={avatarSettingByIdOrManifestPath(unavatarMetadataModal.settingId)}
 				{busy}
 				bind:profileIconCrop={unavatarProfileIconCrop}
 				onClose={closeUnavatarMetadataModal}

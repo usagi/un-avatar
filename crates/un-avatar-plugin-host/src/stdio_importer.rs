@@ -354,32 +354,26 @@ mod tests {
 		}
 	}
 
-	struct VarGuard {
-		key: &'static str,
-		prev: Option<std::ffi::OsString>,
-	}
-
-	impl VarGuard {
-		fn remove(key: &'static str) -> Self {
-			let prev = std::env::var_os(key);
-			std::env::remove_var(key);
-			Self { key, prev }
+	// Give each environment/CWD case its own process. A mutex cannot protect
+	// environment reads made by unrelated test threads or native libraries.
+	fn isolated_cwd_case(test_name: &str, host: bool) -> bool {
+		const CASE: &str = "UN_AVATAR_ISOLATED_CWD_TEST";
+		if std::env::var(CASE).as_deref() == Ok(test_name) {
+			return false;
 		}
-
-		fn set(key: &'static str, val: &str) -> Self {
-			let prev = std::env::var_os(key);
-			std::env::set_var(key, val);
-			Self { key, prev }
+		let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"));
+		child.args([test_name, "--exact", "--test-threads=1"])
+			.env(CASE, test_name)
+			.env("SAMPLE_IO_PLUGIN_EMIT_CWD", "1");
+		if host {
+			child.env("UN_AVATAR_PLUGIN_CHILD_CWD", "host");
+		} else {
+			child.env_remove("UN_AVATAR_PLUGIN_CHILD_CWD");
 		}
-	}
-
-	impl Drop for VarGuard {
-		fn drop(&mut self) {
-			match &self.prev {
-				Some(v) => std::env::set_var(self.key, v),
-				None => std::env::remove_var(self.key),
-			}
-		}
+		let output = child.output().expect("isolated CWD test");
+		assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+		assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "isolated test must execute exactly one case");
+		true
 	}
 
 	fn plugin_report_cwd(got: &ImportResult) -> PathBuf {
@@ -420,6 +414,7 @@ mod tests {
 
 	#[test]
 	fn stdio_importer_child_cwd_defaults_to_bundle_dir() {
+		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_defaults_to_bundle_dir", false) { return; }
 		let _s = cwd_serial_lock();
 		let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sample-io-plugin/manifest.toml");
 		let bundle_dir = std::fs::canonicalize(manifest.parent().expect("manifest parent")).expect("bundle_dir");
@@ -427,8 +422,6 @@ mod tests {
 		let unrelated = std::env::temp_dir().join(format!("un_avatar_cwd_unrelated_{}.d", std::process::id()));
 		std::fs::create_dir_all(&unrelated).expect("mkdir");
 		let _cwd = CwdGuard::chdir(&unrelated).expect("chdir");
-		let _clear_host = VarGuard::remove("UN_AVATAR_PLUGIN_CHILD_CWD");
-		let _emit = VarGuard::set("SAMPLE_IO_PLUGIN_EMIT_CWD", "1");
 
 		let imp = StdioJsonRpcImporter::from_manifest_file(&manifest).expect("importer");
 		let probe = ImportProbe {
@@ -448,6 +441,7 @@ mod tests {
 
 	#[test]
 	fn stdio_importer_child_cwd_follows_host_when_env_host() {
+		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_follows_host_when_env_host", true) { return; }
 		let _s = cwd_serial_lock();
 		let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sample-io-plugin/manifest.toml");
 
@@ -456,8 +450,6 @@ mod tests {
 		let expect_host = std::fs::canonicalize(&host_cwd).expect("canon host cwd");
 
 		let _cwd = CwdGuard::chdir(&host_cwd).expect("chdir");
-		let _host_pref = VarGuard::set("UN_AVATAR_PLUGIN_CHILD_CWD", "host");
-		let _emit = VarGuard::set("SAMPLE_IO_PLUGIN_EMIT_CWD", "1");
 
 		let imp = StdioJsonRpcImporter::from_manifest_file(&manifest).expect("importer");
 		let probe = ImportProbe {

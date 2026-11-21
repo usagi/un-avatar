@@ -2,6 +2,7 @@
 identifier = "supervisor-invoke"
 description = "UN Avatar Supervisor: custom IPC commands registered in lib.rs."
 commands.allow = [
+	"resolve_supervisor_close",
 	"activate_renderer_window",
 	"app_version",
 	"open_external_url",
@@ -9,6 +10,8 @@ commands.allow = [
 	"compress_diagnostics",
 	"duplicate_avatar_setting",
 	"delete_avatar_setting",
+	"list_deleted_avatar_settings",
+	"restore_avatar_setting",
 	"export_diagnostics",
 	"get_app_settings",
 	"get_avatar_setting_details",
@@ -30,6 +33,8 @@ commands.allow = [
 	"clear_taskbar_profile_pins",
 	"pick_file_path",
 	"capture_midi_note_binding",
+	"begin_midi_note_capture",
+	"cancel_midi_note_capture",
 	"read_unavatar_wardrobe_options",
 	"read_unavatar_animator_action_page",
 	"read_unavatar_metadata",
@@ -39,6 +44,8 @@ commands.allow = [
 	"read_diagnostics_export",
 	"reveal_profiles_dir",
 	"reorder_avatar_settings",
+	"list_profile_order_recovery",
+	"restore_profile_order",
 	"reveal_path",
 	"save_supervisor_logs",
 	"log_frontend_error",

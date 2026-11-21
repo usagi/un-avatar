@@ -10,6 +10,13 @@
 	export let placeholder = "";
 	export let disabled = false;
 	export let onChange: (value: number) => void | Promise<void>;
+	function commitInput(event: Event) {
+		const next = clampedNumberFromInput(event, min, max);
+		// A clamped edit can equal the existing prop, so Svelte need not update
+		// the DOM. Explicitly show the same value that is sent for persistence.
+		(event.currentTarget as HTMLInputElement).value = String(next);
+		void onChange(next);
+	}
 </script>
 
 <label data-hint={hint}>
@@ -22,6 +29,6 @@
 		{value}
 		{placeholder}
 		{disabled}
-		onchange={(event) => onChange(clampedNumberFromInput(event, min, max))}
+		onchange={commitInput}
 	/>
 </label>

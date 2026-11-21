@@ -33,6 +33,8 @@ export type UnavatarMetadataDialogState = {
 	metadata: UnavatarMetadataInfo;
 	pendingPath: string | null;
 	iconSelectionOnly?: boolean;
+	avatarPathSaved?: boolean;
+	saveError?: string;
 };
 
 export type UnavatarProfileIconCrop = {

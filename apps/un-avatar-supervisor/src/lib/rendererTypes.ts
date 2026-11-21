@@ -53,6 +53,7 @@ export type RendererRef = {
 };
 
 export type RendererIdentityView = RendererRef & {
+	profile_id?: string | null;
 	name: string;
 	state: string;
 	avatar_path: string | null;
@@ -775,7 +776,7 @@ export type RendererRuntimeDiagnosticsData = Pick<
 	| "dynamics_constraint_refs"
 >;
 
-export type RendererStageActionData = Pick<RendererInstance, "id" | "pid" | "manifest_path">;
+export type RendererStageActionData = Pick<RendererInstance, "id" | "pid" | "manifest_path" | "state">;
 
 export type RendererStageProfile = {
 	id: string;

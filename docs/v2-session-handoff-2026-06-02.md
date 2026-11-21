@@ -14,9 +14,9 @@ This note is for continuing UNAvatar v2 development in a fresh Codex session.
 
 - Main test profile: `mizuki-split`
 - Sample file path used during development:
-  - `C:\Users\the\tmp\un-avatar\target\tmp\mizuki-split.unavatar`
+  - `<export directory>/avatar.unavatar`
 - Unity project location:
-  - `C:\Users\the\AppData\Local\VRChatProjects\mizuki`
+  - `<Unity project>`
 - Main visual references were Base / original / noble1 / noble13 wardrobe states.
 
 ## What Was Implemented In This Session

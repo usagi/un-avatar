@@ -5,7 +5,7 @@ UNToon v2 は lilToon 互換を基準にする。v1 の MToon 互換 shader は�
 ## Reference
 
 - lilToon reference: `jp.lilxyzw.liltoon` 2.3.2, MIT License
-- Local reference package: `C:/Users/the/AppData/Local/VRChatProjects/mizuki/Packages/jp.lilxyzw.liltoon`
+- Local reference package: `<Unity project>/Packages/jp.lilxyzw.liltoon`
 - Primary shader files:
   - `Shader/Includes/lil_common_functions.hlsl`
   - `Shader/Includes/lil_pass_forward_normal.hlsl`

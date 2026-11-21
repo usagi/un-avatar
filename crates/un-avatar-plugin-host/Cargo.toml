@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.100"
 name = "un-avatar-plugin-host"
 description = "UN Avatar — 外部 IO プラグイン（stdio JSON-RPC）ホスト（Phase 2.4 bootstrap）"
 version.workspace = true

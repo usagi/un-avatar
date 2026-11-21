@@ -46,6 +46,7 @@
 
 <section
 	class="editor-section profile-section profile-identity-section"
+	tabindex="-1"
 	data-profile-section="identity"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.identity.section")}

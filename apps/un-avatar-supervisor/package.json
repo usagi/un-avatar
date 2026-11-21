@@ -1,7 +1,7 @@
 {
   "name": "un-avatar-supervisor",
   "private": true,
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
@@ -10,7 +10,8 @@
     "format": "prettier --config ../../.prettierrc.json --ignore-path ../../.prettierignore --write .",
     "format:check": "prettier --config ../../.prettierrc.json --ignore-path ../../.prettierignore --check .",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:unit": "node --test --test-concurrency=1 scripts/attached-renderer-actions.test.mjs scripts/camera-retry-race.test.mjs scripts/window-apply-failure.test.mjs scripts/feature-catalog.test.mjs scripts/ordered-profile-invoke.test.mjs scripts/preview-field-contract.test.mjs scripts/preview-lifecycle-contract.test.mjs scripts/preview-revision.test.mjs scripts/profile-selection-race.test.mjs scripts/reorder-revision.test.mjs scripts/native-command-permissions.test.mjs scripts/advanced-physics-apply.test.mjs scripts/wardrobe-options-race.test.mjs scripts/midi-binding-retention.test.mjs scripts/midi-capture-lifecycle.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

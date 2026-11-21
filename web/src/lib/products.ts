@@ -30,8 +30,8 @@ export const products: Product[] = [
     name: 'U.N. Virtual Avatar Connect',
     shortName: 'Connect',
     role: 'Hub',
-    href: 'https://github.com/usagi/un-virtual-avatar-connect',
-    accent: '#38bdf8',
+    href: 'https://usagi.github.io/un-virtual-avatar-connect/',
+    accent: '#bc9bff',
     group: 'pillar'
   },
   {

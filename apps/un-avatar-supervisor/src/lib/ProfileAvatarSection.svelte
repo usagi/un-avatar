@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { invoke } from "@tauri-apps/api/core";
+	import { onDestroy } from "svelte";
 	import type {
 		AnimatorActionMode,
 		AnimatorBindingSetting,
@@ -50,7 +51,19 @@
 	let midiCaptureSetId: string | null = null;
 	let midiCaptureActionId: string | null = null;
 	let midiCaptureError = "";
+	let midiDraftVersion = 0;
+	const wardrobeMidiDrafts = new Map<string, WardrobeBindingSetting>();
+	const animatorMidiDrafts = new Map<string, AnimatorBindingSetting>();
+	function midiDraftKey(id: string): string {
+		return JSON.stringify([setting.manifest_path, setting.avatar_path, id]);
+	}
 	let midiCaptureRequestId = 0;
+	let midiCaptureToken: string | null = null;
+	function invalidatePendingAvatarReads(): void {
+		cancelWardrobeMidiCapture();
+		animatorRequestId++;
+	}
+	onDestroy(invalidatePendingAvatarReads);
 
 	type MidiNoteCaptureResult = {
 		device: string;
@@ -333,9 +346,10 @@
 		);
 	}
 
-	function wardrobeMidiBindingFor(setId: string): WardrobeBindingSetting {
+	function wardrobeMidiBindingFor(setId: string, profile: AvatarFileSetting = setting, _version = midiDraftVersion): WardrobeBindingSetting {
 		return (
-			setting.wardrobe_bindings.find((binding) => binding.set_id === setId && binding.kind === "midi_note") ?? {
+			wardrobeMidiDrafts.get(midiDraftKey(setId)) ??
+			profile.wardrobe_bindings.find((binding) => binding.set_id === setId && binding.kind === "midi_note") ?? {
 				set_id: setId,
 				kind: "midi_note",
 				device: "",
@@ -351,9 +365,10 @@
 		);
 	}
 
-	function animatorMidiBindingFor(actionId: string): AnimatorBindingSetting {
+	function animatorMidiBindingFor(actionId: string, profile: AvatarFileSetting = setting, _version = midiDraftVersion): AnimatorBindingSetting {
 		return (
-			setting.animator_bindings.find((binding) => binding.action_id === actionId && binding.kind === "midi_note") ?? {
+			animatorMidiDrafts.get(midiDraftKey(actionId)) ??
+			profile.animator_bindings.find((binding) => binding.action_id === actionId && binding.kind === "midi_note") ?? {
 				action_id: actionId,
 				kind: "midi_note",
 				device: "",
@@ -389,15 +404,23 @@
 		const next = setting.wardrobe_bindings.filter((item) => !(item.set_id === setId && item.kind === "midi_note"));
 		const channel = Number(nextBinding.channel ?? 0);
 		const note = Number(nextBinding.note ?? -1);
-		if (channel >= 1 && channel <= 16 && note >= 0 && note <= 127) {
-			next.push({
-				...nextBinding,
-				device: nextBinding.device?.trim() || null,
-				channel,
-				note,
-			});
+		if (!Number.isInteger(channel) || channel < 1 || channel > 16) return;
+		const draftKey = midiDraftKey(setId);
+		if (nextBinding.note == null) {
+			wardrobeMidiDrafts.set(draftKey, nextBinding);
+			midiDraftVersion++;
+			return;
 		}
+		if (!Number.isInteger(note) || note < 0 || note > 127) return;
+		const pendingDraft = wardrobeMidiDrafts.get(draftKey);
+		next.push({
+			...nextBinding,
+			device: nextBinding.device?.trim() || null,
+			channel,
+			note,
+		});
 		await onUpdateSettingValue("wardrobe.bindings", next);
+		if (wardrobeMidiDrafts.get(draftKey) === pendingDraft) { wardrobeMidiDrafts.delete(draftKey); midiDraftVersion++; }
 	}
 
 	async function updateAnimatorShortcut(actionId: string, shortcut: string): Promise<void> {
@@ -422,24 +445,44 @@
 		const next = setting.animator_bindings.filter((item) => !(item.action_id === actionId && item.kind === "midi_note"));
 		const channel = Number(nextBinding.channel ?? 0);
 		const note = Number(nextBinding.note ?? -1);
-		if (channel >= 1 && channel <= 16 && note >= 0 && note <= 127) {
-			next.push({
-				...nextBinding,
-				device: nextBinding.device?.trim() || null,
-				channel,
-				note,
-			});
+		if (!Number.isInteger(channel) || channel < 1 || channel > 16) return;
+		const draftKey = midiDraftKey(actionId);
+		if (nextBinding.note == null) {
+			animatorMidiDrafts.set(draftKey, nextBinding);
+			midiDraftVersion++;
+			return;
 		}
+		if (!Number.isInteger(note) || note < 0 || note > 127) return;
+		const pendingDraft = animatorMidiDrafts.get(draftKey);
+		next.push({
+			...nextBinding,
+			device: nextBinding.device?.trim() || null,
+			channel,
+			note,
+		});
 		await onUpdateSettingValue("animator.bindings", next);
+		if (animatorMidiDrafts.get(draftKey) === pendingDraft) { animatorMidiDrafts.delete(draftKey); midiDraftVersion++; }
+	}
+
+	async function clearWardrobeMidi(setId: string): Promise<void> {
+		const draftKey = midiDraftKey(setId);
+		const draft = wardrobeMidiDrafts.get(draftKey);
+		const next = setting.wardrobe_bindings.filter((item) => !(item.set_id === setId && item.kind === "midi_note"));
+		await onUpdateSettingValue("wardrobe.bindings", next);
+		if (wardrobeMidiDrafts.get(draftKey) === draft) { wardrobeMidiDrafts.delete(draftKey); midiDraftVersion++; }
 	}
 
 	async function captureWardrobeMidi(setId: string): Promise<void> {
-		if (!hasTauriRuntime()) return;
+		if (busy || midiCaptureSetId !== null || midiCaptureActionId !== null || !hasTauriRuntime()) return;
 		const requestId = ++midiCaptureRequestId;
 		midiCaptureSetId = setId;
 		midiCaptureError = "";
+		let captureId: string | null = null;
 		try {
-			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000 });
+			captureId = await invoke<string>("begin_midi_note_capture");
+			if (requestId !== midiCaptureRequestId) return;
+			midiCaptureToken = captureId;
+			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000, captureId });
 			if (requestId !== midiCaptureRequestId) return;
 			await updateWardrobeMidi(setId, {
 				device: result.device,
@@ -450,19 +493,33 @@
 			if (requestId !== midiCaptureRequestId) return;
 			midiCaptureError = String(error);
 		} finally {
+			if (captureId !== null) releaseMidiCapture(captureId);
 			if (requestId === midiCaptureRequestId) {
 				midiCaptureSetId = null;
+				midiCaptureToken = null;
 			}
 		}
 	}
 
+	async function clearAnimatorMidi(actionId: string): Promise<void> {
+		const draftKey = midiDraftKey(actionId);
+		const draft = animatorMidiDrafts.get(draftKey);
+		const next = setting.animator_bindings.filter((item) => !(item.action_id === actionId && item.kind === "midi_note"));
+		await onUpdateSettingValue("animator.bindings", next);
+		if (animatorMidiDrafts.get(draftKey) === draft) { animatorMidiDrafts.delete(draftKey); midiDraftVersion++; }
+	}
+
 	async function captureAnimatorMidi(actionId: string): Promise<void> {
-		if (!hasTauriRuntime()) return;
+		if (busy || midiCaptureSetId !== null || midiCaptureActionId !== null || !hasTauriRuntime()) return;
 		const requestId = ++midiCaptureRequestId;
 		midiCaptureActionId = actionId;
 		midiCaptureError = "";
+		let captureId: string | null = null;
 		try {
-			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000 });
+			captureId = await invoke<string>("begin_midi_note_capture");
+			if (requestId !== midiCaptureRequestId) return;
+			midiCaptureToken = captureId;
+			const result = await invoke<MidiNoteCaptureResult>("capture_midi_note_binding", { timeoutMs: 10_000, captureId });
 			if (requestId !== midiCaptureRequestId) return;
 			await updateAnimatorMidi(actionId, {
 				device: result.device,
@@ -473,14 +530,22 @@
 			if (requestId !== midiCaptureRequestId) return;
 			midiCaptureError = String(error);
 		} finally {
+			if (captureId !== null) releaseMidiCapture(captureId);
 			if (requestId === midiCaptureRequestId) {
 				midiCaptureActionId = null;
+				midiCaptureToken = null;
 			}
 		}
 	}
 
+	function releaseMidiCapture(captureId: string): void {
+		void invoke("cancel_midi_note_capture", { captureId }).catch((error) => console.warn("MIDI capture cleanup failed", error));
+	}
+
 	function cancelWardrobeMidiCapture(): void {
 		midiCaptureRequestId += 1;
+		if (midiCaptureToken !== null) releaseMidiCapture(midiCaptureToken);
+		midiCaptureToken = null;
 		midiCaptureSetId = null;
 		midiCaptureActionId = null;
 	}
@@ -525,6 +590,7 @@
 
 <section
 	class="editor-section section-grid profile-avatar-section"
+	tabindex="-1"
 	data-profile-section="avatar"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.avatar.section")}
@@ -623,7 +689,7 @@
 						<div class="wardrobe-midi-binding">
 							<span>{$_("profiles.editor.wardrobe_midi_note")}</span>
 							<input
-								value={wardrobeMidiBindingFor(set.id).device ?? ""}
+								value={wardrobeMidiBindingFor(set.id, setting, midiDraftVersion).device ?? ""}
 								placeholder={$_("profiles.editor.wardrobe_midi_device")}
 								disabled={busy}
 								onchange={(event) => updateWardrobeMidi(set.id, { device: (event.currentTarget as HTMLInputElement).value })}
@@ -632,28 +698,31 @@
 								type="number"
 								min="1"
 								max="16"
-								value={wardrobeMidiBindingFor(set.id).channel ?? 1}
+								value={wardrobeMidiBindingFor(set.id, setting, midiDraftVersion).channel ?? 1}
 								disabled={busy}
+								required
 								aria-label={$_("profiles.editor.wardrobe_midi_channel")}
-								onchange={(event) => updateWardrobeMidi(set.id, { channel: Number((event.currentTarget as HTMLInputElement).value) })}
+								onchange={(event) => { const input = event.currentTarget as HTMLInputElement; if (input.reportValidity()) void updateWardrobeMidi(set.id, { channel: Number(input.value) }); }}
 							/>
 							<input
 								type="number"
 								min="0"
 								max="127"
-								value={wardrobeMidiBindingFor(set.id).note ?? ""}
+								value={wardrobeMidiBindingFor(set.id, setting, midiDraftVersion).note ?? ""}
 								placeholder={$_("profiles.editor.wardrobe_midi_note_number")}
 								disabled={busy}
+								required
 								aria-label={$_("profiles.editor.wardrobe_midi_note_number")}
-								onchange={(event) => updateWardrobeMidi(set.id, { note: Number((event.currentTarget as HTMLInputElement).value) })}
+								onchange={(event) => { const input = event.currentTarget as HTMLInputElement; if (input.reportValidity()) void updateWardrobeMidi(set.id, { note: Number(input.value) }); }}
 							/>
 							<button
 								type="button"
 								class="icon-button binding-capture-button"
-								disabled={busy || midiCaptureSetId !== null}
+								disabled={busy || midiCaptureSetId !== null || midiCaptureActionId !== null}
 								title={$_("profiles.editor.midi_capture")}
 								onclick={() => captureWardrobeMidi(set.id)}><SlidersHorizontal size={15} /></button
 							>
+							<button type="button" class="midi-clear-button" disabled={busy || midiCaptureSetId !== null || midiCaptureActionId !== null} onclick={() => clearWardrobeMidi(set.id)}>{$_("profiles.editor.midi_clear")}</button>
 						</div>
 					</div>
 				{/each}
@@ -786,7 +855,7 @@
 									<div class="wardrobe-midi-binding">
 										<span>{$_("profiles.editor.wardrobe_midi_note")}</span>
 										<input
-											value={animatorMidiBindingFor(action.id).device ?? ""}
+											value={animatorMidiBindingFor(action.id, setting, midiDraftVersion).device ?? ""}
 											placeholder={$_("profiles.editor.wardrobe_midi_device")}
 											disabled={busy}
 											onchange={(event) => updateAnimatorMidi(action.id, { device: (event.currentTarget as HTMLInputElement).value })}
@@ -795,20 +864,22 @@
 											type="number"
 											min="1"
 											max="16"
-											value={animatorMidiBindingFor(action.id).channel ?? 1}
+											value={animatorMidiBindingFor(action.id, setting, midiDraftVersion).channel ?? 1}
 											disabled={busy}
-											aria-label={$_("profiles.editor.wardrobe_midi_channel")}
-											onchange={(event) => updateAnimatorMidi(action.id, { channel: Number((event.currentTarget as HTMLInputElement).value) })}
+											required
+								aria-label={$_("profiles.editor.wardrobe_midi_channel")}
+											onchange={(event) => { const input = event.currentTarget as HTMLInputElement; if (input.reportValidity()) void updateAnimatorMidi(action.id, { channel: Number(input.value) }); }}
 										/>
 										<input
 											type="number"
 											min="0"
 											max="127"
-											value={animatorMidiBindingFor(action.id).note ?? ""}
+											value={animatorMidiBindingFor(action.id, setting, midiDraftVersion).note ?? ""}
 											placeholder={$_("profiles.editor.wardrobe_midi_note_number")}
 											disabled={busy}
-											aria-label={$_("profiles.editor.wardrobe_midi_note_number")}
-											onchange={(event) => updateAnimatorMidi(action.id, { note: Number((event.currentTarget as HTMLInputElement).value) })}
+											required
+								aria-label={$_("profiles.editor.wardrobe_midi_note_number")}
+											onchange={(event) => { const input = event.currentTarget as HTMLInputElement; if (input.reportValidity()) void updateAnimatorMidi(action.id, { note: Number(input.value) }); }}
 										/>
 										<button
 											type="button"
@@ -817,6 +888,7 @@
 											title={$_("profiles.editor.midi_capture")}
 											onclick={() => captureAnimatorMidi(action.id)}><SlidersHorizontal size={15} /></button
 										>
+							<button type="button" class="midi-clear-button" disabled={busy || midiCaptureSetId !== null || midiCaptureActionId !== null} onclick={() => clearAnimatorMidi(action.id)}>{$_("profiles.editor.midi_clear")}</button>
 									</div>
 								</div>
 							</div>

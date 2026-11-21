@@ -46,6 +46,8 @@ The exporter writes:
 - `avatar.unavatar`
 - `avatar.unavatar.report.json`
 
+Supported Animator curve bindings are preserved for the whole clip, including zero-valued resets. Files exported with the earlier 32-binding limit need to be exported again to recover omitted data; updating the exporter alone cannot repair an existing `.unavatar`.
+
 ## Prototype Scope
 
 The exporter writes a built-in-writer GLB and patches the root glTF JSON with a `UN_avatar` extension. Modular Avatar is not baked into the mesh at export time; supported component data is carried as metadata for the runtime resolver.

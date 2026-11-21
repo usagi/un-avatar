@@ -22,6 +22,7 @@
 
 <section
 	class="editor-section section-grid rendering-presentation-section"
+	tabindex="-1"
 	data-profile-section="look"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.look.section")}

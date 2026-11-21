@@ -3,6 +3,7 @@
 	import { Copy, ExternalLink, Plus, Trash2 } from "lucide-svelte";
 
 	export let busy = false;
+	export let subduedCreation = false;
 	export let selectedSettingId: string | null = null;
 	export let deleteHoldTargetId: string | null = null;
 	export let deleteHoldProgress = 0;
@@ -14,7 +15,7 @@
 </script>
 
 <div class="toolbar">
-	<button class="primary" data-hint={$_("profiles.hints.toolbar.new")} disabled={busy} onclick={() => onNew()}
+	<button class:primary={!subduedCreation} data-hint={$_("profiles.hints.toolbar.new")} disabled={busy} onclick={() => onNew()}
 		><Plus size={16} />{$_("profiles.actions.new")}</button
 	>
 	<button

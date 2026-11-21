@@ -5,6 +5,7 @@
 	import type { ProfileSettingValue } from "./profileTypes";
 	import {
 		DYNAMICS_BOUNCE_FIELD,
+		DYNAMICS_DRAG_FIELD,
 		DYNAMICS_DAMPING_FIELD,
 		DYNAMICS_MATCH_OVERRIDE_TEMPLATES,
 		DYNAMICS_MATCH_OVERRIDE_FIELD,
@@ -52,14 +53,9 @@
 	}
 
 	function persist(next: DynamicsMatchOverrideSetting[]): void {
-		const clean = next
-			.map(cleanOverride)
-			.filter(
-				(override) =>
-					(override.source_id?.length ?? 0) > 0 ||
-					(override.source_id_contains?.length ?? 0) > 0 ||
-					(override.source_id_regex?.length ?? 0) > 0
-			);
+		// Incomplete conditions are drafts, not implicit removal. Native validation
+		// rejects them; the owning profile editor retains the submitted rows.
+		const clean = next.map(cleanOverride);
 		void onUpdateSettingValue(DYNAMICS_MATCH_OVERRIDE_FIELD, clean as Record<string, unknown>[]);
 	}
 
@@ -258,6 +254,17 @@
 					placeholder="-"
 					{disabled}
 					onChange={(value) => updateOverride(index, { shape_preservation: value })}
+				/>
+				<ProfileNumberInputField
+				 label={$_(DYNAMICS_DRAG_FIELD.labelKey)}
+				 hint={$_(DYNAMICS_DRAG_FIELD.hintKey)}
+				 value={override.drag_scale}
+				 min={DYNAMICS_DRAG_FIELD.min}
+				 max={DYNAMICS_DRAG_FIELD.max}
+				 step={DYNAMICS_DRAG_FIELD.step}
+				 placeholder="-"
+				 {disabled}
+				 onChange={(value) => updateOverride(index, { drag_scale: value })}
 				/>
 				{#each DYNAMICS_VERLET_FIELDS as field}
 					<ProfileNumberInputField

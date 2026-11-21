@@ -6,7 +6,7 @@
 
 ## 参照元
 
-- upstream local repo は `C:\Users\the\tmp\lilToon`。tag `2.3.2`、commit `56d5095`。
+- upstream local repo は `<lilToon checkout>`。tag `2.3.2`、commit `56d5095`。
 - 公式 docs では、Fur は normal / vector、length mask、gravity、randomize、noise、mask、AO、mesh type、layer count、root width、contact controls を持つ専用の高負荷 rendering mode として扱われている。
 - 公式 shader structure docs では、`lts_fur.shader` と関連 Fur variants は通常の lilToon material variant ではなく、独自 pass を持つ例外的 shader として扱われている。
 

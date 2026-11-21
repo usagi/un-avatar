@@ -22,7 +22,7 @@ jobs:
             librsvg2-dev \
             libvulkan1 \
             mesa-vulkan-drivers
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -33,3 +33,6 @@ jobs:
         run: npm ci
       - name: cargo xtask ci
         run: cargo run --locked -p xtask -- ci
+      - name: Run Supervisor frontend unit regressions
+        working-directory: apps/un-avatar-supervisor
+        run: npm run test:unit

@@ -2,6 +2,7 @@ import { DYNAMICS_BONE_COLLIDER_FIELD_PREFIX, DYNAMICS_ENABLED_FIELD, DYNAMICS_O
 
 export function isLaunchTimeRendererField(field: string): boolean {
 	return (
+		isMeshClothAssistField(field) ||
 		field === "avatar_path" ||
 		field === "wardrobe_set" ||
 		field.startsWith("wardrobe.transition.") ||
@@ -22,6 +23,7 @@ export function isRuntimeWindowField(field: string): boolean {
 }
 
 export function canApplyWithoutRestart(field: string): boolean {
+	if (isMeshClothAssistField(field)) return false;
 	return (
 		field === "icon_path" ||
 		field.startsWith("wardrobe.transition.") ||
@@ -40,6 +42,10 @@ export function canApplyWithoutRestart(field: string): boolean {
 		field.startsWith("environment.color.") ||
 		field.startsWith("environment.lighting.")
 	);
+}
+
+function isMeshClothAssistField(field: string): boolean {
+	return field === "physics.dynamics.solver.mesh_cloth_assist" || field.startsWith("physics.dynamics.solver.mesh_cloth_assist.");
 }
 
 export function profileFieldLabel(field: string, translate: (key: string) => string): string {

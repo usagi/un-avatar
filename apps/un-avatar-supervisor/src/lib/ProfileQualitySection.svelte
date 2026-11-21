@@ -17,6 +17,7 @@
 
 <section
 	class="editor-section section-grid render-quality-section"
+	tabindex="-1"
 	data-profile-section="quality"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.quality.section")}

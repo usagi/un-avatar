@@ -28,12 +28,14 @@
 </script>
 
 <div class="launch-target">
+	<span class="launch-target-caption">{$_("renderers.toolbar.launch_target")}</span>
 	<button
 		type="button"
 		class="launch-select-button"
 		class:launch-select-text-only={Boolean(launchGroupName)}
 		disabled={avatarSettings.length === 0}
 		title={selectedTargetTitle}
+		aria-expanded={launchMenuOpen}
 		onclick={onToggleOpen}
 	>
 		{#if launchGroupName}
@@ -41,6 +43,7 @@
 		{:else if launchTargetSetting}
 			<img src={iconSrc(launchTargetSetting.icon_path)} alt="" />
 			<strong>{launchTargetSetting.name}</strong>
+			<small>ID: {launchTargetSetting.id}</small>
 		{:else}
 			<strong>{$_("renderers.toolbar.no_settings_found")}</strong>
 		{/if}
@@ -70,3 +73,7 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	.launch-target-caption { font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+</style>

@@ -9,7 +9,7 @@
 	export let draggedSettingId: string | null;
 	export let settingPointerDrag: SettingPointerDrag | null;
 	export let iconSrc: (path: string | null) => string;
-	export let runningCountForManifestPath: (manifestPath: string) => number;
+	export let runningCountForProfileId: (profileId: string) => number;
 	export let onSelect: (settingId: string) => void;
 	export let onBeginDrag: (event: PointerEvent, settingId: string) => void;
 </script>
@@ -18,7 +18,7 @@
 	<h2>{$_("sidebar.profiles")}</h2>
 	<div class:drag-active={Boolean(draggedSettingId)} class="setting-list-items">
 		{#each settings as setting (setting.id)}
-			{@const runningCount = runningCountForManifestPath(setting.manifest_path)}
+			{@const runningCount = runningCountForProfileId(setting.id)}
 			<div class="setting-list-row" animate:flip={{ duration: 120 }}>
 				{#if draggedSettingId === setting.id && settingPointerDrag?.active}
 					<div class="drag-placeholder" aria-hidden="true"></div>

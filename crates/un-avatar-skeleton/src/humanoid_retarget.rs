@@ -2067,7 +2067,7 @@ fn apply_humanoid_pose_to_scene_with_rest_in_space_full(
 	apply_root_translation: bool,
 ) {
 	let resolved_roots = resolved_scene_roots(nodes, roots);
-	if let (Some(ref root_t), Some(&ri)) = (&pose.root, resolved_roots.first()) {
+	if let (Some(root_t), Some(&ri)) = (&pose.root, resolved_roots.first()) {
 		if let Some(node) = nodes.get_mut(ri) {
 			if let Some(base) = root_base_transform(ri, node, rest_nodes, frame_ctx) {
 				let sample_rotation = frame_ctx.transform_rotation(root_t, UnmotionHumanoidRole::Root);
@@ -5644,6 +5644,33 @@ mod tests {
 		let ew = document.expression_weights.as_ref().unwrap();
 		assert_eq!(ew.preset_weights.get("a").copied().unwrap_or(0.0), 0.0);
 		assert_eq!(ew.preset_weights.get("blink_l").copied().unwrap_or(0.0), 0.0);
+	}
+
+	#[test]
+	fn sparse_emotion_alias_release_preserves_live_mouth_and_blink() {
+		let mut document = UnaDocument::default();
+		document.scene = Some(Default::default());
+		document.humanoid_profile = Some(HumanoidProfile::default());
+		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
+			presets: ["MouthSmileLeft", "JawOpen", "EyeBlinkLeft", "EyeBlinkRight"].into_iter()
+				.map(|name| un_avatar_core::UnaExpressionPreset { name: name.into(), binds: vec![] }).collect(),
+		});
+		document.expression_weights = Some(Default::default());
+		for (sequence, samples) in [
+			vec![("mouth_smile_left", 0.7), ("jaw-open", 0.4), ("eye blink left", 0.8), ("EyeBlinkRight", 0.6)],
+			vec![("MOUTH-SMILE-LEFT", 0.0)],
+		].into_iter().enumerate() {
+			let mut frame = UNMotionFrame::new(sequence as u64);
+			frame.face = Some(FaceMotion { tracking_state: TrackingState::Valid, confidence: 1.0, head: None,
+				expressions: samples.into_iter().map(|(name, value)| un_motion_frame::ExpressionSample {
+					name: name.into(), value, confidence: 1.0, source_index: None, state: SampleState::Valid,
+				}).collect() });
+			apply_un_motion_frame_to_document(&mut document, &frame, ApplyUnMotionFrameOpts::default());
+			let weights = &document.expression_weights.as_ref().unwrap().preset_weights;
+			for (name, expected) in [("MouthSmileLeft", if sequence == 0 { 0.7 } else { 0.0 }), ("JawOpen", 0.4), ("EyeBlinkLeft", 0.8), ("EyeBlinkRight", 0.6)] {
+				assert!((weights[name] - expected).abs() < 1e-5, "{sequence}: {name}");
+			}
+		}
 	}
 
 	#[test]

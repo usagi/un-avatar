@@ -847,6 +847,9 @@ impl ProfileManifest {
 				opts.gpu_adapter = Some(gpu_adapter.to_string());
 			}
 		}
+		if let Some(profile_id) = self.id.as_deref().and_then(unaa_z_instance_id) {
+			opts.unaa_z_instance_id = Some(profile_id);
+		}
 		let profile_key = self.id.or(self.display_name);
 		if let Some(profile_key) = profile_key {
 			if let Some(app_id) = renderer_profile_app_user_model_id(&profile_key) {
@@ -854,6 +857,16 @@ impl ProfileManifest {
 			}
 		}
 	}
+}
+
+fn unaa_z_instance_id(profile_id: &str) -> Option<String> {
+	let profile_id = profile_id.trim();
+	(!profile_id.is_empty()
+		&& profile_id.len() <= 128
+		&& profile_id
+			.chars()
+			.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-')))
+	.then(|| profile_id.to_string())
 }
 
 fn renderer_profile_app_user_model_id(profile_key: &str) -> Option<String> {
@@ -2184,5 +2197,20 @@ data = "high_quality"
 			crate::TextureCompressionPreference::HighQuality
 		);
 		assert_eq!(opts.texture_compression_advanced.face, crate::TextureCompressionPreference::Source);
+	}
+
+	#[test]
+	fn profile_id_becomes_exact_unaa_z_renderer_identity() {
+		let manifest: RendererManifest = toml::from_str(
+			r#"
+[profile]
+id = "new-avatar-3"
+display_name = "Kalt'sit Pseudo"
+"#,
+		)
+		.unwrap();
+		let mut opts = AvatarWindowOptions::default();
+		manifest.apply_to(&mut opts);
+		assert_eq!(opts.unaa_z_instance_id.as_deref(), Some("new-avatar-3"));
 	}
 }

@@ -2,6 +2,7 @@
 	import { _ } from "svelte-i18n";
 
 	export let pendingPath: string | null;
+	export let avatarPathSaved = false;
 	export let hasThumbnail = false;
 	export let busy = false;
 	export let useThumbnailForProfileIconOnAccept = false;
@@ -10,18 +11,18 @@
 </script>
 
 <footer class="vrm-metadata-actions">
-	{#if pendingPath && hasThumbnail}
+	{#if pendingPath && hasThumbnail && !avatarPathSaved}
 		<label class="vrm-thumbnail-icon-toggle" title={$_("vrm_metadata.use_thumbnail_as_profile_icon_hint")}>
-			<input type="checkbox" bind:checked={useThumbnailForProfileIconOnAccept} />
+			<input type="checkbox" disabled={busy} bind:checked={useThumbnailForProfileIconOnAccept} />
 			<span>{$_("vrm_metadata.use_thumbnail_as_profile_icon")}</span>
 		</label>
 	{/if}
 	<button class="secondary" onclick={() => onClose()}>
-		{pendingPath ? $_("common.cancel") : $_("common.close")}
+		{pendingPath && !avatarPathSaved ? $_("common.cancel") : $_("common.close")}
 	</button>
 	{#if pendingPath}
 		<button class="primary" disabled={busy} onclick={() => onAcceptAndUse()}>
-			{$_("vrm_metadata.accept_and_use")}
+			{$_(avatarPathSaved ? "vrm_metadata.retry_icon_save" : "vrm_metadata.accept_and_use")}
 		</button>
 	{/if}
 </footer>

@@ -29,6 +29,7 @@
 			>{renderer.pid ? `PID ${renderer.pid}` : `exit ${renderer.exit_code ?? "--"}`}
 			· {rendererHealthLabel(renderer, status, {
 				pending: $_("renderers.summary.pending"),
+				stopping: $_("renderers.state.stopping"),
 				connected: $_("renderers.summary.connected"),
 				crashed: $_("renderers.summary.crashed"),
 				idle: $_("renderers.summary.idle"),

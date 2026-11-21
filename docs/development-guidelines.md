@@ -50,7 +50,7 @@ cargo xtask run
 cargo xtask run --release
 ```
 
-`cargo xtask build` / `run` は Supervisor frontend を build し、Supervisor と Renderer を同じ cargo profile で build してから起動する。workspace の default member だけを build すると Renderer の変更が反映されないことがある。
+`cargo xtask build` / `run` は Supervisor frontend を build し、Supervisor と Renderer を同じ cargo profile で build してから起動する。workspace の default member だけを build すると Renderer の変更が反映されないことがある。 Supervisor frontend は毎回 `VITE_UN_DESIGN_PREVIEW=0` で生成する。比較用出力や外部の共通部品の変更を更新日時だけでは判別できないため、distの日時による再利用は行わない。比較UIを試す場合は専用の出力先へfrontendを直接ビルドする。
 
 Renderer だけを起動前検証する場合は:
 
@@ -69,6 +69,14 @@ cargo xtask run-renderer --profile model2 -- --debug-material-dump
 
 標準の Windows リリースパッケージは Spout2 runtime を含める。
 
+`package` は通常UIの生成とネイティブビルドが成功した後、Supervisor / Renderer のSHA-256を
+`un-avatar-build.json` に記録する。`release-package` は `--skip-build` の有無にかかわらず、
+梱包前にこの記録とEXEを照合する。記録がない旧stagingや、EXEを差し替えたstagingは
+`cargo xtask package` から作り直す。記録は機能検証・最新ソースとの一致・公開承認の代わりではない。
+標準の保存先から別の古いEXEを拾わないよう、`package` では `TAURI_CONFIG`、`CARGO_TARGET_DIR`、
+`CARGO_BUILD_TARGET` による外部の出力先指定を受け付けない。通常の開発ビルドの設定とは別である。
+
+
 ```sh
 cargo xtask spout2
 cargo xtask unity-exporter-package
@@ -79,6 +87,13 @@ cargo xtask package-render-smoke
 
 `release-package` は既定で build と package staging を実行し、`release-packages/un-avatar-<version>.zip` と `release-packages/un-avatar-<version>.zip.sha256.txt` を作る。zip 作成前に packaged Renderer の windowless startup smoke を実行し、zip 作成後に Renderer / Supervisor executable、license files、Unity Exporter、Spout2 runtime（`--skip-spout2` なしの場合）の必須 entry も検査する。
 `release-audit` は既存の portable zip / checksum sidecar / VCC package zip / VCC repo listing と VCC listing の name / version / URL suffix を再ビルドせずに再検査する。portable zip は clean temp directory へ展開し、必須実行ファイル / license / Unity Exporter / Spout2 runtime が通常ファイルとして取り出せること、zip 内の README / LICENSE / third-party notices が現行 source と一致すること、さらに VCC zip の必須 entry が `target/unity/vcc-staging` の生成元と一致し、zip 内 `package.json` の name / version / release asset URL suffix と VCC repo listing の package URL が正しいことも確認する。`local/release-work/` に GitHub Release draft や manual checklist がある場合は、それらの hash / required text / Candidate Build も追加で確認する。
+常用の `target/release` を上書きせず配布候補を作る場合は、
+`cargo xtask package --target-dir target/public-candidate-YYYYMMDD` を使う。
+`release-package` にも同じ `--target-dir` を渡せる。これは Rust のビルド出力先を分離する指定で、
+フロントエンドの `dist` と組立先 `target/package/un-avatar` は共通のため、package ビルドは並行実行しない。
+`--skip-build` は指定ビルド先からの再組立を行わず、従来どおり組立済み package とそのハッシュ記録を検証する。
+初期テンプレートは明示した `profiles/main.toml` と `profiles/debug.toml` のみを同梱し、任意のローカルプロファイルは含めない。
+
 `package-render-smoke` は `target/package/un-avatar/un-avatar-renderer` を使い、window を開かず fixture glTF manifest を `--validate-startup` で検査する。実 profile / `.unavatar` も `cargo xtask package-render-smoke --manifest <path> --wardrobe-set <id>` で同じ packaged Renderer から windowless 検査できる。
 `unity-exporter-package` は Unity Editor を起動せず、`unity/un-avatar-unity-exporter` を `target/unity/un-avatar-unity-exporter` へ UPM package layout としてコピーする。
 
@@ -149,4 +164,9 @@ v2 は `.unavatar` / VRC 由来機能を含むため、VRM だけでなく軽量
 
 ## 設計文書の扱い
 
-公開時点の正本は現行コード、[`../README.md`](../README.md)、[`roadmap.md`](roadmap.md)、[`runtime-mvp.md`](runtime-mvp.md)。古い設計メモと食い違う場合は現行実装を優先する。
+公開時点の正本は現行コード、[`../README.md`](../README.md)、[`roadmap.md`](https://github.com/usagi/un-avatar/blob/main/docs/roadmap.md)、[`runtime-mvp.md`](https://github.com/usagi/un-avatar/blob/main/docs/runtime-mvp.md)。古い設計メモと食い違う場合は現行実装を優先する。
+
+
+### Windowsライブラリ単体試験のマニフェスト
+
+開発用のWindowsライブラリ単体試験で `TaskDialogIndirect` の読込に失敗する場合は、`UN_AVATAR_LIBTEST_MANIFEST=1` をその `cargo test --lib` 実行に限って設定する。単体試験の実行ファイルにCommon Controls v6のマニフェストを埋め込むための指定で、通常アプリのビルドには設定しない。通常アプリはTauriのリソース側でマニフェストを持つ。

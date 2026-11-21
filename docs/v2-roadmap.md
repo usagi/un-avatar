@@ -2,7 +2,7 @@
 
 作成日: 2026-05-31
 
-この文書は v1.0.0 後の v2 開発計画の正本である。v1 の境界は [`../README.md`](../README.md)、[`roadmap.md`](roadmap.md)、[`runtime-mvp.md`](runtime-mvp.md) を優先する。
+この文書は v1.0.0 後の v2 開発計画の正本である。v1 の境界は [`../README.md`](../README.md)、[`roadmap.md`](https://github.com/usagi/un-avatar/blob/main/docs/roadmap.md)、[`runtime-mvp.md`](https://github.com/usagi/un-avatar/blob/main/docs/runtime-mvp.md) を優先する。
 
 ## 1. v2 の中核
 
@@ -211,7 +211,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - node visibility binding を renderer に反映する。
 - material color / emission binding を最小実装する。
 - Supervisor から expression / toggle を操作できる runtime control を広げる。
-- AudioLink 初期対応後の短期作業順は [`v2-near-term-plan.md`](v2-near-term-plan.md) を参照する。まず現状実装のほどほどのリファクタリングと最適化を行い、その後 renderer 再起動なしの Wardrobe hot switch を最初の実用ターゲットにする。
+- AudioLink 初期対応後の短期作業順は [`v2-near-term-plan.md`](https://github.com/usagi/un-avatar/blob/main/docs/v2-near-term-plan.md) を参照する。まず現状実装のほどほどのリファクタリングと最適化を行い、その後 renderer 再起動なしの Wardrobe hot switch を最初の実用ターゲットにする。
 
 ### Milestone 5: UNToon v2 / lilToon major parameters
 
@@ -221,7 +221,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 - v2 開発中の正本は lilToon-compatible な `UnaLilToonLikeMaterial` / lilToon-like shader とする。安定後にこれを正式な UNToon material として扱う。v1 の MToon 実装は参考であり、v2 機能を `UnaMtoonMaterial` へ積み増さない。VRM0/VRM1 MToon は compat load layer で UNToon semantic material へ変換し、MToon-like 別 pipeline は作らない。
 - UV transform / animation は UNToon v2 の基本機能として扱う。Exporter は main texture Tiling / Offset、MToon `_UvAnim*`、lilToon `_MainTex_ScrollRotate` を正規化し、Renderer は同じ transformed / animated UV を base / shade / normal / occlusion / rim / emissive / outline mask へ適用する。
 - WGSL 実装では MIT License の [lilToon](https://github.com/lilxyzw/lilToon) を主要な shader behavior reference として読む。MToon 互換側は MIT License の [MToon](https://github.com/Santarh/MToon) を参照する。U.N. Avatar は独立実装だが、実質的な移植を行った箇所は third-party notice を維持する。
-- 機能単位の互換方針は [`untoon-liltoon-compatibility.md`](untoon-liltoon-compatibility.md) を正とする。画像差分から係数を闇雲に合わせず、lilToon 本家の Main / Shadow / Normal / MatCap / Reflection / Rim / Outline を順に確認して UNToon v2 へ実装する。
+- 機能単位の互換方針は [`untoon-liltoon-compatibility.md`](https://github.com/usagi/un-avatar/blob/main/docs/untoon-liltoon-compatibility.md) を正とする。画像差分から係数を闇雲に合わせず、lilToon 本家の Main / Shadow / Normal / MatCap / Reflection / Rim / Outline を順に確認して UNToon v2 へ実装する。
 
 ### Milestone 6: SpringBone / PhysBone to U.N. dynamics
 
@@ -241,7 +241,7 @@ v2 では機能追加だけでなく、v1 の実用面を強くする。
 ### Milestone 8: Modular Avatar bake support
 
 - `Wardrobe (Split)` では Unity Editor で wardrobe set ごとに bake するのではなく、Exporter が Modular Avatar source graph / component payload / reference 解決情報を `.unavatar` に保持し、Runtime resolver が bake 相当の render graph を生成する。
-- Modular Avatar 対応の機能単位 checklist は [`modular-avatar-compatibility.md`](modular-avatar-compatibility.md) を正とする。
+- Modular Avatar 対応の機能単位 checklist は [`modular-avatar-compatibility.md`](https://github.com/usagi/un-avatar/blob/main/docs/modular-avatar-compatibility.md) を正とする。
 - 初期 regression target は `mizuki-split` / `field_drape` の `Hair_Base` だった。これは alpha / visibility ではなく Modular Avatar Bone Proxy 未適用による transform hierarchy 問題として扱った。
 - Runtime 側で outfit / accessory 切替を扱い、selected wardrobe set ごとの resolver cache / lazy GPU upload を実装する。
 
@@ -270,9 +270,9 @@ v2 初期では次をやらない。
 
 ## 12. 関連文書
 
-- [`unavatar-format-v0.1.md`](unavatar-format-v0.1.md): `.unavatar` GLB extension preview spec
+- [`unavatar-format-v0.1.md`](https://github.com/usagi/un-avatar/blob/main/docs/unavatar-format-v0.1.md): `.unavatar` GLB extension preview spec
 - [`unity-exporter-v0.1.md`](unity-exporter-v0.1.md): Unity Editor Exporter の境界、配置、MVP
-- [`v2-open-decisions.md`](v2-open-decisions.md): GLB writer、crate 境界、`.una` 廃止の採用方針
+- [`v2-open-decisions.md`](https://github.com/usagi/un-avatar/blob/main/docs/v2-open-decisions.md): GLB writer、crate 境界、`.una` 廃止の採用方針
 
 ## 13. 直近の実装順
 

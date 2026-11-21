@@ -1,7 +1,7 @@
 # v2 UI / GUI Operation Plan
 
 This document fixes the v2 user-operation shape before release polish.
-The source policy is [`v2-near-term-plan.md`](v2-near-term-plan.md), especially Output / preview and Renderer tray / Supervisor operation.
+The source policy is [`v2-near-term-plan.md`](https://github.com/usagi/un-avatar/blob/main/docs/v2-near-term-plan.md), especially Output / preview and Renderer tray / Supervisor operation.
 
 ## Product Surfaces
 

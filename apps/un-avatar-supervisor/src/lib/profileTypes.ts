@@ -106,6 +106,7 @@ export type RendererReadySetting = Pick<
 	SettingSummaryLabelData;
 
 export type AvatarSetting = ProfileLaunchSetting & {
+	revision?: string;
 	created_at: string;
 	sort_order: number;
 	storage: "seed" | "user";
@@ -133,6 +134,13 @@ export type AvatarSetting = ProfileLaunchSetting & {
 	dynamics_physics_configured: boolean;
 	dynamics_simulation_hz: number;
 	dynamics_substeps: number;
+	dynamics_surface_constraints_enabled: boolean;
+	dynamics_surface_constraint_topology_max_edge_distance_m: number;
+	dynamics_surface_constraint_topology_max_mean_edge_distance_m: number;
+	dynamics_surface_constraint_spatial_max_distance_m: number;
+	dynamics_surface_constraint_topology_stiffness: number;
+	dynamics_surface_constraint_spatial_stiffness: number;
+	dynamics_surface_constraint_min_edge_count: number;
 	dynamics_category_overrides: DynamicsCategoryOverrideSetting[];
 	dynamics_match_overrides: DynamicsMatchOverrideSetting[];
 	dynamics_collider_augment_overrides: DynamicsColliderAugmentOverrideSetting[];
@@ -386,6 +394,13 @@ export type MotionSetting = Pick<
 	| "dynamics_collider_augment_overrides"
 	| "dynamics_group_overrides"
 	| "dynamics_mesh_cloth_assist"
+	| "dynamics_surface_constraints_enabled"
+	| "dynamics_surface_constraint_topology_max_edge_distance_m"
+	| "dynamics_surface_constraint_topology_max_mean_edge_distance_m"
+	| "dynamics_surface_constraint_spatial_max_distance_m"
+	| "dynamics_surface_constraint_topology_stiffness"
+	| "dynamics_surface_constraint_spatial_stiffness"
+	| "dynamics_surface_constraint_min_edge_count"
 	| "apply_vmc_root_translation"
 	| "bone_colliders_enabled"
 	| "bone_collider_head"

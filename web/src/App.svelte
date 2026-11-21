@@ -4,7 +4,7 @@
 
   const pillars = products.filter((product) => product.group === 'pillar');
   const tools = products.filter((product) => product.group === 'tool');
-  const fallbackRelease = '2.0.0';
+  const fallbackRelease = '2.4.0';
   const vccRepoUrl = 'https://usagi.github.io/un-avatar/vcc/index.json';
   const vccAddRepoUrl = `vcc://vpm/addRepo?url=${encodeURIComponent(vccRepoUrl)}`;
   let latestRelease = fallbackRelease;
@@ -115,7 +115,7 @@
   <section class="hero">
     <div class="shell hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow">U.N. Avatar 2.0.0</p>
+        <p class="eyebrow">U.N. Avatar {latestRelease}</p>
         <h1>お気に入りのアバターを、そのまま配信へ。</h1>
         <p class="lead">
           VRM と VRC / Unity アバターを、デスクトップ / OBS 向けに表示する仮想アバターレンダラー。

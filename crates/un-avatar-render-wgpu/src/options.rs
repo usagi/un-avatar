@@ -649,6 +649,8 @@ pub struct AvatarWindowOptions {
 	/// Windows taskbar grouping identity. Manifest profiles set this per profile so Windows does not
 	/// reuse one profile's cached taskbar icon for every renderer process.
 	pub app_user_model_id: Option<String>,
+	/// UNAA/Z上でRendererを一意に識別する安定ID。通常はprofile.idを使う。
+	pub unaa_z_instance_id: Option<String>,
 	pub clear_color: wgpu::Color,
 	/// タイトルバーに FPS と概算 CPU／GPU 時間（ms）を表示する。
 	pub show_fps_in_title: bool,
@@ -860,6 +862,7 @@ impl Default for AvatarWindowOptions {
 			animator_bindings: Vec::new(),
 			icon_path: None,
 			app_user_model_id: None,
+			unaa_z_instance_id: None,
 			show_fps_in_title: true,
 			target_fps: 60.0,
 			bench_frames: None,

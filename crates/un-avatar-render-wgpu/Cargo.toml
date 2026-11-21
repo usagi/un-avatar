@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.100"
 name = "un-avatar-render-wgpu"
 description = "UN Avatar — winit + wgpu window and render loop (Phase 1.1–1.2 bootstrap)"
 version.workspace = true
@@ -40,6 +41,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 zenoh = { workspace = true }
+jiff = { workspace = true }
 pollster = "0.4"
 un-avatar-core = { path = "../un-avatar-core" }
 un-avatar-io = { path = "../un-avatar-io" }

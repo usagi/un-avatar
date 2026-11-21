@@ -3,6 +3,7 @@
 	import { _ } from "svelte-i18n";
 	import ProfileBoneColliderSettings from "./ProfileBoneColliderSettings.svelte";
 	import ProfileDynamicsMotionFields from "./ProfileDynamicsMotionFields.svelte";
+	import ProfileAdvancedPhysics from "./ProfileAdvancedPhysics.svelte";
 
 	export let setting: MotionSetting;
 	export let busy = false;
@@ -12,6 +13,7 @@
 
 <section
 	class="editor-section profile-physics-section"
+	tabindex="-1"
 	data-profile-section="physics"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.physics.section")}
@@ -22,4 +24,5 @@
 
 	<ProfileDynamicsMotionFields {setting} {busy} {onUpdateSettingValue} />
 	<ProfileBoneColliderSettings {setting} {busy} {onUpdateSettingValue} />
+	<ProfileAdvancedPhysics {setting} {busy} {onUpdateSettingValue} />
 </section>

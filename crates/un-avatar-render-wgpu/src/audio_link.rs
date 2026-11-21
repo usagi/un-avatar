@@ -224,8 +224,7 @@ fn build_audio_link_texture_frame(
 fn normalize_device_match(value: &str) -> String {
 	value
 		.trim()
-		.strip_prefix("cpal:")
-		.unwrap_or(value.trim())
+		.trim_prefix("cpal:")
 		.chars()
 		.filter(|ch| !ch.is_whitespace())
 		.flat_map(char::to_lowercase)

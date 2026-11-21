@@ -13,6 +13,7 @@
 
 <section
 	class="editor-section profile-motion-section"
+	tabindex="-1"
 	data-profile-section="motion"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.motion.section")}

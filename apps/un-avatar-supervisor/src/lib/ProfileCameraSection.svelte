@@ -23,6 +23,7 @@
 
 <section
 	class="editor-section section-grid profile-camera-section"
+	tabindex="-1"
 	data-profile-section="camera"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.camera.section")}

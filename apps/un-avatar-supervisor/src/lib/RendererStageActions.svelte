@@ -15,9 +15,13 @@
 	export let onRestartRenderer: (rendererId: number) => void | Promise<void>;
 	export let onStopRenderer: (rendererId: number) => void | Promise<void>;
 
-	function stageActionDisabled(key: RendererStageActionKey): boolean {
-		if (key === "restart") return busy || !renderer.manifest_path;
-		return key === "activate" ? !renderer.pid : busy || !renderer.pid;
+	function stageActionDisabled(key: RendererStageActionKey, target: RendererStageActionData, pending: boolean): boolean {
+		if (key === "restart") return pending || !target.manifest_path;
+		if (key === "activate") return pending || !target.pid;
+		// Attached Renderers have no owned Child/PID in the instance record.
+		// Protocol operations and stop retries address the managed instance ID.
+		if (key === "stop") return pending || target.state === "Exited" || target.state === "Crashed";
+		return pending || !["Running", "Starting", "Degraded"].includes(target.state);
 	}
 
 	function runStageAction(key: RendererStageActionKey): void {
@@ -50,7 +54,7 @@
 			icon={action.icon}
 			label={$_(action.labelKey)}
 			danger={action.danger === true}
-			disabled={stageActionDisabled(action.key)}
+			disabled={stageActionDisabled(action.key, renderer, busy)}
 			onClick={() => runStageAction(action.key)}
 		/>
 	{/each}

@@ -24,7 +24,7 @@
 
 	let sourceSubscriptions = setting.unmotion_zenoh_subscriptions;
 	let draftSubscriptions = subscriptionsFromSetting();
-	let queuedSubscriptions: UnmotionZenohSubscriptionSetting[] | null = null;
+	let queuedSubscriptions: { values: UnmotionZenohSubscriptionSetting[]; update: typeof onUpdateSettingValue } | null = null;
 	let saveRunning = false;
 
 	$: if (setting.unmotion_zenoh_subscriptions !== sourceSubscriptions && !saveRunning && queuedSubscriptions === null) {
@@ -34,7 +34,7 @@
 
 	function saveSubscriptions(next: UnmotionZenohSubscriptionSetting[]): void {
 		draftSubscriptions = next;
-		queuedSubscriptions = next.map((item) => ({ ...item }));
+		queuedSubscriptions = {values: next.map((item) => ({ ...item })), update: onUpdateSettingValue};
 		void flushSubscriptions();
 	}
 
@@ -45,7 +45,7 @@
 			while (queuedSubscriptions !== null) {
 				const next = queuedSubscriptions;
 				queuedSubscriptions = null;
-				await onUpdateSettingValue("motion.unmotion_zenoh.subscriptions", next as unknown as Record<string, unknown>[]);
+				await next.update("motion.unmotion_zenoh.subscriptions", next.values as unknown as Record<string, unknown>[]);
 			}
 		} finally {
 			saveRunning = false;

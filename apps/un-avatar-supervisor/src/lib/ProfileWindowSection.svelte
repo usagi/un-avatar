@@ -10,6 +10,7 @@
 
 	export let setting: WindowSetting;
 	export let runtimeWindowAvailable = false;
+	export let reviewRendererIds: number[] = [];
 	export let busy = false;
 	export let colorDisplayMode: ColorDisplayMode;
 	export let onColorModeChange: ColorModeChangeHandler;
@@ -21,6 +22,7 @@
 
 <section
 	class="editor-section section-grid profile-window-section"
+	tabindex="-1"
 	data-profile-section="window"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.window.section")}
@@ -35,6 +37,17 @@
 			onclick={onCaptureRuntimeWindow}>{$_("profiles.editor.capture_runtime_window")}</button
 		>
 	</div>
+	{#if import.meta.env.VITE_UN_DESIGN_PREVIEW === "1"}
+        <p class="profile-window-target-scope" role="note">
+            {#if reviewRendererIds.length}
+                ウィンドウ変更の反映先・現在値の取得元：個体 #{reviewRendererIds[0]}。
+                背景色の反映先：{reviewRendererIds.map(id => `#${id}`).join("、")}。
+                {#if reviewRendererIds.length > 1}上部の表示対象を切り替えても、この反映先は変わらない。{/if}
+            {:else}
+                稼働個体なし。変更はこのプロファイルに保存し、次回起動に使用する。
+            {/if}
+        </p>
+    {/if}
 	<ProfileWindowAppearanceFields
 		decorations={setting.decorations}
 		transparent={setting.transparent}

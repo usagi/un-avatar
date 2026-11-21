@@ -18,7 +18,7 @@ use std::{
 		Arc,
 	},
 	thread::JoinHandle,
-	time::Duration,
+	time::{Duration, Instant},
 };
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
@@ -28,13 +28,39 @@ use un_motion_frame_zenoh::{Error, Subscriber, SubscriberBackend, ZenohTopicStra
 #[cfg(feature = "zenoh-transport")]
 use un_motion_frame_zenoh::{ZenohSessionConfig, ZenohSubscriberBackend};
 
-/// レンダラー側がポーリングする受信ハンドル。
-///
-/// drop 時にワーカースレッドへ停止フラグを立て、最大 200ms 以内で停止する。Subscriber の
-/// `keep_alive` (`zenoh::pubsub::Subscriber` を box で握っている) もそのタイミングで drop され、
-/// 実 Zenoh セッション側の subscription も解除される。
+/// Explicit motion endpoints are upstreams, not peer mesh discovery hints.
+#[cfg(feature = "zenoh-transport")]
+fn open_motion_backend(config: &ZenohSessionConfig) -> Result<ZenohSubscriberBackend, Error> {
+    use zenoh::Wait as _;
+    let Some(endpoints) = config.connect_endpoints().filter(|e| !e.is_empty()) else {
+        return ZenohSubscriberBackend::open(config);
+    };
+    let mut direct = zenoh::Config::default();
+    for (key, value) in [
+        ("mode", if endpoints.len() > 1 { "\"peer\"" } else { "\"client\"" }.to_string()),
+        ("listen/endpoints", "[]".to_string()),
+        ("scouting/gossip/enabled", "false".to_string()),
+        ("connect/endpoints", serde_json::to_string(endpoints).map_err(|e| Error::transport(e.to_string()))?),
+        ("scouting/multicast/enabled", "false".to_string()),
+        ("connect/timeout_ms", "5000".to_string()),
+        ("connect/exit_on_failure", "true".to_string()),
+    ] {
+        direct.insert_json5(key, &value).map_err(|e| Error::transport(e.to_string()))?;
+    }
+    let session = zenoh::open(direct).wait().map_err(|e| Error::transport(e.to_string()))?;
+    Ok(ZenohSubscriberBackend::from_session(session))
+}
+
+/// Decoded motion and its local queue-entry time. No sender-clock conversion.
+pub struct TimedMotionFrame {
+	pub frame: UNMotionFrame,
+	/// After decode, before the receiver-to-renderer queue; not socket arrival.
+	pub decoded_at: Instant,
+}
+
+/// レンダラー側がポーリングする受信ハンドル。drop時に受信ワーカーを停止する。
 pub struct UnAvatarZenohReceiver {
-	rx: Receiver<UNMotionFrame>,
+	rx: Receiver<TimedMotionFrame>,
 	shutdown: Arc<AtomicBool>,
 	join: Option<JoinHandle<()>>,
 	strategy: ZenohTopicStrategy,
@@ -51,7 +77,7 @@ impl UnAvatarZenohReceiver {
 	/// 指定したZenoh session設定でSubscriberを作る。
 	#[cfg(feature = "zenoh-transport")]
 	pub fn declare_zenoh(config: &ZenohSessionConfig, strategy: ZenohTopicStrategy) -> Result<Self, Error> {
-		let backend = ZenohSubscriberBackend::open(config)?;
+		let backend = open_motion_backend(config)?;
 		Self::declare_with_backend(backend, strategy)
 	}
 
@@ -61,7 +87,7 @@ impl UnAvatarZenohReceiver {
 		config: &ZenohSessionConfig,
 		strategies: impl IntoIterator<Item = ZenohTopicStrategy>,
 	) -> Result<Vec<Self>, Error> {
-		let backend = ZenohSubscriberBackend::open(config)?;
+		let backend = open_motion_backend(config)?;
 		let session = backend.session().clone();
 		strategies
 			.into_iter()
@@ -83,7 +109,7 @@ impl UnAvatarZenohReceiver {
 	}
 
 	fn start<B: Send + 'static>(subscriber: Subscriber, backend_keep_alive: B, strategy: ZenohTopicStrategy) -> Result<Self, Error> {
-		let (tx, rx) = crossbeam_channel::unbounded::<UNMotionFrame>();
+		let (tx, rx) = crossbeam_channel::unbounded::<TimedMotionFrame>();
 		let shutdown = Arc::new(AtomicBool::new(false));
 		let s = Arc::clone(&shutdown);
 
@@ -99,7 +125,7 @@ impl UnAvatarZenohReceiver {
 					}
 					match subscriber.recv_frame_timeout(Duration::from_millis(100)) {
 						Ok(Some(frame)) => {
-							if tx.send(frame).is_err() {
+							if tx.send(TimedMotionFrame { frame, decoded_at: Instant::now() }).is_err() {
 								// 受信側 (renderer) が drop されている。スレッドを畳む。
 								break;
 							}
@@ -133,7 +159,7 @@ impl UnAvatarZenohReceiver {
 	/// 直近の 1 フレームをノンブロッキングで取り出す。
 	pub fn try_recv(&self) -> Option<UNMotionFrame> {
 		match self.rx.try_recv() {
-			Ok(frame) => Some(frame),
+			Ok(frame) => Some(frame.frame),
 			Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
 		}
 	}
@@ -146,7 +172,7 @@ impl UnAvatarZenohReceiver {
 	pub fn drain_latest(&self) -> Option<UNMotionFrame> {
 		let mut latest = None;
 		while let Ok(frame) = self.rx.try_recv() {
-			latest = Some(frame);
+			latest = Some(frame.frame);
 		}
 		latest
 	}
@@ -163,7 +189,7 @@ impl UnAvatarZenohReceiver {
 		let mut frames = Vec::with_capacity(max_frames);
 		while frames.len() < max_frames {
 			match self.rx.try_recv() {
-				Ok(frame) => frames.push(frame),
+				Ok(frame) => frames.push(frame.frame),
 				Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
 			}
 		}
@@ -175,6 +201,11 @@ impl UnAvatarZenohReceiver {
 	/// 呼び出し側で固定 sleep polling を行うと、入力 FPS と表示 FPS の位相差が粗いバッチ間隔として
 	/// 表面化しやすい。受信チャネル側で待つことで、無音時だけ低負荷にしつつ入力到着時は即座に渡す。
 	pub fn recv_batch_timeout(&self, max_frames: usize, timeout: Duration) -> Vec<UNMotionFrame> {
+		self.recv_timed_batch_timeout(max_frames, timeout).into_iter().map(|item| item.frame).collect()
+	}
+
+	/// Same ordered batch, retaining the post-decode queue entry timestamp.
+	pub fn recv_timed_batch_timeout(&self, max_frames: usize, timeout: Duration) -> Vec<TimedMotionFrame> {
 		if max_frames == 0 {
 			return Vec::new();
 		}
@@ -220,6 +251,58 @@ mod tests {
 			state: TrackingState::Valid,
 		});
 		frame
+	}
+
+	#[test]
+	fn timed_queue_retains_entry_time_and_legacy_order_without_transport() {
+		let (tx, rx) = crossbeam_channel::unbounded();
+		let receiver = UnAvatarZenohReceiver {
+			rx, shutdown: Arc::new(AtomicBool::new(false)), join: None, strategy: ZenohTopicStrategy::default(),
+		};
+		let first = Instant::now() - Duration::from_millis(200);
+		let second = Instant::now() - Duration::from_millis(100);
+		for (sequence, decoded_at) in [(1, first), (2, second)] {
+			tx.send(TimedMotionFrame { frame: make_frame(sequence), decoded_at }).unwrap();
+		}
+		let batch = receiver.recv_timed_batch_timeout(2, Duration::ZERO);
+		assert_eq!(batch.iter().map(|x| x.frame.header.sequence).collect::<Vec<_>>(), vec![1, 2]);
+		assert_eq!(batch[0].decoded_at, first);
+		assert_eq!(batch[1].decoded_at, second);
+		for sequence in 3..=5 {
+			tx.send(TimedMotionFrame { frame: make_frame(sequence), decoded_at: Instant::now() }).unwrap();
+		}
+		assert_eq!(receiver.try_recv().unwrap().header.sequence, 3);
+		assert_eq!(receiver.recv_batch_timeout(1, Duration::ZERO)[0].header.sequence, 4);
+		assert_eq!(receiver.drain_available(1)[0].header.sequence, 5);
+		assert!(receiver.drain_latest().is_none());
+	}
+
+	#[test]
+	fn shared_key_backlog_preserves_both_streams_across_apply_batches() {
+		let (tx, rx) = crossbeam_channel::unbounded();
+		let receiver = UnAvatarZenohReceiver {
+			rx, shutdown: Arc::new(AtomicBool::new(false)), join: None, strategy: ZenohTopicStrategy::default(),
+		};
+		let start = Instant::now() - Duration::from_secs(1);
+		// Simulate an apply-worker stall, with independent sequence counters on
+		// the body and face publishers sharing one subscription key.
+		for index in 0..130u64 {
+			let mut frame = make_frame(index / 2 + 1);
+			frame.header.stream_id = Some(if index % 2 == 0 { "body" } else { "face" }.into());
+			tx.send(TimedMotionFrame { frame, decoded_at: start + Duration::from_millis(index) }).unwrap();
+		}
+		let mut received = Vec::new();
+		for expected_len in [64, 64, 2] {
+			let batch = receiver.recv_timed_batch_timeout(64, Duration::ZERO);
+			assert_eq!(batch.len(), expected_len);
+			received.extend(batch);
+		}
+		for (index, item) in received.iter().enumerate() {
+			assert_eq!(item.frame.header.stream_id.as_deref(), Some(if index % 2 == 0 { "body" } else { "face" }));
+			assert_eq!(item.frame.header.sequence, index as u64 / 2 + 1);
+			assert_eq!(item.decoded_at, start + Duration::from_millis(index as u64));
+		}
+		assert!(receiver.recv_timed_batch_timeout(64, Duration::ZERO).is_empty());
 	}
 
 	#[test]
@@ -316,4 +399,61 @@ mod tests {
 		}
 		panic!("recv_batch_timeout did not collect published frames");
 	}
+    #[cfg(feature = "zenoh-transport")]
+    #[test]
+    fn explicit_upstream_delivers_multiple_streams_without_discovery() {
+        use zenoh::Wait as _;
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("tcp/{}", reservation.local_addr().unwrap());
+        drop(reservation);
+        let mut config = zenoh::Config::default();
+        config.insert_json5("listen/endpoints", &serde_json::to_string(&[&endpoint]).unwrap()).unwrap();
+        config.insert_json5("scouting/multicast/enabled", "false").unwrap();
+        config.insert_json5("scouting/gossip/enabled", "false").unwrap();
+        let publisher = zenoh::open(config).wait().unwrap();
+        let strategies: Vec<_> = ["test/body", "test/face"].into_iter().map(|key| ZenohTopicStrategy { base_key_expr:key.into(), ..Default::default() }).collect();
+        let receivers = UnAvatarZenohReceiver::declare_zenoh_many(&ZenohSessionConfig::default().with_connect_endpoint(endpoint), strategies.clone()).unwrap();
+        let mut seen = [false; 2];
+        for seq in 1..=50 {
+            for (i, strategy) in strategies.iter().enumerate() {
+                publisher.put(strategy.subscribe_key_expr(), un_motion_frame_zenoh::encode_frame(&make_frame(seq)).unwrap()).wait().unwrap();
+                seen[i] |= !receivers[i].recv_batch_timeout(4, Duration::from_millis(20)).is_empty();
+            }
+            if seen.iter().all(|s| *s) { return; }
+        }
+        panic!("explicit endpoint did not deliver both streams: {seen:?}");
+    }
+
+    #[cfg(feature = "zenoh-transport")]
+    #[test]
+    fn explicit_endpoints_receive_from_two_isolated_publishers() {
+        use zenoh::Wait as _;
+        let mut publishers = Vec::new();
+        let mut receiver_config = ZenohSessionConfig::default();
+        for _ in 0..2 {
+            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("tcp/{}", port.local_addr().unwrap());
+            drop(port);
+            let mut config = zenoh::Config::default();
+            config.insert_json5("listen/endpoints", &serde_json::to_string(&[&endpoint]).unwrap()).unwrap();
+            config.insert_json5("scouting/multicast/enabled", "false").unwrap();
+            config.insert_json5("scouting/gossip/enabled", "false").unwrap();
+            publishers.push(zenoh::open(config).wait().unwrap());
+            receiver_config = receiver_config.with_connect_endpoint(endpoint);
+        }
+        let strategy = ZenohTopicStrategy { base_key_expr: "test/isolated".into(), ..Default::default() };
+        let receiver = UnAvatarZenohReceiver::declare_zenoh(&receiver_config, strategy.clone()).unwrap();
+        let mut seen = [false; 2];
+        for _ in 0..50 {
+            for (i, publisher) in publishers.iter().enumerate() {
+                publisher.put(strategy.subscribe_key_expr(), un_motion_frame_zenoh::encode_frame(&make_frame(i as u64)).unwrap()).wait().unwrap();
+            }
+            for frame in receiver.recv_batch_timeout(8, Duration::from_millis(50)) {
+                seen[frame.header.sequence as usize] = true;
+            }
+            if seen.iter().all(|s| *s) { return; }
+        }
+        panic!("both isolated producers must be received: {seen:?}");
+    }
+
 }

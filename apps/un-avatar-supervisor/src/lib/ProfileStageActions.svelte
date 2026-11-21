@@ -9,6 +9,7 @@
 	export let sceneCachePrewarmedFingerprint: string | null = null;
 	export let sceneCachePrewarmedAt: string | null = null;
 	export let liveRenderer: RendererRef | null;
+	export let requireReviewTarget = false;
 	export let pendingRestart: ProfilePendingRestart | null;
 	export let cacheProgress: { phase: string; current: number; total: number; detail: string; elapsed_secs: number } | null = null;
 	export let busy = false;
@@ -116,6 +117,8 @@
 				<button type="button" class="profile-stage-primary-action" onclick={() => onViewRenderer(liveRenderer.id)}
 					><Monitor size={14} /><span>{$_("profiles.live.view_renderer")}</span></button
 				>
+			{:else if requireReviewTarget}
+                <button type="button" disabled>{$_("profiles.review_scope.choose_instance")}</button>
 			{:else}
 				<button
 					type="button"

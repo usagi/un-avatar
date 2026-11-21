@@ -20,6 +20,7 @@
 
 <section
 	class="editor-section profile-output-section"
+	tabindex="-1"
 	data-profile-section="output"
 	onfocusin={onActivate}
 	data-hint={$_("profiles.hints.output.section")}

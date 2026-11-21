@@ -45,7 +45,6 @@ const MAX_SKIN_JOINTS: usize = 1024;
 const COMPACT_SKIN_JOINTS_THRESHOLD: usize = 512;
 const UN_AVATAR_EXTENSION_NAME: &str = "UN_avatar";
 const MAX_UNANIMATOR_ACTIONS: usize = 1024;
-const MAX_UNANIMATOR_EFFECTS_PER_ACTION: usize = 16;
 const GLB_MAGIC: u32 = 0x46546C67;
 const GLB_VERSION_2: u32 = 2;
 const JSON_CHUNK_TYPE: u32 = 0x4E4F534A;
@@ -4595,7 +4594,7 @@ fn unavatar_animator_runtime_actions(
 							},
 						],
 						conditions,
-						effects: effects.iter().take(MAX_UNANIMATOR_EFFECTS_PER_ACTION).cloned().collect(),
+						effects: effects.clone(),
 					});
 				}
 			}
@@ -4674,14 +4673,10 @@ fn unavatar_animator_motion_effects(
 	motion_base_path: &str,
 	effects: &mut Vec<UnaRuntimeActionEffect>,
 ) {
-	if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
-		return;
-	}
+	// Keep complete supported clips, including zero-valued expression resets.
+	// A prefix can contain only resets and silently discard the actual expression.
 	if let Some(bindings) = motion.get("curveBindings").and_then(Value::as_array) {
 		for binding in bindings {
-			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
-				break;
-			}
 			if let Some(effect) = unavatar_animator_curve_binding_effect(binding, scene, motion_base_path) {
 				effects.push(effect);
 			}
@@ -4689,9 +4684,6 @@ fn unavatar_animator_motion_effects(
 	}
 	if let Some(children) = motion.get("children").and_then(Value::as_array) {
 		for child in children {
-			if effects.len() >= MAX_UNANIMATOR_EFFECTS_PER_ACTION {
-				break;
-			}
 			unavatar_animator_motion_effects(child, scene, motion_base_path, effects);
 		}
 	}
@@ -15598,6 +15590,45 @@ mod tests {
 
 		assert!(unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).is_none());
 		assert!(unavatar_runtime_action_set(&unavatar, None, &["animator:0:0:hat_off:0".to_string()], &BTreeMap::new()).is_some());
+	}
+
+	#[test]
+	fn unavatar_runtime_actions_preserve_complete_expression_and_resets() {
+		// Author clips can reset hundreds of shapes before setting the active expression.
+		let bindings: Vec<_> = (0..412).map(|index| serde_json::json!({
+			"propertyName": format!("blendShape.shape_{index}"),
+			"constantValue": if index == 411 { 85.0 } else { 0.0 }
+		})).collect();
+		for motion in [
+			serde_json::json!({"curveBindings": bindings}),
+			serde_json::json!({"children": [
+				{"curveBindings": &bindings[..206]},
+				{"curveBindings": &bindings[206..]}
+			]}),
+		] {
+			let unavatar = UnaUnavatarExtension {
+				spec_version: "0.1-preview".to_string(),
+				source: serde_json::json!({"animator": {"controllers": [{"layers": [{
+					"states": [{"name": "Face", "path": "Face", "motion": motion}],
+					"anyStateTransitions": [{"destinationState": "Face", "conditions": [
+						{"parameter": "Face", "mode": "If", "threshold": 0}
+					]}]
+				}]}]}}),
+			};
+			assert!(unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).is_none());
+			let actions = unavatar_runtime_action_set(
+				&unavatar, None, &["animator:0:0:face:0".to_string()], &BTreeMap::new()
+			).expect("explicitly enabled expression");
+			assert_eq!(actions.actions.len(), 1);
+			let effects = &actions.actions[0].effects;
+			assert_eq!(effects.len(), 412);
+			for (index, effect) in effects.iter().enumerate() {
+				assert_eq!(*effect, UnaRuntimeActionEffect::ExpressionWeight {
+					name: format!("shape_{index}"),
+					weight: if index == 411 { 0.85 } else { 0.0 },
+				});
+			}
+		}
 	}
 
 	#[test]

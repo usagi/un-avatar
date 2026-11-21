@@ -60,6 +60,7 @@
 
 <aside class="panel details-panel">
 	<h2>{renderer ? $_("renderers.details.title") : $_("renderers.ready.title")}</h2>
+	{#if renderer}<p class="muted-small" data-testid="renderer-operation-target">{renderer.name} · #{renderer.id}{#if renderer.profile_id} · ID: {renderer.profile_id}{/if}</p>{/if}
 	{#if renderer}
 		<RendererRuntimeSummaryGrid {renderer} {runtimeStatus} />
 		<RendererPaneTabs {rendererPaneTab} {animatorItemCount} onSelectTab={onSelectRendererPaneTab} />

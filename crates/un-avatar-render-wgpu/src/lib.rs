@@ -136,6 +136,7 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 	"set_camera_lock",
 	"set_camera_fov",
 	"set_camera_state",
+	"camera_effect",
 	"set_apply_vmc_root_translation",
 	"set_primary_motion_source",
 	"set_motion_receivers",
@@ -155,8 +156,23 @@ const RENDERER_CONTROL_CAPABILITIES: &[&str] = &[
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum CameraTransitionEasing {
+	None,
 	Linear,
+	EaseInSine,
+	EaseOutSine,
+	EaseInOutSine,
+	EaseInQuad,
+	EaseOutQuad,
+	EaseInOutQuad,
+	EaseInCubic,
 	EaseOutCubic,
+	EaseInOutCubic,
+	EaseInQuart,
+	EaseOutQuart,
+	EaseInOutQuart,
+	EaseInQuint,
+	EaseOutQuint,
+	EaseInOutQuint,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -314,6 +330,153 @@ struct ActiveCameraTransition {
 	started_at: Instant,
 	duration: Duration,
 	easing: CameraTransitionEasing,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum CameraEffectPose {
+	Orbit {
+		target_xyz: Option<[f32; 3]>,
+		longitude_deg: Option<f32>,
+		latitude_deg: Option<f32>,
+		radius: Option<f32>,
+	},
+	Cartesian {
+		position_xyz: Option<[f32; 3]>,
+		rotation_euler_deg: Option<CameraEffectEulerRotation>,
+		rotation_order: Option<CameraEffectRotationOrder>,
+	},
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraEffectEulerRotation {
+	yaw: Option<f32>,
+	pitch: Option<f32>,
+	roll: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CameraEffectRotationOrder {
+	Yxz,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraEffectTransition {
+	duration_ms: Option<u32>,
+	easing: Option<CameraTransitionEasing>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CameraEffectConflictPolicy {
+	Replace,
+	Queue,
+	IgnoreIfActive,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CameraEffectReturnTo {
+	CapturedAtStart,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraEffectRequest {
+	pose: Option<CameraEffectPose>,
+	diagonal_fov_deg: Option<f32>,
+	enter: Option<CameraEffectTransition>,
+	hold_ms: Option<u32>,
+	leave: Option<CameraEffectTransition>,
+	conflict_policy: Option<CameraEffectConflictPolicy>,
+	return_to: Option<CameraEffectReturnTo>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CameraEffectPhase {
+	Enter,
+	Hold,
+	Leave,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActiveCameraEffect {
+	captured: gpu::CameraStateSnapshot,
+	target: gpu::CameraStateSnapshot,
+	enter: ResolvedCameraEffectTransition,
+	hold_ms: u32,
+	leave: ResolvedCameraEffectTransition,
+	phase: CameraEffectPhase,
+	phase_started_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedCameraEffectTransition {
+	duration_ms: u32,
+	easing: CameraTransitionEasing,
+}
+
+fn enqueue_camera_effect_request(
+	active: &mut Option<ActiveCameraEffect>,
+	queue: &mut std::collections::VecDeque<CameraEffectRequest>,
+	request: CameraEffectRequest,
+) -> bool {
+	match request.conflict_policy.unwrap_or(CameraEffectConflictPolicy::Replace) {
+		CameraEffectConflictPolicy::IgnoreIfActive if active.is_some() || !queue.is_empty() => return false,
+		CameraEffectConflictPolicy::Replace => {
+			*active = None;
+			queue.clear();
+		}
+		_ => {}
+	}
+	queue.push_back(request);
+	true
+}
+
+fn advance_active_camera_effect(mut active: ActiveCameraEffect, now: Instant) -> (gpu::CameraStateSnapshot, Option<ActiveCameraEffect>) {
+	loop {
+		let elapsed = now.saturating_duration_since(active.phase_started_at);
+		match active.phase {
+			CameraEffectPhase::Enter => {
+				let duration = Duration::from_millis(u64::from(active.enter.duration_ms));
+				let raw_t = if duration.is_zero() {
+					1.0
+				} else {
+					(elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+				};
+				let state = lerp_camera_state(active.captured, active.target, ease_camera_transition(raw_t, active.enter.easing));
+				if raw_t < 1.0 {
+					return (state, Some(active));
+				}
+				active.phase = CameraEffectPhase::Hold;
+				active.phase_started_at = now;
+			}
+			CameraEffectPhase::Hold => {
+				if elapsed < Duration::from_millis(u64::from(active.hold_ms)) {
+					return (active.target, Some(active));
+				}
+				active.phase = CameraEffectPhase::Leave;
+				active.phase_started_at = now;
+			}
+			CameraEffectPhase::Leave => {
+				let duration = Duration::from_millis(u64::from(active.leave.duration_ms));
+				let raw_t = if duration.is_zero() {
+					1.0
+				} else {
+					(elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+				};
+				let state = lerp_camera_state(active.target, active.captured, ease_camera_transition(raw_t, active.leave.easing));
+				return if raw_t < 1.0 {
+					(state, Some(active))
+				} else {
+					(active.captured, None)
+				};
+			}
+		}
+	}
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -506,6 +669,7 @@ enum RendererControlEvent {
 	},
 	DumpRuntimeState {
 		path: std::path::PathBuf,
+		morphs_only: bool,
 		result: CommandResultSlot,
 	},
 	SetExpressionOverride {
@@ -537,6 +701,9 @@ enum RendererControlEvent {
 		radius: Option<f32>,
 		diagonal_fov_deg: Option<f32>,
 		transition: Option<CameraTransitionOptions>,
+	},
+	CameraEffect {
+		request: CameraEffectRequest,
 	},
 	SetWindowPosition {
 		x: Option<i32>,
@@ -763,6 +930,10 @@ enum RendererControlCommand {
 		#[serde(default)]
 		transition: Option<CameraTransitionOptions>,
 	},
+	CameraEffect {
+		#[serde(flatten)]
+		request: CameraEffectRequest,
+	},
 	/// プロファイル `[window] x/y` を実行中レンダラーへ反映するときに送られる。
 	/// `SetWindow` は inner サイズと装飾のみだったが、こちらは outer 位置を上書きする。
 	SetWindowPosition {
@@ -900,6 +1071,8 @@ enum RendererControlCommand {
 	},
 	DumpRuntimeState {
 		path: String,
+		#[serde(default)]
+		morphs_only: bool,
 	},
 }
 
@@ -985,6 +1158,7 @@ impl RendererControlCommand {
 				diagonal_fov_deg,
 				transition,
 			},
+			Self::CameraEffect { request } => RendererControlEvent::CameraEffect { request },
 			Self::SetWindowPosition { x, y } => RendererControlEvent::SetWindowPosition { x, y },
 			Self::SetApplyVmcRootTranslation { enabled } => RendererControlEvent::SetApplyVmcRootTranslation { enabled },
 			Self::SetPrimaryMotionSource { source } => RendererControlEvent::SetPrimaryMotionSource { source },
@@ -1187,9 +1361,226 @@ fn wardrobe_set_request_matches_active(active_set: Option<&str>, base_set: Optio
 fn ease_camera_transition(t: f32, easing: CameraTransitionEasing) -> f32 {
 	let t = t.clamp(0.0, 1.0);
 	match easing {
+		CameraTransitionEasing::None => 1.0,
 		CameraTransitionEasing::Linear => t,
+		CameraTransitionEasing::EaseInSine => 1.0 - (t * std::f32::consts::FRAC_PI_2).cos(),
+		CameraTransitionEasing::EaseOutSine => (t * std::f32::consts::FRAC_PI_2).sin(),
+		CameraTransitionEasing::EaseInOutSine => (1.0 - (std::f32::consts::PI * t).cos()) * 0.5,
+		CameraTransitionEasing::EaseInQuad => t * t,
+		CameraTransitionEasing::EaseOutQuad => 1.0 - (1.0 - t).powi(2),
+		CameraTransitionEasing::EaseInOutQuad => {
+			if t < 0.5 {
+				2.0 * t * t
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(2) * 0.5
+			}
+		}
+		CameraTransitionEasing::EaseInCubic => t.powi(3),
 		CameraTransitionEasing::EaseOutCubic => 1.0 - (1.0 - t).powi(3),
+		CameraTransitionEasing::EaseInOutCubic => {
+			if t < 0.5 {
+				4.0 * t.powi(3)
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(3) * 0.5
+			}
+		}
+		CameraTransitionEasing::EaseInQuart => t.powi(4),
+		CameraTransitionEasing::EaseOutQuart => 1.0 - (1.0 - t).powi(4),
+		CameraTransitionEasing::EaseInOutQuart => {
+			if t < 0.5 {
+				8.0 * t.powi(4)
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(4) * 0.5
+			}
+		}
+		CameraTransitionEasing::EaseInQuint => t.powi(5),
+		CameraTransitionEasing::EaseOutQuint => 1.0 - (1.0 - t).powi(5),
+		CameraTransitionEasing::EaseInOutQuint => {
+			if t < 0.5 {
+				16.0 * t.powi(5)
+			} else {
+				1.0 - (-2.0 * t + 2.0).powi(5) * 0.5
+			}
+		}
 	}
+}
+
+fn validate_camera_effect(request: CameraEffectRequest) -> Result<CameraEffectRequest, String> {
+	const MAX_TRANSITION_MS: u32 = 300_000;
+	const MAX_HOLD_MS: u32 = 3_600_000;
+	let _return_to = request.return_to.unwrap_or(CameraEffectReturnTo::CapturedAtStart);
+	if let Some(diagonal_fov_deg) = request.diagonal_fov_deg {
+		if !(1.0..=160.0).contains(&diagonal_fov_deg) || !diagonal_fov_deg.is_finite() {
+			return Err("diagonal_fov_deg must be finite and within 1..=160".to_string());
+		}
+	}
+	let enter = resolve_camera_effect_transition(request.enter, 450);
+	let leave = resolve_camera_effect_transition(request.leave, 650);
+	if enter.duration_ms > MAX_TRANSITION_MS || leave.duration_ms > MAX_TRANSITION_MS {
+		return Err(format!("camera effect transition duration must be <= {MAX_TRANSITION_MS} ms"));
+	}
+	if request.hold_ms.unwrap_or(5_000) > MAX_HOLD_MS {
+		return Err(format!("camera effect hold_ms must be <= {MAX_HOLD_MS}"));
+	}
+	for transition in [enter, leave] {
+		if matches!(transition.easing, CameraTransitionEasing::None) && transition.duration_ms != 0 {
+			return Err("camera effect easing=none requires duration_ms=0".to_string());
+		}
+	}
+	let finite3 = |values: [f32; 3]| values.into_iter().all(f32::is_finite);
+	match request.pose {
+		Some(CameraEffectPose::Orbit {
+			target_xyz,
+			longitude_deg,
+			latitude_deg,
+			radius,
+		}) => {
+			if target_xyz.is_some_and(|value| !finite3(value))
+				|| longitude_deg.is_some_and(|value| !value.is_finite())
+				|| latitude_deg.is_some_and(|value| !value.is_finite())
+				|| radius.is_some_and(|value| !value.is_finite())
+			{
+				return Err("orbit pose values must be finite".to_string());
+			}
+			if latitude_deg.is_some_and(|value| !(-89.9..=89.9).contains(&value))
+				|| radius.is_some_and(|value| !(0.05..=100.0).contains(&value))
+			{
+				return Err("orbit latitude_deg must be within -89.9..=89.9 and radius within 0.05..=100".to_string());
+			}
+		}
+		Some(CameraEffectPose::Cartesian {
+			position_xyz,
+			rotation_euler_deg,
+			rotation_order,
+		}) => {
+			let rotation = rotation_euler_deg.unwrap_or(CameraEffectEulerRotation {
+				yaw: None,
+				pitch: None,
+				roll: None,
+			});
+			if position_xyz.is_some_and(|value| !finite3(value))
+				|| rotation.yaw.is_some_and(|value| !value.is_finite())
+				|| rotation.pitch.is_some_and(|value| !value.is_finite())
+				|| rotation.roll.is_some_and(|value| !value.is_finite())
+			{
+				return Err("cartesian pose values must be finite".to_string());
+			}
+			if rotation.pitch.is_some_and(|value| !(-89.9..=89.9).contains(&value)) {
+				return Err("cartesian pitch must be within -89.9..=89.9".to_string());
+			}
+			if rotation.roll.is_some_and(|value| value.abs() > 0.001) {
+				return Err("cartesian roll is unsupported by the orbit camera and must be zero".to_string());
+			}
+			let _ = rotation_order.unwrap_or(CameraEffectRotationOrder::Yxz);
+		}
+		None => {}
+	}
+	let changes_camera = request.diagonal_fov_deg.is_some()
+		|| match request.pose {
+			Some(CameraEffectPose::Orbit {
+				target_xyz,
+				longitude_deg,
+				latitude_deg,
+				radius,
+			}) => target_xyz.is_some() || longitude_deg.is_some() || latitude_deg.is_some() || radius.is_some(),
+			Some(CameraEffectPose::Cartesian {
+				position_xyz,
+				rotation_euler_deg,
+				..
+			}) => {
+				position_xyz.is_some()
+					|| rotation_euler_deg
+						.is_some_and(|rotation| rotation.yaw.is_some() || rotation.pitch.is_some() || rotation.roll.is_some())
+			}
+			None => false,
+		};
+	if !changes_camera {
+		return Err("camera effect must change at least one pose or FOV field".to_string());
+	}
+	Ok(request)
+}
+
+fn camera_effect_target(captured: gpu::CameraStateSnapshot, request: CameraEffectRequest) -> gpu::CameraStateSnapshot {
+	let diagonal_fov_deg = request.diagonal_fov_deg.unwrap_or(captured.diagonal_fov_deg);
+	let mut target = match request.pose {
+		Some(CameraEffectPose::Orbit {
+			target_xyz,
+			longitude_deg,
+			latitude_deg,
+			radius,
+		}) => gpu::CameraStateSnapshot {
+			target: target_xyz.unwrap_or(captured.target),
+			longitude_deg: longitude_deg.unwrap_or(captured.longitude_deg),
+			latitude_deg: latitude_deg.unwrap_or(captured.latitude_deg),
+			radius: radius.unwrap_or(captured.radius),
+			diagonal_fov_deg,
+		},
+		Some(CameraEffectPose::Cartesian {
+			position_xyz,
+			rotation_euler_deg,
+			rotation_order,
+		}) => {
+			let _ = rotation_order.unwrap_or(CameraEffectRotationOrder::Yxz);
+			let captured_yaw = captured.longitude_deg - 180.0;
+			let captured_pitch = -captured.latitude_deg;
+			let rotation = rotation_euler_deg.unwrap_or(CameraEffectEulerRotation {
+				yaw: None,
+				pitch: None,
+				roll: None,
+			});
+			let yaw_deg = rotation.yaw.unwrap_or(captured_yaw);
+			let pitch_deg = rotation.pitch.unwrap_or(captured_pitch);
+			let yaw = yaw_deg.to_radians();
+			let pitch = pitch_deg.to_radians();
+			let forward = [yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()];
+			let radius = captured.radius;
+			let longitude = captured.longitude_deg.to_radians();
+			let latitude = captured.latitude_deg.to_radians();
+			let cos_latitude = latitude.cos();
+			let captured_position = [
+				captured.target[0] + radius * cos_latitude * longitude.sin(),
+				captured.target[1] + radius * latitude.sin(),
+				captured.target[2] - radius * cos_latitude * longitude.cos(),
+			];
+			let position_xyz = position_xyz.unwrap_or(captured_position);
+			gpu::CameraStateSnapshot {
+				target: [
+					position_xyz[0] + forward[0] * radius,
+					position_xyz[1] + forward[1] * radius,
+					position_xyz[2] + forward[2] * radius,
+				],
+				longitude_deg: yaw_deg + 180.0,
+				latitude_deg: -pitch_deg,
+				radius,
+				diagonal_fov_deg,
+			}
+		}
+		None => gpu::CameraStateSnapshot {
+			diagonal_fov_deg,
+			..captured
+		},
+	};
+	target.longitude_deg = target.longitude_deg.rem_euclid(360.0);
+	target
+}
+
+fn resolve_camera_effect_transition(
+	transition: Option<CameraEffectTransition>,
+	default_duration_ms: u32,
+) -> ResolvedCameraEffectTransition {
+	let transition = transition.unwrap_or(CameraEffectTransition {
+		duration_ms: None,
+		easing: None,
+	});
+	let easing = transition.easing.unwrap_or(CameraTransitionEasing::EaseInOutCubic);
+	let duration_ms = transition.duration_ms.unwrap_or_else(|| {
+		if matches!(easing, CameraTransitionEasing::None) {
+			0
+		} else {
+			default_duration_ms
+		}
+	});
+	ResolvedCameraEffectTransition { duration_ms, easing }
 }
 
 fn parse_animator_transition_curve(value: &str) -> Option<AnimatorTransitionCurve> {
@@ -1682,6 +2073,8 @@ struct AvatarApp {
 	close_hotkey: Option<CloseHotkey>,
 	camera_transition_queue: VecDeque<QueuedCameraTransition>,
 	active_camera_transition: Option<ActiveCameraTransition>,
+	camera_effect_queue: VecDeque<CameraEffectRequest>,
+	active_camera_effect: Option<ActiveCameraEffect>,
 	wardrobe_transition: Option<WardrobeTransitionState>,
 	#[cfg(windows)]
 	renderer_tray: Option<renderer_tray::RendererTray>,
@@ -1758,6 +2151,7 @@ const FRAME_PACING_WINDOW_FRAMES: usize = 120;
 const FRAME_PACING_SPIKE_TOLERANCE_MS: f32 = 1.0;
 const FRAME_TRACE_ENV: &str = "UN_AVATAR_FRAME_TRACE_JSON";
 const FRAME_TRACE_WINDOW_FRAMES: usize = 600;
+const FRAME_TRACE_STARTUP_FRAMES: usize = 1200;
 
 impl FramePacingState {
 	fn push(&mut self, wall_ms: f32, frame_target_late_ms: f32, spike_threshold_ms: f32) -> FramePacingSnapshot {
@@ -1790,9 +2184,10 @@ struct FrameTraceState {
 	last_unmotion_received_frames: u64,
 	last_motion_applied_frames: u64,
 	frames: VecDeque<FrameTraceEntry>,
+	startup_frames: Vec<FrameTraceEntry>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct FrameTraceEntry {
 	seq: u64,
 	t_secs: f32,
@@ -1852,6 +2247,8 @@ struct FrameTraceFile<'a> {
 	spike_threshold_ms: f32,
 	frame_count: usize,
 	frames: &'a VecDeque<FrameTraceEntry>,
+	startup_frame_limit: usize,
+	startup_frames: &'a [FrameTraceEntry],
 }
 
 impl FrameTraceState {
@@ -1875,6 +2272,7 @@ impl FrameTraceState {
 			last_unmotion_received_frames: 0,
 			last_motion_applied_frames: 0,
 			frames: VecDeque::with_capacity(FRAME_TRACE_WINDOW_FRAMES),
+			startup_frames: Vec::with_capacity(FRAME_TRACE_STARTUP_FRAMES),
 		})
 	}
 
@@ -1943,6 +2341,9 @@ impl FrameTraceState {
 			motion_applied_frames_total: motion_applied_frames,
 			motion_applied_frames_delta,
 		});
+		if self.startup_frames.len() < FRAME_TRACE_STARTUP_FRAMES {
+			self.startup_frames.push(self.frames.back().expect("frame just recorded").clone());
+		}
 		self.next_seq = self.next_seq.saturating_add(1);
 		while self.frames.len() > FRAME_TRACE_WINDOW_FRAMES {
 			self.frames.pop_front();
@@ -1959,6 +2360,8 @@ impl FrameTraceState {
 			spike_threshold_ms,
 			frame_count: self.frames.len(),
 			frames: &self.frames,
+			startup_frame_limit: FRAME_TRACE_STARTUP_FRAMES,
+			startup_frames: &self.startup_frames,
 		};
 		let json = serde_json::to_string_pretty(&file).map_err(|e| format!("serialize frame trace: {e}"))?;
 		std::fs::write(&self.path, json).map_err(|e| format!("write frame trace {}: {e}", self.path.display()))
@@ -2182,6 +2585,9 @@ impl AvatarApp {
 				.map(|address| start_runtime_status_server(address, &opts))
 		}
 		.or_else(|| Some(Arc::new(Mutex::new(initial_runtime_snapshot(&opts)))));
+		if let (Some(instance_id), Some(status)) = (opts.unaa_z_instance_id.clone(), runtime_status.as_ref()) {
+			start_unaa_z_renderer(instance_id, opts.title.clone(), Arc::clone(status), event_proxy.clone());
+		}
 		let close_hotkey = match CloseHotkey::parse(&opts.close_hotkey) {
 			Ok(close_hotkey) => close_hotkey,
 			Err(error) => {
@@ -2230,6 +2636,8 @@ impl AvatarApp {
 			close_hotkey,
 			camera_transition_queue: VecDeque::new(),
 			active_camera_transition: None,
+			camera_effect_queue: VecDeque::new(),
+			active_camera_effect: None,
 			wardrobe_transition: None,
 			#[cfg(windows)]
 			renderer_tray: None,
@@ -3761,6 +4169,12 @@ impl AvatarApp {
 				status.startup_progress = None;
 				status.startup_message = Some(error.clone());
 			} else {
+				// Loading frames can publish empty metadata before the model exists.
+				// Refresh on the first frame of the loaded scene rather than waiting
+				// 3,600 frames (minutes when the preview is minimized).
+				if status.scene_state != SCENE_STATE_AVATAR_SCENE {
+					self.runtime_status_frame_seq.set(0);
+				}
 				status.scene_state = SCENE_STATE_AVATAR_SCENE.to_string();
 				status.startup_phase = None;
 				status.startup_progress = None;
@@ -4081,6 +4495,74 @@ impl AvatarApp {
 	fn clear_camera_transitions(&mut self) {
 		self.camera_transition_queue.clear();
 		self.active_camera_transition = None;
+		self.camera_effect_queue.clear();
+		self.active_camera_effect = None;
+	}
+
+	fn enqueue_camera_effect(&mut self, request: CameraEffectRequest) {
+		if !enqueue_camera_effect_request(&mut self.active_camera_effect, &mut self.camera_effect_queue, request) {
+			return;
+		}
+		if matches!(
+			request.conflict_policy.unwrap_or(CameraEffectConflictPolicy::Replace),
+			CameraEffectConflictPolicy::Replace
+		) {
+			self.camera_transition_queue.clear();
+			self.active_camera_transition = None;
+		}
+		self.request_redraw();
+	}
+
+	fn set_camera_state_snapshot(&mut self, state: gpu::CameraStateSnapshot) {
+		if let Some(gpu) = self.gpu.as_mut() {
+			gpu.set_camera_state(
+				Some(state.target),
+				Some(state.longitude_deg),
+				Some(state.latitude_deg),
+				Some(state.radius),
+				Some(state.diagonal_fov_deg),
+			);
+		}
+	}
+
+	fn advance_camera_effect(&mut self, now: Instant) {
+		for _ in 0..8 {
+			if self.active_camera_effect.is_none() {
+				let Some(request) = self.camera_effect_queue.pop_front() else {
+					return;
+				};
+				let Some(gpu) = self.gpu.as_ref() else {
+					self.camera_effect_queue.push_front(request);
+					return;
+				};
+				let captured = gpu.camera_state_snapshot();
+				let enter = resolve_camera_effect_transition(request.enter, 450);
+				let leave = resolve_camera_effect_transition(request.leave, 650);
+				self.active_camera_effect = Some(ActiveCameraEffect {
+					captured,
+					target: camera_effect_target(captured, request),
+					enter,
+					hold_ms: request.hold_ms.unwrap_or(5_000),
+					leave,
+					phase: CameraEffectPhase::Enter,
+					phase_started_at: now,
+				});
+			}
+
+			let Some(active) = self.active_camera_effect.take() else {
+				return;
+			};
+			let (state, next) = advance_active_camera_effect(active, now);
+			self.set_camera_state_snapshot(state);
+			self.active_camera_effect = next;
+			if self.active_camera_effect.is_some() {
+				self.request_redraw();
+				return;
+			}
+		}
+		if self.active_camera_effect.is_some() || !self.camera_effect_queue.is_empty() {
+			self.request_redraw();
+		}
 	}
 
 	fn enqueue_camera_transition(&mut self, patch: CameraStatePatch, options: CameraTransitionOptions) {
@@ -4108,6 +4590,9 @@ impl AvatarApp {
 	}
 
 	fn advance_camera_transition(&mut self, now: Instant) {
+		if self.active_camera_effect.is_some() || !self.camera_effect_queue.is_empty() {
+			return;
+		}
 		if self.active_camera_transition.is_none() {
 			let Some(next) = self.camera_transition_queue.pop_front() else {
 				return;
@@ -4169,6 +4654,7 @@ impl AvatarApp {
 			win.request_redraw();
 			return false;
 		}
+		self.advance_camera_effect(now);
 		self.advance_camera_transition(now);
 		self.advance_animator_transitions(now);
 		self.update_wardrobe_transition_before_frame(now);
@@ -5013,9 +5499,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					*guard = Some(outcome);
 				}
 			}
-			RendererControlEvent::DumpRuntimeState { path, result } => {
+			RendererControlEvent::DumpRuntimeState { path, morphs_only, result } => {
 				let outcome = match self.gpu.as_ref() {
-					Some(gpu) => gpu.dump_runtime_state(&path),
+					Some(gpu) => gpu.dump_runtime_state(&path, morphs_only),
 					None => Err("renderer is not initialized".to_string()),
 				};
 				if let Ok(mut guard) = result.lock() {
@@ -5095,6 +5581,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 					}
 				}
 			}
+			RendererControlEvent::CameraEffect { request } => {
+				self.enqueue_camera_effect(request);
+			}
 			RendererControlEvent::SetLookAt { enabled, clamp_deg } => {
 				let next = if enabled {
 					Some(clamp_deg.unwrap_or(30.0).clamp(0.0, 90.0))
@@ -5171,6 +5660,9 @@ impl ApplicationHandler<RendererControlEvent> for AvatarApp {
 				if let Some(gpu) = self.gpu.as_mut() {
 					gpu.reconfigure_dynamics(enabled, bone_colliders, self.opts.dynamics_physics.clone());
 				}
+				// Simulator summaries must reflect the just-applied settings on
+				// the next frame, including global disable and re-enable.
+				self.runtime_status_frame_seq.set(0);
 				self.request_redraw();
 			}
 			RendererControlEvent::SetAvatarOutline {
@@ -6936,6 +7428,195 @@ struct RuntimeBusControlResponse {
 	error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UnaaZCommandEnvelope {
+	schema_version: u32,
+	kind: String,
+	app_id: String,
+	instance_id: String,
+	command: String,
+	args: serde_json::Value,
+	request_id: String,
+}
+
+fn new_renderer_session_id() -> String {
+	let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+	format!("renderer-{}-{nanos}", std::process::id())
+}
+
+fn unaa_z_snapshot_json(instance_id: &str, session_id: &str, display_name: &str, status: &Arc<Mutex<RendererRuntimeSnapshot>>) -> String {
+	let ready = status
+		.try_lock()
+		.map(|status| status.connected && status.scene_state == SCENE_STATE_AVATAR_SCENE)
+		.unwrap_or(false);
+	serde_json::json!({
+		"schema_version": 1,
+		"kind": "app.snapshot",
+		"app_id": "un-avatar",
+		"instance_id": instance_id,
+		"session_id": session_id,
+		"display_name": display_name,
+		"version": env!("CARGO_PKG_VERSION"),
+		"running": true,
+		"ready": ready,
+		"capabilities": ["renderer", "camera_control"],
+		"commands": ["camera.effect"],
+		"reported_at": jiff::Timestamp::now().to_string(),
+	})
+	.to_string()
+}
+
+fn parse_unaa_z_camera_effect(
+	payload: &[u8],
+	instance_id: &str,
+	session_id: &str,
+) -> Result<(String, CameraEffectRequest), (Option<String>, String)> {
+	let envelope =
+		serde_json::from_slice::<UnaaZCommandEnvelope>(payload).map_err(|error| (None, format!("invalid_command_envelope: {error}")))?;
+	let request_id = Some(envelope.request_id.clone());
+	if envelope.schema_version != 1 || envelope.kind != "app.command" {
+		return Err((request_id, "unsupported_command_envelope".to_string()));
+	}
+	if envelope.app_id != "un-avatar" || envelope.instance_id != instance_id {
+		return Err((request_id, "target_identity_mismatch".to_string()));
+	}
+	if envelope.command != "camera.effect" {
+		return Err((request_id, "unsupported_command".to_string()));
+	}
+	let mut args = envelope
+		.args
+		.as_object()
+		.cloned()
+		.ok_or_else(|| (request_id.clone(), "camera.effect args must be an object".to_string()))?;
+	let target_session_id = args
+		.remove("target_session_id")
+		.and_then(|value| value.as_str().map(str::to_string))
+		.ok_or_else(|| (request_id.clone(), "target_session_id_required".to_string()))?;
+	if target_session_id != session_id {
+		return Err((request_id, "target_session_mismatch".to_string()));
+	}
+	let request = serde_json::from_value::<CameraEffectRequest>(serde_json::Value::Object(args))
+		.map_err(|error| (request_id.clone(), format!("invalid_camera_effect: {error}")))?;
+	let request = validate_camera_effect(request).map_err(|error| (request_id.clone(), format!("invalid_camera_effect: {error}")))?;
+	Ok((envelope.request_id, request))
+}
+
+fn unaa_z_command_response_json(request_id: &str, ok: bool, message: &str, error: Option<&str>) -> String {
+	serde_json::json!({
+		"schema_version": 1,
+		"kind": "app.command.response",
+		"request_id": request_id,
+		"ok": ok,
+		"command": "camera.effect",
+		"message": message,
+		"error": error,
+	})
+	.to_string()
+}
+
+fn start_unaa_z_renderer(
+	instance_id: String,
+	display_name: String,
+	status: Arc<Mutex<RendererRuntimeSnapshot>>,
+	proxy: EventLoopProxy<RendererControlEvent>,
+) {
+	if let Err(error) = thread::Builder::new()
+		.name("un-avatar-unaa-z".to_string())
+		.spawn(move || unaa_z_renderer_loop(instance_id, display_name, status, proxy))
+	{
+		eprintln!("un-avatar-renderer: spawn UNAA/Z service failed: {error}");
+	}
+}
+
+// These services all use the same default network configuration. Independent
+// sessions turn one Renderer into three separately discovered peers and allow
+// its status to be reachable while its camera-command peer is still absent.
+// Keep the data/control services on a single transport identity. Motion input
+// with its explicitly configured endpoints remains a separate transport.
+fn renderer_runtime_session(role: &str) -> Result<zenoh::Session, String> {
+	use zenoh::Wait as _;
+	static SESSION: std::sync::OnceLock<Result<zenoh::Session, String>> = std::sync::OnceLock::new();
+	let session = SESSION.get_or_init(|| {
+		zenoh::open(zenoh::Config::default()).wait().map_err(|error| error.to_string())
+	}).as_ref().map_err(Clone::clone)?.clone();
+	if std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some() {
+		eprintln!("runtime-bus shared session: {role}: {}", session.zid());
+	}
+	Ok(session)
+}
+
+fn unaa_z_renderer_loop(
+	instance_id: String,
+	display_name: String,
+	status: Arc<Mutex<RendererRuntimeSnapshot>>,
+	proxy: EventLoopProxy<RendererControlEvent>,
+) {
+	use zenoh::Wait as _;
+	let session_id = new_renderer_session_id();
+	let base_key = format!("un/app/un-avatar/{instance_id}");
+	let snapshot_key = format!("{base_key}/snapshot");
+	let announce_key = format!("{base_key}/announce");
+	let command_key = format!("{base_key}/command");
+	let response_key = format!("{base_key}/response");
+	let session = match renderer_runtime_session("camera") {
+		Ok(session) => session,
+		Err(error) => {
+			eprintln!("un-avatar-renderer: UNAA/Z open failed: {error}");
+			return;
+		}
+	};
+	let subscriber = match session.declare_subscriber(&command_key).wait() {
+		Ok(subscriber) => subscriber,
+		Err(error) => {
+			eprintln!("un-avatar-renderer: UNAA/Z subscribe {command_key}: {error}");
+			return;
+		}
+	};
+	let queryable = match session.declare_queryable(&snapshot_key).wait() {
+		Ok(queryable) => queryable,
+		Err(error) => {
+			eprintln!("un-avatar-renderer: UNAA/Z queryable {snapshot_key}: {error}");
+			return;
+		}
+	};
+	let mut last_announce = Instant::now() - Duration::from_secs(1);
+	loop {
+		while let Ok(Some(query)) = queryable.try_recv() {
+			let payload = unaa_z_snapshot_json(&instance_id, &session_id, &display_name, &status);
+			let _ = query.reply(&snapshot_key, payload).wait();
+		}
+		while let Ok(Some(sample)) = subscriber.try_recv() {
+			let payload = sample.payload().to_bytes();
+			let outcome = parse_unaa_z_camera_effect(&payload, &instance_id, &session_id);
+			let (request_id, response) = match outcome {
+				Ok((request_id, request)) => {
+					let response = if proxy.send_event(RendererControlEvent::CameraEffect { request }).is_ok() {
+						unaa_z_command_response_json(&request_id, true, "accepted", None)
+					} else {
+						unaa_z_command_response_json(&request_id, false, "rejected", Some("event_loop_closed"))
+					};
+					(request_id, response)
+				}
+				Err((Some(request_id), error)) => {
+					let response = unaa_z_command_response_json(&request_id, false, "rejected", Some(&error));
+					(request_id, response)
+				}
+				Err((None, error)) => {
+					eprintln!("un-avatar-renderer: UNAA/Z command parse failed: {error}");
+					continue;
+				}
+			};
+			let _ = session.put(format!("{response_key}/{request_id}"), response).wait();
+		}
+		if last_announce.elapsed() >= Duration::from_secs(1) {
+			let payload = unaa_z_snapshot_json(&instance_id, &session_id, &display_name, &status);
+			let _ = session.put(&announce_key, payload).wait();
+			last_announce = Instant::now();
+		}
+		thread::sleep(Duration::from_millis(20));
+	}
+}
+
 fn start_runtime_bus(
 	base_key: String,
 	opts: &AvatarWindowOptions,
@@ -6967,9 +7648,11 @@ fn start_runtime_bus(
 
 fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRuntimeSnapshot>>) {
 	use zenoh::Wait as _;
+	let diagnose = std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some();
+	if diagnose { eprintln!("runtime-bus status open begin: {status_key}"); }
 	const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 	const STATUS_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
-	let session = match zenoh::open(zenoh::Config::default()).wait() {
+	let session = match renderer_runtime_session("status") {
 		Ok(session) => session,
 		Err(e) => {
 			eprintln!("un-avatar-renderer: runtime status bus open failed: {e}");
@@ -6977,6 +7660,8 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 		}
 	};
 	let mut last_json = String::new();
+	let mut reported_publish = false;
+	if diagnose { eprintln!("runtime-bus status open ready: {status_key}"); }
 	let mut last_publish = Instant::now() - STATUS_KEEPALIVE_INTERVAL;
 	loop {
 		let snapshot = match status.try_lock() {
@@ -6989,7 +7674,11 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 		if let Ok(json) = serde_json::to_string(&snapshot) {
 			let should_publish = json != last_json || last_publish.elapsed() >= STATUS_KEEPALIVE_INTERVAL;
 			if should_publish {
-				let _ = session.put(&status_key, json.as_str()).wait();
+				let result = session.put(&status_key, json.as_str()).wait();
+				if diagnose && !reported_publish {
+					eprintln!("runtime-bus status first publish: {status_key}: {result:?}");
+					reported_publish = true;
+				}
 				last_json = json;
 				last_publish = Instant::now();
 			}
@@ -7000,7 +7689,9 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 
 fn runtime_control_bus_loop(control_key: String, response_base_key: String, proxy: EventLoopProxy<RendererControlEvent>) {
 	use zenoh::Wait as _;
-	let session = match zenoh::open(zenoh::Config::default()).wait() {
+	let diagnose = std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some();
+	if diagnose { eprintln!("runtime-bus control open begin: {control_key}"); }
+	let session = match renderer_runtime_session("control") {
 		Ok(session) => session,
 		Err(e) => {
 			eprintln!("un-avatar-renderer: runtime control bus open failed: {e}");
@@ -7014,6 +7705,7 @@ fn runtime_control_bus_loop(control_key: String, response_base_key: String, prox
 			return;
 		}
 	};
+	if diagnose { eprintln!("runtime-bus control subscribed: {control_key}"); }
 	while let Ok(sample) = subscriber.recv() {
 		let request = match serde_json::from_slice::<RuntimeBusControlRequest>(&sample.payload().to_bytes()) {
 			Ok(request) => request,
@@ -7027,11 +7719,12 @@ fn runtime_control_bus_loop(control_key: String, response_base_key: String, prox
 		} else {
 			request.command.to_string()
 		};
+		if diagnose { eprintln!("runtime-bus control received: {control_key}: {}", request.request_id); }
 		let response_text = runtime_control_response(&command_text, &proxy);
 		let response = RuntimeBusControlResponse {
 			request_id: request.request_id.clone(),
 			ok: response_text == "ok",
-			error: (response_text != "ok").then(|| response_text.strip_prefix("err ").unwrap_or(&response_text).to_string()),
+			error: (response_text != "ok").then(|| response_text.trim_prefix("err ").to_string()),
 		};
 		if let Ok(json) = serde_json::to_string(&response) {
 			let _ = session.put(format!("{response_base_key}/{}", request.request_id), json).wait();
@@ -7096,7 +7789,7 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 	match parse_renderer_control_command(command) {
 		Ok(RendererControlCommand::Screenshot { path }) => dispatch_screenshot_command(proxy, path),
 		Ok(RendererControlCommand::DumpSceneNodes { path, filter }) => dispatch_dump_scene_nodes_command(proxy, path, filter),
-		Ok(RendererControlCommand::DumpRuntimeState { path }) => dispatch_dump_runtime_state_command(proxy, path),
+		Ok(RendererControlCommand::DumpRuntimeState { path, morphs_only }) => dispatch_dump_runtime_state_command(proxy, path, morphs_only),
 		Ok(RendererControlCommand::SetWardrobe { set_id }) => dispatch_set_wardrobe_command(proxy, set_id),
 		Ok(RendererControlCommand::ActivateAction {
 			action_id,
@@ -7132,6 +7825,13 @@ fn runtime_control_response(command: &str, proxy: &EventLoopProxy<RendererContro
 			billboard_anchor,
 			billboard_y_offset_mm,
 		}) => dispatch_set_wardrobe_transition_command(proxy, billboard_anchor, billboard_y_offset_mm),
+		Ok(RendererControlCommand::CameraEffect { request }) => match validate_camera_effect(request) {
+			Ok(request) => match proxy.send_event(RendererControlEvent::CameraEffect { request }) {
+				Ok(()) => "ok".to_string(),
+				Err(_) => "err event-loop-closed".to_string(),
+			},
+			Err(error) => format!("err {error}"),
+		},
 		Ok(command) => match proxy.send_event(command.into_event()) {
 			Ok(()) => "ok".to_string(),
 			Err(_) => "err event-loop-closed".to_string(),
@@ -7365,13 +8065,14 @@ fn dispatch_dump_scene_nodes_command(proxy: &EventLoopProxy<RendererControlEvent
 	wait_command_result(result, Duration::from_secs(5), "dump_scene_nodes")
 }
 
-fn dispatch_dump_runtime_state_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String) -> String {
+fn dispatch_dump_runtime_state_command(proxy: &EventLoopProxy<RendererControlEvent>, path: String, morphs_only: bool) -> String {
 	if path.trim().is_empty() {
 		return "err dump_runtime_state path required".to_string();
 	}
 	let result: CommandResultSlot = Arc::new(Mutex::new(None));
 	let event = RendererControlEvent::DumpRuntimeState {
 		path: std::path::PathBuf::from(path),
+		morphs_only,
 		result: Arc::clone(&result),
 	};
 	if proxy.send_event(event).is_err() {
@@ -7464,7 +8165,16 @@ fn resolve_activate_action_from_menu_path(
 }
 
 /// イベントループをブロックしてウィンドウを表示する。
-pub fn run(opts: AvatarWindowOptions) -> Result<(), RunError> {
+pub fn run(mut opts: AvatarWindowOptions) -> Result<(), RunError> {
+	// Offline/loopback diagnostics must opt out before any control service is
+	// started. Motion receiver settings remain explicit and independent.
+	if std::env::var("UN_AVATAR_DIAGNOSTIC_NO_CONTROL_SERVICES").as_deref() == Ok("1") {
+		opts.runtime_bus_key = None;
+		opts.runtime_status_address = None;
+		opts.runtime_control_address = None;
+		opts.unaa_z_instance_id = None;
+		eprintln!("un-avatar-renderer: diagnostic control services disabled");
+	}
 	#[cfg(windows)]
 	if let Err(error) =
 		windows_identity::set_renderer_app_user_model_id(opts.app_user_model_id.as_deref().unwrap_or("UsagiNetwork.UNAvatar.Renderer"))
@@ -7566,6 +8276,12 @@ pub fn run_cli() -> Result<(), RunError> {
 		icon: Option<PathBuf>,
 		#[arg(long, hide = true)]
 		app_user_model_id: Option<String>,
+		#[arg(
+			long,
+			value_name = "ID",
+			help = "UNAA/Z Renderer instance ID（通常はprofile.id。Supervisorが明示）"
+		)]
+		unaa_z_instance_id: Option<String>,
 		#[arg(long, value_name = "IP:PORT", help = "VMC Marionette: UDP 待受アドレス（例: 0.0.0.0:39539）")]
 		vmc_address: Option<SocketAddr>,
 		#[arg(long, value_name = "PORT", hide = true)]
@@ -7575,8 +8291,8 @@ pub fn run_cli() -> Result<(), RunError> {
 			help = "Spout2 送出（Windows）。標準配布は cargo xtask package でSpout2込みビルドを作成。開発手動ビルドは --features spout-sdk と SPOUT2_* / PATH が必要"
 		)]
 		spout: bool,
-		#[arg(long, default_value = "UN Avatar Spout", help = "Spout 送信者名")]
-		spout_name: String,
+		#[arg(long, help = "Spout 送信者名（省略時はプロファイル設定）")]
+		spout_name: Option<String>,
 		#[arg(long, value_name = "PX", help = "Spout 解像度幅（省略時はウィンドウ幅）")]
 		spout_width: Option<u32>,
 		#[arg(long, value_name = "PX", help = "Spout 解像度高さ（省略時はウィンドウ高さ）")]
@@ -7810,6 +8526,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		animator_bindings: Vec::new(),
 		icon_path: cli.icon,
 		app_user_model_id: None,
+		unaa_z_instance_id: cli.unaa_z_instance_id.clone(),
 		vmc_address: cli.vmc_address.or_else(|| cli.vmc_port.map(vmc_addr_from_port)),
 		unmotion_zenoh: crate::options::UnmotionZenohOptions {
 			enabled: cli.unmotion_zenoh_enabled,
@@ -7826,7 +8543,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		primary_motion_source: cli.primary_motion_source.unwrap_or_default(),
 		spout: SpoutWindowOptions {
 			enabled: cli.spout,
-			name: cli.spout_name,
+			name: SpoutWindowOptions::default().name,
 			width: cli.spout_width,
 			height: cli.spout_height,
 		},
@@ -7910,7 +8627,7 @@ pub fn run_cli() -> Result<(), RunError> {
 		contact_shadow: Default::default(),
 		ssao: Default::default(),
 	};
-	merge_cli_options(&mut opts, cli_opts);
+	merge_cli_options(&mut opts, cli_opts, cli.spout_name);
 	if opts.mesh_diagnostics.disable_fur {
 		eprintln!("un-avatar-renderer: diagnostics active: lilToon Fur shell pass disabled");
 	}
@@ -8051,7 +8768,7 @@ fn dump_skin_tone_matching(opts: &AvatarWindowOptions) -> Result<(), String> {
 	Ok(())
 }
 
-fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
+fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions, spout_name: Option<String>) {
 	let default = AvatarWindowOptions::default();
 	if cli.title != default.title {
 		opts.title = cli.title;
@@ -8092,6 +8809,9 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.app_user_model_id.is_some() {
 		opts.app_user_model_id = cli.app_user_model_id;
 	}
+	if cli.unaa_z_instance_id.is_some() {
+		opts.unaa_z_instance_id = cli.unaa_z_instance_id;
+	}
 	if cli.clear_color != default.clear_color {
 		opts.clear_color = cli.clear_color;
 	}
@@ -8107,8 +8827,8 @@ fn merge_cli_options(opts: &mut AvatarWindowOptions, cli: AvatarWindowOptions) {
 	if cli.spout.enabled {
 		opts.spout.enabled = true;
 	}
-	if cli.spout.name != SpoutWindowOptions::default().name {
-		opts.spout.name = cli.spout.name;
+	if let Some(name) = spout_name {
+		opts.spout.name = name;
 	}
 	if cli.spout.width.is_some() {
 		opts.spout.width = cli.spout.width;
@@ -8299,6 +9019,7 @@ mod tests {
 		io::{BufRead, BufReader, Read, Write},
 		net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream},
 		path::Path,
+		sync::{Arc, Mutex},
 		thread,
 		time::{Duration, Instant},
 	};
@@ -8308,19 +9029,50 @@ mod tests {
 	#[cfg(windows)]
 	use super::parse_windows_hotkey;
 	use super::{
-		avatar_outline_from_control, camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot,
-		parse_midi_note_event, parse_renderer_control_command, patched_camera_state, renderer_startup_frame_role,
-		resolve_activate_action_from_menu_path, runtime_dynamics_warnings, standalone_runtime_bus_key_for_manifest,
-		start_runtime_status_server, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active, wardrobe_transition_frame_role,
-		AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
+		advance_active_camera_effect, avatar_outline_from_control, camera_effect_target, camera_state_patch_from_snapshot,
+		compact_window_title_status, gpu, initial_runtime_snapshot, parse_midi_note_event, parse_renderer_control_command,
+		parse_unaa_z_camera_effect, patched_camera_state, renderer_startup_frame_role, resolve_activate_action_from_menu_path,
+		resolve_camera_effect_transition, runtime_dynamics_warnings, standalone_runtime_bus_key_for_manifest, start_runtime_status_server,
+		unaa_z_snapshot_json, validate_camera_effect, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active,
+		wardrobe_transition_frame_role, ActiveCameraEffect, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions,
+		CameraEffectConflictPolicy, CameraEffectPhase, CameraEffectRequest, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
 		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
-		SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
+		SCENE_STATE_AVATAR_SCENE, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
 	fn reserve_runtime_status_address() -> SocketAddr {
 		let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)).unwrap();
 		listener.local_addr().unwrap()
+	}
+
+	#[test]
+	fn runtime_dump_morphs_only_is_explicit_and_backward_compatible() {
+		for (input, expected) in [
+			(r#"{"command":"dump_runtime_state","path":"snapshot.json"}"#, false),
+			(r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":true}"#, true),
+		] {
+			let RendererControlCommand::DumpRuntimeState { path, morphs_only } =
+				parse_renderer_control_command(input).unwrap() else { panic!("wrong command"); };
+			assert_eq!(path, "snapshot.json");
+			assert_eq!(morphs_only, expected);
+		}
+		assert!(parse_renderer_control_command(
+			r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":"true"}"#
+		).is_err());
+	}
+
+	#[test]
+	fn cli_spout_name_preserves_manifest_unless_explicitly_supplied() {
+		let mut opts = AvatarWindowOptions::default();
+		opts.spout.name = "usagi diagnostic".into();
+		super::merge_cli_options(&mut opts, AvatarWindowOptions::default(), None);
+		assert_eq!(opts.spout.name, "usagi diagnostic");
+		// Even an explicit name equal to the internal default is an override.
+		super::merge_cli_options(&mut opts, AvatarWindowOptions::default(), Some("UN Avatar".into()));
+		assert_eq!(opts.spout.name, "UN Avatar");
+		super::merge_cli_options(&mut opts, AvatarWindowOptions::default(), Some("UN Avatar Spout".into()));
+		assert_eq!(opts.spout.name, "UN Avatar Spout");
 	}
 
 	fn connect_runtime_status(address: SocketAddr) -> TcpStream {
@@ -8462,6 +9214,33 @@ mod tests {
 		assert!(!super::wardrobe_billboard_min_visible_elapsed(Some(started_at), before_minimum));
 		assert!(super::wardrobe_billboard_min_visible_elapsed(Some(started_at), after_minimum));
 		assert!(super::wardrobe_billboard_min_visible_elapsed(None, started_at));
+	}
+
+	#[test]
+	fn frame_trace_retains_startup_after_recent_window_rolls_over() {
+		let mut trace = super::FrameTraceState {
+			path: std::path::PathBuf::new(),
+			started_at: std::time::Instant::now(),
+			next_seq: 0,
+			last_unmotion_received_frames: 0,
+			last_motion_applied_frames: 0,
+			frames: std::collections::VecDeque::new(),
+			startup_frames: Vec::new(),
+		};
+		let mut pacing = super::FramePacingState::default();
+		let timings = super::FrameTimings::default();
+		let count = super::FRAME_TRACE_STARTUP_FRAMES + super::FRAME_TRACE_WINDOW_FRAMES + 7;
+		for i in 0..count {
+			let wall_ms = if i == 0 { 125.0 } else { 16.6667 };
+			trace.push("runtime_avatar", &timings, pacing.push(wall_ms, 0.0, 16.6667), i as u64, i as u64, None);
+		}
+		assert_eq!(trace.startup_frames.len(), super::FRAME_TRACE_STARTUP_FRAMES);
+		assert_eq!(trace.startup_frames[0].seq, 0);
+		assert_eq!(trace.startup_frames[0].wall_ms, 125.0);
+		assert_eq!(trace.startup_frames.last().unwrap().seq, (super::FRAME_TRACE_STARTUP_FRAMES - 1) as u64);
+		assert_eq!(trace.frames.len(), super::FRAME_TRACE_WINDOW_FRAMES);
+		assert_eq!(trace.frames.front().unwrap().seq, (count - super::FRAME_TRACE_WINDOW_FRAMES) as u64);
+		assert_eq!(trace.frames.back().unwrap().seq, (count - 1) as u64);
 	}
 
 	#[test]
@@ -10010,8 +10789,8 @@ mod tests {
 
 	#[test]
 	fn standalone_runtime_bus_key_is_stable_for_manifest_path() {
-		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\the\Profiles\AvatarProfile.toml"));
-		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"c:/users/the/profiles/avatarprofile.toml"));
+		let first = standalone_runtime_bus_key_for_manifest(Path::new(r"C:\Users\example\Profiles\AvatarProfile.toml"));
+		let second = standalone_runtime_bus_key_for_manifest(Path::new(r"C:/Users/example/profiles/avatarprofile.toml"));
 
 		assert!(first.starts_with("un-avatar/runtime/standalone/"));
 		assert_eq!(first, second);
@@ -10484,6 +11263,324 @@ mod tests {
 		assert_eq!(diagonal_fov_deg, Some(45.0));
 		let transition = transition.expect("transition");
 		assert!(matches!(transition.mode, CameraTransitionMode::Replace));
+	}
+
+	#[test]
+	fn parses_and_validates_atomic_camera_effect() {
+		let command = parse_renderer_control_command(
+			r#"{"command":"camera_effect","pose":{"kind":"orbit","target_xyz":[0.49,1.15,0.26],"longitude_deg":235.0,"latitude_deg":1.0,"radius":0.88},"diagonal_fov_deg":42.0,"enter":{"duration_ms":450,"easing":"ease_in_out_cubic"},"hold_ms":5000,"leave":{"duration_ms":650,"easing":"ease_in_out_cubic"},"conflict_policy":"replace","return_to":"captured_at_start"}"#,
+		)
+		.unwrap();
+		let RendererControlCommand::CameraEffect { request } = command else {
+			panic!("expected camera_effect command");
+		};
+		let request = validate_camera_effect(request).unwrap();
+		assert_eq!(request.hold_ms, Some(5000));
+		assert!(matches!(request.conflict_policy, Some(CameraEffectConflictPolicy::Replace)));
+		assert!(matches!(
+			request.enter.and_then(|transition| transition.easing),
+			Some(CameraTransitionEasing::EaseInOutCubic)
+		));
+	}
+
+	#[test]
+	fn camera_effect_accepts_partial_patch_and_resolves_defaults_from_captured_state() {
+		let captured = gpu::CameraStateSnapshot {
+			target: [0.2, 1.3, -0.1],
+			longitude_deg: 150.0,
+			latitude_deg: -4.0,
+			radius: 1.7,
+			diagonal_fov_deg: 63.0,
+		};
+		let request = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": { "kind": "orbit", "radius": 1.05 }
+		}))
+		.unwrap();
+		let request = validate_camera_effect(request).unwrap();
+		let target = camera_effect_target(captured, request);
+		assert_eq!(target.target, captured.target);
+		assert_eq!(target.longitude_deg, captured.longitude_deg);
+		assert_eq!(target.latitude_deg, captured.latitude_deg);
+		assert_eq!(target.radius, 1.05);
+		assert_eq!(target.diagonal_fov_deg, captured.diagonal_fov_deg);
+		assert_eq!(resolve_camera_effect_transition(request.enter, 450).duration_ms, 450);
+		assert_eq!(request.hold_ms.unwrap_or(5_000), 5_000);
+		assert!(matches!(
+			request.conflict_policy.unwrap_or(CameraEffectConflictPolicy::Replace),
+			CameraEffectConflictPolicy::Replace
+		));
+	}
+
+	#[test]
+	fn camera_effect_accepts_fov_only_and_partial_transitions() {
+		let request = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"diagonal_fov_deg": 48.0,
+			"enter": { "easing": "none" },
+			"leave": { "duration_ms": 0 }
+		}))
+		.unwrap();
+		let request = validate_camera_effect(request).unwrap();
+		let enter = resolve_camera_effect_transition(request.enter, 450);
+		let leave = resolve_camera_effect_transition(request.leave, 650);
+		assert_eq!(enter.duration_ms, 0);
+		assert!(matches!(enter.easing, CameraTransitionEasing::None));
+		assert_eq!(leave.duration_ms, 0);
+		assert!(matches!(leave.easing, CameraTransitionEasing::EaseInOutCubic));
+	}
+
+	#[test]
+	fn cartesian_camera_effect_allows_position_and_rotation_to_be_omitted_independently() {
+		let captured = gpu::CameraStateSnapshot {
+			target: [0.0, 1.0, 0.0],
+			longitude_deg: 180.0,
+			latitude_deg: 0.0,
+			radius: 2.0,
+			diagonal_fov_deg: 60.0,
+		};
+		let position_only = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": { "kind": "cartesian", "position_xyz": [1.0, 2.0, 3.0] }
+		}))
+		.unwrap();
+		let position_target = camera_effect_target(captured, validate_camera_effect(position_only).unwrap());
+		assert_eq!(position_target.longitude_deg, captured.longitude_deg);
+		assert_eq!(position_target.latitude_deg, captured.latitude_deg);
+		assert_eq!(position_target.target, [1.0, 2.0, 1.0]);
+
+		let rotation_only = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": { "kind": "cartesian", "rotation_euler_deg": { "yaw": 90.0 } }
+		}))
+		.unwrap();
+		let rotation_target = camera_effect_target(captured, validate_camera_effect(rotation_only).unwrap());
+		assert_eq!(rotation_target.longitude_deg, 270.0);
+		assert_eq!(rotation_target.latitude_deg, captured.latitude_deg);
+		assert_eq!(rotation_target.radius, captured.radius);
+		assert_eq!(rotation_target.diagonal_fov_deg, captured.diagonal_fov_deg);
+	}
+
+	#[test]
+	fn camera_effect_ignore_preserves_ten_minute_deadline_and_original_return_state() {
+		use super::enqueue_camera_effect_request;
+		let request: CameraEffectRequest = serde_json::from_value(serde_json::json!({
+			"diagonal_fov_deg": 28.0, "hold_ms": 600000,
+			"enter": {"duration_ms": 1200, "easing": "ease_out_cubic"},
+			"leave": {"duration_ms": 1200, "easing": "ease_out_cubic"},
+			"conflict_policy": "ignore_if_active"
+		})).unwrap();
+		validate_camera_effect(request).unwrap();
+		let mut queue = std::collections::VecDeque::new();
+		let mut active = None;
+		assert!(enqueue_camera_effect_request(&mut active, &mut queue, request));
+		let queued_request = CameraEffectRequest { conflict_policy: Some(CameraEffectConflictPolicy::Queue), ..request };
+		assert!(enqueue_camera_effect_request(&mut active, &mut queue, queued_request));
+		assert_eq!(queue.len(), 2);
+		let replacement = CameraEffectRequest { conflict_policy: Some(CameraEffectConflictPolicy::Replace), ..request };
+		assert!(enqueue_camera_effect_request(&mut active, &mut queue, replacement));
+		assert_eq!(queue.len(), 1);
+		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
+		assert_eq!(queue.len(), 1);
+		queue.pop_front();
+		let captured = gpu::CameraStateSnapshot {
+			target: [0.0, 1.0, 0.0], longitude_deg: 180.0,
+			latitude_deg: 0.0, radius: 2.0, diagonal_fov_deg: 60.0,
+		};
+		let start = Instant::now();
+		active = Some(ActiveCameraEffect {
+			captured, target: camera_effect_target(captured, request),
+			enter: resolve_camera_effect_transition(request.enter, 450),
+			leave: resolve_camera_effect_transition(request.leave, 650),
+			hold_ms: 600000, phase: CameraEffectPhase::Enter, phase_started_at: start,
+		});
+		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
+		let (_, next) = advance_active_camera_effect(active.unwrap(), start + Duration::from_millis(1200));
+		active = next;
+		let hold_start = active.unwrap().phase_started_at;
+		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
+		assert_eq!(active.unwrap().phase_started_at, hold_start);
+		let (_, next) = advance_active_camera_effect(active.unwrap(), start + Duration::from_millis(601199));
+		assert_eq!(next.unwrap().phase, CameraEffectPhase::Hold);
+		let (_, next) = advance_active_camera_effect(next.unwrap(), start + Duration::from_millis(601200));
+		active = next;
+		assert_eq!(active.unwrap().phase, CameraEffectPhase::Leave);
+		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
+		let (restored, next) = advance_active_camera_effect(active.unwrap(), start + Duration::from_millis(602400));
+		assert_eq!(restored.diagonal_fov_deg, captured.diagonal_fov_deg);
+		assert_eq!(restored.target, captured.target);
+		active = next;
+		assert!(active.is_none());
+		assert!(queue.is_empty());
+		assert!(enqueue_camera_effect_request(&mut active, &mut queue, request));
+	}
+
+	#[test]
+	fn camera_effect_rejects_patch_without_camera_change() {
+		let request = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": { "kind": "orbit" }
+		}))
+		.unwrap();
+		assert!(validate_camera_effect(request).unwrap_err().contains("at least one"));
+	}
+
+	#[test]
+	fn camera_effect_rejects_nonzero_roll_and_inconsistent_none_easing() {
+		let parse = |roll: f32, duration_ms: u32| {
+			serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+				"pose": {
+					"kind": "cartesian",
+					"position_xyz": [0.0, 1.0, 2.0],
+					"rotation_euler_deg": { "yaw": 0.0, "pitch": 0.0, "roll": roll },
+					"rotation_order": "yxz"
+				},
+				"diagonal_fov_deg": 42.0,
+				"enter": { "duration_ms": duration_ms, "easing": "none" },
+				"hold_ms": 100,
+				"leave": { "duration_ms": 0, "easing": "none" },
+				"conflict_policy": "queue",
+				"return_to": "captured_at_start"
+			}))
+			.unwrap()
+		};
+		assert!(validate_camera_effect(parse(1.0, 0)).unwrap_err().contains("roll"));
+		assert!(validate_camera_effect(parse(0.0, 10)).unwrap_err().contains("easing=none"));
+	}
+
+	#[test]
+	fn cartesian_camera_effect_preserves_captured_focus_distance() {
+		let captured = gpu::CameraStateSnapshot {
+			target: [0.0, 1.0, 0.0],
+			longitude_deg: 180.0,
+			latitude_deg: 0.0,
+			radius: 2.0,
+			diagonal_fov_deg: 60.0,
+		};
+		let request = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": {
+				"kind": "cartesian",
+				"position_xyz": [1.0, 2.0, 3.0],
+				"rotation_euler_deg": { "yaw": 0.0, "pitch": 0.0, "roll": 0.0 },
+				"rotation_order": "yxz"
+			},
+			"diagonal_fov_deg": 42.0,
+			"enter": { "duration_ms": 0, "easing": "none" },
+			"hold_ms": 0,
+			"leave": { "duration_ms": 0, "easing": "none" },
+			"conflict_policy": "replace",
+			"return_to": "captured_at_start"
+		}))
+		.unwrap();
+		let target = camera_effect_target(captured, request);
+		assert_eq!(target.target, [1.0, 2.0, 1.0]);
+		assert_eq!(target.longitude_deg, 180.0);
+		assert_eq!(target.latitude_deg, 0.0);
+		assert_eq!(target.radius, 2.0);
+	}
+
+	#[test]
+	fn atomic_camera_effect_enters_holds_and_restores_captured_state() {
+		let captured = gpu::CameraStateSnapshot {
+			target: [0.0, 1.0, 0.0],
+			longitude_deg: 180.0,
+			latitude_deg: 0.0,
+			radius: 1.4,
+			diagonal_fov_deg: 63.0,
+		};
+		let request = serde_json::from_value::<CameraEffectRequest>(serde_json::json!({
+			"pose": { "kind": "orbit", "target_xyz": [0.5, 1.1, 0.2], "longitude_deg": 235.0, "latitude_deg": 1.0, "radius": 0.88 },
+			"diagonal_fov_deg": 42.0,
+			"enter": { "duration_ms": 100, "easing": "linear" },
+			"hold_ms": 200,
+			"leave": { "duration_ms": 100, "easing": "linear" },
+			"conflict_policy": "queue",
+			"return_to": "captured_at_start"
+		}))
+		.unwrap();
+		let started_at = Instant::now();
+		let target = camera_effect_target(captured, request);
+		let active = ActiveCameraEffect {
+			captured,
+			target,
+			enter: resolve_camera_effect_transition(request.enter, 450),
+			hold_ms: request.hold_ms.unwrap_or(5_000),
+			leave: resolve_camera_effect_transition(request.leave, 650),
+			phase: CameraEffectPhase::Enter,
+			phase_started_at: started_at,
+		};
+		let (mid_enter, active) = advance_active_camera_effect(active, started_at + Duration::from_millis(50));
+		assert!((mid_enter.radius - 1.14).abs() < 0.001);
+		let (_, active) = advance_active_camera_effect(active.unwrap(), started_at + Duration::from_millis(100));
+		assert_eq!(active.unwrap().phase, CameraEffectPhase::Hold);
+		let (_, active) = advance_active_camera_effect(active.unwrap(), started_at + Duration::from_millis(300));
+		assert_eq!(active.unwrap().phase, CameraEffectPhase::Leave);
+		let (restored, active) = advance_active_camera_effect(active.unwrap(), started_at + Duration::from_millis(400));
+		assert!(active.is_none());
+		assert_eq!(restored.target, captured.target);
+		assert_eq!(restored.radius, captured.radius);
+		assert_eq!(restored.diagonal_fov_deg, captured.diagonal_fov_deg);
+	}
+
+	#[test]
+	fn unaa_z_camera_effect_requires_exact_identity_and_current_session() {
+		let payload = serde_json::json!({
+			"schema_version": 1,
+			"kind": "app.command",
+			"app_id": "un-avatar",
+			"instance_id": "new-avatar-3",
+			"command": "camera.effect",
+			"args": {
+				"target_session_id": "renderer-session-current",
+				"pose": { "kind": "orbit", "target_xyz": [0.0, 1.0, 0.0], "longitude_deg": 180.0, "latitude_deg": 0.0, "radius": 0.8 },
+				"diagonal_fov_deg": 42.0,
+				"enter": { "duration_ms": 100, "easing": "linear" },
+				"hold_ms": 500,
+				"leave": { "duration_ms": 100, "easing": "linear" },
+				"conflict_policy": "replace",
+				"return_to": "captured_at_start"
+			},
+			"request_id": "unvac-test-1",
+			"timeout_ms": 800,
+			"issued_at": "2026-09-07T00:00:00Z"
+		});
+		let bytes = serde_json::to_vec(&payload).unwrap();
+		assert!(parse_unaa_z_camera_effect(&bytes, "new-avatar-3", "renderer-session-current").is_ok());
+		let mut partial = payload.clone();
+		partial["args"] = serde_json::json!({
+			"target_session_id": "renderer-session-current",
+			"pose": { "kind": "orbit", "radius": 1.05 }
+		});
+		assert!(parse_unaa_z_camera_effect(&serde_json::to_vec(&partial).unwrap(), "new-avatar-3", "renderer-session-current").is_ok());
+		assert_eq!(
+			parse_unaa_z_camera_effect(&bytes, "other-avatar", "renderer-session-current")
+				.unwrap_err()
+				.1,
+			"target_identity_mismatch"
+		);
+		assert_eq!(
+			parse_unaa_z_camera_effect(&bytes, "new-avatar-3", "renderer-session-new")
+				.unwrap_err()
+				.1,
+			"target_session_mismatch"
+		);
+	}
+
+	#[test]
+	fn unaa_z_snapshot_advertises_camera_effect_only_when_renderer_ready() {
+		let opts = AvatarWindowOptions::default();
+		let status = Arc::new(Mutex::new(initial_runtime_snapshot(&opts)));
+		let before: serde_json::Value =
+			serde_json::from_str(&unaa_z_snapshot_json("new-avatar-3", "session-1", "Kalt'sit Pseudo", &status)).unwrap();
+		assert_eq!(before["ready"], false);
+		{
+			let mut status = status.lock().unwrap();
+			status.connected = true;
+			status.scene_state = SCENE_STATE_AVATAR_SCENE.to_string();
+		}
+		let ready: serde_json::Value =
+			serde_json::from_str(&unaa_z_snapshot_json("new-avatar-3", "session-1", "Kalt'sit Pseudo", &status)).unwrap();
+		assert_eq!(ready["app_id"], "un-avatar");
+		assert_eq!(ready["instance_id"], "new-avatar-3");
+		assert_eq!(ready["session_id"], "session-1");
+		assert_eq!(ready["ready"], true);
+		assert_eq!(ready["capabilities"], serde_json::json!(["renderer", "camera_control"]));
+		assert_eq!(ready["commands"], serde_json::json!(["camera.effect"]));
 	}
 
 	#[test]

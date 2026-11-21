@@ -3847,7 +3847,7 @@ fn runtime_token_filter_matches(value: &str, needles: &[String]) -> bool {
 }
 
 fn runtime_physics_source_scope_key(value: &str) -> String {
-	let value = value.strip_prefix("physbone:").unwrap_or(value);
+	let value = value.trim_prefix("physbone:");
 	let lower = value.to_ascii_lowercase();
 	if let Some(index) = lower.find("/pb/") {
 		return normalize_profile_match_key(&value[..index]);
@@ -6246,6 +6246,9 @@ fn primary_motion_source_from_u8(value: u8) -> crate::options::PrimaryMotionSour
 	}
 }
 
+#[path = "motion_playback.rs"]
+mod motion_playback;
+
 struct MotionControlBuffer {
 	started_at: Instant,
 	state: Mutex<MotionControlBufferState>,
@@ -6266,13 +6269,20 @@ impl Default for MotionControlBuffer {
 
 impl MotionControlBuffer {
 	fn push_frame(&self, frame: un_motion_frame::UNMotionFrame) {
+		self.push_frame_with_queue_time(frame, None);
+	}
+
+	fn push_frame_with_queue_time(&self, frame: un_motion_frame::UNMotionFrame, decoded_at: Option<Instant>) {
+		let entered_at = Instant::now();
+		let queue_wait_ms = decoded_at.map(|at| entered_at.saturating_duration_since(at).as_secs_f32() * 1000.0);
 		let receive_time_ns = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
-		if let Some(trace) = &self.trace {
-			if let Ok(mut trace) = trace.try_lock() {
-				trace.push_raw(&frame, receive_time_ns);
-			}
-		}
 		if let Ok(mut state) = self.state.lock() {
+			let lock_wait_ms = entered_at.elapsed().as_secs_f32() * 1000.0;
+			if let Some(trace) = &self.trace {
+				if let Ok(mut trace) = trace.try_lock() {
+					trace.push_raw(&frame, receive_time_ns, queue_wait_ms, lock_wait_ms);
+				}
+			}
 			state.push_history_sample(&frame, receive_time_ns);
 			let write_idx = state.write_idx;
 			state.buffers[write_idx].push_frame(frame);
@@ -6280,6 +6290,11 @@ impl MotionControlBuffer {
 	}
 
 	fn take_pending_frames_into(&self, out: &mut Vec<un_motion_frame::UNMotionFrame>) {
+		let now = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+		self.take_pending_frames_at(out, now);
+	}
+
+	fn take_pending_frames_at(&self, out: &mut Vec<un_motion_frame::UNMotionFrame>, now: u64) {
 		out.clear();
 		let Ok(mut state) = self.state.lock() else {
 			return;
@@ -6289,7 +6304,8 @@ impl MotionControlBuffer {
 		state.write_idx = next_write_idx;
 		state.buffers[next_write_idx].clear();
 		state.buffers[read_idx].take_frames_into(out);
-		state.apply_interpolation(out);
+		out.retain_mut(motion_playback::retain_immediate);
+		state.playback.sample(now, out);
 		if let Some(trace) = &self.trace {
 			let apply_time_ns = self.started_at.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
 			if let Ok(mut trace) = trace.try_lock() {
@@ -6343,7 +6359,11 @@ struct MotionTraceFile<'a> {
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct MotionTraceSample {
+	expression_count: usize,
+	expressions: Vec<un_motion_frame::ExpressionSample>,
 	t_ms: f32,
+	decoded_queue_wait_ms: Option<f32>,
+	buffer_lock_wait_ms: Option<f32>,
 	sequence: u64,
 	coordinate_space: &'static str,
 	stream_id: Option<String>,
@@ -6383,8 +6403,11 @@ impl MotionTraceBuffer {
 		})
 	}
 
-	fn push_raw(&mut self, frame: &un_motion_frame::UNMotionFrame, time_ns: u64) {
-		push_trace_sample(&mut self.raw, motion_trace_sample(frame, time_ns));
+	fn push_raw(&mut self, frame: &un_motion_frame::UNMotionFrame, time_ns: u64, queue_wait_ms: Option<f32>, lock_wait_ms: f32) {
+		let mut sample = motion_trace_sample(frame, time_ns);
+		sample.decoded_queue_wait_ms = queue_wait_ms;
+		sample.buffer_lock_wait_ms = Some(lock_wait_ms);
+		push_trace_sample(&mut self.raw, sample);
 	}
 
 	fn push_applied(&mut self, frame: &un_motion_frame::UNMotionFrame, time_ns: u64) {
@@ -6423,7 +6446,13 @@ fn motion_trace_sample(frame: &un_motion_frame::UNMotionFrame, time_ns: u64) -> 
 	let (face_head_quat_xyzw, face_head_yaw_deg, face_head_translation_xyz) = trace_transform_parts(face_head);
 	let (body_head_quat_xyzw, body_head_yaw_deg, body_head_translation_xyz) = trace_transform_parts(body_head);
 	MotionTraceSample {
+		expression_count: frame.face.as_ref().map_or(0, |face| face.expressions.len()),
+		// Keep zero releases and original alias spelling/order. Only allocated
+		// when opt-in motion tracing is enabled; bound oversized remote frames.
+		expressions: frame.face.as_ref().map(|face| face.expressions.iter().take(128).cloned().collect()).unwrap_or_default(),
 		t_ms: time_ns as f32 / 1_000_000.0,
+		decoded_queue_wait_ms: None,
+		buffer_lock_wait_ms: None,
 		sequence: frame.header.sequence,
 		coordinate_space: motion_coordinate_space_label(frame.header.coordinate_space),
 		stream_id: frame.header.stream_id.clone(),
@@ -6470,41 +6499,12 @@ fn motion_coordinate_space_label(space: un_motion_frame::CoordinateSpace) -> &'s
 struct MotionControlBufferState {
 	write_idx: usize,
 	buffers: [MotionFrameAccumulator; 2],
-	histories: Vec<MotionFrameHistoryBucket>,
+	playback: motion_playback::Playback,
 }
 
 impl MotionControlBufferState {
 	fn push_history_sample(&mut self, frame: &un_motion_frame::UNMotionFrame, receive_time_ns: u64) {
-		let key = MotionFrameBucketKey::from_frame(frame);
-		if let Some(history) = self.histories.iter_mut().find(|history| history.key == key) {
-			history.push_frame(frame, receive_time_ns);
-			self.prune_history_buckets(receive_time_ns);
-			return;
-		}
-		let mut history = MotionFrameHistoryBucket::new(key);
-		history.push_frame(frame, receive_time_ns);
-		self.histories.push(history);
-		self.prune_history_buckets(receive_time_ns);
-	}
-
-	fn apply_interpolation(&self, frames: &mut [un_motion_frame::UNMotionFrame]) {
-		for frame in frames {
-			let key = MotionFrameBucketKey::from_frame(frame);
-			if let Some(history) = self.histories.iter().find(|history| history.key == key) {
-				history.apply_to_frame(frame);
-			}
-		}
-	}
-
-	fn prune_history_buckets(&mut self, receive_time_ns: u64) {
-		self.histories
-			.retain(|history| receive_time_ns.saturating_sub(history.last_receive_time_ns) <= MOTION_HISTORY_BUCKET_RETAIN_NS);
-		if self.histories.len() <= MOTION_HISTORY_BUCKET_LIMIT {
-			return;
-		}
-		self.histories
-			.sort_by_key(|history| std::cmp::Reverse(history.last_receive_time_ns));
-		self.histories.truncate(MOTION_HISTORY_BUCKET_LIMIT);
+		self.playback.push(frame, receive_time_ns);
 	}
 }
 
@@ -6529,52 +6529,6 @@ impl MotionFrameBucketKey {
 	}
 }
 
-struct MotionFrameHistoryBucket {
-	key: MotionFrameBucketKey,
-	last_receive_time_ns: u64,
-	body_head: TransformSampleHistory,
-	face_head: TransformSampleHistory,
-}
-
-impl MotionFrameHistoryBucket {
-	fn new(key: MotionFrameBucketKey) -> Self {
-		Self {
-			key,
-			last_receive_time_ns: 0,
-			body_head: TransformSampleHistory::default(),
-			face_head: TransformSampleHistory::default(),
-		}
-	}
-
-	fn push_frame(&mut self, frame: &un_motion_frame::UNMotionFrame, receive_time_ns: u64) {
-		self.last_receive_time_ns = receive_time_ns;
-		if let Some(head) = body_head_transform_sample(frame) {
-			self.body_head.push(receive_time_ns, frame.header.expected_dt_ns, head);
-		}
-		let Some(face) = frame.face.as_ref() else {
-			return;
-		};
-		let Some(head) = face.head.as_ref() else {
-			return;
-		};
-		self.face_head.push(receive_time_ns, frame.header.expected_dt_ns, head);
-	}
-
-	fn apply_to_frame(&self, frame: &mut un_motion_frame::UNMotionFrame) {
-		if let Some(head) = body_head_transform_sample_mut(frame) {
-			if let Some(interpolated) = self.body_head.interpolated_sample() {
-				*head = interpolated;
-			}
-		}
-		let Some(face) = frame.face.as_mut() else {
-			return;
-		};
-		if face.head.is_some() {
-			face.head = self.face_head.interpolated_sample();
-		}
-	}
-}
-
 fn body_head_transform_sample(frame: &un_motion_frame::UNMotionFrame) -> Option<&un_motion_frame::TransformSample> {
 	frame
 		.body
@@ -6582,105 +6536,6 @@ fn body_head_transform_sample(frame: &un_motion_frame::UNMotionFrame) -> Option<
 		.and_then(|body| body.humanoid.as_ref())
 		.and_then(|humanoid| humanoid.bones.iter().find(|bone| bone.bone == un_motion_frame::HumanoidBone::Head))
 		.map(|bone| &bone.transform)
-}
-
-fn body_head_transform_sample_mut(frame: &mut un_motion_frame::UNMotionFrame) -> Option<&mut un_motion_frame::TransformSample> {
-	frame
-		.body
-		.as_mut()
-		.and_then(|body| body.humanoid.as_mut())
-		.and_then(|humanoid| {
-			humanoid
-				.bones
-				.iter_mut()
-				.find(|bone| bone.bone == un_motion_frame::HumanoidBone::Head)
-		})
-		.map(|bone| &mut bone.transform)
-}
-
-#[derive(Default)]
-struct TransformSampleHistory {
-	samples: VecDeque<TimedTransformSample>,
-	expected_dt_ns: Option<u64>,
-}
-
-#[derive(Clone)]
-struct TimedTransformSample {
-	time_ns: u64,
-	sample: un_motion_frame::TransformSample,
-}
-
-const MOTION_SAMPLE_HISTORY_LIMIT: usize = 8;
-const FALLBACK_MOTION_SAMPLE_DT_NS: u64 = 16_666_667;
-const MOTION_HISTORY_BUCKET_LIMIT: usize = 8;
-const MOTION_HISTORY_BUCKET_RETAIN_NS: u64 = 5_000_000_000;
-
-impl TransformSampleHistory {
-	fn push(&mut self, time_ns: u64, expected_dt_ns: Option<u64>, sample: &un_motion_frame::TransformSample) {
-		if let Some(expected_dt_ns) = expected_dt_ns.filter(|value| *value > 0) {
-			self.expected_dt_ns = Some(expected_dt_ns);
-		}
-		if let Some(back) = self.samples.back_mut() {
-			if time_ns <= back.time_ns {
-				back.time_ns = time_ns;
-				back.sample = sample.clone();
-				return;
-			}
-		}
-		self.samples.push_back(TimedTransformSample {
-			time_ns,
-			sample: sample.clone(),
-		});
-		while self.samples.len() > MOTION_SAMPLE_HISTORY_LIMIT {
-			self.samples.pop_front();
-		}
-	}
-
-	fn interpolated_sample(&self) -> Option<un_motion_frame::TransformSample> {
-		let latest = self.samples.back()?;
-		if self.samples.len() < 2 {
-			return Some(latest.sample.clone());
-		}
-		let sample_dt_ns = self.expected_dt_ns.unwrap_or_else(|| estimate_sample_dt_ns(&self.samples));
-		let interpolation_delay_ns = sample_dt_ns.saturating_add(sample_dt_ns / 2).max(FALLBACK_MOTION_SAMPLE_DT_NS);
-		let target_ns = latest.time_ns.saturating_sub(interpolation_delay_ns);
-		let mut previous = self.samples.front()?;
-		for next in self.samples.iter().skip(1) {
-			if target_ns <= next.time_ns {
-				let span = next.time_ns.saturating_sub(previous.time_ns);
-				let alpha = if span == 0 {
-					1.0
-				} else {
-					target_ns.saturating_sub(previous.time_ns) as f32 / span as f32
-				}
-				.clamp(0.0, 1.0);
-				return Some(interpolate_transform_sample(&previous.sample, &next.sample, alpha));
-			}
-			previous = next;
-		}
-		Some(latest.sample.clone())
-	}
-}
-
-fn estimate_sample_dt_ns(samples: &VecDeque<TimedTransformSample>) -> u64 {
-	let mut total = 0u64;
-	let mut count = 0u64;
-	let mut previous = None;
-	for sample in samples {
-		if let Some(previous_time_ns) = previous {
-			let dt = sample.time_ns.saturating_sub(previous_time_ns);
-			if dt > 0 {
-				total = total.saturating_add(dt);
-				count = count.saturating_add(1);
-			}
-		}
-		previous = Some(sample.time_ns);
-	}
-	if count == 0 {
-		FALLBACK_MOTION_SAMPLE_DT_NS
-	} else {
-		(total / count).max(1)
-	}
 }
 
 fn interpolate_transform_sample(
@@ -6937,7 +6792,7 @@ impl MotionFrameBucket {
 		frame.header = self.header.clone();
 		frame.sources.extend(self.sources.drain(..));
 		frame.metadata = std::mem::take(&mut self.metadata);
-		if self.body_root.is_some() || !self.body_bones.is_empty() {
+		if self.body_root.is_some() || !self.body_bones.is_empty() || self.body_tracking_state == un_motion_frame::TrackingState::Lost {
 			frame.body = Some(un_motion_frame::BodyMotion {
 				tracking_state: self.body_tracking_state,
 				confidence: self.body_confidence,
@@ -6947,7 +6802,7 @@ impl MotionFrameBucket {
 				}),
 			});
 		}
-		if self.face_head.is_some() || !self.expressions.is_empty() {
+		if self.face_head.is_some() || !self.expressions.is_empty() || self.face_tracking_state == un_motion_frame::TrackingState::Lost {
 			frame.face = Some(un_motion_frame::FaceMotion {
 				tracking_state: self.face_tracking_state,
 				confidence: self.face_confidence,
@@ -6956,7 +6811,7 @@ impl MotionFrameBucket {
 			});
 		}
 		frame.eyes = self.eyes.take();
-		if self.left_wrist.is_some() || !self.left_fingers.is_empty() {
+		if self.left_wrist.is_some() || !self.left_fingers.is_empty() || self.left_tracking_state == un_motion_frame::TrackingState::Lost {
 			frame.left_hand = Some(un_motion_frame::HandMotion {
 				tracking_state: self.left_tracking_state,
 				confidence: self.left_confidence,
@@ -6964,7 +6819,8 @@ impl MotionFrameBucket {
 				fingers: self.left_fingers.drain(..).collect(),
 			});
 		}
-		if self.right_wrist.is_some() || !self.right_fingers.is_empty() {
+		if self.right_wrist.is_some() || !self.right_fingers.is_empty() || self.right_tracking_state == un_motion_frame::TrackingState::Lost
+		{
 			frame.right_hand = Some(un_motion_frame::HandMotion {
 				tracking_state: self.right_tracking_state,
 				confidence: self.right_confidence,
@@ -6973,6 +6829,10 @@ impl MotionFrameBucket {
 			});
 		}
 		frame.signals.extend(self.signals.drain(..));
+		self.body_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.face_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.left_tracking_state = un_motion_frame::TrackingState::Unknown;
+		self.right_tracking_state = un_motion_frame::TrackingState::Unknown;
 		if frame.body.is_none()
 			&& frame.face.is_none()
 			&& frame.eyes.is_none()
@@ -7182,75 +7042,147 @@ mod motion_buffer_tests {
 		buffer.push_frame(expression_frame(2, "Joy", 0.75));
 
 		let mut frames = Vec::new();
-		buffer.take_pending_frames_into(&mut frames);
+		buffer.take_pending_frames_at(&mut frames, 1_000_000_000);
 		assert_eq!(frames.len(), 1);
 		let expressions = &frames[0].face.as_ref().unwrap().expressions;
 		assert_eq!(expressions.len(), 1);
 		assert_eq!(expressions[0].name, "Joy");
 		assert!((expressions[0].value - 0.75).abs() < f32::EPSILON);
-		buffer.take_pending_frames_into(&mut frames);
+		buffer.take_pending_frames_at(&mut frames, 1_000_000_000);
 		assert!(frames.is_empty());
 	}
 
 	#[test]
-	fn transform_history_interpolates_face_head_from_receive_times() {
-		let mut history = TransformSampleHistory::default();
+	fn motion_history_interpolates_body_head_bone() {
+		let mut playback = motion_playback::Playback::default();
 		let dt = 11_111_111;
-		history.push(0, Some(dt), &head_translation_sample(0.0));
-		history.push(dt, Some(dt), &head_translation_sample(1.0));
-		history.push(dt * 2, Some(dt), &head_translation_sample(2.0));
-		history.push(dt * 3, Some(dt), &head_translation_sample(3.0));
+		for i in 0..4 {
+			let mut frame = body_head_translation_frame(i, i as f32);
+			frame.header.expected_dt_ns = Some(dt);
+			playback.push(&frame, i * dt);
+		}
+		let mut frames = Vec::new();
+		playback.sample(dt * 3, &mut frames);
+		let x = body_head_transform_sample(&frames[0]).unwrap().translation.unwrap().x;
+		assert!((x - 1.5).abs() < 0.001, "same delay at receive time: {x}");
+	}
 
-		let x = history
-			.interpolated_sample()
-			.and_then(|head| head.translation)
-			.map(|translation| translation.x)
-			.expect("face head translation");
+	#[test]
+	fn motion_cadence_regression_drains_delayed_pose_after_input_stops() {
+		// Deterministic receive timestamps, all in the past relative to the render read.
+		// The final packet must eventually be reached without another network packet.
+		let mut buffer = MotionControlBuffer::default();
+		buffer.started_at = Instant::now() - std::time::Duration::from_secs(1);
+		let dt = 16_666_667;
+		{
+			let mut state = buffer.state.lock().unwrap();
+			for i in 0..4 {
+				let mut frame = body_head_translation_frame(i, i as f32);
+				frame.header.expected_dt_ns = Some(dt);
+				state.push_history_sample(&frame, i * dt);
+				let write_idx = state.write_idx;
+				state.buffers[write_idx].push_frame(frame);
+			}
+		}
+		let mut frames = Vec::new();
+		buffer.take_pending_frames_into(&mut frames);
+		let mut visible_x = body_head_transform_sample(&frames[0]).unwrap().translation.unwrap().x;
+		for _ in 0..3 {
+			buffer.take_pending_frames_into(&mut frames);
+			for frame in &frames {
+				if let Some(head) = body_head_transform_sample(frame) {
+					visible_x = head.translation.unwrap().x;
+				}
+			}
+		}
 		assert!(
-			(x - 1.5).abs() < 0.001,
-			"expected delayed interpolation between the surrounding head samples, got {x}"
+			(visible_x - 3.0).abs() < 0.001,
+			"final received pose is 3.0, but renderer stays at {visible_x}"
 		);
 	}
 
 	#[test]
-	fn motion_history_interpolates_body_head_bone() {
-		let mut history = MotionFrameHistoryBucket::new(MotionFrameBucketKey::from_frame(&body_head_translation_frame(0, 0.0)));
-		let dt = 11_111_111;
-		history.push_frame(&body_head_translation_frame(1, 0.0), 0);
-		history.push_frame(&body_head_translation_frame(2, 1.0), dt);
-		history.push_frame(&body_head_translation_frame(3, 2.0), dt * 2);
-		history.push_frame(&body_head_translation_frame(4, 3.0), dt * 3);
-
-		let mut frame = body_head_translation_frame(5, 3.0);
-		history.apply_to_frame(&mut frame);
-
-		let x = body_head_transform_sample(&frame)
-			.and_then(|head| head.translation)
-			.map(|translation| translation.x)
-			.expect("body head translation");
+	fn motion_cadence_regression_arm_and_head_share_playback_time() {
+		let dt = 16_666_667;
+		let mut history = motion_playback::Playback::default();
+		let mut last = None;
+		for i in 0..4 {
+			let mut frame = body_head_translation_frame(i, i as f32);
+			frame.header.expected_dt_ns = Some(dt);
+			let bones = &mut frame.body.as_mut().unwrap().humanoid.as_mut().unwrap().bones;
+			let mut arm = bones[0].clone();
+			arm.bone = un_motion_frame::HumanoidBone::LeftUpperArm;
+			bones.push(arm);
+			history.push(&frame, i * dt);
+			last = Some(frame);
+		}
+		let mut frames = Vec::new();
+		history.sample(dt * 3, &mut frames);
+		let frame = frames.pop().unwrap();
+		assert_eq!(last.unwrap().header.sequence, 3);
+		let bones = &frame.body.as_ref().unwrap().humanoid.as_ref().unwrap().bones;
+		let head = bones[0].transform.translation.unwrap().x;
+		let arm = bones[1].transform.translation.unwrap().x;
 		assert!(
-			(x - 1.5).abs() < 0.001,
-			"expected delayed interpolation between body head samples, got {x}"
+			(head - arm).abs() < 0.001,
+			"same-time head/arm samples diverge: head={head}, arm={arm}"
 		);
+	}
+
+	#[test]
+	fn motion_playback_signals_and_loss_are_delivered_once() {
+		let buffer = MotionControlBuffer::default();
+		let mut f = body_head_translation_frame(0, 1.0);
+		f.signals = signal_frame(
+			0,
+			"Coat",
+			un_motion_frame::MotionSignalValue::Bool(true),
+			un_motion_frame::SampleState::Valid,
+		)
+		.signals;
+		buffer.push_frame(f);
+		let mut frames = Vec::new();
+		buffer.take_pending_frames_at(&mut frames, 100_000_000);
+		assert_eq!(frames.iter().map(|f| f.signals.len()).sum::<usize>(), 1);
+		buffer.take_pending_frames_at(&mut frames, 200_000_000);
+		assert!(frames.is_empty());
+		let mut lost = un_motion_frame::UNMotionFrame::new(1);
+		lost.header.coordinate_space = un_motion_frame::CoordinateSpace::UNMotion;
+		lost.body = Some(un_motion_frame::BodyMotion {
+			tracking_state: un_motion_frame::TrackingState::Lost,
+			confidence: 0.0,
+			humanoid: None,
+		});
+		buffer.push_frame(lost);
+		buffer.take_pending_frames_at(&mut frames, 300_000_000);
+		assert_eq!(frames.len(), 1);
+		assert_eq!(
+			frames[0].body.as_ref().unwrap().tracking_state,
+			un_motion_frame::TrackingState::Lost
+		);
+		buffer.take_pending_frames_at(&mut frames, 400_000_000);
+		assert!(frames.is_empty());
 	}
 
 	#[test]
 	fn motion_history_prunes_old_and_excess_source_buckets() {
-		let mut state = MotionControlBufferState::default();
-		for i in 0..(MOTION_HISTORY_BUCKET_LIMIT + 3) {
-			let mut frame = body_head_translation_frame(i as u64, i as f32);
+		let mut playback = motion_playback::Playback::default();
+		for i in 0..11 {
+			let mut frame = expression_frame(i, &format!("channel-{i}"), i as f32);
 			frame.header.stream_id = Some(format!("source-{i}"));
-			state.push_history_sample(&frame, i as u64);
+			playback.push(&frame, i);
 		}
-		assert_eq!(state.histories.len(), MOTION_HISTORY_BUCKET_LIMIT);
-		assert!(state.histories.iter().all(|history| history.last_receive_time_ns >= 3));
-
-		let stale = MOTION_HISTORY_BUCKET_RETAIN_NS + 100;
-		let mut current = body_head_translation_frame(100, 0.0);
-		current.header.stream_id = Some("current".to_string());
-		state.push_history_sample(&current, stale);
-		assert_eq!(state.histories.len(), 1);
-		assert_eq!(state.histories[0].key.stream_id.as_deref(), Some("current"));
+		let mut frames = Vec::new();
+		playback.sample(100_000_000, &mut frames);
+		assert_eq!(frames.len(), 8);
+		assert!(frames.iter().all(|f| f.header.sequence >= 3));
+		let mut current = expression_frame(100, "current", 1.0);
+		current.header.stream_id = Some("current".into());
+		playback.push(&current, 6_000_000_000);
+		frames.clear();
+		playback.sample(6_100_000_000, &mut frames);
+		assert_eq!(frames.len(), 1);
+		assert_eq!(frames[0].header.stream_id.as_deref(), Some("current"));
 	}
 
 	#[test]
@@ -9973,11 +9905,32 @@ impl GpuState {
 			.unwrap_or_default()
 	}
 
-	pub(crate) fn dump_runtime_state(&self, path: &std::path::Path) -> Result<(), String> {
+	pub(crate) fn dump_runtime_state(&self, path: &std::path::Path, morphs_only: bool) -> Result<(), String> {
 		let Some(doc_arc) = self.document.as_ref() else {
 			return Err("document is not loaded".to_string());
 		};
 		let doc = doc_arc.read().map_err(|_| "document lock poisoned".to_string())?;
+		if morphs_only {
+			// Avoid physics/contact diagnostics when sampling short facial gestures.
+			let morph_draws = match (self.scene_meshes.as_ref(), doc.scene.as_ref()) {
+				(Some(meshes), Some(scene)) => meshes.diagnostic_morph_state(scene, None, 64),
+				_ => serde_json::json!({ "draws": [] }),
+			};
+			// Keep the inexpensive expression stage alongside the uploaded morphs.
+			// A zero GPU weight alone cannot distinguish a missing preset from a
+			// later animator/mesh override. Do not include physics diagnostics here.
+			let runtime = doc.runtime_model();
+			let expression_presets: Vec<_> = runtime.expression_catalog()
+				.map(|catalog| catalog.presets.iter().map(|preset| preset.name.as_str()).collect())
+				.unwrap_or_default();
+			let bytes = serde_json::to_vec(&serde_json::json!({
+				"morph_draws": morph_draws,
+				"expression_presets": expression_presets,
+				"expression_weights": runtime.expression_weights(),
+			}))
+				.map_err(|err| err.to_string())?;
+			return std::fs::write(path, bytes).map_err(|err| err.to_string());
+		}
 		let parameter_values = doc.runtime_model().runtime_parameter_values().clone();
 		let morph_overrides = animator_morph_overrides_for_doc(&doc);
 		let dynamics_interaction_parameters =
@@ -11356,62 +11309,85 @@ impl GpuState {
 				for endpoint in endpoints {
 					config = config.with_connect_endpoint(endpoint);
 				}
-				match un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_many(&config, strategies.clone()) {
-					Ok(receivers) => {
-						self.unmotion_zenoh_live = !receivers.is_empty();
-						for (index, (receiver, strategy)) in receivers.into_iter().zip(strategies).enumerate() {
-							let log_for_recv = self.debug_log.clone();
-							let motion_buffer_for_zenoh = Arc::clone(&self.motion_buffer);
-							let received_frames_counter = Arc::clone(&self.unmotion_zenoh_received_frames);
-							let receiver_generation = Arc::clone(&self.motion_receiver_generation);
-							let key_expr_for_log = strategy.subscribe_key_expr();
-							eprintln!("[un-avatar-zenoh] subscribed key='{key_expr_for_log}'");
-							if log_for_recv.is_enabled() {
-								log_for_recv.line("unmotion_zenoh", format!("subscribed key={key_expr_for_log}"));
+				self.unmotion_zenoh_live = !strategies.is_empty();
+				let debug_log = self.debug_log.clone();
+				let motion_buffer = Arc::clone(&self.motion_buffer);
+				let received_frames = Arc::clone(&self.unmotion_zenoh_received_frames);
+				let receiver_generation = Arc::clone(&self.motion_receiver_generation);
+				std::thread::Builder::new()
+					.name("un-avatar-zenoh-connect".into())
+					.spawn(move || -> Result<(), String> {
+						while receiver_generation.load(Ordering::Acquire) == generation {
+							match un_avatar_zenoh::UnAvatarZenohReceiver::declare_zenoh_many(&config, strategies.clone()) {
+								Ok(receivers) => {
+									if receiver_generation.load(Ordering::Acquire) != generation {
+										return Ok(());
+									}
+									for (index, (receiver, strategy)) in receivers.into_iter().zip(strategies).enumerate() {
+										let log_for_recv = debug_log.clone();
+										let motion_buffer_for_zenoh = Arc::clone(&motion_buffer);
+										let received_frames_counter = Arc::clone(&received_frames);
+										let receiver_generation = Arc::clone(&receiver_generation);
+										let key_expr_for_log = strategy.subscribe_key_expr();
+										eprintln!("[un-avatar-zenoh] subscribed key='{key_expr_for_log}'");
+										if log_for_recv.is_enabled() {
+											log_for_recv.line("unmotion_zenoh", format!("subscribed key={key_expr_for_log}"));
+										}
+										std::thread::Builder::new()
+											.name(format!("un-avatar-zenoh-apply-{index}"))
+											.spawn(move || {
+												const MAX_ZENOH_APPLY_BATCH: usize = 64;
+												let mut received = 0u64;
+												while receiver_generation.load(Ordering::Acquire) == generation {
+													let frames = receiver
+														.recv_timed_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
+													if frames.is_empty() {
+														continue;
+													}
+													let batch_len = frames.len();
+													received_frames_counter.fetch_add(batch_len as u64, Ordering::Relaxed);
+													let mut last_seq = None;
+													for item in frames {
+														last_seq = Some(item.frame.header.sequence);
+														motion_buffer_for_zenoh.push_frame_with_queue_time(item.frame, Some(item.decoded_at));
+													}
+													received = received.wrapping_add(1);
+													if log_for_recv.is_enabled() && (received == 1 || received.is_multiple_of(120)) {
+														log_for_recv.line(
+															"unmotion_zenoh",
+															format!(
+																"received batch#{received} frames={batch_len} last_seq={}",
+																last_seq.unwrap_or_default()
+															),
+														);
+													}
+												}
+												if log_for_recv.is_enabled() {
+													log_for_recv.line("unmotion_zenoh", "thread_stop generation_changed");
+												}
+											})
+											.map_err(|e| format!("spawn un-avatar-zenoh-apply thread failed: {e}"))?;
+									}
+									return Ok(());
+								}
+								Err(e) => {
+									eprintln!("[un-avatar-zenoh] declare failed: {e}");
+									if debug_log.is_enabled() {
+										debug_log.line("unmotion_zenoh", format!("declare_failed: {e}"));
+									}
+								}
 							}
-							std::thread::Builder::new()
-								.name(format!("un-avatar-zenoh-apply-{index}"))
-								.spawn(move || {
-									const MAX_ZENOH_APPLY_BATCH: usize = 64;
-									let mut received = 0u64;
-									while receiver_generation.load(Ordering::Acquire) == generation {
-										let frames =
-											receiver.recv_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
-										if frames.is_empty() {
-											continue;
-										}
-										let batch_len = frames.len();
-										received_frames_counter.fetch_add(batch_len as u64, Ordering::Relaxed);
-										let mut last_seq = None;
-										for frame in frames {
-											last_seq = Some(frame.header.sequence);
-											motion_buffer_for_zenoh.push_frame(frame);
-										}
-										received = received.wrapping_add(1);
-										if log_for_recv.is_enabled() && (received == 1 || received.is_multiple_of(120)) {
-											log_for_recv.line(
-												"unmotion_zenoh",
-												format!(
-													"received batch#{received} frames={batch_len} last_seq={}",
-													last_seq.unwrap_or_default()
-												),
-											);
-										}
-									}
-									if log_for_recv.is_enabled() {
-										log_for_recv.line("unmotion_zenoh", "thread_stop generation_changed");
-									}
-								})
-								.map_err(|e| format!("spawn un-avatar-zenoh-apply thread failed: {e}"))?;
+							// Starting before the sender must not leave a permanently dead receiver.
+							for _ in 0..10 {
+								if receiver_generation.load(Ordering::Acquire) != generation {
+									return Ok(());
+								}
+								std::thread::sleep(std::time::Duration::from_millis(50));
+							}
 						}
-					}
-					Err(e) => {
-						eprintln!("[un-avatar-zenoh] declare failed: {e}");
-						if self.debug_log.is_enabled() {
-							self.debug_log.line("unmotion_zenoh", format!("declare_failed: {e}"));
-						}
-					}
-				}
+						Ok(())
+					})
+					.map_err(|e| format!("spawn motion connection worker: {e}"))?;
 			} else {
 				eprintln!("un-avatar-renderer: UNMotion/Zenoh 受信は Humanoid とシーンがあるモデルでのみ有効です");
 			}
@@ -11526,7 +11502,7 @@ impl GpuState {
 		self.depth_texture = tex;
 		self.depth_view = view;
 		#[cfg(windows)]
-		if let (Some(ref mut sp), Some(ref lc)) = (&mut self.spout, &self.spout_launch) {
+		if let (Some(sp), Some(lc)) = (&mut self.spout, &self.spout_launch) {
 			sp.resize_to(&self.device, w, h, lc, self.config.format);
 		}
 		let (gw, gh) = self.render_pixel_dims();
@@ -11784,12 +11760,6 @@ impl GpuState {
 			}
 		}
 		let dynamics_step_ms = t_dynamics0.elapsed().as_secs_f32() * 1000.0;
-		let (gw, gh) = self.render_pixel_dims();
-		let t_globals0 = Instant::now();
-		if !wardrobe_transition_only {
-			self.write_frame_globals(gw, gh, true);
-		}
-		let frame_globals_ms = t_globals0.elapsed().as_secs_f32() * 1000.0;
 
 		let draw_scene = !wardrobe_transition_only && self.scene_meshes.as_ref().is_some_and(|m| !m.is_empty());
 		let use_spout = {
@@ -11860,9 +11830,21 @@ impl GpuState {
 		};
 
 		#[cfg(windows)]
-		if let (Some(ref mut sp), Some(ref lc)) = (&mut self.spout, &self.spout_launch) {
+		if let (Some(sp), Some(lc)) = (&mut self.spout, &self.spout_launch) {
 			sp.resize_to(&self.device, self.config.width, self.config.height, lc, self.config.format);
 		}
+		// Spout creation/resizing can change the size on this frame.
+		// Prepare MSAA/post targets only after the final output target is ready.
+		let (gw, gh) = if use_spout {
+			self.render_pixel_dims()
+		} else {
+			(self.config.width.max(1), self.config.height.max(1))
+		};
+		let t_globals0 = Instant::now();
+		if !wardrobe_transition_only {
+			self.write_frame_globals(gw, gh, true);
+		}
+		let frame_globals_ms = t_globals0.elapsed().as_secs_f32() * 1000.0;
 		let use_post_aa = matches!(self.aa, AaMode::Fxaa | AaMode::Smaa);
 		let use_avatar_outline =
 			self.avatar_outline.policy == AvatarOutlinePolicy::Override && self.avatar_outline.width.unwrap_or(0.003) > 0.0;
@@ -12964,6 +12946,86 @@ fn create_wardrobe_billboard_pipeline(
 #[cfg(test)]
 mod tests {
 	use std::collections::BTreeMap;
+
+	/// Opt-in CPU probe of the real loader and retarget path; never creates a window or GPU device.
+	#[test]
+	#[ignore = "requires UN_AVATAR_EXPRESSION_PROBE_MODEL and a local review model"]
+	fn loaded_model_expression_alias_strength_and_release() {
+		use un_motion_frame::{ExpressionSample, FaceMotion, SampleState, TrackingState, UNMotionFrame};
+		let path = std::env::var("UN_AVATAR_EXPRESSION_PROBE_MODEL").expect("explicit review model required");
+		let wardrobe = std::env::var("UN_AVATAR_EXPRESSION_PROBE_WARDROBE").ok();
+		let actions: Vec<String> = std::env::var("UN_AVATAR_EXPRESSION_PROBE_ACTIONS")
+			.map(|json| serde_json::from_str(&json).expect("action ID JSON array")).unwrap_or_default();
+		let mut document = crate::model_loader::load_document(
+			std::path::Path::new(&path), wardrobe.as_deref(), &actions, &BTreeMap::new(), false, true,
+		).expect("load review model");
+		let document = std::sync::Arc::get_mut(&mut document).expect("unique review document");
+		let preset_names: Vec<_> = document.runtime_model().expression_catalog().map(|catalog|
+			catalog.presets.iter().map(|preset| preset.name.clone()).collect()).unwrap_or_default();
+		eprintln!("CPU expression probe: presets={}, smile={}, mouth={}", preset_names.len(),
+			preset_names.iter().any(|name| name == "eye_smile1"),
+			preset_names.iter().any(|name| name == "mouth_e3_yaeba_left"));
+		for (sequence, value) in [0.25, 0.75, 0.0].into_iter().enumerate() {
+			let mut frame = UNMotionFrame::new(sequence as u64);
+			frame.face = Some(FaceMotion {
+				tracking_state: TrackingState::Valid, confidence: 1.0, head: None,
+				expressions: [("EyeSmile1", value), ("mouth_e3_yaeba_left", value), ("JawOpen", 0.4),
+					("EyeBlinkLeft", 0.3), ("EyeBlinkRight", 0.2)].into_iter().map(|(name, value)| ExpressionSample {
+					name: name.into(), value, confidence: 1.0, source_index: None, state: SampleState::Valid,
+				}).collect(),
+			});
+			un_avatar_skeleton::apply_un_motion_frame_to_document(document, &frame, Default::default());
+			let runtime = document.runtime_model();
+			let weights = runtime.expression_weights().expect("expression weights");
+			let expected = [("eye_smile1", value), ("mouth_e3_yaeba_left", value), ("JawOpen", 0.4),
+				("EyeBlinkLeft", 0.3), ("EyeBlinkRight", 0.2)];
+			for (name, expected_value) in expected {
+				assert_eq!(weights.preset_weights.get(name), Some(&expected_value), "loaded preset {name}, sequence {sequence}");
+			}
+			let scene = runtime.scene_expression_catalog().expect("model scene and catalog");
+			let mut checked = std::collections::BTreeSet::new();
+			for (mesh_index, primitives) in scene.scene.meshes.iter().enumerate() {
+				for (primitive_index, primitive) in primitives.iter().enumerate() {
+					let values = un_avatar_core::morph_weights_for_primitive(
+						primitive, scene.expression_catalog, Some(weights), mesh_index, primitive_index);
+					for (name, expected_value) in expected {
+						if let Some(index) = primitive.morph_target_names.iter().position(|candidate| candidate == name) {
+							assert!((values[index] - expected_value).abs() < 1e-6,
+								"primitive morph {name}, sequence {sequence}: {}", values[index]);
+							checked.insert(name);
+						}
+					}
+				}
+			}
+			assert_eq!(checked.len(), expected.len(), "all five channels must reach real morph targets");
+		}
+	}
+
+	#[test]
+	fn expression_trace_preserves_alias_release_and_reports_truncation() {
+		use un_motion_frame::{ExpressionSample, FaceMotion, SampleState, UNMotionFrame};
+		let mut frame = UNMotionFrame::new(1);
+		let expression = |name: &str, value| ExpressionSample {
+			name: name.into(), value, confidence: 1.0, source_index: Some(0), state: SampleState::Valid,
+		};
+		frame.face = Some(FaceMotion {
+			expressions: vec![expression("EyeSmile1", 0.75), expression("eye_smile1", 0.0)],
+			tracking_state: un_motion_frame::TrackingState::Valid,
+			confidence: 1.0,
+			head: None,
+		});
+		let sample = super::motion_trace_sample(&frame, 123_000_000);
+		let json = serde_json::to_value(sample).unwrap();
+		assert_eq!(json["expression_count"], 2);
+		assert_eq!(json["expressions"][0]["name"], "EyeSmile1");
+		assert_eq!(json["expressions"][0]["value"], 0.75);
+		assert_eq!(json["expressions"][1]["name"], "eye_smile1");
+		assert_eq!(json["expressions"][1]["value"], 0.0);
+		frame.face.as_mut().unwrap().expressions.resize(130, expression("extra", 0.0));
+		let bounded = super::motion_trace_sample(&frame, 0);
+		assert_eq!(bounded.expression_count, 130);
+		assert_eq!(bounded.expressions.len(), 128);
+	}
 
 	use super::{
 		accumulate_spatial_surface_seams, animator_morph_override_parameter_dependencies, animator_morph_override_parameter_values,

@@ -119,6 +119,7 @@ export type RuntimeTableStatusData = RuntimeStartupStatusLabelData &
 
 export type RuntimeStatusLabels = {
 	pending: string;
+	stopping?: string;
 	connected: string;
 	crashed?: string;
 	idle?: string;
@@ -219,6 +220,7 @@ export function rendererHealthLabel(
 	status: RendererHealthStatusData | null,
 	labels: RuntimeStatusLabels
 ): string {
+	if (renderer.state === "Stopping") return labels.stopping ?? "Stopping";
 	const kind = rendererHealthKind(renderer, status);
 	if (kind === "error") return labels.crashed ?? "Crashed";
 	if (kind === "idle") return labels.idle ?? "Idle";

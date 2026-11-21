@@ -384,6 +384,7 @@ small,
 }
 
 .status-strip {
+	flex-wrap: wrap;
 	min-width: 0;
 	color: var(--muted);
 	font-size: 12px;
@@ -397,6 +398,20 @@ small,
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+/* Keep counts legible and recovery instructions readable, including long paths. */
+.status-strip > span:not(.status-message) {
+	flex-shrink: 0;
+}
+
+.status-strip .status-message {
+	display: block;
+	flex: 1 1 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	max-height: 8em;
+	overflow: auto;
 }
 
 .status-strip .warn {
@@ -1307,6 +1322,16 @@ small,
 	flex: 0 0 auto;
 }
 
+.profile-save-recovery {
+	flex: 0 0 auto;
+	max-height: 30vh;
+	overflow: auto;
+	padding: 12px;
+	overflow-wrap: anywhere;
+}
+
+.profile-save-recovery > div { padding-block: 8px; }
+
 .panel {
 	min-height: 0;
 	min-width: 0;
@@ -1781,6 +1806,18 @@ td small {
 	background:
 		linear-gradient(90deg, color-mix(in srgb, var(--accent-cool) 8%, transparent), transparent 52%),
 		color-mix(in srgb, var(--panel-subtle) 56%, transparent);
+}
+
+/* Proposal only: a single section navigator, with the original navigator at narrow widths. */
+@media (min-width: 1181px) {
+	.shell.preview-feature-outline .profile-section-nav {
+		display: none;
+	}
+}
+@media (max-width: 1180px) {
+	.shell.preview-feature-outline .preview-avatar-feature-index {
+		display: none;
+	}
 }
 
 .profile-section-nav button[data-section="identity"],
@@ -3419,7 +3456,7 @@ dd {
 
 .range-number-field {
 	display: grid;
-	grid-template-columns: minmax(120px, 1fr) 76px;
+	grid-template-columns: minmax(0, 1fr) 76px;
 	align-items: center;
 	gap: 8px;
 	min-width: 0;
@@ -3731,6 +3768,7 @@ dd {
 
 .setting-editor {
 	display: grid;
+	grid-template-columns: minmax(0, 1fr);
 	gap: 14px;
 	flex: 1 1 auto;
 	min-height: 0;
@@ -3740,6 +3778,7 @@ dd {
 
 .editor-section {
 	order: 10;
+	min-width: 0;
 	display: grid;
 	gap: 12px;
 	padding: 13px;
@@ -3831,6 +3870,8 @@ dd {
 
 .wardrobe-profile-panel {
 	grid-column: 1 / -1;
+	container: wardrobe-editor / inline-size;
+	min-width: 0;
 	display: grid;
 	gap: 8px;
 	padding: 10px 12px;
@@ -3874,6 +3915,8 @@ dd {
 
 .wardrobe-set-list {
 	display: grid;
+	grid-auto-rows: max-content;
+	align-content: start;
 	gap: 6px;
 	max-height: 260px;
 	overflow: auto;
@@ -3916,6 +3959,28 @@ dd {
 
 .wardrobe-set-label strong {
 	font-size: 13px;
+}
+
+/* The profile list stays visible; adapt to the editor width, not the window. */
+@container wardrobe-editor (max-width: 760px) {
+	.wardrobe-set-row {
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+	.wardrobe-set-row > .wardrobe-shortcut-field,
+	.wardrobe-set-row > .wardrobe-midi-binding {
+		grid-column: 1 / -1;
+		min-width: 0;
+	}
+	.wardrobe-set-row > .wardrobe-midi-binding {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+	}
+	.wardrobe-set-row > .wardrobe-midi-binding > span,
+	.wardrobe-set-row > .wardrobe-midi-binding > input:not([type]) {
+		grid-column: 1 / -1;
+	}
+}
+@container wardrobe-editor (max-width: 420px) {
+	.wardrobe-transition-settings { grid-template-columns: minmax(0, 1fr); }
 }
 
 .wardrobe-set-label small {
@@ -4081,6 +4146,8 @@ dd {
 
 .animator-action-list {
 	display: grid;
+	grid-auto-rows: max-content;
+	align-content: start;
 	gap: 6px;
 	max-height: 420px;
 	overflow: auto;
@@ -5034,7 +5101,8 @@ dd {
 .camera-diagram {
 	grid-column: 1 / -1;
 	display: grid;
-	grid-template-columns: repeat(2, minmax(180px, 240px)) minmax(0, 1fr);
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+	min-width: 0;
 	gap: 12px;
 	align-items: center;
 	padding: 10px;
@@ -5474,6 +5542,7 @@ textarea {
 
 .vrm-metadata-dialog {
 	display: grid;
+	grid-template-rows: minmax(0, 1fr);
 	grid-template-columns: minmax(300px, 0.46fr) minmax(0, 1fr);
 	width: min(1180px, 100%);
 	max-height: min(780px, calc(100vh - 48px));
@@ -5541,11 +5610,13 @@ textarea {
 }
 
 .vrm-metadata-body {
-	display: grid;
-	grid-template-rows: auto minmax(0, 1fr) auto;
+	display: flex;
+	flex-direction: column;
 	min-width: 0;
 	min-height: 0;
 }
+
+.vrm-metadata-body > :not(.vrm-metadata-scroll) { flex-shrink: 0; }
 
 .vrm-metadata-header {
 	padding: 22px 24px 12px;
@@ -5574,6 +5645,7 @@ textarea {
 }
 
 .vrm-metadata-scroll {
+	flex: 1 1 auto;
 	display: grid;
 	gap: 14px;
 	min-height: 0;
@@ -6015,7 +6087,13 @@ textarea {
 	}
 
 	.status-strip {
-		display: none;
+		grid-column: 1 / -1;
+		grid-row: 2;
+	}
+
+	.header-actions {
+		grid-column: 2;
+		grid-row: 1;
 	}
 
 	.profile-summary-grid {
@@ -6305,4 +6383,35 @@ pre {
 	border-radius: 6px;
 	background: var(--panel-subtle);
 	overflow: auto;
+}
+
+/* Keep recovery alongside settings within the workspace's content column. */
+.app-settings-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.app-settings-workspace > .profile-save-recovery { flex: 0 0 auto; max-height: 35vh; overflow: auto; }
+.app-settings-workspace > .app-settings-view { flex: 1 1 0; min-height: 0; }
+
+@media (max-width: 960px) {
+  .profile-window-section { grid-template-columns: minmax(0, 1fr); }
+}
+
+.wardrobe-midi-binding > .midi-clear-button {
+	grid-column: 1 / -1;
+	justify-self: end;
+}
+
+.animator-profile-panel { container: animator-editor / inline-size; min-width: 0; }
+@container animator-editor (max-width: 760px) {
+ .animator-action-row { grid-template-columns: minmax(0, 1fr) auto; }
+ .animator-action-value, .animator-binding-row { grid-column: 1 / -1; }
+ .animator-binding-row { grid-template-columns: minmax(0, 1fr); }
+ .wardrobe-midi-binding { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
+ .wardrobe-midi-binding > span, .wardrobe-midi-binding > input:not([type]) { grid-column: 1 / -1; }
+}
+
+@container animator-editor (max-width: 420px) {
+ .animator-search-row { grid-template-columns: minmax(0, 1fr); }
+ .animator-transition-row { grid-template-columns: minmax(0, 1fr) 72px; }
+ .animator-transition-row > select { grid-column: 1 / -1; }
+ .animator-transition-row input[type="range"] { min-width: 0; width: 100%; }
+ .animator-profile-browser, .animator-selected-panel, .animator-action-list { min-width: 0; }
 }

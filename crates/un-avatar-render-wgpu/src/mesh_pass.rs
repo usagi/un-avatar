@@ -4764,11 +4764,11 @@ fn upload_payload_texture_slot(
 		height,
 	});
 	let upload_start = Instant::now();
-	if let Some(view) = slot.ensure_uploaded(device, queue, None, gpu_texture_compression) {
+	match slot.ensure_uploaded(device, queue, None, gpu_texture_compression) { Some(view) => {
 		image_views.push(view);
-	} else {
+	} _ => {
 		image_views.push(transparent_black_view.clone());
-	}
+	}}
 	slot.set_upload(reload_upload);
 	(slot, upload_start.elapsed())
 }
@@ -10326,11 +10326,11 @@ impl SceneMeshes {
 					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
 					if image_resident {
 						let upload_start = Instant::now();
-						if let Some(view) = slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
+						match slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) { Some(view) => {
 							image_views.push(view);
-						} else {
+						} _ => {
 							image_views.push(transparent_black_view.clone());
-						}
+						}}
 						image_prepare_timings.upload += upload_start.elapsed();
 						slot.set_upload(scene_image_texture_lazy_upload(
 							image_index,

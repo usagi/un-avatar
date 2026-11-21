@@ -9,7 +9,7 @@
 	export let showStoppedRenderers = false;
 	export let emptySummary: string;
 	export let statusForRenderer: (rendererId: number) => RuntimeTableStatusData | null;
-	export let iconSrcForManifest: (manifestPath: string | null) => string;
+	export let iconSrcForRenderer: (rendererId: number) => string;
 	export let onSelectRenderer: (rendererId: number) => void;
 	export let onOpenRendererLog: (rendererId: number) => void;
 </script>
@@ -36,7 +36,7 @@
 					{renderer}
 					{selectedRendererId}
 					status={statusForRenderer(renderer.id)}
-					iconSrc={iconSrcForManifest(renderer.manifest_path)}
+					iconSrc={iconSrcForRenderer(renderer.id)}
 					{onSelectRenderer}
 					{onOpenRendererLog}
 				/>
@@ -53,3 +53,9 @@
 		</tbody>
 	</table>
 </section>
+
+<style>
+	.table-panel { overflow-x: auto; }
+	.renderer-process-table { min-width: 820px; }
+	.process-col-profile { width: 12rem; }
+</style>

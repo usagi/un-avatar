@@ -28,6 +28,7 @@ export type DynamicsCategoryOverrideSetting = {
 };
 
 export type DynamicsGroupOverrideSetting = {
+	drag_scale?: number;
 	source_id: string;
 	solver?: string;
 	damping_half_life_ms?: number;
@@ -42,6 +43,7 @@ export type DynamicsGroupOverrideSetting = {
 };
 
 export type DynamicsMatchOverrideSetting = {
+	drag_scale?: number;
 	name?: string;
 	source_id?: string;
 	source_id_contains?: string[];
@@ -292,3 +294,12 @@ export function dynamicsPresetLabel(category: string, preset: string, translate:
 	const translated = translate(key);
 	return translated === key ? preset : translated;
 }
+
+export const DYNAMICS_DRAG_FIELD = {
+	key: "drag_scale",
+	labelKey: "profiles.editor.dynamics_drag_scale",
+	hintKey: "profiles.editor.dynamics_drag_scale_hint",
+	min: 0,
+	max: 10,
+	step: 0.05,
+} as const;

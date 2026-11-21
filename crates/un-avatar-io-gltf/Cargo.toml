@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.100"
 name = "un-avatar-io-gltf"
 description = "UN Avatar — glTF 2.0 import with static mesh + skinning (Phase 1.3–1.4 bootstrap)"
 version.workspace = true

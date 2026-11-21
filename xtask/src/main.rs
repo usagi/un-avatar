@@ -6,7 +6,7 @@ use std::{
 	io::{BufReader, BufWriter, Read, Write},
 	path::{Path, PathBuf},
 	process::{self, Command, Stdio},
-	time::{Duration, Instant, SystemTime},
+	time::{Duration, Instant},
 };
 
 use glam::{EulerRot, Mat4, Quat, Vec3};
@@ -690,70 +690,19 @@ fn normalize_profile_key(value: &str) -> String {
 	value.trim().to_ascii_lowercase().replace([' ', '_'], "-")
 }
 
-fn newest_mtime(path: &Path, skip_dir_names: &[&str]) -> Option<SystemTime> {
-	let metadata = fs::metadata(path).ok()?;
-	if metadata.is_file() {
-		return metadata.modified().ok();
-	}
-	if !metadata.is_dir() {
-		return None;
-	}
-	let mut newest = metadata.modified().ok();
-	let entries = fs::read_dir(path).ok()?;
-	for entry in entries.flatten() {
-		let child = entry.path();
-		if child.is_dir() {
-			if child
-				.file_name()
-				.and_then(|name| name.to_str())
-				.is_some_and(|name| skip_dir_names.iter().any(|skip| *skip == name))
-			{
-				continue;
-			}
-		}
-		if let Some(time) = newest_mtime(&child, skip_dir_names) {
-			if newest.is_none_or(|current| time > current) {
-				newest = Some(time);
-			}
-		}
-	}
-	newest
-}
-
-fn supervisor_frontend_needs_build(frontend_dir: &Path) -> bool {
-	let dist = frontend_dir.join("dist");
-	let Some(dist_mtime) = newest_mtime(&dist, &[]) else {
-		return true;
-	};
-	let inputs = [
-		"src",
-		"public",
-		"index.html",
-		"package.json",
-		"package-lock.json",
-		"svelte.config.js",
-		"tsconfig.json",
-		"vite.config.ts",
-	];
-	inputs
-		.iter()
-		.filter_map(|input| newest_mtime(&frontend_dir.join(input), &["node_modules", "dist"]))
-		.any(|input_mtime| input_mtime > dist_mtime)
+fn supervisor_frontend_build_command(repo: &Path) -> Command {
+	let mut command = Command::new(npm_exe());
+	command.args(["run", "build"])
+		.env("VITE_UN_DESIGN_PREVIEW", "0")
+		.current_dir(repo.join("apps").join("un-avatar-supervisor"))
+		.stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+	command
 }
 
 fn run_supervisor_frontend_build(repo: &Path) -> bool {
-	let frontend_dir = repo.join("apps").join("un-avatar-supervisor");
-	if !supervisor_frontend_needs_build(&frontend_dir) {
-		eprintln!("frontend: dist is fresh; skip npm run build");
-		return true;
-	}
-	Command::new(npm_exe())
-		.args(["run", "build"])
-		.current_dir(frontend_dir)
-		.stdin(Stdio::inherit())
-		.stdout(Stdio::inherit())
-		.stderr(Stdio::inherit())
-		.status()
+	// Timestamps cannot identify a design-preview build or changes in shared
+	// components outside this frontend directory. Always generate normal UI.
+	supervisor_frontend_build_command(repo).status()
 		.map(|status| status.success())
 		.unwrap_or_else(|e| {
 			eprintln!("package: npm run build failed to start: {e}");
@@ -3686,10 +3635,6 @@ fn exe_name(name: &str) -> String {
 	}
 }
 
-fn release_exe(repo: &Path, name: &str) -> PathBuf {
-	repo.join("target").join("release").join(exe_name(name))
-}
-
 fn reset_package_dir(repo: &Path) -> bool {
 	let package = spout2_package_dir(repo);
 	if package.exists() {
@@ -3705,8 +3650,8 @@ fn reset_package_dir(repo: &Path) -> bool {
 	true
 }
 
-fn stage_exe(repo: &Path, bin_name: &str, dst_dir: &Path, dst_name: &str) -> bool {
-	let src = release_exe(repo, bin_name);
+fn stage_exe(target_dir: &Path, bin_name: &str, dst_dir: &Path, dst_name: &str) -> bool {
+	let src = target_dir.join("release").join(exe_name(bin_name));
 	if !src.is_file() {
 		eprintln!("package: executable not found: {}", src.display());
 		return false;
@@ -3714,7 +3659,13 @@ fn stage_exe(repo: &Path, bin_name: &str, dst_dir: &Path, dst_name: &str) -> boo
 	copy_file_to(&src, &dst_dir.join(exe_name(dst_name)))
 }
 
+// Explicit allowlist: never copy arbitrary local/user profiles into a public package.
+const RELEASE_PROFILE_TEMPLATES: &[&str] = &["profiles/main.toml", "profiles/debug.toml"];
+
 const RELEASE_PACKAGE_DOCS: &[&str] = &[
+	"assets/brand/un-avatar-artwork-renderer.png",
+	"assets/brand/un-avatar-artwork-supervisor.png",
+	"docs/update-and-recovery.md",
 	"docs/v2-getting-started.md",
 	"docs/README.md",
 	"docs/v2-roadmap.md",
@@ -3745,7 +3696,7 @@ fn stage_package_docs(repo: &Path) -> bool {
 		ok &= copy_file_to(&third_party, &package.join("THIRD_PARTY_NOTICES.md"));
 		ok &= copy_file_to(&third_party, &package.join("LICENSES").join("third-party-licenses.md"));
 	}
-	for relative in RELEASE_PACKAGE_DOCS {
+	for relative in RELEASE_PACKAGE_DOCS.iter().chain(RELEASE_PROFILE_TEMPLATES) {
 		let source = repo.join(Path::new(relative));
 		if source.is_file() {
 			ok &= copy_file_to(&source, &package.join(Path::new(relative)));
@@ -3924,24 +3875,23 @@ fn add_zip_entry(writer: &mut zip::ZipWriter<BufWriter<fs::File>>, staging_root:
 }
 
 fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) -> bool {
+	if !staging_root.join(package_name).is_dir() {
+		eprintln!("release-package: package directory missing");
+		return false;
+	}
 	if let Some(parent) = zip_path.parent() {
 		if let Err(err) = fs::create_dir_all(parent) {
 			eprintln!("release-package: mkdir {}: {err}", parent.display());
 			return false;
 		}
 	}
-	if zip_path.exists() {
-		if let Err(err) = fs::remove_file(zip_path) {
-			eprintln!("release-package: remove {}: {err}", zip_path.display());
-			return false;
-		}
-	}
-	let file = match fs::File::create(zip_path) {
+	let temporary = match tempfile::NamedTempFile::new_in(zip_path.parent().unwrap_or(Path::new("."))) {
 		Ok(file) => file,
-		Err(err) => {
-			eprintln!("release-package: create {}: {err}", zip_path.display());
-			return false;
-		}
+		Err(error) => { eprintln!("release-package: temporary ZIP: {error}"); return false; }
+	};
+	let file = match temporary.reopen() {
+		Ok(file) => file,
+		Err(error) => { eprintln!("release-package: open temporary ZIP: {error}"); return false; }
 	};
 	let mut writer = zip::ZipWriter::new(BufWriter::new(file));
 	let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -3949,9 +3899,16 @@ fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) 
 	if !add_zip_entry(&mut writer, staging_root, &package_dir, options) {
 		return false;
 	}
-	if let Err(err) = writer.finish() {
-		eprintln!("release-package: finalize {}: {err}", zip_path.display());
-		return false;
+	let mut file=match writer.finish() {
+		Ok(file)=>file,
+		Err(error)=>{eprintln!("release-package: finalize ZIP: {error}");return false;}
+	};
+	if let Err(error)=file.flush().and_then(|()|file.get_ref().sync_all()) {
+		eprintln!("release-package: flush ZIP: {error}");return false;
+	}
+	drop(file);
+	if let Err(error)=temporary.persist(zip_path) {
+		eprintln!("release-package: replace ZIP: {}",error.error);return false;
 	}
 	true
 }
@@ -3965,7 +3922,7 @@ fn required_release_zip_entries(package_name: &str, require_spout2: bool) -> Vec
 		format!("{root}/THIRD_PARTY_NOTICES.md"),
 		format!("{root}/LICENSES/third-party-licenses.md"),
 	];
-	entries.extend(RELEASE_PACKAGE_DOCS.iter().map(|relative| format!("{root}/{relative}")));
+	entries.extend(RELEASE_PACKAGE_DOCS.iter().chain(RELEASE_PROFILE_TEMPLATES).map(|relative| format!("{root}/{relative}")));
 	entries.extend([
 		format!("{root}/{}", exe_name("un-avatar-renderer")),
 		format!("{root}/{}", exe_name("un-avatar-supervisor")),
@@ -4473,20 +4430,64 @@ fn run_spout2(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	build_spout2(repo) && stage_spout2(repo)
 }
 
-fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+const NORMAL_PACKAGE_RECEIPT: &str = "un-avatar-build.json";
+
+fn normal_package_artifacts(package: &Path) -> Result<serde_json::Value, String> {
+	let mut files=serde_json::Map::new();
+	for binary in ["un-avatar-supervisor", "un-avatar-renderer"] {
+		let name=exe_name(binary);
+		let hash=file_sha256(&package.join(&name)).ok_or_else(||format!("missing or unreadable package artifact: {name}"))?;
+		files.insert(name,serde_json::Value::String(hash));
+	}
+	Ok(serde_json::Value::Object(files))
+}
+
+fn record_normal_package(package: &Path) -> Result<(), String> {
+	let receipt=serde_json::json!({"schema_version":1,"ui_mode":"normal","artifacts":normal_package_artifacts(package)?});
+	let bytes=serde_json::to_vec_pretty(&receipt).map_err(|error|error.to_string())?;
+	fs::write(package.join(NORMAL_PACKAGE_RECEIPT),bytes).map_err(|error|error.to_string())
+}
+
+fn verify_normal_package(package: &Path) -> Result<(), String> {
+	let bytes=fs::read(package.join(NORMAL_PACKAGE_RECEIPT)).map_err(|error|format!("normal UI build receipt missing: {error}; run cargo xtask package"))?;
+	let receipt:serde_json::Value=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
+	if receipt["schema_version"]!=1 || receipt["ui_mode"]!="normal" || receipt["artifacts"]!=normal_package_artifacts(package)? {
+		return Err("package binaries differ from the normal UI build receipt; run cargo xtask package".into());
+	}
+	Ok(())
+}
+
+fn parse_package_options(repo: &Path, args: impl Iterator<Item = String>) -> Result<(bool, PathBuf), String> {
 	let mut skip_spout2 = false;
-	for arg in args {
+	let mut target_dir = repo.join("target");
+	let mut args = args;
+	while let Some(arg) = args.next() {
 		match arg.as_str() {
 			"--skip-spout2" => skip_spout2 = true,
-			"help" | "--help" | "-h" => {
-				print_package_usage();
-				return true;
+			"--target-dir" => {
+				let value = args.next().filter(|s| !s.is_empty() && !s.starts_with("--")).ok_or("--target-dir requires a path")?;
+				let path = PathBuf::from(value);
+				target_dir = if path.is_absolute() {path} else {repo.join(path)};
 			}
-			other => {
-				eprintln!("package: 不明な option: {other}");
-				print_package_usage();
-				return false;
-			}
+			other => return Err(format!("unknown package option: {other}")),
+		}
+	}
+	Ok((skip_spout2, target_dir))
+}
+
+fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
+	let args: Vec<_> = args.collect();
+	if args.iter().any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h")) {
+		print_package_usage(); return true;
+	}
+	let (skip_spout2, target_dir) = match parse_package_options(repo, args.into_iter()) {
+		Ok(options) => options,
+		Err(error) => {eprintln!("package: {error}"); return false;}
+	};
+	for key in ["TAURI_CONFIG", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET"] {
+		if env::var_os(key).is_some() {
+			eprintln!("package: {key} overrides the standard frontend/output path; clear it before packaging");
+			return false;
 		}
 	}
 	if !reset_package_dir(repo) {
@@ -4499,21 +4500,22 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 		return false;
 	}
 
+	let target_text = target_dir.to_string_lossy().into_owned();
 	let build_ok = if skip_spout2 {
 		run_cargo_with_env(
 			repo,
-			&["build", "--release", "-p", "un-avatar-supervisor", "-p", "un-avatar-render-wgpu"],
+			&["build", "--release", "--target-dir", &target_text, "-p", "un-avatar-supervisor", "-p", "un-avatar-render-wgpu"],
 			&[("UN_AVATAR_FRONTEND_PREBUILT", "1")],
 		)
 		.success()
 	} else {
 		run_cargo_with_spout_env(
 			repo,
-			&["build", "--release", "-p", "un-avatar-supervisor"],
+			&["build", "--release", "--target-dir", &target_text, "-p", "un-avatar-supervisor"],
 			&[("UN_AVATAR_FRONTEND_PREBUILT", "1")],
 		) && run_cargo_with_spout_env(
 			repo,
-			&["build", "--release", "-p", "un-avatar-render-wgpu", "--features", "spout-sdk"],
+			&["build", "--release", "--target-dir", &target_text, "-p", "un-avatar-render-wgpu", "--features", "spout-sdk"],
 			&[],
 		)
 	};
@@ -4522,11 +4524,15 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	}
 
 	let package = spout2_package_dir(repo);
-	let ok = stage_exe(repo, "un-avatar-supervisor", &package, "un-avatar-supervisor")
-		&& stage_exe(repo, "un-avatar-renderer", &package, "un-avatar-renderer")
+	let ok = stage_exe(&target_dir, "un-avatar-supervisor", &package, "un-avatar-supervisor")
+		&& stage_exe(&target_dir, "un-avatar-renderer", &package, "un-avatar-renderer")
 		&& stage_package_docs(repo)
 		&& stage_unity_exporter_package(repo, &package.join("unity").join(UNITY_EXPORTER_PACKAGE));
 	if ok {
+		if let Err(error)=record_normal_package(&package) {
+			eprintln!("package: {error}");
+			return false;
+		}
 		println!("package: staged {}", package.display());
 	}
 	ok
@@ -4535,6 +4541,7 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let mut version = None;
 	let mut output_dir = None;
+	let mut target_dir = None;
 	let mut skip_build = false;
 	let mut skip_spout2 = false;
 	let mut keep_staging = false;
@@ -4554,6 +4561,10 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 					return false;
 				};
 				output_dir = Some(PathBuf::from(value));
+			}
+			"--target-dir" => {
+				let Some(value) = iter.next().filter(|s| !s.is_empty() && !s.starts_with("--")) else {eprintln!("release-package: --target-dir requires a path"); return false;};
+				target_dir = Some(value);
 			}
 			"--skip-build" => skip_build = true,
 			"--skip-spout2" => skip_spout2 = true,
@@ -4575,11 +4586,12 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 		return false;
 	};
 	if !skip_build {
-		let package_args = if skip_spout2 {
+		let mut package_args = if skip_spout2 {
 			vec!["--skip-spout2".to_string()]
 		} else {
 			Vec::new()
 		};
+		if let Some(target) = target_dir { package_args.extend(["--target-dir".into(), target]); }
 		if !run_package(repo, package_args.into_iter()) {
 			return false;
 		}
@@ -4591,6 +4603,10 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 			"release-package: package staging directory missing: {}\n先に cargo xtask package を実行するか、--skip-build を外してください。",
 			source_package.display()
 		);
+		return false;
+	}
+	if let Err(error)=verify_normal_package(&source_package) {
+		eprintln!("release-package: {error}");
 		return false;
 	}
 	if !run_package_render_smoke_with_options(repo, PackageRenderSmokeOptions::default()) {
@@ -5117,7 +5133,7 @@ fn print_spout2_usage() {
 
 fn print_package_usage() {
 	eprintln!(
-		"cargo xtask package [--skip-spout2]\n\
+		"cargo xtask package [--skip-spout2] [--target-dir <path>]\n\
 	\n\
 	Releaseビルドを行い、target/package/un-avatar に最小配布レイアウトを作る。\n\
 	Unity exporter package は target/package/un-avatar/unity/ に同梱する。\n\
@@ -5156,7 +5172,7 @@ fn print_unity_fpng_usage() {
 
 fn print_release_package_usage() {
 	eprintln!(
-		"cargo xtask release-package [--version <version>] [--output-dir <path>] [--skip-build] [--skip-spout2] [--keep-staging]\n\
+		"cargo xtask release-package [--target-dir <path>] [--version <version>] [--output-dir <path>] [--skip-build] [--skip-spout2] [--keep-staging]\n\
 	\n\
 	配布ディレクトリを作成し、release-packages/un-avatar-<version>.zip と .sha256.txt sidecar を生成する。\n\
 	packaged Renderer の windowless startup smoke と release zip の必須 entry 検査も実行する。\n\
@@ -6380,6 +6396,69 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn package_build_root_is_explicit_and_defaults_compatibly() {
+		let repo = std::path::Path::new("workspace");
+		assert_eq!(parse_package_options(repo, std::iter::empty()).unwrap(), (false, repo.join("target")));
+		assert_eq!(parse_package_options(repo, ["--target-dir", "target/candidate", "--skip-spout2"].into_iter().map(String::from)).unwrap(), (true, repo.join("target/candidate")));
+		assert!(parse_package_options(repo, ["--target-dir"].into_iter().map(String::from)).is_err());
+		assert!(parse_package_options(repo, ["--target-dir", "--skip-spout2"].into_iter().map(String::from)).is_err());
+	}
+
+	#[test]
+	fn release_archive_failure_preserves_previous_zip() {
+		let root=tempfile::tempdir().unwrap();
+		let output=root.path().join("release.zip");
+		std::fs::write(&output,b"previous package").unwrap();
+		assert!(!super::create_release_zip(root.path(),"package",&output));
+		assert_eq!(std::fs::read(&output).unwrap(),b"previous package");
+		let staging=root.path().join("package");
+		std::fs::create_dir(&staging).unwrap();
+		std::fs::write(staging.join("README.txt"),b"new package").unwrap();
+		#[cfg(windows)] {
+			use std::os::windows::fs::OpenOptionsExt;
+			let locked=std::fs::OpenOptions::new().read(true).share_mode(0).open(staging.join("README.txt")).unwrap();
+			assert!(!super::create_release_zip(root.path(),"package",&output));
+			assert_eq!(std::fs::read(&output).unwrap(),b"previous package");
+			drop(locked);
+		}
+		assert!(super::create_release_zip(root.path(),"package",&output));
+		let mut archive=zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+		let mut text=String::new();
+		std::io::Read::read_to_string(&mut archive.by_name("package/README.txt").unwrap(),&mut text).unwrap();
+		assert_eq!(text,"new package");
+	}
+	#[test]
+	fn package_receipt_rejects_missing_changed_and_preview_artifacts() {
+		let root=std::env::temp_dir().join(format!("una-receipt-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+		std::fs::create_dir(&root).unwrap();
+		for name in ["un-avatar-supervisor","un-avatar-renderer"] {
+			std::fs::write(root.join(super::exe_name(name)),name).unwrap();
+		}
+		assert!(super::verify_normal_package(&root).is_err());
+		super::record_normal_package(&root).unwrap();
+		super::verify_normal_package(&root).unwrap();
+		let receipt_path=root.join(super::NORMAL_PACKAGE_RECEIPT);
+		let original=std::fs::read(&receipt_path).unwrap();
+		let mut preview:serde_json::Value=serde_json::from_slice(&original).unwrap();
+		preview["ui_mode"]="preview".into();
+		std::fs::write(&receipt_path,serde_json::to_vec(&preview).unwrap()).unwrap();
+		assert!(super::verify_normal_package(&root).is_err());
+		std::fs::write(&receipt_path,&original).unwrap();
+		let renderer=root.join(super::exe_name("un-avatar-renderer"));
+		std::fs::write(&renderer,"different renderer").unwrap();
+		assert!(super::verify_normal_package(&root).is_err());
+		std::fs::remove_file(renderer).unwrap();
+		assert!(super::verify_normal_package(&root).is_err());
+		std::fs::remove_dir_all(root).unwrap();
+	}
+	#[test]
+	fn native_build_explicitly_selects_normal_frontend() {
+		let command = super::supervisor_frontend_build_command(std::path::Path::new("repo"));
+		assert!(command.get_envs().any(|(key,value)| key == "VITE_UN_DESIGN_PREVIEW" && value == Some(std::ffi::OsStr::new("0"))));
+		assert_eq!(command.get_args().collect::<Vec<_>>(), ["run", "build"]);
+		assert_eq!(command.get_current_dir(), Some(std::path::Path::new("repo/apps/un-avatar-supervisor")));
+	}
 	use super::*;
 
 	#[test]
@@ -7193,6 +7272,15 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 		assert!(verify_release_zip_entries(&zip_path, package_name, true));
 		assert!(verify_release_zip_entries(&zip_path, package_name, false));
 		assert!(verify_release_zip_clean_unpack(&zip_path, package_name, true));
+
+		// A package without its initial templates must fail, even if both EXEs exist.
+		let template = package.join("profiles/main.toml");
+		let template_bytes = fs::read(&template).expect("packaged main template");
+		fs::remove_file(&template).expect("remove main template");
+		let missing_template_zip = dir.join("package-missing-template.zip");
+		assert!(create_release_zip(&staging_root, package_name, &missing_template_zip));
+		assert!(release_zip_missing_entries(&missing_template_zip, package_name, true).unwrap().contains(&format!("{package_name}/profiles/main.toml")));
+		fs::write(&template, template_bytes).expect("restore main template");
 
 		let no_spout_root = dir.join("staging-no-spout");
 		let no_spout_package = no_spout_root.join(package_name);

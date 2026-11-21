@@ -20,6 +20,7 @@
 	<span class={`runtime-chip-health-${health}`}
 		>{rendererHealthLabel(renderer, runtimeStatus, {
 			pending: $_("renderers.summary.pending"),
+				stopping: $_("renderers.state.stopping"),
 			connected: $_("renderers.summary.connected"),
 			crashed: $_("renderers.summary.crashed"),
 			idle: $_("renderers.summary.idle"),

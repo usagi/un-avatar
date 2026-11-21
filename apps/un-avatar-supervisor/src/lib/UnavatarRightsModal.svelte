@@ -1,4 +1,8 @@
 <script lang="ts">
+	import ProfileDestination from "./ProfileDestination.svelte";
+	import type { AvatarSetting } from "./profileTypes";
+	export let targetProfileId = "";
+	export let targetProfile: AvatarSetting | null = null;
 	import { _ } from "svelte-i18n";
 	import { Move, RotateCcw, ZoomIn } from "lucide-svelte";
 	import type { UnavatarMetadataDialogState, UnavatarPreviewSet, UnavatarProfileIconCrop } from "./unavatarMetadata";
@@ -268,6 +272,7 @@
 			<span>.unavatar {metadata.spec_version ?? ""}</span>
 		</div>
 		<div class="vrm-metadata-body">
+			<ProfileDestination profileId={targetProfileId} profile={targetProfile} />
 			<header class="vrm-metadata-header">
 				<div>
 					<p>{$_("unavatar_rights.eyebrow")}</p>
@@ -275,6 +280,13 @@
 					<span>{metadata.source_type ?? "UN Avatar"}{metadata.export_mode ? ` / ${metadata.export_mode}` : ""}</span>
 				</div>
 			</header>
+			{#if modal.saveError}
+				<section class="unavatar-save-error" role="alert">
+					<strong>{$_(modal.avatarPathSaved ? "unavatar_rights.save_path_succeeded_icon_failed" : "unavatar_rights.save_failed")}</strong>
+					<p>{$_(modal.saveError.includes("profile_conflict") ? "unavatar_rights.save_conflict_help" : "unavatar_rights.save_retry_help")}</p>
+					<details><summary>{$_("unavatar_rights.save_error_details")}</summary><p>{modal.saveError}</p></details>
+				</section>
+			{/if}
 			<div class="vrm-metadata-scroll">
 				<section class="vrm-tech-list" aria-label={$_("unavatar_rights.summary")}>
 					{#each stats as [label, value]}
@@ -325,3 +337,9 @@
 		</div>
 	</div>
 </div>
+
+<style>
+ .unavatar-save-error { margin: 0.75rem 1.5rem; padding: 0.75rem 1rem; border: 1px solid currentColor; border-radius: 0.5rem; }
+ .unavatar-save-error p { margin: 0.4rem 0 0; overflow-wrap: anywhere; }
+ .unavatar-save-error details { margin-top: 0.5rem; }
+</style>

@@ -11,7 +11,6 @@ namespace UNAvatar.UnityExporter
         private const int MaxAnimatorExportControllers = 8;
         private const int MaxAnimatorExportLayersPerController = 32;
         private const int MaxAnimatorExportStatesPerLayer = 192;
-        private const int MaxAnimatorExportBindingsPerClip = 32;
 
         private Dictionary<string, object> BuildAnimatorPayload(GameObject root)
         {
@@ -399,13 +398,12 @@ namespace UNAvatar.UnityExporter
 
         private Dictionary<string, object> AnimatorClipToJson(Transform root, AnimationClip clip)
         {
+            // Facial clips commonly reset hundreds of morphs before setting the
+            // active expression. Preserve every supported binding, including zero
+            // values; truncation can drop the expression or leave old morphs active.
             var curveBindings = new List<object>();
             foreach (var binding in AnimationUtility.GetCurveBindings(clip))
             {
-                if (curveBindings.Count >= MaxAnimatorExportBindingsPerClip)
-                {
-                    break;
-                }
                 if (!IsAnimatorActionCurveBinding(binding))
                 {
                     continue;
@@ -417,10 +415,6 @@ namespace UNAvatar.UnityExporter
             var objectBindings = new List<object>();
             foreach (var binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
             {
-                if (objectBindings.Count >= MaxAnimatorExportBindingsPerClip)
-                {
-                    break;
-                }
                 if (!IsAnimatorActionObjectReferenceBinding(binding))
                 {
                     continue;

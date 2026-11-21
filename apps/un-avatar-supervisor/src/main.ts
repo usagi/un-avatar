@@ -1,10 +1,15 @@
 import "./styles.css";
+import "./un-series.css";
 import App from "./App.svelte";
 import { mount } from "svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { waitLocale } from "svelte-i18n";
 import { setupI18n } from "@usagi.network/un-i18n-svelte";
 import { installFrontendTrace, traceFrontendEvent } from "./lib/frontendTrace";
+import { hasTauriRuntime } from "./lib/environment";
+
+document.documentElement.dataset.unProduct = "avatar";
+document.documentElement.dataset.unDesign ??= "hybrid";
 
 function stringifyFrontendError(value: unknown): string {
 	if (value instanceof Error) return `${value.name}: ${value.message}\n${value.stack ?? ""}`.trim();
@@ -36,9 +41,13 @@ window.addEventListener("unhandledrejection", (event) => {
 // マウントを遅延する。これにより `$_(key)` が最初のレンダリングから正しい言語を返す。
 // `init()` 直後はローダー非同期のため locale store がまだ null の間があり、本番バンドルでは
 // ここで `$_()` が先に走って例外 → 白画面になる。`waitLocale()` で辞書ロード完了を待つ。
-if (import.meta.env.DEV) {
+if (import.meta.env.DEV || import.meta.env.VITE_UN_DESIGN_PREVIEW === "1") {
+	const isolated = !hasTauriRuntime();
 	const { installDevIpcMock } = await import("./dev-ipc-mock");
 	installDevIpcMock();
+	if (isolated && import.meta.env.VITE_UN_DESIGN_PREVIEW === "1") {
+		document.documentElement.dataset.unIsolatedPreview = "1";
+	}
 }
 await setupI18n();
 await waitLocale();

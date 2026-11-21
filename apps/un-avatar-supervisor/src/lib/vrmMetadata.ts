@@ -31,6 +31,8 @@ export type VrmMetadataInfo = VrmMetadataDisplayInfo & {
 export type VrmMetadataDialogState = {
 	metadata: VrmMetadataInfo;
 	pendingPath: string | null;
+	avatarPathSaved?: boolean;
+	saveError?: string;
 };
 
 export type VrmMetadataTranslator = (key: string, options?: { values?: Record<string, string | number> }) => string;

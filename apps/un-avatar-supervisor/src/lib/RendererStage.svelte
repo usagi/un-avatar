@@ -38,7 +38,7 @@
 		<div class="stage-title-row">
 			<div>
 				<h2>{renderer.name}</h2>
-				<p>{basename(renderer.avatar_path)}</p>
+				<p data-testid="renderer-stage-target">{$_("renderers.details.selected_instance", { values: { id: renderer.id } })}{#if renderer.profile_id} · ID: {renderer.profile_id}{/if}{#if renderer.avatar_path} · {basename(renderer.avatar_path)}{/if}</p>
 			</div>
 			<RendererStageActions
 				{renderer}

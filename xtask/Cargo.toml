@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.100"
 name = "xtask"
 description = "UN Avatar — 開発用タスク_runner（bootstrap）"
 version.workspace = true
@@ -12,6 +13,7 @@ publish = false
 workspace = true
 
 [dependencies]
+tempfile = "3.27"
 glam = { version = "0.32", features = ["bytemuck"] }
 serde_json = { workspace = true }
 sha2 = "0.10"
