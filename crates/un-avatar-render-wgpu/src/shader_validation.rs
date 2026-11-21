@@ -96,7 +96,8 @@ mod tests {
 			mesh.contains("let rim_indirect_color = drawu.rim_indirect_color.rgb * rim_tex_color.rgb;")
 				&& mesh.contains(
 					"let rim_light_mul = mix(vec3<f32>(1.0, 1.0, 1.0), effect_light_color, clamp(drawu.rim_control.z, 0.0, 1.0));"
-				) && mesh.contains("drawu.rim_params.w * drawu.rim_indirect_color.a * rim_tex_color.a"),
+				)
+				&& mesh.contains("drawu.rim_params.w * drawu.rim_indirect_color.a * rim_tex_color.a"),
 			"lilToon direction rim must apply RimColorTex, RimEnableLighting, and RimIndirColor alpha to the indirect rim"
 		);
 	}
@@ -230,7 +231,9 @@ mod tests {
 	fn liltoon_transparent_premultiply_uses_alpha_boost_without_boosting_output_alpha() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {\n\tif alpha_kind > 1.5 {\n\t\treturn clamp(a, 0.0, 1.0);"),
+			mesh.contains(
+				"fn fragment_out_alpha(alpha_kind: f32, a: f32, base_color_a: f32) -> f32 {\n\tif alpha_kind > 1.5 {\n\t\treturn clamp(a, 0.0, 1.0);"
+			),
 			"lilToon transparent output alpha remains fd.col.a; _AlphaBoostFA only affects premultiplied rgb"
 		);
 		assert!(
@@ -526,7 +529,9 @@ mod tests {
 			"lilToon Gem must sample refraction with the authored strength"
 		);
 		assert!(
-			mesh.contains("let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma)"),
+			mesh.contains(
+				"let refract_g = textureSample(screen_tex, screen_samp, clamp(base_screen_uv + screen_offset * (refraction_strength + chroma)"
+			),
 			"lilToon Gem chromatic aberration must still affect G when refraction strength is zero"
 		);
 		assert!(
@@ -708,10 +713,7 @@ mod tests {
 		assert!(
 			mesh.contains(
 				"let normal2nd_scale_mask_uv = uv * drawu.normal2nd_scale_mask_uv_offset_scale.zw + drawu.normal2nd_scale_mask_uv_offset_scale.xy;"
-			)
-				&& mesh.contains(
-					"let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;"
-				)
+			) && mesh.contains("let scale_mask = textureSample(normal2nd_scale_mask_tex, base_samp, normal2nd_scale_mask_uv).r;")
 				&& mesh.contains(
 					"lil_unpack_normal_scale(textureSample(normal2nd_tex, normal_samp, normal2nd_uv), drawu.normal2nd_params.y * scale_mask)"
 				),
@@ -775,16 +777,19 @@ mod tests {
 			"exported raw Unity SH coefficients must be evaluated in Unity axes with lilToon/OpenLit basis terms"
 		);
 		assert!(
-			mesh.contains("let direct_color = mix(shade_term, base, shading) * lil_light_color;\n\t\tlit = direct_color * authored_occlusion(uv, dbg);"),
+			mesh.contains(
+				"let direct_color = mix(shade_term, base, shading) * lil_light_color;\n\t\tlit = direct_color * authored_occlusion(uv, dbg);"
+			),
 			"lilToon no-shadow path should be fd.col.rgb *= fd.lightColor, without a second ambient add"
 		);
 		assert!(
 			mesh.contains("lit = min(lit, base * max(drawu.lighting_ext_params.y, drawu.lighting_ext_params.x));")
 				&& mesh
 					.find("lit = min(lit, base * max(drawu.lighting_ext_params.y, drawu.lighting_ext_params.x));")
-					.unwrap() < mesh
-					.find("if (UNTOON_FEATURE_MAIN_LAYERS > 0.5 && !is_untoon_gem_profile)")
-					.unwrap(),
+					.unwrap()
+					< mesh
+						.find("if (UNTOON_FEATURE_MAIN_LAYERS > 0.5 && !is_untoon_gem_profile)")
+						.unwrap(),
 			"lilToon forward pass clamps lit body color to fd.albedo * _LightMaxLimit before unlit main layers and effects"
 		);
 		assert!(
@@ -919,8 +924,9 @@ mod tests {
 	fn liltoon_audio_link_drives_emission_like_upstream() {
 		let mesh = include_str!("../shaders/mesh.wgsl");
 		assert!(
-			mesh.contains("fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, op: vec3<f32>) -> f32")
-				&& mesh.contains("if (drawu.audio_link_params.x <= 0.5) {\n\t\treturn 1.0;"),
+			mesh.contains(
+				"fn lil_calc_audio_link_value(nv: f32, uv0: vec2<f32>, uv1: vec2<f32>, uv2: vec2<f32>, uv3: vec2<f32>, op: vec3<f32>) -> f32"
+			) && mesh.contains("if (drawu.audio_link_params.x <= 0.5) {\n\t\treturn 1.0;"),
 			"AudioLink disabled path must preserve lilToon fd.audioLinkValue default"
 		);
 		assert!(
@@ -991,7 +997,9 @@ mod tests {
 			"lilToon rim shade/backlight normal strength should not renormalize the lerped normal"
 		);
 		assert!(
-			mesh.contains("let matcap2_n = select(matcap2_base_n, normalize(mix(matcap2_base_n, anisotropy_n, matcap2_anisotropy)), matcap2_anisotropy > 0.0);"),
+			mesh.contains(
+				"let matcap2_n = select(matcap2_base_n, normalize(mix(matcap2_base_n, anisotropy_n, matcap2_anisotropy)), matcap2_anisotropy > 0.0);"
+			),
 			"lilToon MatCap2nd keeps raw normal-strength lerp when anisotropy is disabled"
 		);
 	}

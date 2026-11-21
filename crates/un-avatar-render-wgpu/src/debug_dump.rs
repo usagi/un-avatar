@@ -55,13 +55,7 @@ pub fn log_material_skin_report(doc: &UnaDocument) {
 	for (mi, mat) in sc.materials.iter().enumerate() {
 		eprintln!(
 			"[debug-material] materials[{mi}] name={:?} shading={:?} alpha_mode={:?} alpha_cutoff={} cull={:?} double_sided={} base_color_factor.a={}",
-			mat.name,
-			mat.shading,
-			mat.alpha_mode,
-			mat.alpha_cutoff,
-			mat.cull_mode,
-			mat.double_sided,
-			mat.base_color_factor[3],
+			mat.name, mat.shading, mat.alpha_mode, mat.alpha_cutoff, mat.cull_mode, mat.double_sided, mat.base_color_factor[3],
 		);
 		if let Some(unavatar) = mat.unavatar_material.as_ref().and_then(|v| v.as_object()) {
 			let source_shader = unavatar.get("sourceShader").and_then(Value::as_str);

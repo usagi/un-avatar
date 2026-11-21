@@ -3976,14 +3976,16 @@ impl<'a> UnaRuntimeModelMut<'a> {
 				for (index, component) in values.iter().enumerate() {
 					color[index] = component
 						.as_f64()
-						.ok_or_else(|| format!("restore baseline color component is not numeric: {value}"))? as f32;
+						.ok_or_else(|| format!("restore baseline color component is not numeric: {value}"))?
+						as f32;
 				}
 				self.set_material_color(target, parameter, color)
 			}
 			UnaRuntimeActionEffect::MaterialScalar { target, parameter, .. } => {
 				let scalar = value
 					.as_f64()
-					.ok_or_else(|| format!("restore baseline is not numeric for material scalar: {value}"))? as f32;
+					.ok_or_else(|| format!("restore baseline is not numeric for material scalar: {value}"))?
+					as f32;
 				self.set_material_scalar(target, parameter, scalar)
 			}
 			UnaRuntimeActionEffect::MaterialSlot { target, .. } => {
@@ -3993,7 +3995,8 @@ impl<'a> UnaRuntimeModelMut<'a> {
 					Some(
 						value
 							.as_u64()
-							.ok_or_else(|| format!("restore baseline is not an index/null for material slot: {value}"))? as usize,
+							.ok_or_else(|| format!("restore baseline is not an index/null for material slot: {value}"))?
+							as usize,
 					)
 				};
 				self.set_material_slot_index(target, material_index)
@@ -9102,12 +9105,14 @@ mod tests {
 				None,
 			)
 			.unwrap();
-		assert!(document
-			.runtime_model_mut()
-			.scene_and_dynamics_mut()
-			.unwrap()
-			.dynamics
-			.set_group_enabled_by_source_id("physbone:hair", false));
+		assert!(
+			document
+				.runtime_model_mut()
+				.scene_and_dynamics_mut()
+				.unwrap()
+				.dynamics
+				.set_group_enabled_by_source_id("physbone:hair", false)
+		);
 
 		let restored = document
 			.runtime_model_mut()
@@ -9172,32 +9177,40 @@ mod tests {
 			}],
 		};
 
-		assert!(actions
-			.find_action(UnaRuntimeActionQuery {
-				action_id: Some("wardrobe:field_drape"),
-				..Default::default()
-			})
-			.is_some());
-		assert!(actions
-			.find_action(UnaRuntimeActionQuery {
-				expression_menu_path: Some("Wardrobe/Field Drape"),
-				..Default::default()
-			})
-			.is_some());
-		assert!(actions
-			.find_action(UnaRuntimeActionQuery {
-				parameter_name: Some("Outfit"),
-				parameter_value: Some(2.004),
-				..Default::default()
-			})
-			.is_some());
-		assert!(actions
-			.find_action(UnaRuntimeActionQuery {
-				parameter_name: Some("Outfit"),
-				parameter_value: Some(2.006),
-				..Default::default()
-			})
-			.is_none());
+		assert!(
+			actions
+				.find_action(UnaRuntimeActionQuery {
+					action_id: Some("wardrobe:field_drape"),
+					..Default::default()
+				})
+				.is_some()
+		);
+		assert!(
+			actions
+				.find_action(UnaRuntimeActionQuery {
+					expression_menu_path: Some("Wardrobe/Field Drape"),
+					..Default::default()
+				})
+				.is_some()
+		);
+		assert!(
+			actions
+				.find_action(UnaRuntimeActionQuery {
+					parameter_name: Some("Outfit"),
+					parameter_value: Some(2.004),
+					..Default::default()
+				})
+				.is_some()
+		);
+		assert!(
+			actions
+				.find_action(UnaRuntimeActionQuery {
+					parameter_name: Some("Outfit"),
+					parameter_value: Some(2.006),
+					..Default::default()
+				})
+				.is_none()
+		);
 		assert_eq!(
 			actions.actions[0].parameter_assignments(),
 			BTreeMap::from([("Outfit".to_string(), 2.0)])

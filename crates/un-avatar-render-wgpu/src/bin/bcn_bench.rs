@@ -7,9 +7,9 @@ use std::{
 #[cfg(feature = "bcn-gpu-bench")]
 use std::{io::Write, time::Duration};
 
-use block_compression::{encode::compress_rgba8, BC7Settings, CompressionVariant};
+use block_compression::{BC7Settings, CompressionVariant, encode::compress_rgba8};
 use clap::Parser;
-use image::{imageops::FilterType, RgbaImage};
+use image::{RgbaImage, imageops::FilterType};
 use pic_scale::{ImageSize, ImageStore, ImageStoreMut, ResamplingFunction, Scaler, ThreadingPolicy};
 #[cfg(feature = "bcn-gpu-bench")]
 use wgpu::util::DeviceExt;
@@ -428,23 +428,25 @@ fn encode_cpu_striped_parallel(
 			let next = Arc::clone(&next);
 			let rgba = Arc::clone(&rgba);
 			let stripes = Arc::clone(&stripes);
-			scope.spawn(move || loop {
-				let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-				let Some(&(start_y, stripe_h)) = stripes.get(index) else {
-					break;
-				};
-				let mut stripe_rgba = vec![0u8; (width as usize) * (stripe_h as usize) * 4];
-				for row in 0..stripe_h {
-					let src = (((start_y + row) * width) as usize) * 4;
-					let dst = ((row * width) as usize) * 4;
-					let len = (width as usize) * 4;
-					stripe_rgba[dst..dst + len].copy_from_slice(&rgba[src..src + len]);
+			scope.spawn(move || {
+				loop {
+					let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+					let Some(&(start_y, stripe_h)) = stripes.get(index) else {
+						break;
+					};
+					let mut stripe_rgba = vec![0u8; (width as usize) * (stripe_h as usize) * 4];
+					for row in 0..stripe_h {
+						let src = (((start_y + row) * width) as usize) * 4;
+						let dst = ((row * width) as usize) * 4;
+						let len = (width as usize) * 4;
+						stripe_rgba[dst..dst + len].copy_from_slice(&rgba[src..src + len]);
+					}
+					let mut stripe_out = vec![0u8; variant.blocks_byte_size(width, stripe_h)];
+					compress_rgba8(variant, &stripe_rgba, &mut stripe_out, width, stripe_h, width * 4);
+					let dst_offset = (start_y as usize / 4) * row_bytes;
+					let mut result = result.lock().unwrap();
+					result[dst_offset..dst_offset + stripe_out.len()].copy_from_slice(&stripe_out);
 				}
-				let mut stripe_out = vec![0u8; variant.blocks_byte_size(width, stripe_h)];
-				compress_rgba8(variant, &stripe_rgba, &mut stripe_out, width, stripe_h, width * 4);
-				let dst_offset = (start_y as usize / 4) * row_bytes;
-				let mut result = result.lock().unwrap();
-				result[dst_offset..dst_offset + stripe_out.len()].copy_from_slice(&stripe_out);
 			});
 		}
 	});

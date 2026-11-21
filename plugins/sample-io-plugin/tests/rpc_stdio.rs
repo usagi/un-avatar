@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use un_avatar_io::{ExportResult, ImportResult, ReportStatus, UnaDocument};
-use un_avatar_plugin_host::{PluginChild, PROTOCOL_VERSION};
+use un_avatar_plugin_host::{PROTOCOL_VERSION, PluginChild};
 
 fn sample_exe() -> PathBuf {
 	let key = "CARGO_BIN_EXE_sample_io_plugin";

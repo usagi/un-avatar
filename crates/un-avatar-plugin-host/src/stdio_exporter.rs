@@ -11,12 +11,12 @@ use un_avatar_io::{
 	FormatDescriptor, FormatDirection, FormatId, PluginStability, UnaDocument,
 };
 
-use crate::manifest::{load_manifest, PluginManifest};
+use crate::manifest::{PluginManifest, load_manifest};
 use crate::stdio_importer::{
 	bundle_dir_from_manifest, check_protocol, plugin_child_uses_bundle_cwd_from_env, register_stdio_plugins_from_root,
 	registration_origin_label, resolve_plugin_executable,
 };
-use crate::stdio_rpc::{rpc_handshake_timeout_from_env, rpc_import_timeout_from_env, HandshakeError, PluginChild};
+use crate::stdio_rpc::{HandshakeError, PluginChild, rpc_handshake_timeout_from_env, rpc_import_timeout_from_env};
 
 #[derive(Debug)]
 pub enum StdioExporterError {

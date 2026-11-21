@@ -16,27 +16,28 @@ use clap::{Parser, Subcommand};
 use glam::{Mat4, Quat, Vec3, Vec4};
 use serde::Serialize;
 use un_avatar_core::{
-	modular_avatar_component_support_kind, morph_weights_for_primitive, una_dynamics_translation_writeback_candidate_count,
-	una_dynamics_translation_writeback_target_count, UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat,
-	UnaMaterialPbr, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey,
-	UnaRuntimeSourceKind, UnaRuntimeToonModel, UnaSceneSnapshot, UnaShadingModel,
+	UnaAlphaMode, UnaDynamicsSourceKind, UnaHumanoidRuntimeBasis, UnaImagePixelFormat, UnaMaterialPbr, UnaNodeConstraintKind,
+	UnaRuntimeActionEffect, UnaRuntimeActionTrigger, UnaRuntimeResolverCacheKey, UnaRuntimeSourceKind, UnaRuntimeToonModel,
+	UnaSceneSnapshot, UnaShadingModel, modular_avatar_component_support_kind, morph_weights_for_primitive,
+	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count,
 };
 use un_avatar_io::{
-	path_has_format_extension, AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport,
-	FormatDescriptor, FormatId, ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument,
+	AvatarExporter, AvatarImporter, ExportCapability, ExportContext, ExportOptions, ExportOutput, ExportReport, FormatDescriptor, FormatId,
+	ImportContext, ImportInput, ImportOptions, ImportProbe, ImportReport, IoRegistry, UnaDocument, path_has_format_extension,
 };
-use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, register_gltf_importer, WardrobeApplyReport};
+use un_avatar_io_gltf::{WardrobeApplyReport, apply_unavatar_wardrobe_set, register_gltf_importer};
 use un_avatar_io_vrm::register_vrm_importer;
 use un_avatar_plugin_host::{register_stdio_exporters_from_plugin_root, register_stdio_importers_from_plugin_root};
 use un_avatar_skeleton::{
-	annotate_dynamics_response_group_visibility, apply_dynamics_mesh_cloth_assist_to_vertices, build_dynamics_bone_colliders_with_sources,
-	classify_dynamics_group_category, dynamics_mesh_cloth_assist_deforming_nodes, dynamics_mesh_cloth_assist_joint_roles,
+	BoneColliderConfig, BoneColliderPrimitive, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig, DynamicsMeshClothAssistJointRole,
+	DynamicsMeshClothAssistTransferKind, DynamicsMeshClothAssistVertex, DynamicsPhysicsConfig, DynamicsPhysicsParams,
+	DynamicsResponseCategorySummary, DynamicsResponseGroupSummary, DynamicsSimulator, DynamicsStepProfile, DynamicsTailSample,
+	DynamicsVisualTargetContext, annotate_dynamics_response_group_visibility, apply_dynamics_mesh_cloth_assist_to_vertices,
+	build_dynamics_bone_colliders_with_sources, classify_dynamics_group_category, dynamics_mesh_cloth_assist_deforming_nodes,
+	dynamics_mesh_cloth_assist_joint_roles,
 	dynamics_mesh_cloth_assist_mesh_matches_with_categories as skeleton_mesh_cloth_assist_mesh_matches_with_categories,
 	dynamics_mesh_cloth_assist_transfer_candidate, for_each_dynamics_mesh_cloth_assist_neighbor, local_capsule_world, local_plane_world,
-	local_sphere_world, BoneColliderConfig, BoneColliderPrimitive, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig,
-	DynamicsMeshClothAssistJointRole, DynamicsMeshClothAssistTransferKind, DynamicsMeshClothAssistVertex, DynamicsPhysicsConfig,
-	DynamicsPhysicsParams, DynamicsResponseCategorySummary, DynamicsResponseGroupSummary, DynamicsSimulator, DynamicsStepProfile,
-	DynamicsTailSample, DynamicsVisualTargetContext,
+	local_sphere_world,
 };
 
 const DIAGNOSE_DYNAMICS_GROUP_TEXT_LIMIT: usize = 24;
@@ -2230,7 +2231,8 @@ fn is_known_command(arg: &OsStr) -> bool {
 			| "dynamics-motion-trace-audit"
 			| "dynamics-vertex-probe"
 			| "diagnose"
-			| "vmc" | "help"
+			| "vmc"
+			| "help"
 	)
 }
 
@@ -4670,11 +4672,7 @@ fn dynamics_motion_trace_report(
 		}
 	}
 	fn motion_trace_group_average(value_sum: f32, group_count: usize) -> f32 {
-		if group_count > 0 {
-			value_sum / group_count as f32
-		} else {
-			0.0
-		}
+		if group_count > 0 { value_sum / group_count as f32 } else { 0.0 }
 	}
 	fn motion_trace_recovery_ratio(final_lag: f32, recovery_lag: f32) -> f32 {
 		if final_lag > f32::EPSILON {
@@ -5879,7 +5877,8 @@ fn run_dynamics_vertex_probe(
 			report.mesh_index,
 			report.skin_index,
 			report.settle_frames,
-			report.pose_left_upper_arm_z_deg
+			report
+				.pose_left_upper_arm_z_deg
 				.map(|value| format!(" left_upper_arm_z={value:.1}deg"))
 				.unwrap_or_default(),
 			report.tuning,
@@ -7560,12 +7559,7 @@ fn run_dynamics_motion_trace_audit(
 		if let Some(hint) = &finding.response_override_hint {
 			println!(
 				"motion_finding_response_hint[{}]: source_id={} rest_response={:?} damping_half_life_ms={:?} stretch_range_scale={:?} stretch_motion={:?}",
-				finding.kind,
-				hint.source_id,
-				hint.rest_response,
-				hint.damping_half_life_ms,
-				hint.stretch_range_scale,
-				hint.stretch_motion
+				finding.kind, hint.source_id, hint.rest_response, hint.damping_half_life_ms, hint.stretch_range_scale, hint.stretch_motion
 			);
 		}
 	}
@@ -12000,7 +11994,11 @@ fn run_diagnose(
 			category.group_override_group_count,
 			category.xpbd_group_count,
 			category.average_xpbd_compliance,
-			response_range(category.average_rest_response, category.min_rest_response, category.max_rest_response),
+			response_range(
+				category.average_rest_response,
+				category.min_rest_response,
+				category.max_rest_response
+			),
 			response_range(
 				category.average_shape_preservation,
 				category.min_shape_preservation,
@@ -13389,14 +13387,18 @@ mod tests {
 		let err = require_current_exporter_dynamics_scan(&report).unwrap_err();
 
 		assert_eq!(report.source_params_count, 1);
-		assert!(report
-			.missing_required_source_params
-			.iter()
-			.any(|missing| missing == "pullCurve=0/1"));
-		assert!(report
-			.missing_required_source_params
-			.iter()
-			.any(|missing| missing == "limitRotation=0/1"));
+		assert!(
+			report
+				.missing_required_source_params
+				.iter()
+				.any(|missing| missing == "pullCurve=0/1")
+		);
+		assert!(
+			report
+				.missing_required_source_params
+				.iter()
+				.any(|missing| missing == "limitRotation=0/1")
+		);
 		assert!(err.contains("pullCurve=0/1"));
 	}
 
@@ -14476,12 +14478,16 @@ mod tests {
 		collect_motion_trace_numeric_evidence(&[category], &[group], &mut evidence);
 
 		assert!(evidence.iter().any(|item| item.contains("motion category cloth max_lag")));
-		assert!(evidence
-			.iter()
-			.any(|item| item.contains("motion category cloth recovery_half_life_frames")));
-		assert!(evidence
-			.iter()
-			.any(|item| item.contains("motion group physbone:test residual_motion")));
+		assert!(
+			evidence
+				.iter()
+				.any(|item| item.contains("motion category cloth recovery_half_life_frames"))
+		);
+		assert!(
+			evidence
+				.iter()
+				.any(|item| item.contains("motion group physbone:test residual_motion"))
+		);
 	}
 
 	#[test]
@@ -15390,14 +15396,18 @@ mod tests {
 		assert_eq!(vertex_filter.filters[0].kind, "blend_shape");
 		assert_eq!(vertex_filter.filters[0].shapes, vec!["Sleeve".to_string()]);
 		assert_eq!(vertex_filter.filters[0].threshold, Some(0.001));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups")));
-		assert!(!report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("wardrobe set \"base\"") && warning.contains("no assetGroups")));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("wardrobe set \"hat\"") && warning.contains("no assetGroups"))
+		);
+		assert!(
+			!report
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("wardrobe set \"base\"") && warning.contains("no assetGroups"))
+		);
 	}
 
 	#[test]
@@ -15488,18 +15498,25 @@ mod tests {
 			Vec::new(),
 		);
 
-		assert!(report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("import warning") && warning.contains("ModularAvatarMeshCutter")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|warning| warning.contains("import approximation") && warning.contains("ModularAvatar.ModularAvatarExample.Approximate")));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("import warning") && warning.contains("ModularAvatarMeshCutter"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("import lost feature") && warning.contains("ModularAvatar.ModularAvatarMeshCutter"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|warning| warning.contains("import approximation")
+					&& warning.contains("ModularAvatar.ModularAvatarExample.Approximate"))
+		);
 	}
 
 	#[test]
@@ -15886,27 +15903,36 @@ mod tests {
 		assert_eq!(report.dynamics.source_grabbing_enabled_count, 1);
 		assert_eq!(report.dynamics.source_posing_enabled_count, 1);
 		assert_eq!(report.dynamics.source_interaction_parameter_count, 1);
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("raw dynamics entries but no runtime dynamics groups")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("raw dynamics source colliders include 1 unknown shape collider")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics stretch/squish limits are authored in source data")
-				&& w.contains("runtime_stretch_limit_groups=0")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("raw dynamics entries but no runtime dynamics groups"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("raw dynamics source colliders include 1 unknown shape collider"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics stretch/squish limits are authored in source data")
+					&& w.contains("runtime_stretch_limit_groups=0"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver"))
+		);
+		assert!(
+			report.warnings.iter().any(
+				|w| w.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
+			)
+		);
 	}
 
 	#[test]
@@ -15983,14 +16009,18 @@ mod tests {
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_count, 1);
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_min, Some(0.015));
 		assert_eq!(report.dynamics.groups[0].hit_radius_sample_max, Some(0.015));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics radius curves are approximated as per-joint hit radius")));
-		assert!(!report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver")));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics radius curves are approximated as per-joint hit radius"))
+		);
+		assert!(
+			!report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics radius curves are metadata-only in the current solver"))
+		);
 	}
 
 	#[test]
@@ -16111,50 +16141,66 @@ mod tests {
 			Vec::new(),
 		);
 
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics contact source_id \"contact:hand\" lowers to 2 runtime contacts")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics constraint_ref source_id \"constraint:parent\" lowers to 2 runtime constraint refs")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics groups are present but none are currently enabled") && w.contains("samples=[physbone:hair@root")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("dynamics stretch limits are supported as simulation stretch")
-				&& w.contains("writeback_target_groups=1")
-				&& w.contains("physbone:hair@root")));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics source_id \"physbone:hair\" lowers to 2 runtime groups"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics contact source_id \"contact:hand\" lowers to 2 runtime contacts"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics constraint_ref source_id \"constraint:parent\" lowers to 2 runtime constraint refs"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics groups are present but none are currently enabled")
+					&& w.contains("samples=[physbone:hair@root"))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("dynamics stretch limits are supported as simulation stretch")
+					&& w.contains("writeback_target_groups=1")
+					&& w.contains("physbone:hair@root"))
+		);
 		assert_eq!(report.dynamics.rotation_translation_writeback_group_count, 1);
 		assert_eq!(report.dynamics.translation_writeback_candidate_count, 1);
 		assert_eq!(report.dynamics.translation_writeback_target_count, 1);
 		assert_eq!(report.dynamics.stretch_translation_writeback_group_count, 1);
 		assert_eq!(report.dynamics.stretch_translation_writeback_target_group_count, 1);
-		assert!(report.warnings.iter().any(|w| w
-			.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
-			&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")));
-		assert!(report.warnings.iter().any(|w| w
-			.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
-			&& w.contains("samples=[physbone:hair@root")));
-		assert!(report.warnings.iter().any(|w| w
-			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
-			&& w.contains("samples=[constraint:parent@root/receiver")));
+		assert!(report.warnings.iter().any(|w| {
+			w.contains("dynamics contact probes would emit 1 parameter value(s), but contact parameter emission is disabled")
+				&& w.contains("samples=[contact:hand@root/receiver<=contact:hand:ContactHand]")
+		}));
+		assert!(report.warnings.iter().any(|w| {
+			w.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
+				&& w.contains("samples=[physbone:hair@root")
+		}));
+		assert!(report.warnings.iter().any(
+			|w| w.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
+				&& w.contains("samples=[constraint:parent@root/receiver")
+		));
 		assert_eq!(report.dynamics.groups.len(), 2);
 		assert!(report.dynamics.groups.iter().all(|group| group.source_enabled));
 		assert!(report.dynamics.groups.iter().all(|group| !group.enabled));
-		assert!(report
-			.dynamics
-			.groups
-			.iter()
-			.all(|group| group.runtime_enabled_override == Some(false)));
+		assert!(
+			report
+				.dynamics
+				.groups
+				.iter()
+				.all(|group| group.runtime_enabled_override == Some(false))
+		);
 		assert_eq!(report.dynamics.groups[0].interaction_parameter, "HairPB");
 		assert_eq!(report.dynamics.interaction_hooks.len(), 2);
 		assert_eq!(report.dynamics.interaction_hooks[0].group_index, 0);
@@ -16162,10 +16208,12 @@ mod tests {
 		assert!(report.dynamics.interaction_hooks[0].allow_grabbing);
 		assert!(!report.dynamics.interaction_hooks[0].allow_posing);
 		assert!(!report.dynamics.interaction_hooks[0].metadata_only);
-		assert!(report.dynamics.interaction_hooks[0]
-			.suffix_parameters
-			.iter()
-			.any(|parameter| parameter == "HairPB_IsGrabbed"));
+		assert!(
+			report.dynamics.interaction_hooks[0]
+				.suffix_parameters
+				.iter()
+				.any(|parameter| parameter == "HairPB_IsGrabbed")
+		);
 		assert_eq!(report.dynamics.interaction_hooks[1].group_index, 1);
 		assert!(report.dynamics.interaction_hooks[1].allow_posing);
 		assert!(report.dynamics.interaction_hooks[1].suffix_parameters.is_empty());
@@ -16339,26 +16387,36 @@ mod tests {
 			Vec::new(),
 		);
 
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:missing\"")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:raw-only\"")));
-		assert!(report
-			.warnings
-			.iter()
-			.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:action-missing\"") }));
-		assert!(!report
-			.warnings
-			.iter()
-			.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:hair\"")));
-		assert!(!report
-			.warnings
-			.iter()
-			.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:hair\"") }));
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:missing\""))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:raw-only\""))
+		);
+		assert!(
+			report
+				.warnings
+				.iter()
+				.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:action-missing\"") })
+		);
+		assert!(
+			!report
+				.warnings
+				.iter()
+				.any(|w| w.contains("wardrobe dynamicsEnable target \"physbone:hair\""))
+		);
+		assert!(
+			!report
+				.warnings
+				.iter()
+				.any(|w| { w.contains("runtime action \"action:dynamics\" DynamicsEnabled target \"physbone:hair\"") })
+		);
 	}
 
 	#[test]

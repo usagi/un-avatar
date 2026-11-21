@@ -608,11 +608,7 @@ fn conservative_world_scale(m: Mat4) -> f32 {
 	let sy = m.y_axis.truncate().length();
 	let sz = m.z_axis.truncate().length();
 	let scale = sx.max(sy).max(sz);
-	if scale.is_finite() && scale > OFF_EPSILON {
-		scale
-	} else {
-		1.0
-	}
+	if scale.is_finite() && scale > OFF_EPSILON { scale } else { 1.0 }
 }
 
 fn estimate_humanoid_height(lookup: &HumanoidLookup, world: &[Mat4]) -> Option<f32> {

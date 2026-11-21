@@ -1679,7 +1679,8 @@ pub(crate) fn compressed_cache_lookup_from_source_metadata(
 		&& !matches!(
 			compression_preference_for_role(mode, advanced, role),
 			TextureCompressionPreference::Source | TextureCompressionPreference::HighQuality
-		) && matches!(role, TextureRole::Clothing | TextureRole::GenericColor | TextureRole::Emissive)
+		)
+		&& matches!(role, TextureRole::Clothing | TextureRole::GenericColor | TextureRole::Emissive)
 	{
 		TextureUploadKind::Bc1Srgb
 	} else {

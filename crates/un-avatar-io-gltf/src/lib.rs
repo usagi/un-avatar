@@ -16,23 +16,23 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use exr::prelude::{f16, pixel_vec::PixelVec, read, ReadChannels, ReadLayers};
+use exr::prelude::{ReadChannels, ReadLayers, f16, pixel_vec::PixelVec, read};
 use glam::{Mat4, Quat, Vec3};
 use serde_json::Value;
 use un_avatar_core::{
-	apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
-	unavatar_modular_avatar_components_slice, unavatar_modular_avatar_value, Approximation, ReportStatus, UnaAlphaMode, UnaBounds,
-	UnaColorFactorColorSpace, UnaCullMode, UnaDocument, UnaDynamicsCollider, UnaDynamicsColliderShape, UnaDynamicsConstraintRef,
-	UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsImmobileType, UnaDynamicsIntegrationType, UnaDynamicsInteraction,
-	UnaDynamicsLimit, UnaDynamicsSettings, UnaDynamicsSourceKind, UnaDynamicsWritebackMode, UnaExpressionCatalog, UnaExpressionPreset,
-	UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba, UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial,
-	UnaLilToonLikeRuntimeVariant, UnaLilToonLikeSourceProfile, UnaLilToonLikeStencilState, UnaMaterialPbr, UnaMeshBuffers,
-	UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas, UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint,
-	UnaNodeConstraintKind, UnaNodeConstraintSource, UnaRuntimeAction, UnaRuntimeActionCondition, UnaRuntimeActionEffect,
-	UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut, UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget,
-	UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneDirectionalLight, UnaSceneEnvironmentLight, UnaSceneLighting, UnaSceneNode,
-	UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup, UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler,
-	UnaTextureWrapMode, UnaUnavatarExtension, UnaUnityConstraintWorldUpType,
+	Approximation, ReportStatus, UnaAlphaMode, UnaBounds, UnaColorFactorColorSpace, UnaCullMode, UnaDocument, UnaDynamicsCollider,
+	UnaDynamicsColliderShape, UnaDynamicsConstraintRef, UnaDynamicsContact, UnaDynamicsContactKind, UnaDynamicsImmobileType,
+	UnaDynamicsIntegrationType, UnaDynamicsInteraction, UnaDynamicsLimit, UnaDynamicsSettings, UnaDynamicsSourceKind,
+	UnaDynamicsWritebackMode, UnaExpressionCatalog, UnaExpressionPreset, UnaExpressionWeights, UnaImagePixelFormat, UnaImageRgba,
+	UnaImageSourceMetadata, UnaLilToonLikeBlendMode, UnaLilToonLikeMaterial, UnaLilToonLikeRuntimeVariant, UnaLilToonLikeSourceProfile,
+	UnaLilToonLikeStencilState, UnaMaterialPbr, UnaMeshBuffers, UnaMeshPrimitiveKey, UnaMorphTargetBind, UnaMorphTargetDeltas,
+	UnaMtoonMaterial, UnaMtoonOutlineWidthMode, UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource, UnaRuntimeAction,
+	UnaRuntimeActionCondition, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger, UnaRuntimeDynamicsMut,
+	UnaRuntimeMaterialSlotTarget, UnaRuntimeMaterialTarget, UnaRuntimeNodeTarget, UnaSceneAssetGroupOwnership, UnaSceneDirectionalLight,
+	UnaSceneEnvironmentLight, UnaSceneLighting, UnaSceneNode, UnaSceneSnapshot, UnaShadingModel, UnaSkin, UnaSpringBoneGroup,
+	UnaSpringBoneSettings, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode, UnaUnavatarExtension,
+	UnaUnityConstraintWorldUpType, apply_runtime_material_color, apply_runtime_material_scalar, modular_avatar_component_support_kind,
+	unavatar_modular_avatar_components_slice, unavatar_modular_avatar_value,
 };
 use un_avatar_io::{
 	AvatarImporter, Capability, FormatCapabilities, FormatDescriptor, FormatDirection, FormatId, ImportContext, ImportError, ImportInput,
@@ -5824,8 +5824,10 @@ fn unavatar_base_hidden_subtree_paths(unavatar: &UnaUnavatarExtension) -> Vec<St
 					let is_visibility = matches!(
 						ty,
 						"subtreeEnabled"
-							| "subtreeVisibility" | "nodeEnabled"
-							| "nodeVisibility" | "rendererEnabled"
+							| "subtreeVisibility"
+							| "nodeEnabled"
+							| "nodeVisibility"
+							| "rendererEnabled"
 							| "rendererVisibility"
 					);
 					let hidden = op.get("visible").and_then(|v| v.as_bool()) == Some(false);
@@ -8132,11 +8134,7 @@ fn modular_avatar_wrap_uv(value: f32, mode: UnaTextureWrapMode) -> f32 {
 		}
 		UnaTextureWrapMode::MirroredRepeat => {
 			let repeated = value.rem_euclid(2.0);
-			if repeated <= 1.0 {
-				repeated
-			} else {
-				2.0 - repeated
-			}
+			if repeated <= 1.0 { repeated } else { 2.0 - repeated }
 		}
 	}
 }
@@ -12818,8 +12816,8 @@ mod tests {
 	use glam::Mat4;
 	use image::ImageEncoder;
 	use std::io::Write;
-	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
 	use un_avatar_core::{UnaNodeConstraint, UnaNodeConstraintKind, UnaNodeConstraintSource};
+	use un_avatar_core::{una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count};
 
 	fn test_skin_primitive(joints: Vec<[u16; 4]>, weights: Vec<[f32; 4]>) -> UnaMeshBuffers {
 		UnaMeshBuffers {
@@ -12882,10 +12880,12 @@ mod tests {
 		assert_eq!(skins[0].inverse_bind_matrices.len(), 3);
 		assert_eq!(meshes[0][0].joints.as_deref(), Some(&[[0, 1, 2, 0], [0, 0, 0, 0]][..]));
 		assert_eq!(meshes[0][0].vertex_payload_id, None);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("glTF skin compaction: compacted_skins=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("glTF skin compaction: compacted_skins=1"))
+		);
 	}
 
 	#[test]
@@ -13583,10 +13583,12 @@ mod tests {
 		chains.sort();
 
 		assert_eq!(chains, vec![vec![0, 1, 2], vec![0, 3]]);
-		assert!(settings
-			.groups
-			.iter()
-			.all(|group| group.source_kind == UnaDynamicsSourceKind::VrcPhysBone));
+		assert!(
+			settings
+				.groups
+				.iter()
+				.all(|group| group.source_kind == UnaDynamicsSourceKind::VrcPhysBone)
+		);
 	}
 
 	#[test]
@@ -13920,10 +13922,12 @@ mod tests {
 
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 3]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("modular_avatar_pb_blocker_ignores=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("modular_avatar_pb_blocker_ignores=1"))
+		);
 	}
 
 	#[test]
@@ -13968,10 +13972,12 @@ mod tests {
 		assert_eq!(settings.colliders[0].height, 0.2);
 		assert_eq!(settings.colliders[0].position, [-0.0, 0.1, 0.2]);
 		assert_eq!(settings.colliders[0].rotation, [0.0, -0.5, -0.0, 0.8660254]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("modular_avatar_global_colliders=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("modular_avatar_global_colliders=1"))
+		);
 	}
 
 	#[test]
@@ -14006,10 +14012,12 @@ mod tests {
 		assert_eq!(endpoint_translation.to_array(), [-0.1, 0.2, 0.3]);
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("synthesized_endpoint_children=1"))
+		);
 	}
 
 	#[test]
@@ -14050,10 +14058,12 @@ mod tests {
 		);
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 2]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("synthesized_endpoint_children=1"))
+		);
 		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
@@ -14091,14 +14101,18 @@ mod tests {
 		assert_eq!(endpoint_translation.to_array(), [-0.1, 0.2, 0.3]);
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 1, 2]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("synthesized_endpoint_children=1")));
-		assert!(!report
-			.messages
-			.iter()
-			.any(|message| message.contains("could not synthesize endpoint tail")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("synthesized_endpoint_children=1"))
+		);
+		assert!(
+			!report
+				.messages
+				.iter()
+				.any(|message| message.contains("could not synthesize endpoint tail"))
+		);
 		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
@@ -14136,10 +14150,12 @@ mod tests {
 		assert_eq!(endpoint_translation.to_array(), [-0.0, 0.25, 0.0]);
 		assert_eq!(settings.groups.len(), 1);
 		assert_eq!(settings.groups[0].bone_node_indices, vec![0, 2]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("synthesized_endpoint_children=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("synthesized_endpoint_children=1"))
+		);
 		assert!(!report.messages.iter().any(|message| message.contains("ignored endpointPosition")));
 	}
 
@@ -14288,11 +14304,11 @@ mod tests {
 		assert_eq!(got.report.status, ReportStatus::PartialSuccess);
 		assert_eq!(got.report.lost_features.len(), 1);
 		assert_eq!(got.report.lost_features[0].feature, format!("ModularAvatar.{short_type}"));
-		assert!(got
-			.report
-			.diagnostics
-			.iter()
-			.any(|diagnostic| { diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(short_type) }));
+		assert!(
+			got.report.diagnostics.iter().any(|diagnostic| {
+				diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains(short_type)
+			})
+		);
 	}
 
 	#[test]
@@ -14364,11 +14380,12 @@ mod tests {
 		assert_eq!(actions.actions[0].id, "ma:object_toggle:0");
 		assert_eq!(actions.actions[0].conditions.len(), 1);
 		assert!(actions.actions[0].conditions[0].inverted);
-		assert!(!got
-			.report
-			.diagnostics
-			.iter()
-			.any(|diagnostic| diagnostic.text.contains("inverted_ignored")));
+		assert!(
+			!got.report
+				.diagnostics
+				.iter()
+				.any(|diagnostic| diagnostic.text.contains("inverted_ignored"))
+		);
 	}
 
 	#[test]
@@ -14821,11 +14838,12 @@ mod tests {
 		assert_eq!(source.byte_length, png.len() as u64);
 		assert_eq!(source.source_hash, source_hash64(&png));
 		assert!(source.encoded_bytes.is_none());
-		assert!(got
-			.report
-			.messages
-			.iter()
-			.any(|message| message.contains(".unavatar textureAssets:") && message.contains("file_backed=true")));
+		assert!(
+			got.report
+				.messages
+				.iter()
+				.any(|message| message.contains(".unavatar textureAssets:") && message.contains("file_backed=true"))
+		);
 	}
 
 	#[test]
@@ -15343,17 +15361,19 @@ mod tests {
 		let humanoid = got.document.humanoid_profile.as_ref().expect("humanoid profile");
 		assert_eq!(humanoid.bone_node_indices.get("hips"), Some(&1));
 		assert!(got.report.messages.iter().any(|m| m.contains("UN_avatar specVersion=0.1-preview")));
-		assert!(got
-			.report
-			.messages
-			.iter()
-			.any(|m| m.contains(".unavatar unity active state: visibility_applied=0")));
+		assert!(
+			got.report
+				.messages
+				.iter()
+				.any(|m| m.contains(".unavatar unity active state: visibility_applied=0"))
+		);
 		assert!(got.report.messages.iter().any(|m| m.contains("inherited_hidden_skipped=2")));
-		assert!(got
-			.report
-			.messages
-			.iter()
-			.any(|m| m.contains(".unavatar humanoid: resolved_bones=1")));
+		assert!(
+			got.report
+				.messages
+				.iter()
+				.any(|m| m.contains(".unavatar humanoid: resolved_bones=1"))
+		);
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
@@ -15595,10 +15615,14 @@ mod tests {
 	#[test]
 	fn unavatar_runtime_actions_preserve_complete_expression_and_resets() {
 		// Author clips can reset hundreds of shapes before setting the active expression.
-		let bindings: Vec<_> = (0..412).map(|index| serde_json::json!({
-			"propertyName": format!("blendShape.shape_{index}"),
-			"constantValue": if index == 411 { 85.0 } else { 0.0 }
-		})).collect();
+		let bindings: Vec<_> = (0..412)
+			.map(|index| {
+				serde_json::json!({
+					"propertyName": format!("blendShape.shape_{index}"),
+					"constantValue": if index == 411 { 85.0 } else { 0.0 }
+				})
+			})
+			.collect();
 		for motion in [
 			serde_json::json!({"curveBindings": bindings}),
 			serde_json::json!({"children": [
@@ -15616,17 +15640,19 @@ mod tests {
 				}]}]}}),
 			};
 			assert!(unavatar_runtime_action_set(&unavatar, None, &[], &BTreeMap::new()).is_none());
-			let actions = unavatar_runtime_action_set(
-				&unavatar, None, &["animator:0:0:face:0".to_string()], &BTreeMap::new()
-			).expect("explicitly enabled expression");
+			let actions = unavatar_runtime_action_set(&unavatar, None, &["animator:0:0:face:0".to_string()], &BTreeMap::new())
+				.expect("explicitly enabled expression");
 			assert_eq!(actions.actions.len(), 1);
 			let effects = &actions.actions[0].effects;
 			assert_eq!(effects.len(), 412);
 			for (index, effect) in effects.iter().enumerate() {
-				assert_eq!(*effect, UnaRuntimeActionEffect::ExpressionWeight {
-					name: format!("shape_{index}"),
-					weight: if index == 411 { 0.85 } else { 0.0 },
-				});
+				assert_eq!(
+					*effect,
+					UnaRuntimeActionEffect::ExpressionWeight {
+						name: format!("shape_{index}"),
+						weight: if index == 411 { 0.85 } else { 0.0 },
+					}
+				);
 			}
 		}
 	}
@@ -16054,10 +16080,12 @@ mod tests {
 
 		assert_eq!(actions.actions.len(), 1);
 		assert_eq!(actions.actions[0].label, "Jacket Red");
-		assert!(actions.actions[0]
-			.triggers
-			.iter()
-			.all(|trigger| !matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { .. })));
+		assert!(
+			actions.actions[0]
+				.triggers
+				.iter()
+				.all(|trigger| !matches!(trigger, UnaRuntimeActionTrigger::ExpressionMenu { .. }))
+		);
 	}
 
 	#[test]
@@ -18559,10 +18587,12 @@ mod tests {
 				&& diagnostic.text.contains("supportKind mismatch")
 				&& diagnostic.text.contains("count=1")
 		}));
-		assert!(report
-			.approximations
-			.iter()
-			.any(|approximation| approximation.feature == "ModularAvatar.ModularAvatarMeshCutter"));
+		assert!(
+			report
+				.approximations
+				.iter()
+				.any(|approximation| approximation.feature == "ModularAvatar.ModularAvatarMeshCutter")
+		);
 		assert!(report.lost_features.is_empty());
 	}
 
@@ -19409,14 +19439,18 @@ mod tests {
 			.iter()
 			.find(|preset| preset.name == "Breast_Big")
 			.expect("source preset");
-		assert!(preset
-			.binds
-			.iter()
-			.any(|bind| bind.mesh_index == 1 && bind.primitive_index == 0 && bind.morph_target_index == 0 && bind.weight_scale == 0.5));
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("blendshape_sync_expression_binds=1")));
+		assert!(
+			preset
+				.binds
+				.iter()
+				.any(|bind| bind.mesh_index == 1 && bind.primitive_index == 0 && bind.morph_target_index == 0 && bind.weight_scale == 0.5)
+		);
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("blendshape_sync_expression_binds=1"))
+		);
 		let mut weights = UnaExpressionWeights::default();
 		weights.preset_weights.insert("Breast_Big".to_string(), 0.8);
 		let morphs = un_avatar_core::morph_weights_for_primitive(&scene.meshes[1][0], Some(&catalog), Some(&weights), 1, 0);
@@ -19466,10 +19500,12 @@ mod tests {
 		assert!(report.messages.iter().any(|message| {
 			message.contains("Modular Avatar components") && message.contains("resolver_supported=1") && message.contains("unsupported=0")
 		}));
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| { message.contains("remove_vertex_color_nodes=1") && message.contains("remove_vertex_color_primitives=1") }));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| { message.contains("remove_vertex_color_nodes=1") && message.contains("remove_vertex_color_primitives=1") })
+		);
 	}
 
 	#[test]
@@ -19550,10 +19586,12 @@ mod tests {
 
 		assert_eq!(scene.meshes[0][0].default_morph_weights, vec![0.5]);
 		assert_eq!(scene.meshes[1][0].default_morph_weights, vec![0.5]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("shape_changer_set_applied=1")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("shape_changer_set_applied=1"))
+		);
 		assert!(report.messages.iter().any(|message| message.contains("blendshape_sync_applied=1")));
 	}
 
@@ -20230,10 +20268,12 @@ mod tests {
 		for (a, e) in actual.to_cols_array().iter().zip(expected.to_cols_array()) {
 			assert!((a - e).abs() < 0.0001, "actual={actual:?} expected={expected:?}");
 		}
-		assert!(report
-			.messages
-			.iter()
-			.any(|m| { m.contains("merge_armature_mappings=1") && m.contains("mesh_retargeter_joints=1") }));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|m| { m.contains("merge_armature_mappings=1") && m.contains("mesh_retargeter_joints=1") })
+		);
 	}
 
 	#[test]
@@ -20902,10 +20942,12 @@ mod tests {
 		};
 		let mut report = ImportReport::default();
 		apply_unavatar_modular_avatar(&mut scene, &unavatar, &mut report);
-		assert!(report
-			.messages
-			.iter()
-			.any(|m| m.contains("merge_armature_cycles=2") && m.contains("merge_armature_component_cycles=0")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|m| m.contains("merge_armature_cycles=2") && m.contains("merge_armature_component_cycles=0"))
+		);
 		assert!(report.diagnostics.iter().any(|diagnostic| {
 			diagnostic.severity == un_avatar_core::ReportSeverity::Warning && diagnostic.text.contains("merge_armature_cycles=2")
 		}));
@@ -21281,10 +21323,12 @@ mod tests {
 		let (scale, _, _) = Mat4::from_cols_array(&scene.nodes[proxy].transform).to_scale_rotation_translation();
 		assert_vec3_near(scale, Vec3::new(2.0, 3.0, 4.0));
 		assert_eq!(scene.skins[0].joint_nodes, vec![proxy, 2]);
-		assert!(report
-			.messages
-			.iter()
-			.any(|m| { m.contains("scale_adjuster_proxies=1") && m.contains("scale_adjuster_skin_joints=1") }));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|m| { m.contains("scale_adjuster_proxies=1") && m.contains("scale_adjuster_skin_joints=1") })
+		);
 	}
 
 	#[test]
@@ -21392,10 +21436,12 @@ mod tests {
 		apply_unavatar_asset_group_ownership(&mut scene, &unavatar, &mut report);
 
 		assert!(scene.asset_group_ownership.is_empty());
-		assert!(report
-			.messages
-			.iter()
-			.any(|message| message.contains("assetGroupOwnershipAmbiguities detected")));
+		assert!(
+			report
+				.messages
+				.iter()
+				.any(|message| message.contains("assetGroupOwnershipAmbiguities detected"))
+		);
 		let has_warning = report.diagnostics.iter().any(|diagnostic| {
 			diagnostic.severity == un_avatar_core::ReportSeverity::Warning
 				&& diagnostic.text.contains("assetGroupOwnershipAmbiguities detected")

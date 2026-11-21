@@ -1,6 +1,6 @@
 //! Receive-clock playback. Events bypass the delay; continuous channels retain
 //! independent history so sparse producers cannot erase one another's fields.
-use super::{interpolate_transform_sample, interpolate_vec3f, MotionFrameBucketKey};
+use super::{MotionFrameBucketKey, interpolate_transform_sample, interpolate_vec3f};
 use std::collections::VecDeque;
 use un_motion_frame::*;
 
@@ -719,9 +719,11 @@ mod tests {
 		pose.root = None;
 		pose.bones[0].state = SampleState::Missing;
 		p.push(&missing, 70_000_000);
-		assert!(read(&mut p, 80_000_000)
-			.iter()
-			.all(|f| f.body.as_ref().unwrap().humanoid.as_ref().unwrap().bones.is_empty()));
+		assert!(
+			read(&mut p, 80_000_000)
+				.iter()
+				.all(|f| f.body.as_ref().unwrap().humanoid.as_ref().unwrap().bones.is_empty())
+		);
 	}
 	#[test]
 	fn playback_jitter_never_rewinds_and_expires() {

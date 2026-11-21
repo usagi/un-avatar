@@ -19,10 +19,10 @@ use un_avatar_core::{
 	UnaShadingModel, UnaTextureFilterMode, UnaTextureSampler, UnaTextureWrapMode,
 };
 use un_avatar_skeleton::{
+	DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig, DynamicsMeshClothAssistJointRole, DynamicsMeshClothAssistVertex,
 	apply_dynamics_mesh_cloth_assist_to_vertices, dynamics_mesh_cloth_assist_joint_roles,
 	dynamics_mesh_cloth_assist_mesh_matches_with_categories as mesh_cloth_assist_mesh_matches_with_categories,
-	dynamics_token_filter_matches, DynamicsCategoryDefinition, DynamicsMeshClothAssistConfig, DynamicsMeshClothAssistJointRole,
-	DynamicsMeshClothAssistVertex,
+	dynamics_token_filter_matches,
 };
 
 use crate::avatar_material::texture_roles_for_scene;
@@ -30,16 +30,16 @@ use crate::debug_dump::{debug_primitive_color_rgba, iris_like_material_name};
 use crate::liltoon_features;
 use crate::scene_transform::{safe_inverse_mesh_world, scene_world_matrices};
 use crate::skin_tone::{
-	build_skin_tone_matched_images, material_skin_tone_kind, skin_tone_matching_debug_for_scene_with_world,
-	skin_tone_texture_kinds_for_scene, SkinToneMatchingDebug,
+	SkinToneMatchingDebug, build_skin_tone_matched_images, material_skin_tone_kind, skin_tone_matching_debug_for_scene_with_world,
+	skin_tone_texture_kinds_for_scene,
 };
 use crate::texture_pipeline::{
+	GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind, TextureUploadPayload,
 	compressed_cache_lookup_from_source, compressed_cache_lookup_from_source_metadata, compressed_upload_kind_for_texture,
 	compression_preference_for_role, create_vulkan_gpu_texture_compression_context, estimated_processed_mip_count,
 	load_or_build_processed_texture, load_or_build_processed_texture_with_rgba, mip_level_count, processed_texture_cache_path_from_key,
 	read_compressed_texture_cache, source_texture_upload, texture_cache_key, texture_cache_key_from_source_metadata,
-	texture_upload_payload, GpuTextureCompressionContext, SourceTextureUpload, TextureCacheEvent, TextureRole, TextureUploadKind,
-	TextureUploadPayload,
+	texture_upload_payload,
 };
 use crate::{
 	BlockCompressionEncoder, TextureCompressionAdvancedOptions, TextureCompressionMode, TextureCompressionPreference, TextureMipmapFilter,
@@ -4764,11 +4764,14 @@ fn upload_payload_texture_slot(
 		height,
 	});
 	let upload_start = Instant::now();
-	match slot.ensure_uploaded(device, queue, None, gpu_texture_compression) { Some(view) => {
-		image_views.push(view);
-	} _ => {
-		image_views.push(transparent_black_view.clone());
-	}}
+	match slot.ensure_uploaded(device, queue, None, gpu_texture_compression) {
+		Some(view) => {
+			image_views.push(view);
+		}
+		_ => {
+			image_views.push(transparent_black_view.clone());
+		}
+	}
 	slot.set_upload(reload_upload);
 	(slot, upload_start.elapsed())
 }
@@ -10326,11 +10329,14 @@ impl SceneMeshes {
 					let mut slot = SceneImageTextureSlot::new(SceneImageTextureUpload::Source(source_upload));
 					if image_resident {
 						let upload_start = Instant::now();
-						match slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) { Some(view) => {
-							image_views.push(view);
-						} _ => {
-							image_views.push(transparent_black_view.clone());
-						}}
+						match slot.ensure_uploaded(device, queue, None, &mut gpu_texture_compression) {
+							Some(view) => {
+								image_views.push(view);
+							}
+							_ => {
+								image_views.push(transparent_black_view.clone());
+							}
+						}
 						image_prepare_timings.upload += upload_start.elapsed();
 						slot.set_upload(scene_image_texture_lazy_upload(
 							image_index,
@@ -12658,7 +12664,8 @@ impl SceneMeshes {
 						);
 						!draw_has_active_expression
 							&& !draw_has_active_morph_name_override
-							&& !debug_zero_morphs && d.morph_weights_match_default
+							&& !debug_zero_morphs
+							&& d.morph_weights_match_default
 					};
 					if !skip_static_default_morph {
 						d.morph_weight_scratch.clear();
@@ -15443,22 +15450,26 @@ mod tests {
 
 	#[test]
 	fn ray_triangle_intersection_rejects_misses_and_hits_behind_origin() {
-		assert!(ray_triangle_intersection(
-			Vec3::new(1.5, 1.5, 1.0),
-			Vec3::new(0.0, 0.0, -1.0),
-			Vec3::new(0.0, 0.0, 0.0),
-			Vec3::new(1.0, 0.0, 0.0),
-			Vec3::new(0.0, 1.0, 0.0),
-		)
-		.is_none());
-		assert!(ray_triangle_intersection(
-			Vec3::new(0.25, 0.25, 1.0),
-			Vec3::new(0.0, 0.0, 1.0),
-			Vec3::new(0.0, 0.0, 0.0),
-			Vec3::new(1.0, 0.0, 0.0),
-			Vec3::new(0.0, 1.0, 0.0),
-		)
-		.is_none());
+		assert!(
+			ray_triangle_intersection(
+				Vec3::new(1.5, 1.5, 1.0),
+				Vec3::new(0.0, 0.0, -1.0),
+				Vec3::new(0.0, 0.0, 0.0),
+				Vec3::new(1.0, 0.0, 0.0),
+				Vec3::new(0.0, 1.0, 0.0),
+			)
+			.is_none()
+		);
+		assert!(
+			ray_triangle_intersection(
+				Vec3::new(0.25, 0.25, 1.0),
+				Vec3::new(0.0, 0.0, 1.0),
+				Vec3::new(0.0, 0.0, 0.0),
+				Vec3::new(1.0, 0.0, 0.0),
+				Vec3::new(0.0, 1.0, 0.0),
+			)
+			.is_none()
+		);
 	}
 
 	#[test]
@@ -16646,9 +16657,11 @@ mod tests {
 		assert_eq!(card_sources[0].sample_index, 0);
 		assert_eq!(card_sources[11].sample_index, 11);
 		assert!(card_sources.iter().any(|source| source.indices == [0, 3, 4, 0]));
-		assert!(card_sources
-			.iter()
-			.all(|source| source.sample_index < liltoon_fur_segment_count(3.0)));
+		assert!(
+			card_sources
+				.iter()
+				.all(|source| source.sample_index < liltoon_fur_segment_count(3.0))
+		);
 	}
 
 	#[test]

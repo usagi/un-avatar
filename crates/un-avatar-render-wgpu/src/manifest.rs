@@ -3,14 +3,14 @@ use std::{fs, net::SocketAddr, path::Path};
 use serde::Deserialize;
 
 use crate::{
+	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
+	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
 	mesh_pass::{AvatarOutlineKind, AvatarOutlinePolicy},
 	options::{
 		AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AudioLinkSource, AvatarWindowOptions, BloomOptions, BloomQuality,
 		ColorGradingLook, ContactShadowOptions, DirectionalLightOptions, EnvironmentColorOptions, EnvironmentLightOptions,
 		PrimaryMotionSource, SsaoOptions, UnmotionZenohSubscriptionOptions, WardrobeBindingKind, WardrobeBindingOptions,
 	},
-	AaMode, BlockCompressionEncoder, RenderBackend, SceneMeshLoadOpts, SpoutWindowOptions, TextureCompressionAdvancedOptions,
-	TextureCompressionMode, TextureMipmapFilter, TextureResolutionLimit, WindowDebugOptions,
 };
 use un_avatar_skeleton::DynamicsPhysicsConfig;
 
@@ -1402,11 +1402,7 @@ impl BoneColliderRadiiMmManifest {
 }
 
 fn clamp_collider_radius_mm(value: f32) -> f32 {
-	if value.is_finite() {
-		value.clamp(0.0, 1000.0)
-	} else {
-		0.0
-	}
+	if value.is_finite() { value.clamp(0.0, 1000.0) } else { 0.0 }
 }
 
 impl LookAtManifest {

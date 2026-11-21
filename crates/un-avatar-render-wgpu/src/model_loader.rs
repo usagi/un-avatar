@@ -4,7 +4,7 @@ use un_avatar_core::{
 	ImportReport, ReportSeverity, UnaDocument, UnaRuntimeAction, UnaRuntimeActionEffect, UnaRuntimeActionSet, UnaRuntimeActionTrigger,
 };
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
-use un_avatar_io_gltf::{apply_unavatar_wardrobe_set, GltfImporter, WardrobeApplyReport};
+use un_avatar_io_gltf::{GltfImporter, WardrobeApplyReport, apply_unavatar_wardrobe_set};
 use un_avatar_io_vrm::{
 	gltf_root_json_from_bytes, gltf_root_json_from_path, has_vrm_extension, import_vrm_bytes, import_vrm_bytes_profiled,
 };

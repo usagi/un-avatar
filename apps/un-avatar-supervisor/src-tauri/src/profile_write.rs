@@ -1,6 +1,10 @@
 //! Replace complete profile contents without truncating the existing file first.
 //! This does not provide conflict detection between independent editors.
-use std::{fs, io::{self, Write}, path::Path};
+use std::{
+	fs,
+	io::{self, Write},
+	path::Path,
+};
 
 pub(crate) fn revision(contents: &[u8]) -> String {
 	use sha2::{Digest, Sha256};
@@ -15,17 +19,24 @@ pub(crate) fn check_revision(contents: &[u8], expected: Option<&str>) -> Result<
 }
 
 /// Caller holds the store lock. Check the complete order before any publication.
-pub(crate) fn check_reorder(paths: &[(String, std::path::PathBuf)], expected: Option<&std::collections::BTreeMap<String,String>>) -> Result<(),String> {
-    let ids=paths.iter().map(|(id,_)|id).collect::<std::collections::BTreeSet<_>>();
-    if ids.len()!=paths.len(){return Err("duplicate profile in reorder".into());}
-    if let Some(expected)=expected {
-        if expected.len()!=ids.len()||expected.keys().any(|id|!ids.contains(id)){return Err("profile_conflict: reorder target set changed".into());}
-        for (id,path) in paths {
-            let bytes=fs::read(path).map_err(|e|format!("read {}: {e}",path.display()))?;
-            check_revision(&bytes,expected.get(id).map(String::as_str))?;
-        }
-    }
-    Ok(())
+pub(crate) fn check_reorder(
+	paths: &[(String, std::path::PathBuf)],
+	expected: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<(), String> {
+	let ids = paths.iter().map(|(id, _)| id).collect::<std::collections::BTreeSet<_>>();
+	if ids.len() != paths.len() {
+		return Err("duplicate profile in reorder".into());
+	}
+	if let Some(expected) = expected {
+		if expected.len() != ids.len() || expected.keys().any(|id| !ids.contains(id)) {
+			return Err("profile_conflict: reorder target set changed".into());
+		}
+		for (id, path) in paths {
+			let bytes = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+			check_revision(&bytes, expected.get(id).map(String::as_str))?;
+		}
+	}
+	Ok(())
 }
 
 /// Keep the guard alive from read through publication/rename. The persistent
@@ -33,14 +44,21 @@ pub(crate) fn check_reorder(paths: &[(String, std::path::PathBuf)], expected: Op
 /// invalidate the lock. Never remove it on unlock (waiters may hold the inode).
 /// Only cooperating writers are serialized; this is not stale-editor detection.
 pub(crate) fn lock_store(directory: &Path) -> io::Result<fs::File> {
-    fs::create_dir_all(directory)?;
-    lock_directory(&directory.join(".lifecycle"))
+	fs::create_dir_all(directory)?;
+	lock_directory(&directory.join(".lifecycle"))
 }
 
 pub(crate) fn lock_directory(path: &Path) -> io::Result<fs::File> {
-	let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+	let parent = path
+		.parent()
+		.filter(|p| !p.as_os_str().is_empty())
+		.unwrap_or_else(|| Path::new("."));
 	let parent = fs::canonicalize(parent)?;
-	let guard = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false)
+	let guard = fs::OpenOptions::new()
+		.read(true)
+		.write(true)
+		.create(true)
+		.truncate(false)
 		.open(parent.join(".un-avatar-profile-write.lock"))?;
 	guard.lock()?;
 	Ok(guard)
@@ -48,7 +66,10 @@ pub(crate) fn lock_directory(path: &Path) -> io::Result<fs::File> {
 
 /// Publish a new profile only if the destination is still unused.
 pub(crate) fn create(path: &Path, contents: &[u8]) -> io::Result<()> {
-	let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+	let parent = path
+		.parent()
+		.filter(|p| !p.as_os_str().is_empty())
+		.unwrap_or_else(|| Path::new("."));
 	let mut staged = tempfile::NamedTempFile::new_in(parent)?;
 	staged.write_all(contents)?;
 	staged.as_file().sync_all()?;
@@ -62,8 +83,13 @@ pub(crate) fn replace(path: &Path, contents: &[u8]) -> io::Result<()> {
 	let path = if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
 		resolved = fs::canonicalize(path)?;
 		resolved.as_path()
-	} else { path };
-	let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
+	} else {
+		path
+	};
+	let parent = path
+		.parent()
+		.filter(|p| !p.as_os_str().is_empty())
+		.unwrap_or_else(|| Path::new("."));
 	let mut staged = tempfile::NamedTempFile::new_in(parent)?;
 	staged.write_all(contents)?;
 	match fs::metadata(path) {
@@ -88,17 +114,23 @@ mod tests {
 	use super::*;
 	#[test]
 	fn reorder_checks_every_revision_before_any_write() {
-		let root=tempfile::tempdir().unwrap();
-		let paths:Vec<(String,std::path::PathBuf)>=vec![("a".into(),root.path().join("a.toml")),("b".into(),root.path().join("b.toml"))];
-		for (_,path) in &paths{fs::write(path,b"original").unwrap();}
-		let expected=paths.iter().map(|(id,_)|(id.clone(),revision(b"original"))).collect::<std::collections::BTreeMap<_,_>>();
-		assert!(check_reorder(&paths,Some(&expected)).is_ok());
-		fs::write(&paths[1].1,b"external edit").unwrap();
-		assert!(check_reorder(&paths,Some(&expected)).unwrap_err().contains("profile_conflict"));
-		assert_eq!(fs::read(&paths[0].1).unwrap(),b"original");
-		assert_eq!(fs::read(&paths[1].1).unwrap(),b"external edit");
-		assert!(check_reorder(&paths[..1],Some(&expected)).is_err());
-		assert!(check_reorder(&[paths[0].clone(),paths[0].clone()],None).is_err());
+		let root = tempfile::tempdir().unwrap();
+		let paths: Vec<(String, std::path::PathBuf)> =
+			vec![("a".into(), root.path().join("a.toml")), ("b".into(), root.path().join("b.toml"))];
+		for (_, path) in &paths {
+			fs::write(path, b"original").unwrap();
+		}
+		let expected = paths
+			.iter()
+			.map(|(id, _)| (id.clone(), revision(b"original")))
+			.collect::<std::collections::BTreeMap<_, _>>();
+		assert!(check_reorder(&paths, Some(&expected)).is_ok());
+		fs::write(&paths[1].1, b"external edit").unwrap();
+		assert!(check_reorder(&paths, Some(&expected)).unwrap_err().contains("profile_conflict"));
+		assert_eq!(fs::read(&paths[0].1).unwrap(), b"original");
+		assert_eq!(fs::read(&paths[1].1).unwrap(), b"external edit");
+		assert!(check_reorder(&paths[..1], Some(&expected)).is_err());
+		assert!(check_reorder(&[paths[0].clone(), paths[0].clone()], None).is_err());
 	}
 
 	#[test]
@@ -107,8 +139,10 @@ mod tests {
 		let path = std::path::PathBuf::from(std::env::var_os("UNA_TEST_TRANSACTION_PATH").unwrap());
 		for _ in 0..12 {
 			let _guard = if std::env::var_os("UNA_TEST_STORE_LOCK").is_some() {
-                lock_store(path.parent().unwrap()).unwrap()
-            } else { lock_directory(&path).unwrap() };
+				lock_store(path.parent().unwrap()).unwrap()
+			} else {
+				lock_directory(&path).unwrap()
+			};
 			let value: u32 = fs::read_to_string(&path).unwrap().parse().unwrap();
 			std::thread::sleep(std::time::Duration::from_millis(2));
 			replace(&path, (value + 1).to_string().as_bytes()).unwrap();
@@ -120,14 +154,22 @@ mod tests {
 		let root = tempfile::tempdir().unwrap();
 		let target = root.path().join("counter.toml");
 		fs::write(&target, "0").unwrap();
-		let mut children: Vec<_> = (0..2).map(|index| {
-            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-            command.args(["--exact", "profile_write::tests::transaction_lock_process_worker", "--ignored"])
-                .env("UNA_TEST_TRANSACTION_PATH", &target).env_remove("UNA_TEST_STORE_LOCK");
-            if index == 0 { command.env("UNA_TEST_STORE_LOCK", "1"); }
-            command.spawn().unwrap()
-		}).collect();
-		for child in &mut children { assert!(child.wait().unwrap().success()); }
+		let mut children: Vec<_> = (0..2)
+			.map(|index| {
+				let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+				command
+					.args(["--exact", "profile_write::tests::transaction_lock_process_worker", "--ignored"])
+					.env("UNA_TEST_TRANSACTION_PATH", &target)
+					.env_remove("UNA_TEST_STORE_LOCK");
+				if index == 0 {
+					command.env("UNA_TEST_STORE_LOCK", "1");
+				}
+				command.spawn().unwrap()
+			})
+			.collect();
+		for child in &mut children {
+			assert!(child.wait().unwrap().success());
+		}
 		assert_eq!(fs::read_to_string(&target).unwrap(), "24");
 	}
 
@@ -165,14 +207,17 @@ mod tests {
 		let root = tempfile::tempdir().unwrap();
 		let path = root.path().join("same.toml");
 		let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-		let workers: Vec<_> = [b'A', b'B'].into_iter().map(|byte| {
-			let path = path.clone();
-			let barrier = barrier.clone();
-			std::thread::spawn(move || {
-				barrier.wait();
-				create(&path, &vec![byte; 8192]).map(|()| byte)
+		let workers: Vec<_> = [b'A', b'B']
+			.into_iter()
+			.map(|byte| {
+				let path = path.clone();
+				let barrier = barrier.clone();
+				std::thread::spawn(move || {
+					barrier.wait();
+					create(&path, &vec![byte; 8192]).map(|()| byte)
+				})
 			})
-		}).collect();
+			.collect();
 		let results: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
 		assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
 		let winner = results.into_iter().find_map(Result::ok).unwrap();

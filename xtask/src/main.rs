@@ -13,7 +13,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 use sha2::{Digest, Sha256};
 use un_avatar_core::UnaDocument;
 use un_avatar_io::{AvatarImporter, ImportContext, ImportInput, ImportOptions};
-use un_avatar_skeleton::{apply_un_motion_frame_to_document_with_rest, ApplyUnMotionFrameOpts};
+use un_avatar_skeleton::{ApplyUnMotionFrameOpts, apply_un_motion_frame_to_document_with_rest};
 use un_avatar_types::HumanoidProfile;
 use un_avatar_zenoh::UnAvatarZenohReceiver;
 use un_motion_frame::{
@@ -21,7 +21,7 @@ use un_motion_frame::{
 	TransformSample, UNMotionFrame,
 };
 use un_motion_frame_zenoh::ZenohTopicStrategy;
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipArchive};
+use zip::{CompressionMethod, ZipArchive, write::SimpleFileOptions};
 
 const SPOUT2_REPO_URL: &str = "https://github.com/leadedge/Spout2.git";
 const DEFAULT_SPOUT2_REF: &str = "2.007.017";
@@ -569,11 +569,7 @@ fn quoted_field(line: &str, key: &str) -> Option<String> {
 
 fn path_from_arg(repo: &Path, value: String) -> PathBuf {
 	let path = PathBuf::from(value);
-	if path.is_absolute() {
-		path
-	} else {
-		repo.join(path)
-	}
+	if path.is_absolute() { path } else { repo.join(path) }
 }
 
 fn resolve_renderer_profile_manifest(repo: &Path, profile: &str) -> Result<PathBuf, String> {
@@ -692,17 +688,21 @@ fn normalize_profile_key(value: &str) -> String {
 
 fn supervisor_frontend_build_command(repo: &Path) -> Command {
 	let mut command = Command::new(npm_exe());
-	command.args(["run", "build"])
+	command
+		.args(["run", "build"])
 		.env("VITE_UN_DESIGN_PREVIEW", "0")
 		.current_dir(repo.join("apps").join("un-avatar-supervisor"))
-		.stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+		.stdin(Stdio::inherit())
+		.stdout(Stdio::inherit())
+		.stderr(Stdio::inherit());
 	command
 }
 
 fn run_supervisor_frontend_build(repo: &Path) -> bool {
 	// Timestamps cannot identify a design-preview build or changes in shared
 	// components outside this frontend directory. Always generate normal UI.
-	supervisor_frontend_build_command(repo).status()
+	supervisor_frontend_build_command(repo)
+		.status()
 		.map(|status| status.success())
 		.unwrap_or_else(|e| {
 			eprintln!("package: npm run build failed to start: {e}");
@@ -1109,11 +1109,7 @@ Record evidence in `notes-template.md` and keep screenshots/diagnostics bundles 
 }
 
 fn npm_exe() -> &'static str {
-	if cfg!(windows) {
-		"npm.cmd"
-	} else {
-		"npm"
-	}
+	if cfg!(windows) { "npm.cmd" } else { "npm" }
 }
 
 fn run_cargo_with_spout_env(repo: &Path, args: &[&str], extra_envs: &[(&str, &str)]) -> bool {
@@ -1948,7 +1944,9 @@ fn response_audit_group_label(group: &serde_json::Value) -> String {
 	let orient = json_f64(group, "average_orientation_follow");
 	let stretch = json_f64(group, "average_max_stretch_response");
 	let stretch_motion = json_f64(group, "average_stretch_motion_response");
-	format!("{source_id}:category={category},visual={visual},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}")
+	format!(
+		"{source_id}:category={category},visual={visual},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}"
+	)
 }
 
 fn response_audit_top_group_label(groups: &[serde_json::Value]) -> String {
@@ -1992,7 +1990,9 @@ fn response_audit_category_label(category: &serde_json::Value) -> String {
 	let orient = json_f64(category, "average_orientation_follow");
 	let stretch = json_f64(category, "average_max_stretch_response");
 	let stretch_motion = json_f64(category, "average_stretch_motion_response");
-	format!("{name}:groups={groups},visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}")
+	format!(
+		"{name}:groups={groups},visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},joints={joints},visibleJoints={visible_joints},visibleMeshSubtrees={visible_mesh_subtrees},rest={rest:.3},shape={shape:.3},bounce={bounce:.3},follow={follow:.3},orient={orient:.3},stretch={stretch:.3},stretchMotion={stretch_motion:.3}"
+	)
 }
 
 fn response_audit_visual_response_evidence_count(modes: &[serde_json::Value]) -> u64 {
@@ -2134,7 +2134,9 @@ fn collider_summary_label(summary: &serde_json::Value) -> String {
 	let projections = json_u64(summary, "projection_count");
 	let sources = json_u64(summary, "source_count");
 	let min_margin = json_f64(summary, "min_margin");
-	format!("{path}:shape={shape},inside={inside_bounds},candidates={candidates},penetrating={penetrating},projections={projections},sources={sources},minMargin={min_margin:.5}")
+	format!(
+		"{path}:shape={shape},inside={inside_bounds},candidates={candidates},penetrating={penetrating},projections={projections},sources={sources},minMargin={min_margin:.5}"
+	)
 }
 
 fn json_stable_offset(value: &serde_json::Value) -> f64 {
@@ -2161,7 +2163,9 @@ fn motion_trace_response_label(value: &serde_json::Value) -> String {
 	let orient = json_f64(value, "average_orientation_follow");
 	let stretch = json_f64(value, "average_max_stretch_response");
 	let stretch_motion = json_f64(value, "average_stretch_motion_response");
-	format!("resp=rest:{rest:.3},shape:{shape:.3},bounce:{bounce:.3},follow:{follow:.3},orient:{orient:.3},stretch:{stretch:.3},stretchMotion:{stretch_motion:.3}")
+	format!(
+		"resp=rest:{rest:.3},shape:{shape:.3},bounce:{bounce:.3},follow:{follow:.3},orient:{orient:.3},stretch:{stretch:.3},stretchMotion:{stretch_motion:.3}"
+	)
 }
 
 fn motion_trace_bool_label(value: &serde_json::Value, key: &str) -> &'static str {
@@ -2190,7 +2194,9 @@ fn motion_trace_category_summary_label(category: &serde_json::Value) -> String {
 	let residual_chain_ratio = json_f64(category, "residual_motion_chain_ratio");
 	let half_life = json_half_life_label(category);
 	let response = motion_trace_response_label(category);
-	format!("{name}:visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},avg={avg_lag:.3},rec={recovery:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}")
+	format!(
+		"{name}:visualGroups={visual_groups},nonvisualGroups={nonvisual_groups},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},avg={avg_lag:.3},rec={recovery:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}"
+	)
 }
 
 fn motion_trace_top_visual_category_label(categories: &[serde_json::Value], groups: &[serde_json::Value]) -> String {
@@ -2256,11 +2262,7 @@ fn motion_trace_finding_top_label_where(findings: &[serde_json::Value], predicat
 			}
 		})
 		.collect::<Vec<_>>();
-	if labels.is_empty() {
-		"-".to_string()
-	} else {
-		labels.join(",")
-	}
+	if labels.is_empty() { "-".to_string() } else { labels.join(",") }
 }
 
 fn motion_trace_visual_finding_top_label(findings: &[serde_json::Value]) -> String {
@@ -2284,7 +2286,9 @@ fn motion_trace_group_summary_label(group: &serde_json::Value) -> String {
 	let residual_chain_ratio = json_f64(group, "residual_motion_chain_ratio");
 	let half_life = json_half_life_label(group);
 	let response = motion_trace_response_label(group);
-	format!("{source_id}:visual={visual_target},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}")
+	format!(
+		"{source_id}:visual={visual_target},chain={chain_length:.3},max={max_lag:.3},maxChain={max_lag_chain_ratio:.3},initialStable={initial_stable:.3},stable={settled:.3},stableRatio={stable_ratio:.3},stableChain={stable_chain_ratio:.3},state={recovery_state},res={residual:.3},resChain={residual_chain_ratio:.3},half={half_life},{response}"
+	)
 }
 
 fn motion_trace_top_group_label(groups: &[serde_json::Value]) -> String {
@@ -3628,11 +3632,7 @@ fn clean_spout2(repo: &Path) -> bool {
 }
 
 fn exe_name(name: &str) -> String {
-	if cfg!(windows) {
-		format!("{name}.exe")
-	} else {
-		name.to_string()
-	}
+	if cfg!(windows) { format!("{name}.exe") } else { name.to_string() }
 }
 
 fn reset_package_dir(repo: &Path) -> bool {
@@ -3887,11 +3887,17 @@ fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) 
 	}
 	let temporary = match tempfile::NamedTempFile::new_in(zip_path.parent().unwrap_or(Path::new("."))) {
 		Ok(file) => file,
-		Err(error) => { eprintln!("release-package: temporary ZIP: {error}"); return false; }
+		Err(error) => {
+			eprintln!("release-package: temporary ZIP: {error}");
+			return false;
+		}
 	};
 	let file = match temporary.reopen() {
 		Ok(file) => file,
-		Err(error) => { eprintln!("release-package: open temporary ZIP: {error}"); return false; }
+		Err(error) => {
+			eprintln!("release-package: open temporary ZIP: {error}");
+			return false;
+		}
 	};
 	let mut writer = zip::ZipWriter::new(BufWriter::new(file));
 	let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -3899,16 +3905,21 @@ fn create_release_zip(staging_root: &Path, package_name: &str, zip_path: &Path) 
 	if !add_zip_entry(&mut writer, staging_root, &package_dir, options) {
 		return false;
 	}
-	let mut file=match writer.finish() {
-		Ok(file)=>file,
-		Err(error)=>{eprintln!("release-package: finalize ZIP: {error}");return false;}
+	let mut file = match writer.finish() {
+		Ok(file) => file,
+		Err(error) => {
+			eprintln!("release-package: finalize ZIP: {error}");
+			return false;
+		}
 	};
-	if let Err(error)=file.flush().and_then(|()|file.get_ref().sync_all()) {
-		eprintln!("release-package: flush ZIP: {error}");return false;
+	if let Err(error) = file.flush().and_then(|()| file.get_ref().sync_all()) {
+		eprintln!("release-package: flush ZIP: {error}");
+		return false;
 	}
 	drop(file);
-	if let Err(error)=temporary.persist(zip_path) {
-		eprintln!("release-package: replace ZIP: {}",error.error);return false;
+	if let Err(error) = temporary.persist(zip_path) {
+		eprintln!("release-package: replace ZIP: {}", error.error);
+		return false;
 	}
 	true
 }
@@ -3922,7 +3933,12 @@ fn required_release_zip_entries(package_name: &str, require_spout2: bool) -> Vec
 		format!("{root}/THIRD_PARTY_NOTICES.md"),
 		format!("{root}/LICENSES/third-party-licenses.md"),
 	];
-	entries.extend(RELEASE_PACKAGE_DOCS.iter().chain(RELEASE_PROFILE_TEMPLATES).map(|relative| format!("{root}/{relative}")));
+	entries.extend(
+		RELEASE_PACKAGE_DOCS
+			.iter()
+			.chain(RELEASE_PROFILE_TEMPLATES)
+			.map(|relative| format!("{root}/{relative}")),
+	);
 	entries.extend([
 		format!("{root}/{}", exe_name("un-avatar-renderer")),
 		format!("{root}/{}", exe_name("un-avatar-supervisor")),
@@ -4433,25 +4449,26 @@ fn run_spout2(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 const NORMAL_PACKAGE_RECEIPT: &str = "un-avatar-build.json";
 
 fn normal_package_artifacts(package: &Path) -> Result<serde_json::Value, String> {
-	let mut files=serde_json::Map::new();
+	let mut files = serde_json::Map::new();
 	for binary in ["un-avatar-supervisor", "un-avatar-renderer"] {
-		let name=exe_name(binary);
-		let hash=file_sha256(&package.join(&name)).ok_or_else(||format!("missing or unreadable package artifact: {name}"))?;
-		files.insert(name,serde_json::Value::String(hash));
+		let name = exe_name(binary);
+		let hash = file_sha256(&package.join(&name)).ok_or_else(|| format!("missing or unreadable package artifact: {name}"))?;
+		files.insert(name, serde_json::Value::String(hash));
 	}
 	Ok(serde_json::Value::Object(files))
 }
 
 fn record_normal_package(package: &Path) -> Result<(), String> {
-	let receipt=serde_json::json!({"schema_version":1,"ui_mode":"normal","artifacts":normal_package_artifacts(package)?});
-	let bytes=serde_json::to_vec_pretty(&receipt).map_err(|error|error.to_string())?;
-	fs::write(package.join(NORMAL_PACKAGE_RECEIPT),bytes).map_err(|error|error.to_string())
+	let receipt = serde_json::json!({"schema_version":1,"ui_mode":"normal","artifacts":normal_package_artifacts(package)?});
+	let bytes = serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?;
+	fs::write(package.join(NORMAL_PACKAGE_RECEIPT), bytes).map_err(|error| error.to_string())
 }
 
 fn verify_normal_package(package: &Path) -> Result<(), String> {
-	let bytes=fs::read(package.join(NORMAL_PACKAGE_RECEIPT)).map_err(|error|format!("normal UI build receipt missing: {error}; run cargo xtask package"))?;
-	let receipt:serde_json::Value=serde_json::from_slice(&bytes).map_err(|error|error.to_string())?;
-	if receipt["schema_version"]!=1 || receipt["ui_mode"]!="normal" || receipt["artifacts"]!=normal_package_artifacts(package)? {
+	let bytes = fs::read(package.join(NORMAL_PACKAGE_RECEIPT))
+		.map_err(|error| format!("normal UI build receipt missing: {error}; run cargo xtask package"))?;
+	let receipt: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+	if receipt["schema_version"] != 1 || receipt["ui_mode"] != "normal" || receipt["artifacts"] != normal_package_artifacts(package)? {
 		return Err("package binaries differ from the normal UI build receipt; run cargo xtask package".into());
 	}
 	Ok(())
@@ -4465,9 +4482,12 @@ fn parse_package_options(repo: &Path, args: impl Iterator<Item = String>) -> Res
 		match arg.as_str() {
 			"--skip-spout2" => skip_spout2 = true,
 			"--target-dir" => {
-				let value = args.next().filter(|s| !s.is_empty() && !s.starts_with("--")).ok_or("--target-dir requires a path")?;
+				let value = args
+					.next()
+					.filter(|s| !s.is_empty() && !s.starts_with("--"))
+					.ok_or("--target-dir requires a path")?;
 				let path = PathBuf::from(value);
-				target_dir = if path.is_absolute() {path} else {repo.join(path)};
+				target_dir = if path.is_absolute() { path } else { repo.join(path) };
 			}
 			other => return Err(format!("unknown package option: {other}")),
 		}
@@ -4478,11 +4498,15 @@ fn parse_package_options(repo: &Path, args: impl Iterator<Item = String>) -> Res
 fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let args: Vec<_> = args.collect();
 	if args.iter().any(|arg| matches!(arg.as_str(), "help" | "--help" | "-h")) {
-		print_package_usage(); return true;
+		print_package_usage();
+		return true;
 	}
 	let (skip_spout2, target_dir) = match parse_package_options(repo, args.into_iter()) {
 		Ok(options) => options,
-		Err(error) => {eprintln!("package: {error}"); return false;}
+		Err(error) => {
+			eprintln!("package: {error}");
+			return false;
+		}
 	};
 	for key in ["TAURI_CONFIG", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET"] {
 		if env::var_os(key).is_some() {
@@ -4504,7 +4528,16 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 	let build_ok = if skip_spout2 {
 		run_cargo_with_env(
 			repo,
-			&["build", "--release", "--target-dir", &target_text, "-p", "un-avatar-supervisor", "-p", "un-avatar-render-wgpu"],
+			&[
+				"build",
+				"--release",
+				"--target-dir",
+				&target_text,
+				"-p",
+				"un-avatar-supervisor",
+				"-p",
+				"un-avatar-render-wgpu",
+			],
 			&[("UN_AVATAR_FRONTEND_PREBUILT", "1")],
 		)
 		.success()
@@ -4515,7 +4548,16 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 			&[("UN_AVATAR_FRONTEND_PREBUILT", "1")],
 		) && run_cargo_with_spout_env(
 			repo,
-			&["build", "--release", "--target-dir", &target_text, "-p", "un-avatar-render-wgpu", "--features", "spout-sdk"],
+			&[
+				"build",
+				"--release",
+				"--target-dir",
+				&target_text,
+				"-p",
+				"un-avatar-render-wgpu",
+				"--features",
+				"spout-sdk",
+			],
 			&[],
 		)
 	};
@@ -4529,7 +4571,7 @@ fn run_package(repo: &Path, args: impl Iterator<Item = String>) -> bool {
 		&& stage_package_docs(repo)
 		&& stage_unity_exporter_package(repo, &package.join("unity").join(UNITY_EXPORTER_PACKAGE));
 	if ok {
-		if let Err(error)=record_normal_package(&package) {
+		if let Err(error) = record_normal_package(&package) {
 			eprintln!("package: {error}");
 			return false;
 		}
@@ -4563,7 +4605,10 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 				output_dir = Some(PathBuf::from(value));
 			}
 			"--target-dir" => {
-				let Some(value) = iter.next().filter(|s| !s.is_empty() && !s.starts_with("--")) else {eprintln!("release-package: --target-dir requires a path"); return false;};
+				let Some(value) = iter.next().filter(|s| !s.is_empty() && !s.starts_with("--")) else {
+					eprintln!("release-package: --target-dir requires a path");
+					return false;
+				};
 				target_dir = Some(value);
 			}
 			"--skip-build" => skip_build = true,
@@ -4591,7 +4636,9 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 		} else {
 			Vec::new()
 		};
-		if let Some(target) = target_dir { package_args.extend(["--target-dir".into(), target]); }
+		if let Some(target) = target_dir {
+			package_args.extend(["--target-dir".into(), target]);
+		}
 		if !run_package(repo, package_args.into_iter()) {
 			return false;
 		}
@@ -4605,7 +4652,7 @@ fn run_release_package(repo: &Path, args: impl Iterator<Item = String>) -> bool 
 		);
 		return false;
 	}
-	if let Err(error)=verify_normal_package(&source_package) {
+	if let Err(error) = verify_normal_package(&source_package) {
 		eprintln!("release-package: {error}");
 		return false;
 	}
@@ -6399,54 +6446,76 @@ mod tests {
 	#[test]
 	fn package_build_root_is_explicit_and_defaults_compatibly() {
 		let repo = std::path::Path::new("workspace");
-		assert_eq!(parse_package_options(repo, std::iter::empty()).unwrap(), (false, repo.join("target")));
-		assert_eq!(parse_package_options(repo, ["--target-dir", "target/candidate", "--skip-spout2"].into_iter().map(String::from)).unwrap(), (true, repo.join("target/candidate")));
+		assert_eq!(
+			parse_package_options(repo, std::iter::empty()).unwrap(),
+			(false, repo.join("target"))
+		);
+		assert_eq!(
+			parse_package_options(
+				repo,
+				["--target-dir", "target/candidate", "--skip-spout2"].into_iter().map(String::from)
+			)
+			.unwrap(),
+			(true, repo.join("target/candidate"))
+		);
 		assert!(parse_package_options(repo, ["--target-dir"].into_iter().map(String::from)).is_err());
 		assert!(parse_package_options(repo, ["--target-dir", "--skip-spout2"].into_iter().map(String::from)).is_err());
 	}
 
 	#[test]
 	fn release_archive_failure_preserves_previous_zip() {
-		let root=tempfile::tempdir().unwrap();
-		let output=root.path().join("release.zip");
-		std::fs::write(&output,b"previous package").unwrap();
-		assert!(!super::create_release_zip(root.path(),"package",&output));
-		assert_eq!(std::fs::read(&output).unwrap(),b"previous package");
-		let staging=root.path().join("package");
+		let root = tempfile::tempdir().unwrap();
+		let output = root.path().join("release.zip");
+		std::fs::write(&output, b"previous package").unwrap();
+		assert!(!super::create_release_zip(root.path(), "package", &output));
+		assert_eq!(std::fs::read(&output).unwrap(), b"previous package");
+		let staging = root.path().join("package");
 		std::fs::create_dir(&staging).unwrap();
-		std::fs::write(staging.join("README.txt"),b"new package").unwrap();
-		#[cfg(windows)] {
+		std::fs::write(staging.join("README.txt"), b"new package").unwrap();
+		#[cfg(windows)]
+		{
 			use std::os::windows::fs::OpenOptionsExt;
-			let locked=std::fs::OpenOptions::new().read(true).share_mode(0).open(staging.join("README.txt")).unwrap();
-			assert!(!super::create_release_zip(root.path(),"package",&output));
-			assert_eq!(std::fs::read(&output).unwrap(),b"previous package");
+			let locked = std::fs::OpenOptions::new()
+				.read(true)
+				.share_mode(0)
+				.open(staging.join("README.txt"))
+				.unwrap();
+			assert!(!super::create_release_zip(root.path(), "package", &output));
+			assert_eq!(std::fs::read(&output).unwrap(), b"previous package");
 			drop(locked);
 		}
-		assert!(super::create_release_zip(root.path(),"package",&output));
-		let mut archive=zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
-		let mut text=String::new();
-		std::io::Read::read_to_string(&mut archive.by_name("package/README.txt").unwrap(),&mut text).unwrap();
-		assert_eq!(text,"new package");
+		assert!(super::create_release_zip(root.path(), "package", &output));
+		let mut archive = zip::ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+		let mut text = String::new();
+		std::io::Read::read_to_string(&mut archive.by_name("package/README.txt").unwrap(), &mut text).unwrap();
+		assert_eq!(text, "new package");
 	}
 	#[test]
 	fn package_receipt_rejects_missing_changed_and_preview_artifacts() {
-		let root=std::env::temp_dir().join(format!("una-receipt-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+		let root = std::env::temp_dir().join(format!(
+			"una-receipt-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
 		std::fs::create_dir(&root).unwrap();
-		for name in ["un-avatar-supervisor","un-avatar-renderer"] {
-			std::fs::write(root.join(super::exe_name(name)),name).unwrap();
+		for name in ["un-avatar-supervisor", "un-avatar-renderer"] {
+			std::fs::write(root.join(super::exe_name(name)), name).unwrap();
 		}
 		assert!(super::verify_normal_package(&root).is_err());
 		super::record_normal_package(&root).unwrap();
 		super::verify_normal_package(&root).unwrap();
-		let receipt_path=root.join(super::NORMAL_PACKAGE_RECEIPT);
-		let original=std::fs::read(&receipt_path).unwrap();
-		let mut preview:serde_json::Value=serde_json::from_slice(&original).unwrap();
-		preview["ui_mode"]="preview".into();
-		std::fs::write(&receipt_path,serde_json::to_vec(&preview).unwrap()).unwrap();
+		let receipt_path = root.join(super::NORMAL_PACKAGE_RECEIPT);
+		let original = std::fs::read(&receipt_path).unwrap();
+		let mut preview: serde_json::Value = serde_json::from_slice(&original).unwrap();
+		preview["ui_mode"] = "preview".into();
+		std::fs::write(&receipt_path, serde_json::to_vec(&preview).unwrap()).unwrap();
 		assert!(super::verify_normal_package(&root).is_err());
-		std::fs::write(&receipt_path,&original).unwrap();
-		let renderer=root.join(super::exe_name("un-avatar-renderer"));
-		std::fs::write(&renderer,"different renderer").unwrap();
+		std::fs::write(&receipt_path, &original).unwrap();
+		let renderer = root.join(super::exe_name("un-avatar-renderer"));
+		std::fs::write(&renderer, "different renderer").unwrap();
 		assert!(super::verify_normal_package(&root).is_err());
 		std::fs::remove_file(renderer).unwrap();
 		assert!(super::verify_normal_package(&root).is_err());
@@ -6455,9 +6524,16 @@ mod tests {
 	#[test]
 	fn native_build_explicitly_selects_normal_frontend() {
 		let command = super::supervisor_frontend_build_command(std::path::Path::new("repo"));
-		assert!(command.get_envs().any(|(key,value)| key == "VITE_UN_DESIGN_PREVIEW" && value == Some(std::ffi::OsStr::new("0"))));
+		assert!(
+			command
+				.get_envs()
+				.any(|(key, value)| key == "VITE_UN_DESIGN_PREVIEW" && value == Some(std::ffi::OsStr::new("0")))
+		);
 		assert_eq!(command.get_args().collect::<Vec<_>>(), ["run", "build"]);
-		assert_eq!(command.get_current_dir(), Some(std::path::Path::new("repo/apps/un-avatar-supervisor")));
+		assert_eq!(
+			command.get_current_dir(),
+			Some(std::path::Path::new("repo/apps/un-avatar-supervisor"))
+		);
 	}
 	use super::*;
 
@@ -6612,8 +6688,10 @@ mod tests {
 		assert!(
 			visual_label.starts_with("cloth:groups=5,visualGroups=4,nonvisualGroups=1,joints=12,visibleJoints=10,visibleMeshSubtrees=2")
 		);
-		assert!(nonvisual_label
-			.starts_with("control:groups=3,visualGroups=0,nonvisualGroups=3,joints=18,visibleJoints=0,visibleMeshSubtrees=0"));
+		assert!(
+			nonvisual_label
+				.starts_with("control:groups=3,visualGroups=0,nonvisualGroups=3,joints=18,visibleJoints=0,visibleMeshSubtrees=0")
+		);
 		assert!(visual_label.contains("stretchMotion=0.770"));
 	}
 
@@ -7242,11 +7320,13 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 
 	#[test]
 	fn package_render_smoke_options_require_manifest_for_wardrobe() {
-		assert!(parse_package_render_smoke_options(
-			Path::new("."),
-			["--wardrobe-set".to_string(), "field_drape".to_string()].into_iter()
-		)
-		.is_err());
+		assert!(
+			parse_package_render_smoke_options(
+				Path::new("."),
+				["--wardrobe-set".to_string(), "field_drape".to_string()].into_iter()
+			)
+			.is_err()
+		);
 	}
 
 	#[test]
@@ -7279,7 +7359,11 @@ un-avatar-renderer: model import profile path=model step=import_gltf_path elapse
 		fs::remove_file(&template).expect("remove main template");
 		let missing_template_zip = dir.join("package-missing-template.zip");
 		assert!(create_release_zip(&staging_root, package_name, &missing_template_zip));
-		assert!(release_zip_missing_entries(&missing_template_zip, package_name, true).unwrap().contains(&format!("{package_name}/profiles/main.toml")));
+		assert!(
+			release_zip_missing_entries(&missing_template_zip, package_name, true)
+				.unwrap()
+				.contains(&format!("{package_name}/profiles/main.toml"))
+		);
 		fs::write(&template, template_bytes).expect("restore main template");
 
 		let no_spout_root = dir.join("staging-no-spout");

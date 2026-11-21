@@ -5,18 +5,18 @@ use std::{
 	path::{Path, PathBuf},
 	process::Command,
 	sync::LazyLock,
-	sync::{mpsc, Arc, Mutex},
+	sync::{Arc, Mutex, mpsc},
 	thread,
 	time::Duration,
 };
 
 use tray_icon::{
-	menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 	Icon as TrayIconImage, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
+	menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
 };
 use winit::event_loop::EventLoopProxy;
 
-use crate::{gpu, AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnapshot};
+use crate::{AvatarWindowOptions, RendererControlEvent, RendererRuntimeSnapshot, gpu};
 
 const TRAY_ICON_ID_PREFIX: &str = "un-avatar-renderer-tray";
 const SUPERVISOR_OPEN_PROFILE_MANIFEST_ARG: &str = "--open-profile-manifest";
@@ -489,7 +489,7 @@ pub(crate) fn install_event_handlers(proxy: EventLoopProxy<RendererControlEvent>
 
 #[cfg(windows)]
 fn pump_windows_messages() {
-	use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+	use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage};
 
 	unsafe {
 		let mut msg = MSG::default();
@@ -1138,11 +1138,7 @@ fn animator_normalized_toggle_label(label: &str) -> (String, Option<AnimatorTogg
 
 fn animator_inactive_parameter_value(value: f32, polarity: Option<AnimatorTogglePolarity>) -> f32 {
 	let _ = polarity;
-	if value.abs() <= 0.005 {
-		1.0
-	} else {
-		0.0
-	}
+	if value.abs() <= 0.005 { 1.0 } else { 0.0 }
 }
 
 fn append_header(menu: &Menu, opts: &AvatarWindowOptions, snapshot: &RendererRuntimeSnapshot, text: &TrayText) {

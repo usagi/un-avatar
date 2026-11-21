@@ -12,8 +12,8 @@ use un_avatar_io::{
 	ImportOptions, ImportProbe, ImportProbeResult, ImportResult, PluginStability,
 };
 
-use crate::manifest::{load_manifest, PluginManifest};
-use crate::stdio_rpc::{rpc_handshake_timeout_from_env, rpc_import_timeout_from_env, HandshakeError, PluginChild};
+use crate::manifest::{PluginManifest, load_manifest};
+use crate::stdio_rpc::{HandshakeError, PluginChild, rpc_handshake_timeout_from_env, rpc_import_timeout_from_env};
 
 #[derive(Debug)]
 pub enum StdioImporterError {
@@ -362,7 +362,8 @@ mod tests {
 			return false;
 		}
 		let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"));
-		child.args([test_name, "--exact", "--test-threads=1"])
+		child
+			.args([test_name, "--exact", "--test-threads=1"])
 			.env(CASE, test_name)
 			.env("SAMPLE_IO_PLUGIN_EMIT_CWD", "1");
 		if host {
@@ -371,8 +372,16 @@ mod tests {
 			child.env_remove("UN_AVATAR_PLUGIN_CHILD_CWD");
 		}
 		let output = child.output().expect("isolated CWD test");
-		assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-		assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"), "isolated test must execute exactly one case");
+		assert!(
+			output.status.success(),
+			"{}\n{}",
+			String::from_utf8_lossy(&output.stdout),
+			String::from_utf8_lossy(&output.stderr)
+		);
+		assert!(
+			String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+			"isolated test must execute exactly one case"
+		);
 		true
 	}
 
@@ -414,7 +423,9 @@ mod tests {
 
 	#[test]
 	fn stdio_importer_child_cwd_defaults_to_bundle_dir() {
-		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_defaults_to_bundle_dir", false) { return; }
+		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_defaults_to_bundle_dir", false) {
+			return;
+		}
 		let _s = cwd_serial_lock();
 		let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sample-io-plugin/manifest.toml");
 		let bundle_dir = std::fs::canonicalize(manifest.parent().expect("manifest parent")).expect("bundle_dir");
@@ -441,7 +452,9 @@ mod tests {
 
 	#[test]
 	fn stdio_importer_child_cwd_follows_host_when_env_host() {
-		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_follows_host_when_env_host", true) { return; }
+		if isolated_cwd_case("stdio_importer::tests::stdio_importer_child_cwd_follows_host_when_env_host", true) {
+			return;
+		}
 		let _s = cwd_serial_lock();
 		let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/sample-io-plugin/manifest.toml");
 

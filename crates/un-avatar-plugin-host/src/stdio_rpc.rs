@@ -4,7 +4,7 @@ use std::{
 	io::{BufRead, BufReader, BufWriter, Write},
 	path::Path,
 	process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-	sync::{mpsc, Arc, Mutex},
+	sync::{Arc, Mutex, mpsc},
 	thread,
 	time::{Duration, Instant},
 };

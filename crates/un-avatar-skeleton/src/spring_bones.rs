@@ -43,13 +43,13 @@ use std::{collections::BTreeMap, time::Instant};
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
 use un_avatar_core::{
-	una_dynamics_translation_writeback_candidate_count, UnaDynamicsGroup, UnaDynamicsImmobileType, UnaDynamicsLimit, UnaDynamicsSettings,
-	UnaDynamicsWritebackMode, UnaRuntimeDynamics, UnaSceneNode, UnaSceneSnapshot,
+	UnaDynamicsGroup, UnaDynamicsImmobileType, UnaDynamicsLimit, UnaDynamicsSettings, UnaDynamicsWritebackMode, UnaRuntimeDynamics,
+	UnaSceneNode, UnaSceneSnapshot, una_dynamics_translation_writeback_candidate_count,
 };
 
 use crate::bone_colliders::{
-	push_tail_out_of_world_collider, resolve_world_colliders, BoneColliderPrimitive, RuntimeBoneColliderPrimitive,
-	WorldBoneColliderPrimitive,
+	BoneColliderPrimitive, RuntimeBoneColliderPrimitive, WorldBoneColliderPrimitive, push_tail_out_of_world_collider,
+	resolve_world_colliders,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -754,11 +754,7 @@ fn normalized_text_contains_any(text: &str, aliases: &[&str]) -> bool {
 }
 
 fn finite_or(value: f32, fallback: f32) -> f32 {
-	if value.is_finite() {
-		value
-	} else {
-		fallback
-	}
+	if value.is_finite() { value } else { fallback }
 }
 
 fn default_spring_bone_simulation_hz() -> f32 {
@@ -4391,9 +4387,11 @@ mod tests {
 			dynamics_mesh_cloth_assist_deforming_nodes(&chain, 3).collect::<Vec<_>>(),
 			vec![13, 14]
 		);
-		assert!(dynamics_mesh_cloth_assist_deforming_nodes(&chain[..2], 0)
-			.collect::<Vec<_>>()
-			.is_empty());
+		assert!(
+			dynamics_mesh_cloth_assist_deforming_nodes(&chain[..2], 0)
+				.collect::<Vec<_>>()
+				.is_empty()
+		);
 	}
 
 	#[test]
@@ -8924,27 +8922,35 @@ mod tests {
 			.expect("left summary");
 		assert_eq!(left_summary.matched_overrides, vec!["all ear test groups", "left later override"]);
 		assert!(!left_summary.group_override_applied);
-		assert!(left_summary
-			.invalid_match_regexes
-			.iter()
-			.any(|message| message.contains("broken regex")));
+		assert!(
+			left_summary
+				.invalid_match_regexes
+				.iter()
+				.any(|message| message.contains("broken regex"))
+		);
 		let right_summary = summaries
 			.iter()
 			.find(|summary| summary.source_id == "physbone:right-ear")
 			.expect("right summary");
 		assert_eq!(right_summary.matched_overrides, vec!["all ear test groups", "right regex"]);
 		assert!(right_summary.group_override_applied);
-		assert!(right_summary
-			.invalid_match_regexes
-			.iter()
-			.any(|message| message.contains("broken regex")));
+		assert!(
+			right_summary
+				.invalid_match_regexes
+				.iter()
+				.any(|message| message.contains("broken regex"))
+		);
 		let tuning_warnings = sim.tuning_warnings();
-		assert!(tuning_warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics match override did not match") && warning.contains("missing cape")));
-		assert!(tuning_warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics exact group override") && warning.contains("physbone:missing")));
+		assert!(
+			tuning_warnings
+				.iter()
+				.any(|warning| warning.contains("dynamics match override did not match") && warning.contains("missing cape"))
+		);
+		assert!(
+			tuning_warnings
+				.iter()
+				.any(|warning| warning.contains("dynamics exact group override") && warning.contains("physbone:missing"))
+		);
 	}
 
 	#[test]

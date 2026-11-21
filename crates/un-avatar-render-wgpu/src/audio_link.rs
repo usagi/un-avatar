@@ -1,17 +1,17 @@
 use std::{
 	collections::VecDeque,
 	sync::{
-		atomic::{AtomicBool, Ordering},
 		Arc,
+		atomic::{AtomicBool, Ordering},
 	},
 	thread,
 	time::Duration,
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use crossbeam_channel::{bounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, bounded};
 use crossbeam_queue::ArrayQueue;
-use rustfft::{num_complex::Complex, Fft, FftPlanner};
+use rustfft::{Fft, FftPlanner, num_complex::Complex};
 
 use crate::options::AudioLinkOptions;
 

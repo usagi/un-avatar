@@ -34,8 +34,8 @@ use std::{
 	net::SocketAddr,
 	path::{Path, PathBuf},
 	sync::{
-		atomic::{AtomicBool, AtomicU64, Ordering},
 		Arc, Mutex,
+		atomic::{AtomicBool, AtomicU64, Ordering},
 	},
 	thread,
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -43,7 +43,7 @@ use std::{
 
 pub use debug_log::WindowDebugOptions;
 pub use gpu::FrameTimings;
-use gpu::{wardrobe_asset_upload_plan_is_default, DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan};
+use gpu::{DocumentAttachOptions, GpuState, PreparedDocumentScene, WardrobeAssetUploadPlan, wardrobe_asset_upload_plan_is_default};
 pub use mesh_pass::{AvatarOutlineKind, AvatarOutlineOptions, AvatarOutlinePolicy, SceneMeshLoadOpts};
 pub use options::{
 	AaMode, AnimatorActionBindingOptions, AnimatorActionTransitionOptions, AvatarWindowOptions, BlockCompressionEncoder, BloomOptions,
@@ -1288,11 +1288,7 @@ impl RendererControlCommand {
 }
 
 fn color_component(value: f64) -> f64 {
-	if value.is_finite() {
-		value.clamp(0.0, 1.0)
-	} else {
-		0.0
-	}
+	if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 }
 }
 
 fn apply_camera_state_patch(gpu: &mut GpuState, patch: CameraStatePatch) {
@@ -2375,11 +2371,7 @@ impl FrameBenchMetric {
 	}
 
 	fn avg(self, frames: u32) -> f32 {
-		if frames == 0 {
-			0.0
-		} else {
-			self.sum / frames as f32
-		}
+		if frames == 0 { 0.0 } else { self.sum / frames as f32 }
 	}
 }
 
@@ -3025,16 +3017,17 @@ impl AvatarApp {
 		let active = self
 			.active_profile_animator_actions
 			.binary_search_by(|id| id.as_str().cmp(action_id))
-			.is_ok() || self
-			.runtime_status
-			.as_ref()
-			.and_then(|status| status.lock().ok())
-			.is_some_and(|status| {
-				status
-					.runtime_actions
-					.iter()
-					.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
-			});
+			.is_ok()
+			|| self
+				.runtime_status
+				.as_ref()
+				.and_then(|status| status.lock().ok())
+				.is_some_and(|status| {
+					status
+						.runtime_actions
+						.iter()
+						.any(|action| action.action_id == action_id && action.current_condition_state.as_deref() == Some("active"))
+				});
 		if mode == "toggle" && active {
 			let parameter = self.runtime_status.as_ref().and_then(|status| {
 				status.lock().ok().and_then(|status| {
@@ -6461,7 +6454,7 @@ fn wardrobe_hotkey_thread(
 	use windows::Win32::{
 		System::Threading::GetCurrentThreadId,
 		UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey},
-		UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, PeekMessageW, TranslateMessage, MSG, PM_NOREMOVE, WM_HOTKEY},
+		UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, PM_NOREMOVE, PeekMessageW, TranslateMessage, WM_HOTKEY},
 	};
 	unsafe {
 		let thread_id = GetCurrentThreadId();
@@ -7536,9 +7529,11 @@ fn start_unaa_z_renderer(
 fn renderer_runtime_session(role: &str) -> Result<zenoh::Session, String> {
 	use zenoh::Wait as _;
 	static SESSION: std::sync::OnceLock<Result<zenoh::Session, String>> = std::sync::OnceLock::new();
-	let session = SESSION.get_or_init(|| {
-		zenoh::open(zenoh::Config::default()).wait().map_err(|error| error.to_string())
-	}).as_ref().map_err(Clone::clone)?.clone();
+	let session = SESSION
+		.get_or_init(|| zenoh::open(zenoh::Config::default()).wait().map_err(|error| error.to_string()))
+		.as_ref()
+		.map_err(Clone::clone)?
+		.clone();
 	if std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some() {
 		eprintln!("runtime-bus shared session: {role}: {}", session.zid());
 	}
@@ -7649,7 +7644,9 @@ fn start_runtime_bus(
 fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRuntimeSnapshot>>) {
 	use zenoh::Wait as _;
 	let diagnose = std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some();
-	if diagnose { eprintln!("runtime-bus status open begin: {status_key}"); }
+	if diagnose {
+		eprintln!("runtime-bus status open begin: {status_key}");
+	}
 	const STATUS_PUBLISH_INTERVAL: Duration = Duration::from_millis(250);
 	const STATUS_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
 	let session = match renderer_runtime_session("status") {
@@ -7661,7 +7658,9 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 	};
 	let mut last_json = String::new();
 	let mut reported_publish = false;
-	if diagnose { eprintln!("runtime-bus status open ready: {status_key}"); }
+	if diagnose {
+		eprintln!("runtime-bus status open ready: {status_key}");
+	}
 	let mut last_publish = Instant::now() - STATUS_KEEPALIVE_INTERVAL;
 	loop {
 		let snapshot = match status.try_lock() {
@@ -7690,7 +7689,9 @@ fn publish_runtime_status_loop(status_key: String, status: Arc<Mutex<RendererRun
 fn runtime_control_bus_loop(control_key: String, response_base_key: String, proxy: EventLoopProxy<RendererControlEvent>) {
 	use zenoh::Wait as _;
 	let diagnose = std::env::var_os("UN_AVATAR_RUNTIME_BUS_DIAGNOSTICS").is_some();
-	if diagnose { eprintln!("runtime-bus control open begin: {control_key}"); }
+	if diagnose {
+		eprintln!("runtime-bus control open begin: {control_key}");
+	}
 	let session = match renderer_runtime_session("control") {
 		Ok(session) => session,
 		Err(e) => {
@@ -7705,7 +7706,9 @@ fn runtime_control_bus_loop(control_key: String, response_base_key: String, prox
 			return;
 		}
 	};
-	if diagnose { eprintln!("runtime-bus control subscribed: {control_key}"); }
+	if diagnose {
+		eprintln!("runtime-bus control subscribed: {control_key}");
+	}
 	while let Ok(sample) = subscriber.recv() {
 		let request = match serde_json::from_slice::<RuntimeBusControlRequest>(&sample.payload().to_bytes()) {
 			Ok(request) => request,
@@ -7719,7 +7722,9 @@ fn runtime_control_bus_loop(control_key: String, response_base_key: String, prox
 		} else {
 			request.command.to_string()
 		};
-		if diagnose { eprintln!("runtime-bus control received: {control_key}: {}", request.request_id); }
+		if diagnose {
+			eprintln!("runtime-bus control received: {control_key}: {}", request.request_id);
+		}
 		let response_text = runtime_control_response(&command_text, &proxy);
 		let response = RuntimeBusControlResponse {
 			request_id: request.request_id.clone(),
@@ -9029,15 +9034,15 @@ mod tests {
 	#[cfg(windows)]
 	use super::parse_windows_hotkey;
 	use super::{
-		advance_active_camera_effect, avatar_outline_from_control, camera_effect_target, camera_state_patch_from_snapshot,
-		compact_window_title_status, gpu, initial_runtime_snapshot, parse_midi_note_event, parse_renderer_control_command,
-		parse_unaa_z_camera_effect, patched_camera_state, renderer_startup_frame_role, resolve_activate_action_from_menu_path,
-		resolve_camera_effect_transition, runtime_dynamics_warnings, standalone_runtime_bus_key_for_manifest, start_runtime_status_server,
-		unaa_z_snapshot_json, validate_camera_effect, wardrobe_exit_camera_patch, wardrobe_set_request_matches_active,
-		wardrobe_transition_frame_role, ActiveCameraEffect, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions,
-		CameraEffectConflictPolicy, CameraEffectPhase, CameraEffectRequest, CameraTransitionEasing, CameraTransitionMode, CloseHotkey,
-		RendererControlCommand, RendererControlEvent, WardrobeAssetUploadPlan, WardrobeBindingKind, WardrobeBindingOptions,
-		SCENE_STATE_AVATAR_SCENE, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS,
+		ActiveCameraEffect, AvatarOutlineKind, AvatarOutlinePolicy, AvatarWindowOptions, CameraEffectConflictPolicy, CameraEffectPhase,
+		CameraEffectRequest, CameraTransitionEasing, CameraTransitionMode, CloseHotkey, RendererControlCommand, RendererControlEvent,
+		SCENE_STATE_AVATAR_SCENE, SCENE_STATE_STARTUP_PROGRESS, WINDOW_TITLE_STATUS_MAX_CHARS, WardrobeAssetUploadPlan,
+		WardrobeBindingKind, WardrobeBindingOptions, advance_active_camera_effect, avatar_outline_from_control, camera_effect_target,
+		camera_state_patch_from_snapshot, compact_window_title_status, gpu, initial_runtime_snapshot, parse_midi_note_event,
+		parse_renderer_control_command, parse_unaa_z_camera_effect, patched_camera_state, renderer_startup_frame_role,
+		resolve_activate_action_from_menu_path, resolve_camera_effect_transition, runtime_dynamics_warnings,
+		standalone_runtime_bus_key_for_manifest, start_runtime_status_server, unaa_z_snapshot_json, validate_camera_effect,
+		wardrobe_exit_camera_patch, wardrobe_set_request_matches_active, wardrobe_transition_frame_role,
 	};
 	use winit::keyboard::{Key, ModifiersState};
 
@@ -9050,16 +9055,18 @@ mod tests {
 	fn runtime_dump_morphs_only_is_explicit_and_backward_compatible() {
 		for (input, expected) in [
 			(r#"{"command":"dump_runtime_state","path":"snapshot.json"}"#, false),
-			(r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":true}"#, true),
+			(
+				r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":true}"#,
+				true,
+			),
 		] {
-			let RendererControlCommand::DumpRuntimeState { path, morphs_only } =
-				parse_renderer_control_command(input).unwrap() else { panic!("wrong command"); };
+			let RendererControlCommand::DumpRuntimeState { path, morphs_only } = parse_renderer_control_command(input).unwrap() else {
+				panic!("wrong command");
+			};
 			assert_eq!(path, "snapshot.json");
 			assert_eq!(morphs_only, expected);
 		}
-		assert!(parse_renderer_control_command(
-			r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":"true"}"#
-		).is_err());
+		assert!(parse_renderer_control_command(r#"{"command":"dump_runtime_state","path":"snapshot.json","morphs_only":"true"}"#).is_err());
 	}
 
 	#[test]
@@ -9232,12 +9239,22 @@ mod tests {
 		let count = super::FRAME_TRACE_STARTUP_FRAMES + super::FRAME_TRACE_WINDOW_FRAMES + 7;
 		for i in 0..count {
 			let wall_ms = if i == 0 { 125.0 } else { 16.6667 };
-			trace.push("runtime_avatar", &timings, pacing.push(wall_ms, 0.0, 16.6667), i as u64, i as u64, None);
+			trace.push(
+				"runtime_avatar",
+				&timings,
+				pacing.push(wall_ms, 0.0, 16.6667),
+				i as u64,
+				i as u64,
+				None,
+			);
 		}
 		assert_eq!(trace.startup_frames.len(), super::FRAME_TRACE_STARTUP_FRAMES);
 		assert_eq!(trace.startup_frames[0].seq, 0);
 		assert_eq!(trace.startup_frames[0].wall_ms, 125.0);
-		assert_eq!(trace.startup_frames.last().unwrap().seq, (super::FRAME_TRACE_STARTUP_FRAMES - 1) as u64);
+		assert_eq!(
+			trace.startup_frames.last().unwrap().seq,
+			(super::FRAME_TRACE_STARTUP_FRAMES - 1) as u64
+		);
 		assert_eq!(trace.frames.len(), super::FRAME_TRACE_WINDOW_FRAMES);
 		assert_eq!(trace.frames.front().unwrap().seq, (count - super::FRAME_TRACE_WINDOW_FRAMES) as u64);
 		assert_eq!(trace.frames.back().unwrap().seq, (count - 1) as u64);
@@ -9471,18 +9488,24 @@ mod tests {
 				&& warning.contains("writeback_target_groups=1")
 				&& warning.contains("physbone:hair@root/hair")
 		));
-		assert!(!warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target")));
-		assert!(warnings.iter().any(|warning| warning
-			.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
-			&& warning.contains("samples=[physbone:hair@root/hair]")));
-		assert!(warnings.iter().any(|warning| warning
-			.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
-			&& warning.contains("samples=[constraint:parent@root/target]")));
-		assert!(warnings
-			.iter()
-			.any(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")));
+		assert!(
+			!warnings
+				.iter()
+				.any(|warning| warning.contains("dynamics rotation_translation writeback has no safe translation target"))
+		);
+		assert!(warnings.iter().any(|warning| {
+			warning.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
+				&& warning.contains("samples=[physbone:hair@root/hair]")
+		}));
+		assert!(warnings.iter().any(|warning| {
+			warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver")
+				&& warning.contains("samples=[constraint:parent@root/target]")
+		}));
+		assert!(
+			warnings
+				.iter()
+				.any(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))
+		);
 		assert!(warnings.iter().any(
 			|warning| warning.contains("dynamics contact probes would emit 3 parameter value(s)")
 				&& warning.contains("samples=[contact:hand@root/hand<=contact:sender:ContactHand]")
@@ -10392,19 +10415,24 @@ mod tests {
 			.and_then(|value| value.as_array())
 			.expect("dynamics warnings");
 		assert_eq!(dynamics_warnings.len(), 4);
-		assert!(dynamics_warnings.iter().any(|warning| warning
-			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics stretch limits are supported as simulation stretch"))));
-		assert!(dynamics_warnings
-			.iter()
-			.any(|warning| warning.as_str().is_some_and(|warning| warning
-				.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver"))));
-		assert!(dynamics_warnings.iter().any(|warning| warning
-			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))));
-		assert!(dynamics_warnings.iter().any(|warning| warning
-			.as_str()
-			.is_some_and(|warning| warning.contains("dynamics match override contains invalid regular expression"))));
+		assert!(dynamics_warnings.iter().any(|warning| {
+			warning
+				.as_str()
+				.is_some_and(|warning| warning.contains("dynamics stretch limits are supported as simulation stretch"))
+		}));
+		assert!(dynamics_warnings.iter().any(|warning| warning.as_str().is_some_and(|warning| {
+			warning.contains("dynamics grabbing/posing interaction hooks without parameters are metadata-only in the current solver")
+		})));
+		assert!(dynamics_warnings.iter().any(|warning| {
+			warning
+				.as_str()
+				.is_some_and(|warning| warning.contains("dynamics VRC constraint refs are metadata/reset refs only in the current solver"))
+		}));
+		assert!(dynamics_warnings.iter().any(|warning| {
+			warning
+				.as_str()
+				.is_some_and(|warning| warning.contains("dynamics match override contains invalid regular expression"))
+		}));
 		assert_eq!(
 			snapshot
 				.get("dynamics_grabbing_enabled_group_count")
@@ -10765,26 +10793,36 @@ mod tests {
 		);
 		assert!(snapshot.get("resolver_cache_key").is_none());
 		assert!(snapshot.get("last_action_id").is_some_and(|value| value.is_null()));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("scene_state"))));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_wardrobe"))));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_parameter"))));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_dynamics_enabled"))));
-		assert!(snapshot
-			.get("control_capabilities")
-			.and_then(|value| value.as_array())
-			.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_animator_profile"))));
+		assert!(
+			snapshot
+				.get("control_capabilities")
+				.and_then(|value| value.as_array())
+				.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("scene_state")))
+		);
+		assert!(
+			snapshot
+				.get("control_capabilities")
+				.and_then(|value| value.as_array())
+				.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_wardrobe")))
+		);
+		assert!(
+			snapshot
+				.get("control_capabilities")
+				.and_then(|value| value.as_array())
+				.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_parameter")))
+		);
+		assert!(
+			snapshot
+				.get("control_capabilities")
+				.and_then(|value| value.as_array())
+				.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_dynamics_enabled")))
+		);
+		assert!(
+			snapshot
+				.get("control_capabilities")
+				.and_then(|value| value.as_array())
+				.is_some_and(|capabilities| capabilities.iter().any(|value| value.as_str() == Some("set_animator_profile")))
+		);
 	}
 
 	#[test]
@@ -11365,30 +11403,43 @@ mod tests {
 			"enter": {"duration_ms": 1200, "easing": "ease_out_cubic"},
 			"leave": {"duration_ms": 1200, "easing": "ease_out_cubic"},
 			"conflict_policy": "ignore_if_active"
-		})).unwrap();
+		}))
+		.unwrap();
 		validate_camera_effect(request).unwrap();
 		let mut queue = std::collections::VecDeque::new();
 		let mut active = None;
 		assert!(enqueue_camera_effect_request(&mut active, &mut queue, request));
-		let queued_request = CameraEffectRequest { conflict_policy: Some(CameraEffectConflictPolicy::Queue), ..request };
+		let queued_request = CameraEffectRequest {
+			conflict_policy: Some(CameraEffectConflictPolicy::Queue),
+			..request
+		};
 		assert!(enqueue_camera_effect_request(&mut active, &mut queue, queued_request));
 		assert_eq!(queue.len(), 2);
-		let replacement = CameraEffectRequest { conflict_policy: Some(CameraEffectConflictPolicy::Replace), ..request };
+		let replacement = CameraEffectRequest {
+			conflict_policy: Some(CameraEffectConflictPolicy::Replace),
+			..request
+		};
 		assert!(enqueue_camera_effect_request(&mut active, &mut queue, replacement));
 		assert_eq!(queue.len(), 1);
 		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
 		assert_eq!(queue.len(), 1);
 		queue.pop_front();
 		let captured = gpu::CameraStateSnapshot {
-			target: [0.0, 1.0, 0.0], longitude_deg: 180.0,
-			latitude_deg: 0.0, radius: 2.0, diagonal_fov_deg: 60.0,
+			target: [0.0, 1.0, 0.0],
+			longitude_deg: 180.0,
+			latitude_deg: 0.0,
+			radius: 2.0,
+			diagonal_fov_deg: 60.0,
 		};
 		let start = Instant::now();
 		active = Some(ActiveCameraEffect {
-			captured, target: camera_effect_target(captured, request),
+			captured,
+			target: camera_effect_target(captured, request),
 			enter: resolve_camera_effect_transition(request.enter, 450),
 			leave: resolve_camera_effect_transition(request.leave, 650),
-			hold_ms: 600000, phase: CameraEffectPhase::Enter, phase_started_at: start,
+			hold_ms: 600000,
+			phase: CameraEffectPhase::Enter,
+			phase_started_at: start,
 		});
 		assert!(!enqueue_camera_effect_request(&mut active, &mut queue, request));
 		let (_, next) = advance_active_camera_effect(active.unwrap(), start + Duration::from_millis(1200));

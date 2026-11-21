@@ -3,8 +3,8 @@
 use glam::{EulerRot, Mat4, Quat, Vec3};
 use std::collections::BTreeMap;
 use un_avatar_core::{
-	resolved_scene_roots, UnaDocument, UnaHumanoidRuntimeBasis, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis,
-	UnaNodeConstraintKind, UnaRuntimeRetargetInputs, UnaSceneNode, UnaSceneSnapshot, UnaUnityConstraintWorldUpType,
+	UnaDocument, UnaHumanoidRuntimeBasis, UnaNodeConstraint, UnaNodeConstraintAimAxis, UnaNodeConstraintAxis, UnaNodeConstraintKind,
+	UnaRuntimeRetargetInputs, UnaSceneNode, UnaSceneSnapshot, UnaUnityConstraintWorldUpType, resolved_scene_roots,
 };
 use un_avatar_types::HumanoidProfile;
 use un_motion_frame::{CoordinateSpace, Finger, HandMotion, HumanoidBone, HumanoidPose, SampleState, TransformSample, UNMotionFrame};
@@ -5652,22 +5652,51 @@ mod tests {
 		document.scene = Some(Default::default());
 		document.humanoid_profile = Some(HumanoidProfile::default());
 		document.expression_catalog = Some(un_avatar_core::UnaExpressionCatalog {
-			presets: ["MouthSmileLeft", "JawOpen", "EyeBlinkLeft", "EyeBlinkRight"].into_iter()
-				.map(|name| un_avatar_core::UnaExpressionPreset { name: name.into(), binds: vec![] }).collect(),
+			presets: ["MouthSmileLeft", "JawOpen", "EyeBlinkLeft", "EyeBlinkRight"]
+				.into_iter()
+				.map(|name| un_avatar_core::UnaExpressionPreset {
+					name: name.into(),
+					binds: vec![],
+				})
+				.collect(),
 		});
 		document.expression_weights = Some(Default::default());
 		for (sequence, samples) in [
-			vec![("mouth_smile_left", 0.7), ("jaw-open", 0.4), ("eye blink left", 0.8), ("EyeBlinkRight", 0.6)],
+			vec![
+				("mouth_smile_left", 0.7),
+				("jaw-open", 0.4),
+				("eye blink left", 0.8),
+				("EyeBlinkRight", 0.6),
+			],
 			vec![("MOUTH-SMILE-LEFT", 0.0)],
-		].into_iter().enumerate() {
+		]
+		.into_iter()
+		.enumerate()
+		{
 			let mut frame = UNMotionFrame::new(sequence as u64);
-			frame.face = Some(FaceMotion { tracking_state: TrackingState::Valid, confidence: 1.0, head: None,
-				expressions: samples.into_iter().map(|(name, value)| un_motion_frame::ExpressionSample {
-					name: name.into(), value, confidence: 1.0, source_index: None, state: SampleState::Valid,
-				}).collect() });
+			frame.face = Some(FaceMotion {
+				tracking_state: TrackingState::Valid,
+				confidence: 1.0,
+				head: None,
+				expressions: samples
+					.into_iter()
+					.map(|(name, value)| un_motion_frame::ExpressionSample {
+						name: name.into(),
+						value,
+						confidence: 1.0,
+						source_index: None,
+						state: SampleState::Valid,
+					})
+					.collect(),
+			});
 			apply_un_motion_frame_to_document(&mut document, &frame, ApplyUnMotionFrameOpts::default());
 			let weights = &document.expression_weights.as_ref().unwrap().preset_weights;
-			for (name, expected) in [("MouthSmileLeft", if sequence == 0 { 0.7 } else { 0.0 }), ("JawOpen", 0.4), ("EyeBlinkLeft", 0.8), ("EyeBlinkRight", 0.6)] {
+			for (name, expected) in [
+				("MouthSmileLeft", if sequence == 0 { 0.7 } else { 0.0 }),
+				("JawOpen", 0.4),
+				("EyeBlinkLeft", 0.8),
+				("EyeBlinkRight", 0.6),
+			] {
 				assert!((weights[name] - expected).abs() < 1e-5, "{sequence}: {name}");
 			}
 		}

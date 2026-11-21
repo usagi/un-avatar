@@ -4,7 +4,7 @@
 
 use std::sync::LazyLock;
 
-pub use un_i18n::{apply_locale, SvelteI18nBundle, UnI18nStore};
+pub use un_i18n::{SvelteI18nBundle, UnI18nStore, apply_locale};
 
 /// プロセス共有 store。`rust_i18n::i18n!` の backend と Tauri command が同じ flatten 済
 /// メッセージを参照する (`(*UN_I18N_STORE).clone()` で rust_i18n に渡す)。

@@ -6,8 +6,8 @@ use std::{
 	fmt::Write as _,
 	net::SocketAddr,
 	sync::{
-		atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
 		Arc, Mutex, RwLock,
+		atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 	},
 	time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -15,28 +15,30 @@ use std::{
 use glam::{EulerRot, Mat4, Quat, Vec3, Vec4};
 use serde_json::Value;
 use un_avatar_core::{
-	una_dynamics_translation_writeback_candidate_count, una_dynamics_translation_writeback_target_count, UnaDocument,
-	UnaEvaluationTargetKind, UnaExpressionCatalog, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionQuery,
+	UnaDocument, UnaEvaluationTargetKind, UnaExpressionCatalog, UnaNodeConstraintKind, UnaRuntimeActionEffect, UnaRuntimeActionQuery,
 	UnaRuntimeActionTrigger, UnaRuntimeDynamics, UnaRuntimeDynamicsCounts, UnaRuntimeNodeTarget, UnaSceneLighting, UnaSceneNode,
-	UnaSceneSnapshot, UnaSceneSphericalHarmonics,
+	UnaSceneSnapshot, UnaSceneSphericalHarmonics, una_dynamics_translation_writeback_candidate_count,
+	una_dynamics_translation_writeback_target_count,
 };
 use un_avatar_skeleton::{
+	BoneColliderConfig, BoneColliderPrimitive, BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator,
+	DynamicsStepProfile, DynamicsSurfaceConstraint, DynamicsTailSample, DynamicsVisualTargetContext, RuntimeBoneColliderPrimitive,
 	annotate_dynamics_response_group_visibility, build_dynamics_bone_colliders_with_sources, classify_dynamics_group_category,
 	collider_stats, distance_point_segment, dynamics_group_match_text, dynamics_mesh_cloth_assist_deforming_nodes,
-	dynamics_normalize_match_text, dynamics_normalized_token_filter_matches, local_capsule_world, local_sphere_world, BoneColliderConfig,
-	BoneColliderPrimitive, BoneColliderSource, BoneColliderStats, DynamicsPhysicsConfig, DynamicsSimulator, DynamicsStepProfile,
-	DynamicsSurfaceConstraint, DynamicsTailSample, DynamicsVisualTargetContext, RuntimeBoneColliderPrimitive,
+	dynamics_normalize_match_text, dynamics_normalized_token_filter_matches, local_capsule_world, local_sphere_world,
 };
 use winit::window::Window;
 
 use crate::{
+	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
+	WindowDebugOptions,
 	camera::OrbitCamera,
 	debug_dump::log_material_skin_report,
 	debug_log::DebugLog,
 	mesh_pass::{
-		prewarm_scene_texture_caches, AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier,
-		SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress,
-		SceneMeshLoadOpts, SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary, VertexPickRequest,
+		AvatarOutlineOptions, AvatarOutlinePolicy, DrawTransformUpdateTimings, MeshShaderVariantTier, SceneMeshActiveResidencyGaps,
+		SceneMeshAssetResidencyCounts, SceneMeshAssetResidencyRefresh, SceneMeshBuildProgress, SceneMeshLoadOpts,
+		SceneMeshRuntimeRequirements, SceneMeshes, TextureUploadSummary, VertexPickRequest, prewarm_scene_texture_caches,
 	},
 	model_loader,
 	options::{
@@ -45,8 +47,6 @@ use crate::{
 	},
 	pipeline_cache::PersistentPipelineCache,
 	post_process::PostProcess,
-	AaMode, BlockCompressionEncoder, RenderBackend, SpoutWindowOptions, TextureCompressionAdvancedOptions, TextureCompressionMode,
-	WindowDebugOptions,
 };
 
 const SHADER_SKY: &str = include_str!("../shaders/sky.wgsl");
@@ -6449,7 +6449,11 @@ fn motion_trace_sample(frame: &un_motion_frame::UNMotionFrame, time_ns: u64) -> 
 		expression_count: frame.face.as_ref().map_or(0, |face| face.expressions.len()),
 		// Keep zero releases and original alias spelling/order. Only allocated
 		// when opt-in motion tracing is enabled; bound oversized remote frames.
-		expressions: frame.face.as_ref().map(|face| face.expressions.iter().take(128).cloned().collect()).unwrap_or_default(),
+		expressions: frame
+			.face
+			.as_ref()
+			.map(|face| face.expressions.iter().take(128).cloned().collect())
+			.unwrap_or_default(),
 		t_ms: time_ns as f32 / 1_000_000.0,
 		decoded_queue_wait_ms: None,
 		buffer_lock_wait_ms: None,
@@ -9920,7 +9924,8 @@ impl GpuState {
 			// A zero GPU weight alone cannot distinguish a missing preset from a
 			// later animator/mesh override. Do not include physics diagnostics here.
 			let runtime = doc.runtime_model();
-			let expression_presets: Vec<_> = runtime.expression_catalog()
+			let expression_presets: Vec<_> = runtime
+				.expression_catalog()
 				.map(|catalog| catalog.presets.iter().map(|preset| preset.name.as_str()).collect())
 				.unwrap_or_default();
 			let bytes = serde_json::to_vec(&serde_json::json!({
@@ -9928,7 +9933,7 @@ impl GpuState {
 				"expression_presets": expression_presets,
 				"expression_weights": runtime.expression_weights(),
 			}))
-				.map_err(|err| err.to_string())?;
+			.map_err(|err| err.to_string())?;
 			return std::fs::write(path, bytes).map_err(|err| err.to_string());
 		}
 		let parameter_values = doc.runtime_model().runtime_parameter_values().clone();
@@ -11339,8 +11344,10 @@ impl GpuState {
 												const MAX_ZENOH_APPLY_BATCH: usize = 64;
 												let mut received = 0u64;
 												while receiver_generation.load(Ordering::Acquire) == generation {
-													let frames = receiver
-														.recv_timed_batch_timeout(MAX_ZENOH_APPLY_BATCH, std::time::Duration::from_millis(50));
+													let frames = receiver.recv_timed_batch_timeout(
+														MAX_ZENOH_APPLY_BATCH,
+														std::time::Duration::from_millis(50),
+													);
 													if frames.is_empty() {
 														continue;
 													}
@@ -11349,7 +11356,8 @@ impl GpuState {
 													let mut last_seq = None;
 													for item in frames {
 														last_seq = Some(item.frame.header.sequence);
-														motion_buffer_for_zenoh.push_frame_with_queue_time(item.frame, Some(item.decoded_at));
+														motion_buffer_for_zenoh
+															.push_frame_with_queue_time(item.frame, Some(item.decoded_at));
 													}
 													received = received.wrapping_add(1);
 													if log_for_recv.is_enabled() && (received == 1 || received.is_multiple_of(120)) {
@@ -12955,43 +12963,87 @@ mod tests {
 		let path = std::env::var("UN_AVATAR_EXPRESSION_PROBE_MODEL").expect("explicit review model required");
 		let wardrobe = std::env::var("UN_AVATAR_EXPRESSION_PROBE_WARDROBE").ok();
 		let actions: Vec<String> = std::env::var("UN_AVATAR_EXPRESSION_PROBE_ACTIONS")
-			.map(|json| serde_json::from_str(&json).expect("action ID JSON array")).unwrap_or_default();
+			.map(|json| serde_json::from_str(&json).expect("action ID JSON array"))
+			.unwrap_or_default();
 		let mut document = crate::model_loader::load_document(
-			std::path::Path::new(&path), wardrobe.as_deref(), &actions, &BTreeMap::new(), false, true,
-		).expect("load review model");
+			std::path::Path::new(&path),
+			wardrobe.as_deref(),
+			&actions,
+			&BTreeMap::new(),
+			false,
+			true,
+		)
+		.expect("load review model");
 		let document = std::sync::Arc::get_mut(&mut document).expect("unique review document");
-		let preset_names: Vec<_> = document.runtime_model().expression_catalog().map(|catalog|
-			catalog.presets.iter().map(|preset| preset.name.clone()).collect()).unwrap_or_default();
-		eprintln!("CPU expression probe: presets={}, smile={}, mouth={}", preset_names.len(),
+		let preset_names: Vec<_> = document
+			.runtime_model()
+			.expression_catalog()
+			.map(|catalog| catalog.presets.iter().map(|preset| preset.name.clone()).collect())
+			.unwrap_or_default();
+		eprintln!(
+			"CPU expression probe: presets={}, smile={}, mouth={}",
+			preset_names.len(),
 			preset_names.iter().any(|name| name == "eye_smile1"),
-			preset_names.iter().any(|name| name == "mouth_e3_yaeba_left"));
+			preset_names.iter().any(|name| name == "mouth_e3_yaeba_left")
+		);
 		for (sequence, value) in [0.25, 0.75, 0.0].into_iter().enumerate() {
 			let mut frame = UNMotionFrame::new(sequence as u64);
 			frame.face = Some(FaceMotion {
-				tracking_state: TrackingState::Valid, confidence: 1.0, head: None,
-				expressions: [("EyeSmile1", value), ("mouth_e3_yaeba_left", value), ("JawOpen", 0.4),
-					("EyeBlinkLeft", 0.3), ("EyeBlinkRight", 0.2)].into_iter().map(|(name, value)| ExpressionSample {
-					name: name.into(), value, confidence: 1.0, source_index: None, state: SampleState::Valid,
-				}).collect(),
+				tracking_state: TrackingState::Valid,
+				confidence: 1.0,
+				head: None,
+				expressions: [
+					("EyeSmile1", value),
+					("mouth_e3_yaeba_left", value),
+					("JawOpen", 0.4),
+					("EyeBlinkLeft", 0.3),
+					("EyeBlinkRight", 0.2),
+				]
+				.into_iter()
+				.map(|(name, value)| ExpressionSample {
+					name: name.into(),
+					value,
+					confidence: 1.0,
+					source_index: None,
+					state: SampleState::Valid,
+				})
+				.collect(),
 			});
 			un_avatar_skeleton::apply_un_motion_frame_to_document(document, &frame, Default::default());
 			let runtime = document.runtime_model();
 			let weights = runtime.expression_weights().expect("expression weights");
-			let expected = [("eye_smile1", value), ("mouth_e3_yaeba_left", value), ("JawOpen", 0.4),
-				("EyeBlinkLeft", 0.3), ("EyeBlinkRight", 0.2)];
+			let expected = [
+				("eye_smile1", value),
+				("mouth_e3_yaeba_left", value),
+				("JawOpen", 0.4),
+				("EyeBlinkLeft", 0.3),
+				("EyeBlinkRight", 0.2),
+			];
 			for (name, expected_value) in expected {
-				assert_eq!(weights.preset_weights.get(name), Some(&expected_value), "loaded preset {name}, sequence {sequence}");
+				assert_eq!(
+					weights.preset_weights.get(name),
+					Some(&expected_value),
+					"loaded preset {name}, sequence {sequence}"
+				);
 			}
 			let scene = runtime.scene_expression_catalog().expect("model scene and catalog");
 			let mut checked = std::collections::BTreeSet::new();
 			for (mesh_index, primitives) in scene.scene.meshes.iter().enumerate() {
 				for (primitive_index, primitive) in primitives.iter().enumerate() {
 					let values = un_avatar_core::morph_weights_for_primitive(
-						primitive, scene.expression_catalog, Some(weights), mesh_index, primitive_index);
+						primitive,
+						scene.expression_catalog,
+						Some(weights),
+						mesh_index,
+						primitive_index,
+					);
 					for (name, expected_value) in expected {
 						if let Some(index) = primitive.morph_target_names.iter().position(|candidate| candidate == name) {
-							assert!((values[index] - expected_value).abs() < 1e-6,
-								"primitive morph {name}, sequence {sequence}: {}", values[index]);
+							assert!(
+								(values[index] - expected_value).abs() < 1e-6,
+								"primitive morph {name}, sequence {sequence}: {}",
+								values[index]
+							);
 							checked.insert(name);
 						}
 					}
@@ -13006,7 +13058,11 @@ mod tests {
 		use un_motion_frame::{ExpressionSample, FaceMotion, SampleState, UNMotionFrame};
 		let mut frame = UNMotionFrame::new(1);
 		let expression = |name: &str, value| ExpressionSample {
-			name: name.into(), value, confidence: 1.0, source_index: Some(0), state: SampleState::Valid,
+			name: name.into(),
+			value,
+			confidence: 1.0,
+			source_index: Some(0),
+			state: SampleState::Valid,
 		};
 		frame.face = Some(FaceMotion {
 			expressions: vec![expression("EyeSmile1", 0.75), expression("eye_smile1", 0.0)],
@@ -13028,6 +13084,12 @@ mod tests {
 	}
 
 	use super::{
+		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE, DynamicsColliderShapeKind,
+		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE, RenderedFrameRole,
+		RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary, RuntimeDynamicsColliderPathContactSummary,
+		RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus, RuntimeMenuGraphNode, SceneNodeConstraintCounts,
+		Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED,
+		WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT, WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
 		accumulate_spatial_surface_seams, animator_morph_override_parameter_dependencies, animator_morph_override_parameter_values,
 		animator_morph_override_parameter_values_match, animator_morph_overrides_for_doc, augment_dynamics_bone_colliders,
 		dynamics_collider_contact_statuses, dynamics_collider_path_candidate_summary_statuses,
@@ -13040,16 +13102,9 @@ mod tests {
 		runtime_action_parameter_values_match, runtime_action_statuses, scene_node_constraint_counts, sorted_index_difference,
 		sorted_unique_index_union, surface_color_format, transparent_alpha_mode, wardrobe_action_statuses,
 		wardrobe_asset_upload_plan_for_document, wardrobe_asset_upload_plan_with_draw_counts, wardrobe_scoped_upload_work_for_active_gaps,
-		DynamicsColliderShapeKind, RenderedFrameRole, RendererStartupPresentation, RuntimeDynamicsColliderPathCandidateSummary,
-		RuntimeDynamicsColliderPathContactSummary, RuntimeDynamicsColliderSelectionStatus, RuntimeDynamicsColliderStatus,
-		RuntimeMenuGraphNode, SceneNodeConstraintCounts, Spout2FrameDelivery, StartupProgressOverlayFrame, SurfaceConstraintNode,
-		WardrobeAssetUploadPlan, WardrobeChangingBillboardFrame, WardrobeTransitionPresentation,
-		BASELINE_FALLBACK_SAMPLED_TEXTURES_PER_STAGE, BASELINE_FALLBACK_SAMPLERS_PER_STAGE,
-		HIGH_CAPABILITY_LILTOON_SAMPLED_TEXTURES_PER_STAGE, HIGH_CAPABILITY_LILTOON_SAMPLERS_PER_STAGE,
-		WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED, WARDROBE_RESIDENCY_GAP_INDEX_STATUS_LIMIT,
 	};
-	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use crate::RenderBackend;
+	use crate::mesh_pass::{MeshShaderVariantTier, SceneMeshActiveResidencyGaps, SceneMeshAssetResidencyCounts};
 	use glam::{Mat4, Vec3};
 	use serde_json::json;
 	use un_avatar_core::{
@@ -13423,9 +13478,11 @@ mod tests {
 
 		augment_dynamics_bone_colliders(settings.runtime_dynamics(), &scene, &config, &mut colliders);
 
-		assert!(colliders
-			.iter()
-			.any(|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/Body/Chest Collider"));
+		assert!(
+			colliders.iter().any(
+				|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/Body/Chest Collider"
+			)
+		);
 	}
 
 	#[test]
@@ -13471,9 +13528,11 @@ mod tests {
 
 		augment_dynamics_bone_colliders(settings.runtime_dynamics(), &scene, &config, &mut colliders);
 
-		assert!(colliders
-			.iter()
-			.any(|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/胸 コライダー"));
+		assert!(
+			colliders
+				.iter()
+				.any(|collider| collider.source_id == "physbone:Avatar/generic" && collider.collider_path == "Avatar/PB/胸 コライダー")
+		);
 	}
 
 	fn test_scene_node_with_transform(name: &str, transform: Mat4, children: Vec<usize>) -> UnaSceneNode {
@@ -14838,9 +14897,10 @@ mod tests {
 		assert_eq!(plan.resident_material_count, 0);
 		assert_eq!(plan.resident_image_count, 0);
 		assert_eq!(plan.resident_dynamics_count, 0);
-		assert!(plan
-			.reason
-			.contains("mesh/texture/material assets do not yet carry group ownership metadata"));
+		assert!(
+			plan.reason
+				.contains("mesh/texture/material assets do not yet carry group ownership metadata")
+		);
 	}
 
 	#[test]
@@ -14946,9 +15006,10 @@ mod tests {
 		assert!(plan.scoped_upload_supported);
 		assert!(!plan.all_resident);
 		assert_eq!(plan.mode, WARDROBE_ASSET_UPLOAD_MODE_RESOURCE_SCOPED);
-		assert!(plan
-			.reason
-			.contains("mesh buffers, image textures, and cubemap resources are scoped"));
+		assert!(
+			plan.reason
+				.contains("mesh buffers, image textures, and cubemap resources are scoped")
+		);
 	}
 
 	#[test]

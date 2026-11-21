@@ -137,11 +137,7 @@ pub(crate) fn skin_tone_texture_kinds_for_scene(scene: &UnaSceneSnapshot) -> Vec
 
 fn srgb8_to_linear(v: u8) -> f32 {
 	let v = f32::from(v) / 255.0;
-	if v <= 0.04045 {
-		v / 12.92
-	} else {
-		((v + 0.055) / 1.055).powf(2.4)
-	}
+	if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
 }
 
 fn linear_to_srgb8(v: f32) -> u8 {

@@ -432,11 +432,7 @@ fn obj_vec3_from_vec4(obj: &serde_json::Map<String, Value>, key: &str, default: 
 
 fn srgb_channel_to_linear(c: f32) -> f32 {
 	let c = c.clamp(0.0, 1.0);
-	if c <= 0.04045 {
-		c / 12.92
-	} else {
-		((c + 0.055) / 1.055).powf(2.4)
-	}
+	if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 fn obj_vrm0_rim_color_vec3_from_vec4(obj: &serde_json::Map<String, Value>, key: &str, default: [f32; 3]) -> [f32; 3] {
@@ -2429,14 +2425,18 @@ mod tests {
 		};
 		expand_expression_binds_per_primitive(&scene, &mut cat);
 		assert_eq!(cat.presets[0].binds.len(), 2);
-		assert!(cat.presets[0]
-			.binds
-			.iter()
-			.any(|b| b.primitive_index == 0 && b.morph_target_index == 2));
-		assert!(cat.presets[0]
-			.binds
-			.iter()
-			.any(|b| b.primitive_index == 1 && b.morph_target_index == 2));
+		assert!(
+			cat.presets[0]
+				.binds
+				.iter()
+				.any(|b| b.primitive_index == 0 && b.morph_target_index == 2)
+		);
+		assert!(
+			cat.presets[0]
+				.binds
+				.iter()
+				.any(|b| b.primitive_index == 1 && b.morph_target_index == 2)
+		);
 	}
 
 	#[test]
