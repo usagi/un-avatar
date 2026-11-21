@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="312" viewBox="0 0 800 312" role="img" aria-label="衣装の状態を保存する"><rect width="800" height="312" rx="15" fill="#20212c"/><g font-family="system-ui,sans-serif"><text x="24" y="39" fill="#f4f1ef" font-size="23">衣装の状態を保存する</text>
+<rect x="22" y="64" width="756" height="69" rx="8" fill="#303240"/>
+<circle cx="48" cy="98" r="13" fill="#f2bd99"/><text x="48" y="103" text-anchor="middle" font-size="15" fill="#252735">1</text>
+<text x="75" y="91" font-size="18" font-weight="bold" fill="#f4f1ef">Base</text><text x="75" y="115" font-size="16" fill="#c9cbd5">基本の衣装を表示し、Capture Current As Base を選択</text>
+<rect x="22" y="143" width="756" height="69" rx="8" fill="#303240"/>
+<circle cx="48" cy="177" r="13" fill="#f2bd99"/><text x="48" y="182" text-anchor="middle" font-size="15" fill="#252735">2</text>
+<text x="75" y="170" font-size="18" font-weight="bold" fill="#f4f1ef">Wardrobe Sets</text><text x="75" y="194" font-size="16" fill="#c9cbd5">衣装を切り替え、名前を付けて Capture Current As Set を選択</text>
+<rect x="22" y="222" width="756" height="69" rx="8" fill="#303240"/>
+<circle cx="48" cy="256" r="13" fill="#f2bd99"/><text x="48" y="261" text-anchor="middle" font-size="15" fill="#252735">3</text>
+<text x="75" y="249" font-size="18" font-weight="bold" fill="#f4f1ef">Export</text><text x="75" y="273" font-size="16" fill="#c9cbd5">保存した Base と衣装セットを .unavatar にまとめて出力</text>
+</g></svg>

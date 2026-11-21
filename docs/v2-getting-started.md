@@ -78,8 +78,8 @@ U.N. Avatar Renderer は、実行時に Unity Editor や VRChat client を必要
 ## VRM を使う
 
 1. `un-avatar-supervisor.exe` を起動します。
-2. 左側メニューから `プロファイル` を開きます。
-3. `+` ボタンで新しいプロファイルを作ります。
+2. 左側メニューから `プロファイルと稼働` を開きます。
+3. `新規` ボタンでプロファイルを作ります。
 4. アバターファイルとして `.vrm` を選びます。
 5. モーション入力、出力、ウィンドウ、カメラなどを必要に応じて設定します。
 6. `起動` ボタンで Renderer を起動します。
@@ -115,7 +115,7 @@ https://usagi.github.io/un-avatar/vcc/index.json
 3. `Output` に `.unavatar` を出力するパスを設定します。
 4. 操作パネルの `1. Base -> 2. Wardrobe Sets -> 3. Export` の順に操作します。
 
-![Unity Editor の U.N. Avatar Exporter 画面。1 は Tools メニュー、2 は Avatar Root と Output、3 は Base / Wardrobe Sets / Export の操作パネル。](assets/v2-getting-started/exporter-workflow.png)
+![Unity Editor の U.N. Avatar Exporter 操作図。1 は Tools メニュー、2 は Avatar Root と Output、3 は Base / Wardrobe Sets / Export の操作パネル。](assets/v2-getting-started/exporter-workflow.svg)
 
 > 図1:
 >
@@ -130,8 +130,8 @@ Wardrobe を使う場合は、Export Mode を `Wardrobe` にして、`1. Base` �
 ### 3. Supervisor で起動する
 
 1. `un-avatar-supervisor.exe` を起動します。
-2. 左側メニューから `プロファイル` を開きます。
-3. `+` ボタンで新しいプロファイルを作ります。
+2. 左側メニューから `プロファイルと稼働` を開きます。
+3. `新規` ボタンでプロファイルを作ります。
 4. アバターファイルとして出力した `.unavatar` を選びます。
 5. 必要に応じて出力モード、カメラ、モーション入力を設定します。
 6. `起動` ボタンで Renderer を起動します。
@@ -167,7 +167,7 @@ Wardrobe を使うと、Renderer を起動したまま衣装や小物の状態�
 2. 必要に応じて素体側の衣装や blendshape を調整します。
 3. `Capture Current As Set` で状態を保存します。
 
-![Exporter の Wardrobe 操作。1 は Base 保存、2 は Wardrobe Sets の保存と管理、3 は .unavatar export。](assets/v2-getting-started/exporter-wardrobe-sets.png)
+![Exporter の Wardrobe 操作。1 は Base 保存、2 は Wardrobe Sets の保存と管理、3 は .unavatar export。](assets/v2-getting-started/exporter-wardrobe-sets.svg)
 
 > 図3:
 >
